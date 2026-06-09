@@ -1,0 +1,42 @@
+#pragma once
+
+#import <stddef.h>
+#import <stdint.h>
+#import <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct rctl_http_server rctl_http_server;
+
+// Start an HTTP server on `port` (0.0.0.0). Serves a WebCodecs player at "/" and
+// a live H.264 stream at "/stream". Returns NULL on failure.
+rctl_http_server *rctl_http_start(int port);
+
+// Push one Annex-B access unit to all connected stream clients.
+void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len, bool keyframe);
+
+// Set the current display orientation (UIInterfaceOrientation: 1=portrait,
+// 2=portrait-upside-down, 3=landscape-right, 4=landscape-left). Broadcast to clients.
+void rctl_http_set_orientation(rctl_http_server *s, int orientation);
+
+// Tell clients to drop their decoder (used around an encoder reconfigure, since
+// the resolution/SPS changes). Also clears the cached keyframe.
+void rctl_http_signal_reset(rctl_http_server *s);
+
+// Register a callback invoked when a client requests new encode settings via
+// GET /config?fps=..&scale=..&bitrate=..
+typedef void (*rctl_reconfigure_cb)(void *ctx, int fps, double scale, int bitrate);
+void rctl_http_set_reconfigure(rctl_http_server *s, rctl_reconfigure_cb cb, void *ctx);
+
+// Register a callback invoked for client input via GET /input?phase=&id=&x=&y=
+// phase: 0=down,1=move,2=up; (x,y) normalized [0,1] in framebuffer space.
+typedef void (*rctl_input_cb)(void *ctx, int phase, int finger, double nx, double ny);
+void rctl_http_set_input(rctl_http_server *s, rctl_input_cb cb, void *ctx);
+
+void rctl_http_stop(rctl_http_server *s);
+
+#ifdef __cplusplus
+}
+#endif

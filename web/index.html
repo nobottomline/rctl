@@ -1,0 +1,115 @@
+<!doctype html>
+<!-- rctl web client. Served from /var/mobile/rctl/index.html on the device
+     (falls back to the copy embedded in HttpStreamServer.mm). -->
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>rctl</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;color:#ddd;
+    font-family:-apple-system,system-ui,sans-serif;overflow:hidden;
+    -webkit-user-select:none;user-select:none}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  canvas{transform-origin:center center}
+  #hud{position:fixed;top:6px;left:8px;font-size:11px;opacity:.55;z-index:10}
+  #bar{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);z-index:10;
+    display:flex;gap:6px;background:rgba(20,20,22,.55);padding:6px;border-radius:11px;
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+  #bar button{background:#2b2b2f;color:#eee;border:0;border-radius:8px;padding:7px 11px;font-size:12px}
+  #bar button.on{background:#3478f6}
+</style></head>
+<body>
+<div id="hud">rctl: connecting…</div>
+<div id="stage"><canvas id="c"></canvas></div>
+<div id="bar">
+  <button data-q="hq" class="on">High</button>
+  <button data-q="bal">Balanced</button>
+  <button data-q="lat">Low latency</button>
+</div>
+<script>
+const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+let dec=null,ts=0,frames=0,started=false,orient=1,codec='avc1.640033';
+// UIInterfaceOrientation -> CSS rotation (deg) to make content upright.
+const DEG={1:0,2:180,3:-90,4:90};
+function applyOrient(){
+  const deg=DEG[orient]||0,cw=canvas.width||1,ch=canvas.height||1;
+  const r90=(deg===90||deg===-90);
+  const bbW=r90?ch:cw,bbH=r90?cw:ch;
+  const sc=Math.min(innerWidth/bbW,innerHeight/bbH);
+  canvas.style.transform=`rotate(${deg}deg) scale(${sc})`;
+}
+addEventListener('resize',applyOrient);
+// Derive the WebCodecs codec string from an Annex-B SPS NAL (type 7).
+function codecFromAU(au){
+  for(let i=0;i+8<au.length;i++){
+    if(au[i]===0&&au[i+1]===0&&au[i+2]===0&&au[i+3]===1&&(au[i+4]&0x1f)===7){
+      return 'avc1.'+[au[i+5],au[i+6],au[i+7]].map(x=>x.toString(16).padStart(2,'0')).join('');
+    }
+  }
+  return null;
+}
+function mkdec(){
+  if(dec){try{dec.close()}catch(e){}}
+  dec=new VideoDecoder({
+    output:f=>{const rs=(canvas.width!==f.displayWidth||canvas.height!==f.displayHeight);
+      if(rs){canvas.width=f.displayWidth;canvas.height=f.displayHeight;}
+      ctx.drawImage(f,0,0);f.close();frames++;if(rs)applyOrient();},
+    error:e=>{hud.textContent='decoder error: '+e.message;started=false;dec=null;}
+  });
+  dec.configure({codec,optimizeForLatency:true});
+}
+setInterval(()=>{hud.textContent=`rctl — ${frames}f ${canvas.width}x${canvas.height} o=${orient} ${codec}`;},1000);
+document.querySelectorAll('#bar button').forEach(b=>b.onclick=()=>{
+  const q={hq:'scale=1.0&fps=30&bitrate=24000000',
+           bal:'scale=0.75&fps=45&bitrate=14000000',
+           lat:'scale=0.6&fps=60&bitrate=8000000'}[b.dataset.q];
+  fetch('/config?'+q);
+  document.querySelectorAll('#bar button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+});
+// ---- input: map a click on the displayed (rotated/scaled) canvas back to
+// normalized framebuffer coordinates, send to the device ----
+// Map a click on the displayed (rotated/scaled) canvas back to normalized
+// coordinates in the captured frame = the screen's FIXED space. The device
+// converts that to the window's point space via UIKit (handles all rotations).
+function clientToNorm(cx,cy){
+  const deg=DEG[orient]||0, rad=-deg*Math.PI/180;
+  const cw=canvas.width||1, ch=canvas.height||1, r90=(deg===90||deg===-90);
+  const bbW=r90?ch:cw, bbH=r90?cw:ch;
+  const sc=Math.min(innerWidth/bbW, innerHeight/bbH);
+  let dx=(cx-innerWidth/2)/sc, dy=(cy-innerHeight/2)/sc;
+  const rx=dx*Math.cos(rad)-dy*Math.sin(rad), ry=dx*Math.sin(rad)+dy*Math.cos(rad);
+  return [(rx+cw/2)/cw, (ry+ch/2)/ch];
+}
+function send(p,nx,ny){ fetch(`/input?phase=${p}&id=0&x=${nx.toFixed(4)}&y=${ny.toFixed(4)}`).catch(()=>{}); }
+const stage=document.getElementById('stage');
+stage.style.touchAction='none';
+let down=false,lastMove=0;
+stage.addEventListener('pointerdown',e=>{down=true;try{stage.setPointerCapture(e.pointerId)}catch(_){}
+  const[x,y]=clientToNorm(e.clientX,e.clientY);send(0,x,y);e.preventDefault();});
+stage.addEventListener('pointermove',e=>{if(!down)return;const now=performance.now();if(now-lastMove<16)return;lastMove=now;
+  const[x,y]=clientToNorm(e.clientX,e.clientY);send(1,x,y);e.preventDefault();});
+function up(e){if(!down)return;down=false;const[x,y]=clientToNorm(e.clientX,e.clientY);send(2,x,y);e.preventDefault();}
+stage.addEventListener('pointerup',up);
+stage.addEventListener('pointercancel',up);
+(async()=>{
+  let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
+  const reader=resp.body.getReader();let buf=new Uint8Array(0);
+  for(;;){
+    const r=await reader.read();if(r.done){hud.textContent='stream ended';break;}
+    const nb=new Uint8Array(buf.length+r.value.length);nb.set(buf,0);nb.set(r.value,buf.length);buf=nb;
+    for(;;){
+      if(buf.length<5)break;
+      const type=buf[0];
+      const len=((buf[1]<<24)>>>0)+(buf[2]<<16)+(buf[3]<<8)+buf[4];
+      if(buf.length<5+len)break;
+      const data=buf.slice(5,5+len);buf=buf.subarray(5+len);
+      if(type===2){if(data.length>=1){orient=data[0];applyOrient();}continue;}
+      if(type===3){started=false;if(dec){try{dec.close()}catch(e){}}dec=null;continue;}
+      const key=(type===1);
+      if(!started){if(!key)continue;const cs=codecFromAU(data);if(cs)codec=cs;mkdec();started=true;}
+      try{
+        dec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:ts,data}));ts+=10000;
+      }catch(e){hud.textContent='decode err: '+e.message;}
+    }
+  }
+})();
+</script></body></html>
