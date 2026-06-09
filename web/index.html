@@ -16,6 +16,11 @@
     -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
   #bar button{background:#2b2b2f;color:#eee;border:0;border-radius:8px;padding:7px 11px;font-size:12px}
   #bar button.on{background:#3478f6}
+  #sys{position:fixed;top:8px;right:10px;z-index:10;display:flex;gap:6px;
+    background:rgba(20,20,22,.55);padding:6px;border-radius:11px;
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+  #sys button{background:#2b2b2f;color:#eee;border:0;border-radius:8px;padding:7px 10px;font-size:12px}
+  #sys button:active{background:#3478f6}
 </style></head>
 <body>
 <div id="hud">rctl: connecting…</div>
@@ -24,6 +29,12 @@
   <button data-q="hq" class="on">High</button>
   <button data-q="bal">Balanced</button>
   <button data-q="lat">Low latency</button>
+</div>
+<div id="sys">
+  <button data-b="home">⌂ Home</button>
+  <button data-b="lock">⏻ Lock</button>
+  <button data-b="volup">Vol+</button>
+  <button data-b="voldn">Vol−</button>
 </div>
 <script>
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
@@ -90,6 +101,27 @@ stage.addEventListener('pointermove',e=>{if(!down)return;const now=performance.n
 function up(e){if(!down)return;down=false;const[x,y]=clientToNorm(e.clientX,e.clientY);send(2,x,y);e.preventDefault();}
 stage.addEventListener('pointerup',up);
 stage.addEventListener('pointercancel',up);
+// ---- keyboard: forward physical keystrokes as HID key events ----
+function codeToUsage(c){
+  if(/^Key[A-Z]$/.test(c)) return 0x04+(c.charCodeAt(3)-65);
+  if(/^Digit[1-9]$/.test(c)) return 0x1E+(c.charCodeAt(5)-49);
+  if(c==='Digit0') return 0x27;
+  return ({Enter:0x28,NumpadEnter:0x28,Escape:0x29,Backspace:0x2A,Tab:0x2B,Space:0x2C,
+    Minus:0x2D,Equal:0x2E,BracketLeft:0x2F,BracketRight:0x30,Backslash:0x31,
+    Semicolon:0x33,Quote:0x34,Backquote:0x35,Comma:0x36,Period:0x37,Slash:0x38,CapsLock:0x39,
+    ArrowRight:0x4F,ArrowLeft:0x50,ArrowDown:0x51,ArrowUp:0x52,
+    Delete:0x4C,Home:0x4A,End:0x4D,PageUp:0x4B,PageDown:0x4E,
+    ControlLeft:0xE0,ShiftLeft:0xE1,AltLeft:0xE2,MetaLeft:0xE3,
+    ControlRight:0xE4,ShiftRight:0xE5,AltRight:0xE6,MetaRight:0xE7})[c]||0;
+}
+function key(u,d){ fetch(`/key?p=7&u=${u}&d=${d}`).catch(()=>{}); }
+addEventListener('keydown',e=>{const u=codeToUsage(e.code);if(u){key(u,1);e.preventDefault();}});
+addEventListener('keyup',e=>{const u=codeToUsage(e.code);if(u){key(u,0);e.preventDefault();}});
+// ---- hardware buttons (HID Consumer page 0x0C): Home / Lock / Volume ----
+const SYS={home:0x40,lock:0x30,volup:0xE9,voldn:0xEA};
+function sysPress(name){const u=SYS[name];if(!u)return;
+  fetch(`/key?p=12&u=${u}&d=1`).then(()=>setTimeout(()=>fetch(`/key?p=12&u=${u}&d=0`),70));}
+document.querySelectorAll('#sys button').forEach(b=>b.onclick=()=>sysPress(b.dataset.b));
 (async()=>{
   let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
   const reader=resp.body.getReader();let buf=new Uint8Array(0);

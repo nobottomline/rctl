@@ -34,6 +34,10 @@ static void input_handler(void *ctx, int phase, int finger, double nx, double ny
     rctl_input_touch(finger, nx, ny, phase);
 }
 
+static void key_handler(void *ctx, int page, int usage, int down) {
+    rctl_input_key(page, usage, down);
+}
+
 // Authoritative interface orientation from FrontBoard (matches the framebuffer).
 static int current_orientation(void) {
     if (!gOrientObserver) return 0;
@@ -52,6 +56,7 @@ static int current_orientation(void) {
             if (!gServer) { NSLog(@"[rctl-sbcap] server failed to start"); return; }
             rctl_http_set_reconfigure(gServer, reconfigure, NULL);
             rctl_http_set_input(gServer, input_handler, NULL);
+            rctl_http_set_key(gServer, key_handler, NULL);
 
             // Default: native resolution, 30fps, 20 Mbps, High profile (screen-recording quality).
             gSession = rctl_session_start(30, 20000000, 1.0, net_sink, gServer);

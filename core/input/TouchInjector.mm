@@ -45,6 +45,8 @@ typedef IOHIDEventSystemClientRef (*ClientCreate_f)(CFAllocatorRef);
 typedef void (*ClientDispatch_f)(IOHIDEventSystemClientRef, IOHIDEventRef);
 typedef void (*BKSSetDigitizerInfo_f)(IOHIDEventRef, uint32_t contextID, uint8_t, uint8_t,
                                       CFStringRef, CFTimeInterval, float);
+typedef IOHIDEventRef (*CreateKeyboard_f)(CFAllocatorRef, uint64_t, uint32_t usagePage,
+                                          uint32_t usage, int down, uint32_t flags);
 
 static CreateDigitizer_f _CreateDigitizer;
 static CreateFinger_f    _CreateFinger;
@@ -55,6 +57,7 @@ static SetSenderID_f     _SetSenderID;
 static ClientCreate_f    _ClientCreate;
 static ClientDispatch_f  _ClientDispatch;
 static BKSSetDigitizerInfo_f _BKSSetDigitizerInfo;
+static CreateKeyboard_f  _CreateKeyboard;
 static IOHIDEventSystemClientRef gClient;
 static bool gReady;
 
@@ -77,6 +80,7 @@ static void ensure_init(void) {
         _ClientCreate    = (ClientCreate_f)dlsym(RTLD_DEFAULT, "IOHIDEventSystemClientCreate");
         _ClientDispatch  = (ClientDispatch_f)dlsym(RTLD_DEFAULT, "IOHIDEventSystemClientDispatchEvent");
         _BKSSetDigitizerInfo = (BKSSetDigitizerInfo_f)dlsym(bks ? bks : RTLD_DEFAULT, "BKSHIDEventSetDigitizerInfo");
+        _CreateKeyboard = (CreateKeyboard_f)dlsym(RTLD_DEFAULT, "IOHIDEventCreateKeyboardEvent");
         if (_ClientCreate) gClient = _ClientCreate(kCFAllocatorDefault);
         gReady = _CreateDigitizer && _CreateFinger && _Append && _SetInt && _ClientDispatch;
         char b[256];
@@ -166,4 +170,24 @@ int rctl_input_window_orientation(void) {
         }
     }
     return 0;
+}
+
+void rctl_input_key(int page, int usage, int down) {
+    ensure_init();
+    if (!_CreateKeyboard || !gClient) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        uint64_t ts = mach_absolute_time();
+        IOHIDEventRef ev = _CreateKeyboard(kCFAllocatorDefault, ts, (uint32_t)page,
+                                           (uint32_t)usage, down ? 1 : 0, 0);
+        if (!ev) return;
+        // Keyboard keys are delivered to the focused app via _enqueueHIDEvent;
+        // Consumer buttons (Home/Power/Volume) are system events — dispatch only.
+        if (page == 0x07) {
+            UIApplication *app = [UIApplication sharedApplication];
+            ((void (*)(id, SEL, IOHIDEventRef))objc_msgSend)(app, NSSelectorFromString(@"_enqueueHIDEvent:"), ev);
+        }
+        if (_SetSenderID) _SetSenderID(ev, kSenderID);
+        _ClientDispatch(gClient, ev);
+        CFRelease(ev);
+    });
 }

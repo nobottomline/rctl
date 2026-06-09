@@ -35,6 +35,11 @@ void rctl_http_set_reconfigure(rctl_http_server *s, rctl_reconfigure_cb cb, void
 typedef void (*rctl_input_cb)(void *ctx, int phase, int finger, double nx, double ny);
 void rctl_http_set_input(rctl_http_server *s, rctl_input_cb cb, void *ctx);
 
+// Register a callback for client key/button input via GET /key?p=<page>&u=<usage>&d=<0|1>
+// page defaults to 0x07 (keyboard); 0x0C = Consumer (Home/Power/Volume).
+typedef void (*rctl_key_cb)(void *ctx, int page, int usage, int down);
+void rctl_http_set_key(rctl_http_server *s, rctl_key_cb cb, void *ctx);
+
 void rctl_http_stop(rctl_http_server *s);
 
 #ifdef __cplusplus

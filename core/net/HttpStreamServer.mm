@@ -31,6 +31,8 @@ struct rctl_http_server {
     void *recfg_ctx;
     rctl_input_cb input_cb;
     void *input_ctx;
+    rctl_key_cb key_cb;
+    void *key_ctx;
     volatile bool running;
 };
 
@@ -214,6 +216,18 @@ static void handle_client(rctl_http_server *s, int fd) {
         if (cb) cb(cx, phase, id, x, y);
         send_text(fd, "200 OK", "text/plain", "ok");
         close(fd);
+    } else if (strncmp(req, "GET /key", 8) == 0) {
+        int page = 0x07, usage = 0, down = 0;
+        char *p;
+        if ((p = strstr(req, "p="))) page  = atoi(p + 2);
+        if ((p = strstr(req, "u="))) usage = atoi(p + 2);
+        if ((p = strstr(req, "d="))) down  = atoi(p + 2);
+        pthread_mutex_lock(&s->mtx);
+        rctl_key_cb cb = s->key_cb; void *cx = s->key_ctx;
+        pthread_mutex_unlock(&s->mtx);
+        if (cb) cb(cx, page, usage, down);
+        send_text(fd, "200 OK", "text/plain", "ok");
+        close(fd);
     } else if (strncmp(req, "GET /config", 11) == 0) {
         int fps = 30, br = 20000000; double sc = 1.0;
         char *p;
@@ -331,6 +345,13 @@ void rctl_http_set_input(rctl_http_server *s, rctl_input_cb cb, void *ctx) {
     if (!s) return;
     pthread_mutex_lock(&s->mtx);
     s->input_cb = cb; s->input_ctx = ctx;
+    pthread_mutex_unlock(&s->mtx);
+}
+
+void rctl_http_set_key(rctl_http_server *s, rctl_key_cb cb, void *ctx) {
+    if (!s) return;
+    pthread_mutex_lock(&s->mtx);
+    s->key_cb = cb; s->key_ctx = ctx;
     pthread_mutex_unlock(&s->mtx);
 }
 

@@ -16,6 +16,11 @@ void rctl_input_tap(double nx, double ny);
 // More reliable than FBSOrientationObserver and consistent with touch mapping.
 int rctl_input_window_orientation(void);
 
+// Inject a HID key/button event. `page` is the HID usage page (0x07 =
+// Keyboard/Keypad, 0x0C = Consumer for Home/Power/Volume). `usage` is the usage
+// code on that page; down=1 press, down=0 release.
+void rctl_input_key(int page, int usage, int down);
+
 #ifdef __cplusplus
 }
 #endif
