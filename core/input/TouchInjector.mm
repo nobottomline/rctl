@@ -30,6 +30,10 @@ enum {
 enum { kEvRange = 0x1, kEvTouch = 0x2, kEvPosition = 0x4 };
 static const uint32_t kHand = 3;                       // kIOHIDDigitizerTransducerTypeHand
 static const uint64_t kSenderID = 0xDEFACEDBEEFFECE5ULL;
+// A touch that begins within this fraction of any screen edge is treated as a
+// possible system gesture (Control Center, app switcher, Notification Center).
+static const double kEdgeFrac = 0.05;
+static bool gEdgeGesture = false;  // latched at touch-down, held for the gesture
 
 typedef IOHIDEventRef (*CreateDigitizer_f)(CFAllocatorRef, uint64_t, uint32_t type, uint32_t index,
     uint32_t identity, uint32_t eventMask, uint32_t buttonMask, IOHIDFloat x, IOHIDFloat y, IOHIDFloat z,
@@ -111,6 +115,13 @@ static void do_touch(int phase, double nx, double ny) {
     double y = ny * fsz.height;
     uint32_t ctx = ((uint32_t (*)(id, SEL))objc_msgSend)(kw, NSSelectorFromString(@"_contextId"));
 
+    // Classify edge-origin gestures at touch-down and hold that for the whole
+    // gesture. Only edge gestures get the systemGesture flag, so mid-screen
+    // swipes (page flips, scrolling) keep behaving normally.
+    if (phase == 0)
+        gEdgeGesture = (nx < kEdgeFrac || nx > 1.0 - kEdgeFrac ||
+                        ny < kEdgeFrac || ny > 1.0 - kEdgeFrac);
+
     static int dbg = 0;
     if (dbg++ < 8) {
         char b[320];
@@ -138,7 +149,11 @@ static void do_touch(int phase, double nx, double ny) {
     _SetInt(parent, kFieldAltitude, 1);
 
     if (_BKSSetDigitizerInfo) {
-        _BKSSetDigitizerInfo(parent, ctx, 0, 0, NULL, 0, 0);
+        // 3rd arg = systemGestureIsPossible. Set ONLY for edge-origin gestures so
+        // the system's edge-swipe recognizers (Control Center from the top, app
+        // switcher / dock from the bottom, Notification Center) consider them —
+        // setting it for every touch hijacks normal scrolling/page swipes.
+        _BKSSetDigitizerInfo(parent, ctx, gEdgeGesture ? 1 : 0, 0, NULL, 0, 0);
         ((void (*)(id, SEL, IOHIDEventRef))objc_msgSend)(app, NSSelectorFromString(@"_enqueueHIDEvent:"), parent);
     }
     if (_SetSenderID) _SetSenderID(parent, kSenderID);
@@ -172,22 +187,29 @@ int rctl_input_window_orientation(void) {
     return 0;
 }
 
+static void post_key(int page, int usage, int down) {
+    if (!_CreateKeyboard || !gClient) return;
+    uint64_t ts = mach_absolute_time();
+    IOHIDEventRef ev = _CreateKeyboard(kCFAllocatorDefault, ts, (uint32_t)page,
+                                       (uint32_t)usage, down ? 1 : 0, 0);
+    if (!ev) return;
+    // Keyboard keys are delivered to the focused app via _enqueueHIDEvent;
+    // Consumer buttons (Home/Power/Volume) are system events — dispatch only.
+    if (page == 0x07) {
+        UIApplication *app = [UIApplication sharedApplication];
+        ((void (*)(id, SEL, IOHIDEventRef))objc_msgSend)(app, NSSelectorFromString(@"_enqueueHIDEvent:"), ev);
+    }
+    if (_SetSenderID) _SetSenderID(ev, kSenderID);
+    _ClientDispatch(gClient, ev);
+    CFRelease(ev);
+}
+
+// down: 0=release, 1=press, 2=tap (press+release atomically, in order — used for
+// regular keys so a lost/late release can't cause auto-repeat duplicates).
 void rctl_input_key(int page, int usage, int down) {
     ensure_init();
-    if (!_CreateKeyboard || !gClient) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        uint64_t ts = mach_absolute_time();
-        IOHIDEventRef ev = _CreateKeyboard(kCFAllocatorDefault, ts, (uint32_t)page,
-                                           (uint32_t)usage, down ? 1 : 0, 0);
-        if (!ev) return;
-        // Keyboard keys are delivered to the focused app via _enqueueHIDEvent;
-        // Consumer buttons (Home/Power/Volume) are system events — dispatch only.
-        if (page == 0x07) {
-            UIApplication *app = [UIApplication sharedApplication];
-            ((void (*)(id, SEL, IOHIDEventRef))objc_msgSend)(app, NSSelectorFromString(@"_enqueueHIDEvent:"), ev);
-        }
-        if (_SetSenderID) _SetSenderID(ev, kSenderID);
-        _ClientDispatch(gClient, ev);
-        CFRelease(ev);
+        if (down == 2) { post_key(page, usage, 1); post_key(page, usage, 0); }
+        else            post_key(page, usage, down);
     });
 }

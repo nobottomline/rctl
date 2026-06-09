@@ -9,6 +9,30 @@
 #import "net/HttpStreamServer.h"
 #import "input/TouchInjector.h"
 
+// Edge system gestures (Control Center, Cover Sheet) can't be synthesized into
+// the right window via HID, so trigger them directly through SpringBoard's
+// presentation controllers. Selectors verified on iOS 14.4 by runtime probe.
+// code: 1=Control Center, 2=Cover Sheet / Notification Center. Each toggles.
+static void rctl_system_action(int code) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (code == 1) {
+            id cc = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"SBControlCenterController"),
+                                                    NSSelectorFromString(@"sharedInstance"));
+            if (!cc) return;
+            BOOL vis = ((BOOL (*)(id, SEL))objc_msgSend)(cc, NSSelectorFromString(@"isVisible"));
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(cc,
+                NSSelectorFromString(vis ? @"dismissAnimated:" : @"presentAnimated:"), YES);
+        } else if (code == 2) {
+            id cs = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"SBCoverSheetPresentationManager"),
+                                                    NSSelectorFromString(@"sharedInstance"));
+            if (!cs) return;
+            BOOL vis = ((BOOL (*)(id, SEL))objc_msgSend)(cs, NSSelectorFromString(@"isVisible"));
+            ((void (*)(id, SEL, BOOL, BOOL, id))objc_msgSend)(cs,
+                NSSelectorFromString(@"setCoverSheetPresented:animated:withCompletion:"), !vis, YES, nil);
+        }
+    });
+}
+
 static rctl_http_server *gServer = NULL;
 static rctl_session *gSession = NULL;
 static dispatch_source_t gOrientTimer = NULL;
@@ -35,6 +59,8 @@ static void input_handler(void *ctx, int phase, int finger, double nx, double ny
 }
 
 static void key_handler(void *ctx, int page, int usage, int down) {
+    // Sentinel page 0xF0 = SpringBoard presentation actions (fire on key-down).
+    if (page == 0xF0) { if (down) rctl_system_action(usage); return; }
     rctl_input_key(page, usage, down);
 }
 
