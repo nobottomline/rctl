@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Grant the camera TCC service by entitlement so the helper needs no DB
+         grant. Honored by tccd for platform/entitled binaries on a jailbreak. -->
+    <key>com.apple.private.tcc.allow</key>
+    <array>
+        <string>kTCCServiceCamera</string>
+    </array>
+    <key>platform-application</key>
+    <true/>
+    <!-- Try to dodge the foreground-only camera interruption. -->
+    <key>com.apple.developer.avfoundation.multitasking-camera-access</key>
+    <true/>
+    <key>com.apple.springboard.opensensitiveurl</key>
+    <true/>
+    <key>com.apple.private.avfoundation.capturesession.allowoutsideofapp</key>
+    <true/>
+</dict>
+</plist>
