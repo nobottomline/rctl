@@ -274,6 +274,11 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
     } else if (!strcmp(path, "/v1/respring")) {
         // Restart SpringBoard (we're root). Delay so the HTTP reply goes out first.
         AFTER(0.2, ^{ respring_device(); });
+    } else if (!strcmp(path, "/v1/brightness")) {
+        double v = get_d(query, "v", -1);
+        if (v < 0) { *status = 400; return strdup("{\"error\":\"v (0..1) required\"}"); }
+        int permille = (int)(v * 1000 + 0.5); if (permille > 1000) permille = 1000;
+        ipc_key(0xF1, permille, 1);          // page 0xF1 sentinel -> SB sets UIScreen brightness
     } else if (!strcmp(path, "/v1/clipboard")) {
         if (body && body[0]) {            // POST body -> set the pasteboard
             send_to_sb(RCTL_MSG_SETCLIP, body, (uint32_t)strlen(body));

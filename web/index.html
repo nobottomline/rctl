@@ -31,6 +31,7 @@
     padding:7px 4px;font-size:12px;white-space:nowrap}
   #panel button:active{background:#3478f6}
   #panel button.on{background:#3478f6}
+  #panel .slider{flex:1;width:100%;accent-color:#3478f6;height:26px;margin:0 2px}
   /* Console (playground) modal */
   #pg{position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;
     background:rgba(0,0,0,.55);padding:16px;box-sizing:border-box}
@@ -76,6 +77,8 @@
     <button data-b="voldn">Vol&nbsp;−</button>
     <button data-b="volup">Vol&nbsp;+</button>
   </div>
+  <div class="sect">Brightness</div>
+  <div class="row"><input id="brSlider" class="slider" type="range" min="0" max="100" value="50"></div>
   <div class="sect">Orientation</div>
   <div class="row">
     <button id="oAuto" class="on">Auto</button>
@@ -169,8 +172,17 @@ setInterval(()=>{hud.textContent=`rctl — ${frames}f ${canvas.width}x${canvas.h
 
 // ---- floating control panel ----
 const fab=document.getElementById('fab'),panel=document.getElementById('panel');
-function setPanel(open){ panel.classList.toggle('open',open); fab.classList.toggle('open',open); }
+function setPanel(open){ panel.classList.toggle('open',open); fab.classList.toggle('open',open); if(open) initBrightness(); }
 fab.onclick=e=>{ e.stopPropagation(); setPanel(!panel.classList.contains('open')); };
+// Brightness slider: set the device backlight, coalescing while a request is in flight.
+const brSlider=document.getElementById('brSlider'); let brBusy=false, brPend=null, brInit=false;
+function sendBr(v){ if(brBusy){ brPend=v; return; } brBusy=true;
+  fetch(`/v1/brightness?v=${v.toFixed(3)}`).catch(()=>{}).then(()=>{ brBusy=false;
+    if(brPend!=null){ const p=brPend; brPend=null; sendBr(p); } }); }
+brSlider.oninput=()=>sendBr(brSlider.value/100);
+async function initBrightness(){ if(brInit)return; brInit=true;
+  try{ const j=await(await fetch('/v1/deviceinfo')).json();
+    if(typeof j.brightness==='number') brSlider.value=Math.round(j.brightness*100); }catch(e){} }
 
 // Quality presets
 document.querySelectorAll('#panel button[data-q]').forEach(b=>b.onclick=()=>{

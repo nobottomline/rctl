@@ -41,6 +41,37 @@ static void rctl_system_action(int code) {
     });
 }
 
+// Display brightness via BackBoardServices. backboardd owns the real backlight;
+// it only accepts a brightness change while a brightness *transaction* is open
+// (that's why a plain UIScreen.brightness write from SpringBoard is a no-op).
+static void *rctl_bbs(void) {
+    static void *h = NULL; static dispatch_once_t once;
+    dispatch_once(&once, ^{ h = dlopen("/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices", RTLD_NOW); });
+    return h;
+}
+static void rctl_set_brightness(double v) {
+    if (v < 0) v = 0; else if (v > 1) v = 1;
+    static void  (*BKSSet)(float, int)        = NULL;
+    static void *(*BKSTxn)(CFAllocatorRef)     = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ void *h = rctl_bbs(); if (h) {
+        BKSSet = (void (*)(float, int))dlsym(h, "BKSDisplayBrightnessSet");
+        BKSTxn = (void *(*)(CFAllocatorRef))dlsym(h, "BKSDisplayBrightnessTransactionCreate"); } });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (BKSSet) {
+            void *t = BKSTxn ? BKSTxn(kCFAllocatorDefault) : NULL;  // hold a transaction across the set
+            BKSSet((float)v, 1);
+            if (t) CFRelease(t);
+        }
+        [UIScreen mainScreen].brightness = v;                       // keep UIKit's view in sync
+    });
+}
+static float rctl_get_brightness(void) {
+    static float (*BKSGet)(void) = NULL; static dispatch_once_t once;
+    dispatch_once(&once, ^{ void *h = rctl_bbs(); if (h) BKSGet = (float (*)(void))dlsym(h, "BKSDisplayBrightnessGetCurrent"); });
+    return BKSGet ? BKSGet() : (float)[UIScreen mainScreen].brightness;
+}
+
 // Launch an app by bundle id via SpringBoardServices. Call OFF the main thread
 // (it's a synchronous client request to SpringBoard; on the main thread it
 // self-deadlocks until a long timeout).
@@ -157,8 +188,9 @@ static NSString *rctl_device_info(void) {  // call on the main thread
     d.batteryMonitoringEnabled = YES;
     int pct = (int)(d.batteryLevel * 100 + 0.5);
     NSString *batt = pct >= 0 ? [NSString stringWithFormat:@"%d%%", pct] : @"?";
-    return [NSString stringWithFormat:@"{\"name\":\"%@\",\"model\":\"%@\",\"ios\":\"%@\",\"battery\":\"%@\"}",
-            d.name, d.model, d.systemVersion, batt];
+    double bright = (double)rctl_get_brightness();
+    return [NSString stringWithFormat:@"{\"name\":\"%@\",\"model\":\"%@\",\"ios\":\"%@\",\"battery\":\"%@\",\"brightness\":%.3f}",
+            d.name, d.model, d.systemVersion, batt, bright];
 }
 
 // Open a URL via SpringBoardServices (and unlock). Off the main thread — it's a
@@ -220,6 +252,7 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_KEY && len >= sizeof(rctl_ipc_key)) {
                 rctl_ipc_key m; memcpy(&m, buf, sizeof m);
                 if (m.page == 0xF0) { if (m.down) rctl_system_action(m.usage); }
+                else if (m.page == 0xF1) rctl_set_brightness(m.usage / 1000.0);
                 else rctl_input_key(m.page, m.usage, m.down);
             } else if (type == RCTL_MSG_CONFIG && len >= sizeof(rctl_ipc_config)) {
                 rctl_ipc_config m; memcpy(&m, buf, sizeof m);
