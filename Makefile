@@ -20,6 +20,7 @@ export THEOS_DEVICE_PORT ?= 2222
 include $(THEOS)/makefiles/common.mk
 
 SUBPROJECTS += springboard
+SUBPROJECTS += daemon
 
 include $(THEOS)/makefiles/aggregate.mk
 

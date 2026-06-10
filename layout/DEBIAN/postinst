@@ -1,13 +1,23 @@
 #!/bin/sh
-# Re-sign the injected dylib with the device's own ldid — ad-hoc signatures made
-# off-device (macOS) are rejected by on-device AMFI on arm64e and the dylib is
-# refused at load. Then respring to load the tweak.
+# Re-sign our binaries with the device's own ldid — ad-hoc signatures made
+# off-device (macOS) are rejected by on-device AMFI on arm64e, so the dylib is
+# refused at load and the daemon is SIGKILLed. Then (re)load the daemon and
+# respring so SpringBoard picks up the agent.
 set -e
 
 DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
+DAEMON=/usr/local/bin/rctld
+PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
 
-if [ -f "$DYLIB" ] && command -v ldid >/dev/null 2>&1; then
-    ldid -S "$DYLIB" || true
+if command -v ldid >/dev/null 2>&1; then
+    [ -f "$DYLIB" ]  && ldid -S "$DYLIB"  || true
+    [ -f "$DAEMON" ] && ldid -S "$DAEMON" || true
+fi
+
+# (Re)load the launchd daemon.
+if [ -f "$PLIST" ]; then
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load "$PLIST"   2>/dev/null || true
 fi
 
 # Respring so SpringBoard picks up the (re)installed agent.

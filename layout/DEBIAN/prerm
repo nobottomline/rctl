@@ -1,8 +1,11 @@
 #!/bin/sh
-# On removal, respring so SpringBoard unloads the agent and frees port 8080.
+# On removal/upgrade, stop the daemon and respring (frees port 8080).
 set -e
 
+PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
+
 if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
+    [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
     killall -9 SpringBoard 2>/dev/null || true
 fi
 
