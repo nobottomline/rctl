@@ -50,7 +50,8 @@
     color:#f2f2f7;padding:9px 10px;font-size:14px;font-family:inherit;outline:none;box-sizing:border-box}
   .pgsec input:focus,.pgsec textarea:focus{border-color:#3478f6}
   .pgsec textarea{min-height:60px;resize:vertical}
-  .pgsec #devInfo{font-size:12px;color:#c7c7cc;min-height:18px;word-break:break-word}
+  .pgsec #devInfo,.pgsec #recInfo{font-size:12px;color:#c7c7cc;min-height:18px;word-break:break-word}
+  #recBtn.rec{background:#e0392b;color:#fff}
   .pgsec .act{display:flex;gap:7px;margin-top:auto}
   .pgsec button{flex:1;border:0;border-radius:8px;padding:9px;font-size:13px;font-weight:500;color:#fff;background:#3478f6}
   .pgsec button.sec{background:#3a3a3d}
@@ -116,6 +117,9 @@
       <div class="act"><button id="shotB">Save screenshot</button></div></div>
     <div class="pgsec"><label>Device</label>
       <div class="act"><button id="rspBtn" class="sec">Respring</button></div></div>
+    <div class="pgsec"><label>Record &amp; play (touch + keys)</label>
+      <div id="recInfo">no recording</div>
+      <div class="act"><button id="recBtn" class="sec">● Record</button><button id="playBtn">▶ Play</button></div></div>
     <div class="pgsec wide"><label>Clipboard (Mac ↔ iPad)</label>
       <textarea id="clip" placeholder="clipboard text"></textarea>
       <div class="act"><button id="clGet" class="sec">Get from iPad</button><button id="clSet">Set on iPad</button></div></div>
@@ -194,7 +198,11 @@ function clientToNorm(cx,cy){
   const rx=dx*Math.cos(rad)-dy*Math.sin(rad), ry=dx*Math.sin(rad)+dy*Math.cos(rad);
   return [(rx+cw/2)/cw, (ry+ch/2)/ch];
 }
-function send(p,nx,ny,f){ fetch(`/input?phase=${p}&id=${f}&x=${nx.toFixed(4)}&y=${ny.toFixed(4)}`).catch(()=>{}); }
+// Macro record/playback: capture the input we send (with timing), replay later.
+let recording=null, recStart=0, macro=null;
+function recPush(e){ if(recording){ e.t=performance.now()-recStart; recording.push(e); } }
+function send(p,nx,ny,f){ recPush({k:'t',p,x:+nx.toFixed(4),y:+ny.toFixed(4),f});
+  fetch(`/input?phase=${p}&id=${f}&x=${nx.toFixed(4)}&y=${ny.toFixed(4)}`).catch(()=>{}); }
 const stage=document.getElementById('stage');
 stage.style.touchAction='none';
 // Multitouch: each active pointer (finger) gets its own index 0..10.
@@ -226,7 +234,7 @@ function codeToUsage(c){
     ControlLeft:0xE0,ShiftLeft:0xE1,AltLeft:0xE2,MetaLeft:0xE3,
     ControlRight:0xE4,ShiftRight:0xE5,AltRight:0xE6,MetaRight:0xE7})[c]||0;
 }
-function key(u,d){ fetch(`/key?p=7&u=${u}&d=${d}`).catch(()=>{}); }
+function key(u,d){ recPush({k:'k',u,d}); fetch(`/key?p=7&u=${u}&d=${d}`).catch(()=>{}); }
 // Modifiers held (press/release); regular keys as one atomic tap (d=2) so a
 // lost/late release can't make iOS auto-repeat ("ls -la" -> "ls -laa").
 const MODS=new Set([0xE0,0xE1,0xE2,0xE3,0xE4,0xE5,0xE6,0xE7]);
@@ -283,6 +291,16 @@ $('clGet').onclick=async()=>{ try{const j=await(await fetch('/v1/clipboard')).js
 $('devBtn').onclick=async()=>{ try{const j=await(await fetch('/v1/deviceinfo')).json();
   $('devInfo').textContent=`${j.name||'?'} · ${j.model||''} · iOS ${j.ios||''} · 🔋 ${j.battery||'?'}`;
   }catch(e){ $('devInfo').textContent='(no reply)'; } };
+// Record / play a touch+key macro (client-side, replayed with original timing).
+function updateRec(){ $('recInfo').textContent = recording ? `recording… ${recording.length}`
+  : (macro && macro.length ? `recorded ${macro.length} events` : 'no recording'); }
+$('recBtn').onclick=()=>{
+  if(recording){ macro=recording; recording=null; $('recBtn').textContent='● Record'; $('recBtn').classList.remove('rec'); }
+  else { recording=[]; recStart=performance.now(); macro=null; $('recBtn').textContent='■ Stop'; $('recBtn').classList.add('rec'); }
+  updateRec();
+};
+$('playBtn').onclick=()=>{ if(!macro||!macro.length)return;
+  macro.forEach(e=>setTimeout(()=>{ if(e.k==='t')send(e.p,e.x,e.y,e.f); else if(e.k==='k')key(e.u,e.d); }, e.t)); };
 (async()=>{
   let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
   const reader=resp.body.getReader();let buf=new Uint8Array(0);
