@@ -12,8 +12,16 @@
 #import <stdio.h>
 #import <time.h>
 #import <dlfcn.h>
+#import <spawn.h>
 #import "net/HttpStreamServer.h"
 #import "ipc/Ipc.h"
+
+extern char **environ;
+static void respring_device(void) {
+    pid_t pid;
+    char *argv[] = { (char *)"killall", (char *)"SpringBoard", NULL };
+    posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, argv, environ);
+}
 
 static void dlog(const char *msg) {
     FILE *f = fopen("/tmp/rctld.log", "a");
@@ -213,6 +221,9 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         if (!get_param(query,"text",raw,sizeof raw)) { *status = 400; return strdup("{\"error\":\"text required\"}"); }
         url_decode(raw, text, sizeof text);
         send_to_sb(RCTL_MSG_TOAST, text, (uint32_t)strlen(text));
+    } else if (!strcmp(path, "/v1/respring")) {
+        // Restart SpringBoard (we're root). Delay so the HTTP reply goes out first.
+        AFTER(0.2, ^{ respring_device(); });
     } else if (!strcmp(path, "/v1/script")) {
         return run_script(body, status);
     } else {

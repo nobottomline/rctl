@@ -19,6 +19,8 @@
 // the right window via HID, so trigger them directly through SpringBoard's
 // presentation controllers. Selectors verified on iOS 14.4 by runtime probe.
 // code: 1=Control Center, 2=Cover Sheet / Notification Center. Each toggles.
+// (Native screenshots are done client-side instead — SBScreenshotManager's
+// save throws an async exception in its flash animation that aborts SpringBoard.)
 static void rctl_system_action(int code) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (code == 1) {

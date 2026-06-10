@@ -33,21 +33,26 @@
   #panel button.on{background:#3478f6}
   /* Console (playground) modal */
   #pg{position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;
-    background:rgba(0,0,0,.55)}
+    background:rgba(0,0,0,.55);padding:16px;box-sizing:border-box}
   #pg.open{display:flex}
-  #pgcard{width:min(400px,92vw);max-height:86vh;overflow:auto;box-sizing:border-box;
-    background:rgba(30,30,33,.97);border-radius:18px;padding:16px 16px 14px;
-    -webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);box-shadow:0 14px 44px rgba(0,0,0,.6)}
-  #pgcard h2{margin:0 0 12px;font-size:17px;font-weight:600;color:#f2f2f7}
-  .fld{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
-  .fld label{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#86868b}
-  .fld input,.fld textarea{background:#1b1b1e;border:1px solid #3a3a3d;border-radius:9px;
+  #pgcard{width:min(600px,100%);max-height:90vh;overflow:auto;box-sizing:border-box;
+    background:rgba(28,28,31,.98);border-radius:20px;padding:18px;
+    -webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);box-shadow:0 16px 48px rgba(0,0,0,.6)}
+  .pghdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px}
+  .pghdr h2{margin:0;font-size:18px;font-weight:600;color:#f2f2f7}
+  #pgX{width:30px;height:30px;border-radius:50%;border:0;background:#3a3a3d;color:#f2f2f7;font-size:17px;line-height:1}
+  #pggrid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+  @media(max-width:540px){#pggrid{grid-template-columns:1fr}}
+  .pgsec{background:#242427;border-radius:13px;padding:12px;display:flex;flex-direction:column;gap:7px}
+  .pgsec.wide{grid-column:1/-1}
+  .pgsec label{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#86868b}
+  .pgsec input,.pgsec textarea{background:#151517;border:1px solid #3a3a3d;border-radius:8px;
     color:#f2f2f7;padding:9px 10px;font-size:14px;font-family:inherit;outline:none;box-sizing:border-box}
-  .fld input:focus,.fld textarea:focus{border-color:#3478f6}
-  .fld textarea{min-height:58px;resize:vertical}
-  .fld .act{display:flex;gap:8px;margin-top:1px}
-  #pgcard .act button{flex:1;border:0;border-radius:9px;padding:9px;font-size:14px;font-weight:500;color:#fff;background:#3478f6}
-  #pgcard .act button.sec{background:#3a3a3d}
+  .pgsec input:focus,.pgsec textarea:focus{border-color:#3478f6}
+  .pgsec textarea{min-height:60px;resize:vertical}
+  .pgsec .act{display:flex;gap:7px;margin-top:auto}
+  .pgsec button{flex:1;border:0;border-radius:8px;padding:9px;font-size:13px;font-weight:500;color:#fff;background:#3478f6}
+  .pgsec button.sec{background:#3a3a3d}
 </style></head>
 <body>
 <div id="hud">rctl: connecting…</div>
@@ -75,7 +80,7 @@
     <button id="oRot">⟳ Rotate</button>
   </div>
   <div class="sect">Tools</div>
-  <div class="row"><button id="pgOpen">⌨ Console</button></div>
+  <div class="row"><button id="pgOpen">⌨ Console</button><button id="rspPanel">↻ Respring</button></div>
   <div class="sect">Quality</div>
   <div class="row">
     <button data-q="hq" class="on">High</button>
@@ -85,22 +90,28 @@
 </div>
 
 <div id="pg"><div id="pgcard">
-  <h2>Console</h2>
-  <div class="fld"><label>Alert</label>
-    <input id="aTitle" placeholder="Title"><input id="aMsg" placeholder="Message">
-    <div class="act"><button id="aBtn">Show alert</button></div></div>
-  <div class="fld"><label>Toast</label>
-    <input id="tText" placeholder="Text">
-    <div class="act"><button id="tBtn">Show toast</button></div></div>
-  <div class="fld"><label>Launch app</label>
-    <input id="lBundle" placeholder="com.apple.Preferences">
-    <div class="act"><button id="lBtn">Launch</button></div></div>
-  <div class="fld"><label>Type text (into focused field)</label>
-    <input id="yText" placeholder="hello world">
-    <div class="act"><button id="yBtn">Type</button></div></div>
-  <div class="fld"><label>Script (JSON macro)</label>
-    <textarea id="sJson" placeholder='{"actions":[{"type":"tap","x":0.5,"y":0.5}]}'></textarea>
-    <div class="act"><button id="sBtn">Run</button><button id="pgX" class="sec">Close</button></div></div>
+  <div class="pghdr"><h2>Console</h2><button id="pgX">✕</button></div>
+  <div id="pggrid">
+    <div class="pgsec"><label>Alert</label>
+      <input id="aTitle" placeholder="Title"><input id="aMsg" placeholder="Message">
+      <div class="act"><button id="aBtn">Show alert</button></div></div>
+    <div class="pgsec"><label>Toast</label>
+      <input id="tText" placeholder="Text">
+      <div class="act"><button id="tBtn">Show toast</button></div></div>
+    <div class="pgsec"><label>Launch app</label>
+      <input id="lBundle" placeholder="com.apple.Preferences">
+      <div class="act"><button id="lBtn">Launch</button></div></div>
+    <div class="pgsec"><label>Type text (into focused field)</label>
+      <input id="yText" placeholder="hello world">
+      <div class="act"><button id="yBtn">Type</button></div></div>
+    <div class="pgsec"><label>Screenshot (saved in browser, invisible on iPad)</label>
+      <div class="act"><button id="shotB">Save screenshot</button></div></div>
+    <div class="pgsec"><label>Device</label>
+      <div class="act"><button id="rspBtn" class="sec">Respring</button></div></div>
+    <div class="pgsec wide"><label>Script (JSON macro)</label>
+      <textarea id="sJson" placeholder='{"actions":[{"type":"tap","x":0.5,"y":0.5}]}'></textarea>
+      <div class="act"><button id="sBtn">Run</button></div></div>
+  </div>
 </div></div>
 
 <script>
@@ -226,6 +237,21 @@ $('tBtn').onclick=()=>fetch(`/v1/toast?text=${enc($('tText').value)}`).catch(()=
 $('lBtn').onclick=()=>fetch(`/v1/launch?bundle=${enc($('lBundle').value)}`).catch(()=>{});
 $('yBtn').onclick=()=>fetch(`/v1/type?text=${enc($('yText').value)}`).catch(()=>{});
 $('sBtn').onclick=()=>fetch('/v1/script',{method:'POST',body:$('sJson').value}).catch(()=>{});
+// Browser screenshot: export the current frame upright (rotated to effOrient) —
+// nothing appears on the iPad.
+function shotBrowser(){
+  if(!canvas.width)return;
+  const deg=DEG[effOrient()]||0,cw=canvas.width,ch=canvas.height,r90=(deg===90||deg===-90);
+  const t=document.createElement('canvas');t.width=r90?ch:cw;t.height=r90?cw:ch;
+  const x=t.getContext('2d');x.translate(t.width/2,t.height/2);x.rotate(deg*Math.PI/180);
+  x.drawImage(canvas,-cw/2,-ch/2);
+  const a=document.createElement('a');a.download=`rctl-${Date.now()}.png`;a.href=t.toDataURL('image/png');a.click();
+}
+$('shotB').onclick=shotBrowser;
+// Respring (restart SpringBoard).
+function respring(){ if(confirm('Respring the device?')) fetch('/v1/respring',{method:'POST'}).catch(()=>{}); }
+$('rspBtn').onclick=respring;
+$('rspPanel').onclick=()=>{ setPanel(false); respring(); };
 (async()=>{
   let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
   const reader=resp.body.getReader();let buf=new Uint8Array(0);
