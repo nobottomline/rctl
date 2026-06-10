@@ -39,6 +39,14 @@ static void rctl_system_action(int code) {
     });
 }
 
+// App launching is deferred: the correct in-SpringBoard launch API still needs to
+// be verified (SBSLaunchApplicationWithIdentifier is a client->SpringBoard call,
+// unproven from inside SpringBoard). For now just log the request so the rest of
+// the automation API stays stable.
+static void rctl_launch_app(NSString *bid) {
+    if (bid) NSLog(@"[rctl-sbcap] launch requested (not yet wired): %@", bid);
+}
+
 static rctl_session     *gSession = NULL;
 static dispatch_source_t gOrientTimer = NULL;
 static id                gOrientObserver = nil;   // FBSOrientationObserver
@@ -88,6 +96,9 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_CONFIG && len >= sizeof(rctl_ipc_config)) {
                 rctl_ipc_config m; memcpy(&m, buf, sizeof m);
                 reconfigure(m.fps, m.scale, m.bitrate);
+            } else if (type == RCTL_MSG_LAUNCH && len > 0) {
+                NSString *bid = [[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding];
+                dispatch_async(dispatch_get_main_queue(), ^{ rctl_launch_app(bid); });
             }
             free(buf);
         }

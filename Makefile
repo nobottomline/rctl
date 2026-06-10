@@ -12,6 +12,11 @@
 export ARCHS = arm64 arm64e
 export TARGET = iphone:clang:14.5:14.0
 
+# IMPORTANT: deploy with scripts/deploy.sh (remove + fresh install), NOT
+# `make package install`. Upgrading the dylib in place over a running SpringBoard
+# leaves a stale code-signing state (__TEXT becomes non-executable) and crashes
+# SpringBoard at load; a clean remove + fresh install avoids it.
+
 # Default install target = the USB tunnel (see ~/.ssh/config Host rctl-device).
 # Override for Wi-Fi: THEOS_DEVICE_IP=greatlove THEOS_DEVICE_PORT=22 make package install
 export THEOS_DEVICE_IP ?= rctl-device

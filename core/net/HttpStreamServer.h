@@ -40,6 +40,14 @@ void rctl_http_set_input(rctl_http_server *s, rctl_input_cb cb, void *ctx);
 typedef void (*rctl_key_cb)(void *ctx, int page, int usage, int down);
 void rctl_http_set_key(rctl_http_server *s, rctl_key_cb cb, void *ctx);
 
+// Register a handler for the REST automation API (any "/v1/..." request). Gets the
+// path ("/v1/tap"), the raw query string (after '?', may be ""), and the request
+// body (POST, may be ""). Returns a malloc'd response body (server frees it) and
+// sets *status (e.g. 200, 400, 404). Return NULL to send an empty 200.
+typedef char *(*rctl_rest_cb)(void *ctx, const char *path, const char *query,
+                              const char *body, int *status);
+void rctl_http_set_rest(rctl_http_server *s, rctl_rest_cb cb, void *ctx);
+
 void rctl_http_stop(rctl_http_server *s);
 
 #ifdef __cplusplus

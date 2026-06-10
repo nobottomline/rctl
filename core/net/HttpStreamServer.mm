@@ -33,6 +33,8 @@ struct rctl_http_server {
     void *input_ctx;
     rctl_key_cb key_cb;
     void *key_ctx;
+    rctl_rest_cb rest_cb;
+    void *rest_ctx;
     volatile bool running;
 };
 
@@ -246,6 +248,45 @@ static void handle_client(rctl_http_server *s, int fd) {
         snprintf(body, sizeof(body), "%d", s->orientation);
         send_text(fd, "200 OK", "text/plain", body);
         close(fd);
+    } else if (strncmp(req, "GET /v1/", 8) == 0 || strncmp(req, "POST /v1/", 9) == 0) {
+        // REST automation plane: route "/v1/..." to the registered handler, which
+        // does the action and returns a JSON body. Parse path + query without
+        // clobbering the buffer (we still need it to find the POST body).
+        bool isPost = (req[0] == 'P');
+        const char *target = req + (isPost ? 5 : 4);   // skip "POST " / "GET "
+        char tbuf[1024]; size_t ti = 0;
+        while (target[ti] && target[ti] != ' ' && ti < sizeof(tbuf) - 1) { tbuf[ti] = target[ti]; ti++; }
+        tbuf[ti] = 0;
+        char *path = tbuf, *query = strchr(tbuf, '?');
+        if (query) { *query = 0; query++; } else query = (char *)"";
+
+        // Read the POST body (best-effort up to Content-Length beyond the first recv).
+        char *bodybuf = NULL; const char *body = "";
+        char *hdr_end = strstr(req, "\r\n\r\n");
+        if (isPost && hdr_end) {
+            char *cl = strstr(req, "Content-Length:");
+            int clen = cl ? atoi(cl + 15) : 0;
+            if (clen > 0 && clen < 1 << 20) {
+                char *bstart = hdr_end + 4;
+                int have = (int)(n - (bstart - req)), got = have > clen ? clen : have;
+                bodybuf = (char *)malloc(clen + 1);
+                if (have > 0) memcpy(bodybuf, bstart, got);
+                while (got < clen) { ssize_t k = recv(fd, bodybuf + got, clen - got, 0); if (k <= 0) break; got += (int)k; }
+                bodybuf[got] = 0; body = bodybuf;
+            }
+        }
+
+        pthread_mutex_lock(&s->mtx);
+        rctl_rest_cb cb = s->rest_cb; void *cx = s->rest_ctx;
+        pthread_mutex_unlock(&s->mtx);
+        int status = 200;
+        char *resp = cb ? cb(cx, path, query, body, &status) : NULL;
+        const char *line = status == 400 ? "400 Bad Request" :
+                           status == 404 ? "404 Not Found" :
+                           status == 500 ? "500 Internal Server Error" : "200 OK";
+        send_text(fd, line, "application/json", resp ? resp : "{}");
+        free(resp); free(bodybuf);
+        close(fd);
     } else if (strncmp(req, "GET / ", 6) == 0 || strncmp(req, "GET /index", 10) == 0) {
         size_t hlen = 0;
         char *html = read_file("/var/mobile/rctl/index.html", &hlen);
@@ -352,6 +393,13 @@ void rctl_http_set_key(rctl_http_server *s, rctl_key_cb cb, void *ctx) {
     if (!s) return;
     pthread_mutex_lock(&s->mtx);
     s->key_cb = cb; s->key_ctx = ctx;
+    pthread_mutex_unlock(&s->mtx);
+}
+
+void rctl_http_set_rest(rctl_http_server *s, rctl_rest_cb cb, void *ctx) {
+    if (!s) return;
+    pthread_mutex_lock(&s->mtx);
+    s->rest_cb = cb; s->rest_ctx = ctx;
     pthread_mutex_unlock(&s->mtx);
 }
 

@@ -19,6 +19,7 @@ enum {
     RCTL_MSG_INPUT  = 0x10,  // daemon->SB: rctl_ipc_input
     RCTL_MSG_KEY    = 0x11,  // daemon->SB: rctl_ipc_key
     RCTL_MSG_CONFIG = 0x12,  // daemon->SB: rctl_ipc_config
+    RCTL_MSG_LAUNCH = 0x13,  // daemon->SB: bundle id (UTF-8, not NUL-terminated)
 };
 
 #pragma pack(push, 1)
