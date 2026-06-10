@@ -130,6 +130,7 @@ static void rctl_show_toast(NSString *text, double seconds) {
 }
 
 // ---- Fun FX / pranks: speak aloud, play a sound, strobe, fullscreen banner ----
+static int current_orientation(void);              // defined below; for upright overlays
 // We drive AVSpeechSynthesizer/AVAudioSession via the Objective-C runtime and
 // declare AudioServicesPlaySystemSound by prototype, to AVOID importing the
 // AVFoundation umbrella header — it drags in camera/simd headers that fail to
@@ -173,7 +174,9 @@ static void rctl_fx_sound(uint32_t sid) {
 static void rctl_fx_flash(int times, uint8_t r, uint8_t g, uint8_t b) {
     if (times < 1) times = 1; if (times > 30) times = 30;
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *w = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        // fixedCoordinateSpace.bounds = the native panel — covers the whole screen
+        // in every orientation (a SpringBoard window doesn't rotate with the UI).
+        UIWindow *w = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].fixedCoordinateSpace.bounds];
         w.windowLevel = UIWindowLevelAlert + 100;
         w.userInteractionEnabled = NO;
         w.backgroundColor = [UIColor colorWithRed:r/255.0 green:g/255.0 blue:b/255.0 alpha:1];
@@ -188,21 +191,30 @@ static void rctl_fx_flash(int times, uint8_t r, uint8_t g, uint8_t b) {
     });
 }
 
-// Cover the whole screen with big text for `secs` seconds.
+// Cover the whole screen with big text for `secs` seconds. The window fills the
+// native panel; the label is sized to the UI-oriented area and rotated so the
+// text reads upright to whoever is physically looking at the iPad.
 static void rctl_fx_banner(NSString *text, float secs) {
     if (!text.length) return;
     if (secs <= 0) secs = 3;
     dispatch_async(dispatch_get_main_queue(), ^{
-        CGRect b = [UIScreen mainScreen].bounds;
-        UIWindow *w = [[UIWindow alloc] initWithFrame:b];
+        CGRect fb = [UIScreen mainScreen].fixedCoordinateSpace.bounds;   // native, full panel
+        int o = current_orientation();
+        BOOL land = (o == 3 || o == 4);
+        UIWindow *w = [[UIWindow alloc] initWithFrame:fb];
         w.windowLevel = UIWindowLevelAlert + 100;
         w.userInteractionEnabled = NO;
         w.backgroundColor = [UIColor colorWithWhite:0 alpha:0.92];
-        UILabel *l = [[UILabel alloc] initWithFrame:CGRectInset(b, 28, 28)];
+        CGFloat uw = land ? fb.size.height : fb.size.width;             // UI-oriented size
+        CGFloat uh = land ? fb.size.width  : fb.size.height;
+        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, uw - 56, uh - 56)];
         l.text = text; l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter;
         l.textColor = [UIColor whiteColor];
         l.font = [UIFont boldSystemFontOfSize:56];
         l.adjustsFontSizeToFitWidth = YES; l.minimumScaleFactor = 0.25;
+        CGFloat ang = (o == 2) ? M_PI : (o == 3) ? M_PI_2 : (o == 4) ? -M_PI_2 : 0;
+        l.transform = CGAffineTransformMakeRotation(ang);
+        l.center = CGPointMake(fb.size.width / 2, fb.size.height / 2);  // center on screen
         [w addSubview:l];
         w.hidden = NO;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(secs * NSEC_PER_SEC)),
