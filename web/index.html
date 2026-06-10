@@ -56,6 +56,17 @@
   .pgsec .act{display:flex;gap:7px;margin-top:auto}
   .pgsec button{flex:1;border:0;border-radius:8px;padding:9px;font-size:13px;font-weight:500;color:#fff;background:#3478f6}
   .pgsec button.sec{background:#3a3a3d}
+  .pgsec .fbar{display:flex;gap:7px}
+  .pgsec .fbar input{flex:1;min-width:0}
+  .pgsec .fbar button{flex:0 0 auto;padding:9px 13px}
+  .flist{max-height:240px;overflow:auto;background:#151517;border:1px solid #3a3a3d;border-radius:8px}
+  .frow{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #2a2a2d;font-size:13px}
+  .frow:last-child{border-bottom:0}
+  .frow .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .frow.dir .fn{cursor:pointer;color:#4aa3ff}
+  .frow .fsz{color:#86868b;font-size:11px;white-space:nowrap}
+  .frow .fb{flex:0 0 auto;width:auto;padding:4px 9px;font-size:12px;background:#3a3a3d}
+  .frow .fb.del{background:#5a2b2b}
 </style></head>
 <body>
 <div id="hud">rctl: connecting…</div>
@@ -123,6 +134,11 @@
     <div class="pgsec"><label>Record &amp; play (touch + keys)</label>
       <div id="recInfo">no recording</div>
       <div class="act"><button id="recBtn" class="sec">● Record</button><button id="playBtn">▶ Play</button></div></div>
+    <div class="pgsec wide"><label>Files (browser ↔ iPad)</label>
+      <div class="fbar"><button id="fUp" class="sec">↑</button><input id="fPath" value="/var/mobile" spellcheck="false"><button id="fGo" class="sec">Go</button></div>
+      <div id="fList" class="flist"></div>
+      <input id="fUpload" type="file" style="display:none">
+      <div class="act"><button id="fUpBtn" class="sec">⬆ Upload to this folder</button></div></div>
     <div class="pgsec wide"><label>Clipboard (Mac ↔ iPad)</label>
       <textarea id="clip" placeholder="clipboard text"></textarea>
       <div class="act"><button id="clGet" class="sec">Get from iPad</button><button id="clSet">Set on iPad</button></div></div>
@@ -272,9 +288,54 @@ async function loadApps(){ if(appMap)return; appMap={};
   try{ const arr=await(await fetch('/v1/apps')).json(); const dl=$('appList'); dl.innerHTML='';
     arr.forEach(a=>{ appMap[a.name]=a.id; const o=document.createElement('option'); o.value=a.name; o.label=a.id; dl.appendChild(o); });
   }catch(e){} }
-$('pgOpen').onclick=()=>{ setPanel(false); pg.classList.add('open'); loadApps(); };
+$('pgOpen').onclick=()=>{ setPanel(false); pg.classList.add('open'); loadApps(); fInit(); };
 $('pgX').onclick=()=>pg.classList.remove('open');
 pg.onclick=e=>{ if(e.target===pg) pg.classList.remove('open'); };
+
+// File manager: browse the device filesystem, download/upload/delete (daemon is root).
+const fPath=$('fPath'), fList=$('fList'); let fLoaded=false;
+function fInit(){ if(fLoaded)return; fLoaded=true; fLoad(); }
+const fSize=n=> n<1024?n+' B' : n<1048576?(n/1024).toFixed(0)+' KB' : (n/1048576).toFixed(1)+' MB';
+const fJoin=(d,n)=> (d.endsWith('/')?d:d+'/')+n;
+const fParent=d=>{ d=d.replace(/\/+$/,''); const i=d.lastIndexOf('/'); return i<=0?'/':d.slice(0,i); };
+async function fLoad(p){
+  if(p!==undefined) fPath.value=p;
+  const dir=fPath.value||'/';
+  fList.innerHTML='<div class="frow">…</div>';
+  try{
+    const j=await(await fetch('/v1/ls?path='+enc(dir))).json();
+    if(j.error){ fList.innerHTML='<div class="frow">'+j.error+'</div>'; return; }
+    fPath.value=j.path||dir; fList.innerHTML='';
+    (j.entries||[]).forEach(e=>{
+      const row=document.createElement('div'); row.className='frow'+(e.dir?' dir':'');
+      const nm=document.createElement('span'); nm.className='fn'; nm.textContent=(e.dir?'📁 ':'📄 ')+e.name;
+      if(e.dir) nm.onclick=()=>fLoad(fJoin(j.path,e.name));
+      row.appendChild(nm);
+      if(!e.dir){
+        const sz=document.createElement('span'); sz.className='fsz'; sz.textContent=fSize(e.size); row.appendChild(sz);
+        const dl=document.createElement('button'); dl.className='fb'; dl.textContent='⬇'; dl.title='Download';
+        dl.onclick=()=>fDownload(fJoin(j.path,e.name),e.name); row.appendChild(dl);
+      }
+      const rm=document.createElement('button'); rm.className='fb del'; rm.textContent='✕'; rm.title='Delete';
+      rm.onclick=async()=>{ if(!confirm('Delete '+e.name+'?'))return;
+        await fetch('/v1/rm?path='+enc(fJoin(j.path,e.name))).catch(()=>{}); fLoad(); };
+      row.appendChild(rm);
+      fList.appendChild(row);
+    });
+    if(!fList.children.length) fList.innerHTML='<div class="frow">(empty)</div>';
+  }catch(err){ fList.innerHTML='<div class="frow">error</div>'; }
+}
+async function fDownload(path,name){
+  try{ const b=await(await fetch('/v1/pull?path='+enc(path))).blob();
+    const u=URL.createObjectURL(b), a=document.createElement('a'); a.href=u; a.download=name; a.click(); URL.revokeObjectURL(u);
+  }catch(e){} }
+$('fGo').onclick=()=>fLoad();
+$('fUp').onclick=()=>fLoad(fParent(fPath.value));
+fPath.addEventListener('keydown',e=>{ if(e.key==='Enter')fLoad(); });
+$('fUpBtn').onclick=()=>$('fUpload').click();
+$('fUpload').onchange=async()=>{ const f=$('fUpload').files[0]; if(!f)return;
+  try{ await fetch('/v1/push?path='+enc(fJoin(fPath.value,f.name)),{method:'POST',body:await f.arrayBuffer()}); }catch(e){}
+  $('fUpload').value=''; fLoad(); };
 $('aBtn').onclick=()=>fetch(`/v1/alert?title=${enc($('aTitle').value)}&message=${enc($('aMsg').value)}`).catch(()=>{});
 $('tBtn').onclick=()=>fetch(`/v1/toast?text=${enc($('tText').value)}`).catch(()=>{});
 $('lBtn').onclick=()=>{ const v=$('lBundle').value.trim(); if(!v)return;

@@ -13,6 +13,8 @@
 #import <time.h>
 #import <dlfcn.h>
 #import <spawn.h>
+#import <dirent.h>
+#import <sys/stat.h>
 #import "net/HttpStreamServer.h"
 #import "ipc/Ipc.h"
 
@@ -241,7 +243,35 @@ static char *run_script(const char *body, int *status) {
     return strdup("{\"ok\":true}");
 }
 
-static char *rest_handler(void *ctx, const char *path, const char *query, const char *body, int *status) {
+// List a directory as JSON {path, entries:[{name,dir,size}]}, dirs first then name.
+static char *list_dir(const char *dir, int *status) {
+    DIR *d = opendir(dir);
+    if (!d) { *status = 404; return strdup("{\"error\":\"cannot open directory\"}"); }
+    NSMutableArray *entries = [NSMutableArray array];
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        NSString *name = [NSString stringWithUTF8String:e->d_name];
+        if (!name) continue;                       // skip names that aren't valid UTF-8
+        char full[3072]; snprintf(full, sizeof full, "%s/%s", dir, e->d_name);
+        struct stat st; BOOL isdir = NO; long long size = 0;
+        if (lstat(full, &st) == 0) { isdir = S_ISDIR(st.st_mode); size = (long long)st.st_size; }
+        [entries addObject:@{ @"name": name, @"dir": @(isdir), @"size": @(size) }];
+    }
+    closedir(d);
+    [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL ad = [a[@"dir"] boolValue], bd = [b[@"dir"] boolValue];
+        if (ad != bd) return ad ? NSOrderedAscending : NSOrderedDescending;   // directories first
+        return [a[@"name"] caseInsensitiveCompare:b[@"name"]];
+    }];
+    NSDictionary *obj = @{ @"path": ([NSString stringWithUTF8String:dir] ?: @""), @"entries": entries };
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+    return out;
+}
+
+static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
+                          int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
     if (!strcmp(path, "/v1/tap")) {
         schedule_tap(get_d(query,"x",0), get_d(query,"y",0), 0);
@@ -305,6 +335,42 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         send_to_sb(RCTL_MSG_OPENURL, url, (uint32_t)strlen(url));
     } else if (!strcmp(path, "/v1/script")) {
         return run_script(body, status);
+    } else if (!strcmp(path, "/v1/ls")) {
+        char raw[1024], dir[1024];
+        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        url_decode(raw, dir, sizeof dir);
+        return list_dir(dir, status);
+    } else if (!strcmp(path, "/v1/pull")) {       // download a file -> raw bytes
+        char raw[1024], file[1024];
+        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        url_decode(raw, file, sizeof file);
+        struct stat st;
+        if (stat(file, &st) != 0) { *status = 404; return strdup("{\"error\":\"not found\"}"); }
+        if (S_ISDIR(st.st_mode))  { *status = 400; return strdup("{\"error\":\"is a directory\"}"); }
+        if (st.st_size > (64 << 20)) { *status = 400; return strdup("{\"error\":\"too large (>64MB)\"}"); }
+        FILE *f = fopen(file, "rb");
+        if (!f) { *status = 500; return strdup("{\"error\":\"cannot open\"}"); }
+        long sz = st.st_size; char *buf = (char *)malloc(sz > 0 ? sz : 1);
+        size_t rd = fread(buf, 1, sz, f); fclose(f);
+        *out_len = (int)rd; *out_ctype = "application/octet-stream";
+        return buf;
+    } else if (!strcmp(path, "/v1/push")) {       // upload: POST body bytes -> file
+        char raw[1024], file[1024];
+        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        url_decode(raw, file, sizeof file);
+        FILE *f = fopen(file, "wb");
+        if (!f) { *status = 500; return strdup("{\"error\":\"cannot write\"}"); }
+        if (body_len > 0) fwrite(body, 1, body_len, f);
+        fclose(f);
+        char out[96]; snprintf(out, sizeof out, "{\"ok\":true,\"bytes\":%d}", body_len);
+        return strdup(out);
+    } else if (!strcmp(path, "/v1/rm")) {
+        char raw[1024], target[1024];
+        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        url_decode(raw, target, sizeof target);
+        struct stat st;
+        int rc = (stat(target, &st) == 0 && S_ISDIR(st.st_mode)) ? rmdir(target) : unlink(target);
+        if (rc != 0) { *status = 500; return strdup("{\"error\":\"delete failed\"}"); }
     } else {
         *status = 404; return strdup("{\"error\":\"unknown action\"}");
     }

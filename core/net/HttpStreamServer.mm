@@ -173,14 +173,18 @@ static bool send_frame_chunk(int fd, uint8_t type, const uint8_t *data, size_t l
     return ok;
 }
 
-static void send_text(int fd, const char *status, const char *ctype, const char *body) {
+static void send_data(int fd, const char *status, const char *ctype,
+                      const void *body, size_t len) {
     char hdr[256];
     int n = snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
         "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-        status, ctype, strlen(body));
+        status, ctype, len);
     send_full(fd, hdr, n);
-    send_full(fd, body, strlen(body));
+    send_full(fd, body, len);
+}
+static void send_text(int fd, const char *status, const char *ctype, const char *body) {
+    send_data(fd, status, ctype, body, strlen(body));
 }
 
 static void handle_client(rctl_http_server *s, int fd) {
@@ -261,30 +265,34 @@ static void handle_client(rctl_http_server *s, int fd) {
         if (query) { *query = 0; query++; } else query = (char *)"";
 
         // Read the POST body (best-effort up to Content-Length beyond the first recv).
-        char *bodybuf = NULL; const char *body = "";
+        // Cap at 64 MB — large enough for file uploads, bounded against abuse.
+        char *bodybuf = NULL; const char *body = ""; int body_len = 0;
         char *hdr_end = strstr(req, "\r\n\r\n");
         if (isPost && hdr_end) {
             char *cl = strstr(req, "Content-Length:");
             int clen = cl ? atoi(cl + 15) : 0;
-            if (clen > 0 && clen < 1 << 20) {
+            if (clen > 0 && clen < (64 << 20)) {
                 char *bstart = hdr_end + 4;
                 int have = (int)(n - (bstart - req)), got = have > clen ? clen : have;
                 bodybuf = (char *)malloc(clen + 1);
                 if (have > 0) memcpy(bodybuf, bstart, got);
                 while (got < clen) { ssize_t k = recv(fd, bodybuf + got, clen - got, 0); if (k <= 0) break; got += (int)k; }
-                bodybuf[got] = 0; body = bodybuf;
+                bodybuf[got] = 0; body = bodybuf; body_len = got;
             }
         }
 
         pthread_mutex_lock(&s->mtx);
         rctl_rest_cb cb = s->rest_cb; void *cx = s->rest_ctx;
         pthread_mutex_unlock(&s->mtx);
-        int status = 200;
-        char *resp = cb ? cb(cx, path, query, body, &status) : NULL;
+        int status = 200, out_len = 0; const char *out_ctype = NULL;
+        char *resp = cb ? cb(cx, path, query, body, body_len, &status, &out_len, &out_ctype) : NULL;
         const char *line = status == 400 ? "400 Bad Request" :
                            status == 404 ? "404 Not Found" :
                            status == 500 ? "500 Internal Server Error" : "200 OK";
-        send_text(fd, line, "application/json", resp ? resp : "{}");
+        if (out_ctype)   // explicit content-type => send exactly out_len raw bytes (may be 0)
+            send_data(fd, line, out_ctype, resp ? resp : "", out_len);
+        else             // default: treat resp as a NUL-terminated JSON string
+            send_data(fd, line, "application/json", resp ? resp : "{}", resp ? strlen(resp) : 2);
         free(resp); free(bodybuf);
         close(fd);
     } else if (strncmp(req, "GET / ", 6) == 0 || strncmp(req, "GET /index", 10) == 0) {
