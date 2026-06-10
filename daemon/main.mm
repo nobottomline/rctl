@@ -39,6 +39,56 @@ static void send_to_sb(uint8_t type, const void *data, uint32_t len) {
     pthread_mutex_unlock(&gSBLock);
 }
 
+// ---- request/response: send a query to SB and block for its reply ----
+#define RCTL_MAX_PENDING 16
+typedef struct { uint32_t reqid; dispatch_semaphore_t sem; char *result; bool used; } pending_t;
+static pending_t gPending[RCTL_MAX_PENDING];
+static pthread_mutex_t gPendLock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t gNextReqid = 1;
+
+// Deliver a REPLY from SB to the waiting query (called from the ipc thread).
+static void deliver_reply(uint32_t reqid, const uint8_t *payload, uint32_t len) {
+    pthread_mutex_lock(&gPendLock);
+    for (int i = 0; i < RCTL_MAX_PENDING; i++) {
+        if (gPending[i].used && gPending[i].reqid == reqid && !gPending[i].result) {
+            gPending[i].result = (char *)malloc(len + 1);
+            if (gPending[i].result) { memcpy(gPending[i].result, payload, len); gPending[i].result[len] = 0; }
+            dispatch_semaphore_signal(gPending[i].sem);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&gPendLock);
+}
+
+// Send a query to SB and wait up to `timeout` s for the reply. Returns a malloc'd
+// string (caller frees) or NULL on timeout/no-SB.
+static char *sb_query(uint8_t qtype, const char *payload, uint32_t plen, double timeout) {
+    pthread_mutex_lock(&gPendLock);
+    int slot = -1;
+    for (int i = 0; i < RCTL_MAX_PENDING; i++) if (!gPending[i].used) { slot = i; break; }
+    if (slot < 0) { pthread_mutex_unlock(&gPendLock); return NULL; }
+    uint32_t reqid = gNextReqid++;
+    gPending[slot].used = true; gPending[slot].reqid = reqid;
+    gPending[slot].sem = dispatch_semaphore_create(0); gPending[slot].result = NULL;
+    pthread_mutex_unlock(&gPendLock);
+
+    uint32_t blen = 5 + plen;
+    uint8_t *buf = (uint8_t *)malloc(blen);
+    buf[0] = reqid >> 24; buf[1] = reqid >> 16; buf[2] = reqid >> 8; buf[3] = (uint8_t)reqid; buf[4] = qtype;
+    if (plen) memcpy(buf + 5, payload, plen);
+    send_to_sb(RCTL_MSG_QUERY, buf, blen);
+    free(buf);
+
+    long timedout = dispatch_semaphore_wait(gPending[slot].sem,
+                        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)));
+    pthread_mutex_lock(&gPendLock);
+    char *result = timedout == 0 ? gPending[slot].result : NULL;
+    if (timedout != 0 && gPending[slot].result) free(gPending[slot].result);
+    gPending[slot].used = false; gPending[slot].result = NULL; gPending[slot].sem = NULL;
+    pthread_mutex_unlock(&gPendLock);
+    return result;
+}
+
 static void on_input(void *ctx, int phase, int finger, double nx, double ny) {
     rctl_ipc_input m = { (int32_t)phase, (int32_t)finger, nx, ny };
     send_to_sb(RCTL_MSG_INPUT, &m, sizeof m);
@@ -224,6 +274,26 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
     } else if (!strcmp(path, "/v1/respring")) {
         // Restart SpringBoard (we're root). Delay so the HTTP reply goes out first.
         AFTER(0.2, ^{ respring_device(); });
+    } else if (!strcmp(path, "/v1/clipboard")) {
+        if (body && body[0]) {            // POST body -> set the pasteboard
+            send_to_sb(RCTL_MSG_SETCLIP, body, (uint32_t)strlen(body));
+        } else {                          // GET -> read the pasteboard
+            char *clip = sb_query(RCTL_Q_CLIPBOARD, NULL, 0, 1.5);
+            NSString *s = clip ? ([NSString stringWithUTF8String:clip] ?: @"") : @"";
+            free(clip);
+            NSData *jd = [NSJSONSerialization dataWithJSONObject:@{@"text": s} options:0 error:nil];
+            char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+            return out;
+        }
+    } else if (!strcmp(path, "/v1/deviceinfo")) {
+        char *info = sb_query(RCTL_Q_DEVINFO, NULL, 0, 1.5);
+        if (info) return info;            // SB already returns JSON
+        *status = 504; return strdup("{\"error\":\"no reply from device\"}");
+    } else if (!strcmp(path, "/v1/openurl")) {
+        char raw[1024], url[1024];
+        if (!get_param(query,"url",raw,sizeof raw)) { *status = 400; return strdup("{\"error\":\"url required\"}"); }
+        url_decode(raw, url, sizeof url);
+        send_to_sb(RCTL_MSG_OPENURL, url, (uint32_t)strlen(url));
     } else if (!strcmp(path, "/v1/script")) {
         return run_script(body, status);
     } else {
@@ -249,6 +319,9 @@ static void *ipc_thread(void *unused) {
                 rctl_http_push_au(gHttp, buf + 1, len - 1, buf[0] != 0);
             } else if (type == RCTL_MSG_ORIENT && len >= 1) {
                 rctl_http_set_orientation(gHttp, buf[0]);
+            } else if (type == RCTL_MSG_REPLY && len >= 4) {
+                uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
+                deliver_reply(reqid, buf + 4, len - 4);
             }
             free(buf);
         }

@@ -22,7 +22,14 @@ enum {
     RCTL_MSG_LAUNCH = 0x13,  // daemon->SB: bundle id (UTF-8)
     RCTL_MSG_ALERT  = 0x14,  // daemon->SB: "title\nmessage" (UTF-8)
     RCTL_MSG_TOAST  = 0x15,  // daemon->SB: toast text (UTF-8)
+    RCTL_MSG_SETCLIP= 0x16,  // daemon->SB: set the pasteboard to this text
+    RCTL_MSG_OPENURL= 0x17,  // daemon->SB: open this URL
+    RCTL_MSG_QUERY  = 0x18,  // daemon->SB: [4B BE reqid][1B qtype][payload], expects a REPLY
+    RCTL_MSG_REPLY  = 0x19,  // SB->daemon: [4B BE reqid][payload]
 };
+
+// Query types carried in RCTL_MSG_QUERY (request/response over the socket).
+enum { RCTL_Q_CLIPBOARD = 1, RCTL_Q_DEVINFO = 2 };
 
 #pragma pack(push, 1)
 typedef struct { int32_t phase; int32_t finger; double x; double y; } rctl_ipc_input;

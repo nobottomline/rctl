@@ -50,6 +50,7 @@
     color:#f2f2f7;padding:9px 10px;font-size:14px;font-family:inherit;outline:none;box-sizing:border-box}
   .pgsec input:focus,.pgsec textarea:focus{border-color:#3478f6}
   .pgsec textarea{min-height:60px;resize:vertical}
+  .pgsec #devInfo{font-size:12px;color:#c7c7cc;min-height:18px;word-break:break-word}
   .pgsec .act{display:flex;gap:7px;margin-top:auto}
   .pgsec button{flex:1;border:0;border-radius:8px;padding:9px;font-size:13px;font-weight:500;color:#fff;background:#3478f6}
   .pgsec button.sec{background:#3a3a3d}
@@ -104,10 +105,19 @@
     <div class="pgsec"><label>Type text (into focused field)</label>
       <input id="yText" placeholder="hello world">
       <div class="act"><button id="yBtn">Type</button></div></div>
+    <div class="pgsec"><label>Open URL</label>
+      <input id="urlIn" placeholder="https://apple.com">
+      <div class="act"><button id="urlBtn">Open</button></div></div>
+    <div class="pgsec"><label>Device info</label>
+      <div id="devInfo">—</div>
+      <div class="act"><button id="devBtn" class="sec">Refresh</button></div></div>
     <div class="pgsec"><label>Screenshot (saved in browser, invisible on iPad)</label>
       <div class="act"><button id="shotB">Save screenshot</button></div></div>
     <div class="pgsec"><label>Device</label>
       <div class="act"><button id="rspBtn" class="sec">Respring</button></div></div>
+    <div class="pgsec wide"><label>Clipboard (Mac ↔ iPad)</label>
+      <textarea id="clip" placeholder="clipboard text"></textarea>
+      <div class="act"><button id="clGet" class="sec">Get from iPad</button><button id="clSet">Set on iPad</button></div></div>
     <div class="pgsec wide"><label>Script (JSON macro)</label>
       <textarea id="sJson" placeholder='{"actions":[{"type":"tap","x":0.5,"y":0.5}]}'></textarea>
       <div class="act"><button id="sBtn">Run</button></div></div>
@@ -258,6 +268,13 @@ $('shotB').onclick=shotBrowser;
 function respring(){ if(confirm('Respring the device?')) fetch('/v1/respring',{method:'POST'}).catch(()=>{}); }
 $('rspBtn').onclick=respring;
 $('rspPanel').onclick=()=>{ setPanel(false); respring(); };
+// Open URL, clipboard (Mac <-> iPad), device info.
+$('urlBtn').onclick=()=>fetch(`/v1/openurl?url=${enc($('urlIn').value)}`).catch(()=>{});
+$('clSet').onclick=()=>fetch('/v1/clipboard',{method:'POST',body:$('clip').value}).catch(()=>{});
+$('clGet').onclick=async()=>{ try{const j=await(await fetch('/v1/clipboard')).json();$('clip').value=j.text||'';}catch(e){} };
+$('devBtn').onclick=async()=>{ try{const j=await(await fetch('/v1/deviceinfo')).json();
+  $('devInfo').textContent=`${j.name||'?'} · ${j.model||''} · iOS ${j.ios||''} · 🔋 ${j.battery||'?'}`;
+  }catch(e){ $('devInfo').textContent='(no reply)'; } };
 (async()=>{
   let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
   const reader=resp.body.getReader();let buf=new Uint8Array(0);

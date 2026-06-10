@@ -131,6 +131,53 @@ static void send_orient(int o) {
     pthread_mutex_unlock(&gIpcLock);
 }
 
+// Reply to a daemon query: [4B BE reqid][UTF-8 payload].
+static void send_reply(uint32_t reqid, NSString *result) {
+    NSData *d = [(result ?: @"") dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    uint32_t blen = 4 + (uint32_t)d.length;
+    uint8_t *buf = (uint8_t *)malloc(blen);
+    buf[0] = reqid >> 24; buf[1] = reqid >> 16; buf[2] = reqid >> 8; buf[3] = (uint8_t)reqid;
+    memcpy(buf + 4, d.bytes, d.length);
+    pthread_mutex_lock(&gIpcLock);
+    if (gIpc) (void)rctl_ipc_send(gIpc, RCTL_MSG_REPLY, buf, blen);
+    pthread_mutex_unlock(&gIpcLock);
+    free(buf);
+}
+
+static void rctl_set_clipboard(NSString *text) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [UIPasteboard generalPasteboard].string = text ?: @""; });
+}
+
+static NSString *rctl_get_clipboard(void) {  // call on the main thread
+    return [UIPasteboard generalPasteboard].string ?: @"";
+}
+
+static NSString *rctl_device_info(void) {  // call on the main thread
+    UIDevice *d = [UIDevice currentDevice];
+    d.batteryMonitoringEnabled = YES;
+    int pct = (int)(d.batteryLevel * 100 + 0.5);
+    NSString *batt = pct >= 0 ? [NSString stringWithFormat:@"%d%%", pct] : @"?";
+    return [NSString stringWithFormat:@"{\"name\":\"%@\",\"model\":\"%@\",\"ios\":\"%@\",\"battery\":\"%@\"}",
+            d.name, d.model, d.systemVersion, batt];
+}
+
+// Open a URL via SpringBoardServices (and unlock). Off the main thread — it's a
+// client->SpringBoard call that would self-deadlock on the main thread.
+static void rctl_open_url(NSString *urlStr) {
+    if (!urlStr.length) return;
+    static void (*SBSOpenURL)(CFURLRef, Boolean) = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *h = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
+        SBSOpenURL = (void (*)(CFURLRef, Boolean))dlsym(h ? h : RTLD_DEFAULT, "SBSOpenSensitiveURLAndUnlock");
+    });
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        CFURLRef url = CFURLCreateWithString(NULL, (__bridge CFStringRef)urlStr, NULL);
+        if (url && SBSOpenURL) SBSOpenURL(url, true);
+        if (url) CFRelease(url);
+    });
+}
+
 // Restart the capture/encode session with new settings (from the daemon's /config).
 static void reconfigure(int fps, double scale, int bitrate) {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -176,6 +223,18 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_TOAST && len > 0) {
                 NSString *s = [[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding];
                 rctl_show_toast(s, 2.0);
+            } else if (type == RCTL_MSG_SETCLIP) {
+                rctl_set_clipboard([[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding] ?: @"");
+            } else if (type == RCTL_MSG_OPENURL && len > 0) {
+                rctl_open_url([[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding]);
+            } else if (type == RCTL_MSG_QUERY && len >= 5) {
+                uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
+                uint8_t qtype = buf[4];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSString *r = qtype == RCTL_Q_CLIPBOARD ? rctl_get_clipboard()
+                                : qtype == RCTL_Q_DEVINFO   ? rctl_device_info() : @"";
+                    send_reply(reqid, r);
+                });
             }
             free(buf);
         }
