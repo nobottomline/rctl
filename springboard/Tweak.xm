@@ -51,8 +51,21 @@ static void rctl_launch_app(NSString *bid) {
     if (SBSLaunch) SBSLaunch((__bridge CFStringRef)bid, false);
 }
 
+// Keep the device awake and unlocked for remote use: reset SpringBoard's idle
+// timer (which drives auto-dim and auto-lock) and undim the display.
+static void rctl_keep_awake(void) {
+    UIApplication *app = [UIApplication sharedApplication];
+    SEL withArg = NSSelectorFromString(@"resetIdleTimerAndUndim:");
+    if ([app respondsToSelector:withArg]) { ((void (*)(id, SEL, BOOL))objc_msgSend)(app, withArg, YES); return; }
+    SEL priv = NSSelectorFromString(@"_resetIdleTimerAndUndim:");
+    if ([app respondsToSelector:priv]) { ((void (*)(id, SEL, BOOL))objc_msgSend)(app, priv, YES); return; }
+    SEL noArg = NSSelectorFromString(@"resetIdleTimerAndUndim");
+    if ([app respondsToSelector:noArg]) ((void (*)(id, SEL))objc_msgSend)(app, noArg);
+}
+
 static rctl_session     *gSession = NULL;
 static dispatch_source_t gOrientTimer = NULL;
+static dispatch_source_t gAwakeTimer = NULL;
 static id                gOrientObserver = nil;   // FBSOrientationObserver
 static rctl_ipc         *gIpc = NULL;             // connection to rctld
 static pthread_mutex_t   gIpcLock = PTHREAD_MUTEX_INITIALIZER;
@@ -161,6 +174,13 @@ static int current_orientation(void) {
                 send_orient(sent);
             });
             dispatch_resume(gOrientTimer);
+
+            // Keep the device awake + unlocked for remote use (reset the idle timer).
+            gAwakeTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+            dispatch_source_set_timer(gAwakeTimer, DISPATCH_TIME_NOW,
+                                      (uint64_t)(10 * NSEC_PER_SEC), (uint64_t)NSEC_PER_SEC);
+            dispatch_source_set_event_handler(gAwakeTimer, ^{ rctl_keep_awake(); });
+            dispatch_resume(gAwakeTimer);
         });
     }
 }

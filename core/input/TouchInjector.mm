@@ -21,6 +21,9 @@
 #import <dlfcn.h>
 #import <unistd.h>
 #import <stdio.h>
+#import <time.h>
+#import <sys/stat.h>
+#import <sys/sysctl.h>
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
 typedef struct __IOHIDEventSystemClient *IOHIDEventSystemClientRef;
@@ -130,6 +133,36 @@ static void ensure_init(void) {
     });
 }
 
+// Persist the captured senderID so it survives resprings within a boot — the
+// caller then needs to physically touch the screen only once per boot, not once
+// per respring. Keyed by boot time (current time minus uptime); the id changes
+// across reboots, and a reboot drops the jailbreak anyway, so a stale value is
+// never used. File is world-writable so it loads regardless of process uid.
+#define RCTL_SENDERID_FILE "/tmp/rctl_senderid.txt"
+
+static long rctl_boot_time(void) {
+    struct timeval bt; size_t sz = sizeof(bt);
+    int mib[2] = { CTL_KERN, KERN_BOOTTIME };
+    if (sysctl(mib, 2, &bt, &sz, NULL, 0) == 0 && bt.tv_sec) return (long)bt.tv_sec;
+    return (long)time(NULL) - (long)[NSProcessInfo processInfo].systemUptime;  // fallback
+}
+
+static void save_senderid(uint64_t sid) {
+    FILE *f = fopen(RCTL_SENDERID_FILE, "w");
+    if (f) { fprintf(f, "%llu %ld\n", (unsigned long long)sid, rctl_boot_time()); fclose(f);
+             chmod(RCTL_SENDERID_FILE, 0666); }
+}
+
+static uint64_t load_senderid(void) {
+    FILE *f = fopen(RCTL_SENDERID_FILE, "r");
+    if (!f) return 0;
+    unsigned long long sid = 0; long bt = 0;
+    int ok = fscanf(f, "%llu %ld", &sid, &bt);
+    fclose(f);
+    if (ok == 2 && sid && labs(bt - rctl_boot_time()) <= 5) return (uint64_t)sid;
+    return 0;
+}
+
 // Capture the real senderID from a genuine hardware touch. Critically, ignore
 // our OWN injected events (they carry kFallbackSenderID and are echoed back to
 // this listener) — otherwise we'd capture the fake id and poison every touch.
@@ -139,6 +172,7 @@ static void senderid_callback(void *target, void *refcon, void *service, IOHIDEv
     uint64_t sid = _GetSenderID(event);
     if (sid && sid != kFallbackSenderID) {
         gSenderID = sid;
+        save_senderid(sid);
         char b[80]; snprintf(b, sizeof b, "[input] real senderID captured: 0x%llx", sid); ilog(b);
     }
 }
@@ -150,6 +184,11 @@ static void senderid_callback(void *target, void *refcon, void *service, IOHIDEv
 static void ensure_senderid(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        gSenderID = load_senderid();           // cached from an earlier touch this boot
+        if (gSenderID) {
+            char b[80]; snprintf(b, sizeof b, "[input] senderID loaded from cache: 0x%llx", gSenderID); ilog(b);
+            return;                            // no physical touch needed
+        }
         if (_RegisterCallback && _ScheduleRunLoop && _ClientCreate) {
             gSenderClient = _ClientCreate(kCFAllocatorDefault);
             if (gSenderClient) {
