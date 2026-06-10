@@ -1,0 +1,9 @@
+#!/bin/sh
+# On removal, respring so SpringBoard unloads the agent and frees port 8080.
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
+    killall -9 SpringBoard 2>/dev/null || true
+fi
+
+exit 0

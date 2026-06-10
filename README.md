@@ -39,14 +39,16 @@ rctl/
 │   └── vendor/     #   vendored private headers
 ├── springboard/    # the injected agent (rctlsbcap): capture + encode + serve + inject
 ├── web/            # browser client (WebCodecs decoder, pointer/keyboard input)
-├── docs/           # design & operational docs
-└── scripts/        # build / deploy helpers
+├── layout/         # extra package payload (web client) + maintainer scripts (postinst/prerm)
+├── control         # Debian package metadata
+├── Makefile        # Theos aggregate: builds every component into one .deb
+└── docs/           # design & operational docs
 ```
 
-Planned, not yet created: `relay/` (Go signaling + TURN), `ios-app/` (native client),
-`proto/` (shared protocol). The HTTP server lives in the SpringBoard agent today for
-simplicity; it may later move into a separate root daemon (so a network bug can't respring
-SpringBoard).
+Planned, not yet created: `daemon/` (rctld — root daemon hosting transport + the REST
+automation API, supervised by launchd), `relay/` (Go signaling + TURN), `proto/` (shared
+protocol). The HTTP server lives in the SpringBoard agent today; it moves into `rctld` next
+so a network/transport bug can't respring SpringBoard.
 
 ## Transport / decode decision
 
@@ -58,23 +60,27 @@ SpringBoard).
 
 ## Build & deploy
 
-Requires Theos (`$THEOS`) and the iOS 14.5 SDK on macOS. Passwordless SSH alias `greatlove`.
+Requires Theos (`$THEOS`) and the iOS 14.5 SDK on macOS. The whole project is a Theos
+aggregate package — build and install everything as a real `.deb` with one command:
 
 ```sh
-make -C springboard THEOS=/Users/grigorij/theos
-scp -q springboard/.theos/obj/debug/rctlsbcap.dylib \
-    greatlove:/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
-ssh greatlove 'ldid -S /Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib; killall SpringBoard'
-# web client (served from disk, no rebuild needed to iterate):
-scp -q web/index.html greatlove:/var/mobile/rctl/index.html
-# then open http://<ipad-ip>:8080/ in Safari (WebCodecs required)
+# Default target is the USB tunnel — start it first:
+iproxy 2222:22 8080:8080 &
+
+make package install      # build .deb, copy it, dpkg -i, re-sign, respring
+# over Wi-Fi instead:
+THEOS_DEVICE_IP=greatlove THEOS_DEVICE_PORT=22 make package install
+
+# then open http://localhost:8080/  (USB)  or  http://<ipad-ip>:8080/  (Wi-Fi) in Safari
 ```
 
-> NOTE: the macOS `ldid` signature is rejected by on-device AMFI — always re-sign on the
-> device (`ldid -S`) after copying, or the binary is SIGKILLed at launch.
->
-> When Wi-Fi is flaky, work over USB: `iproxy 2222:22 8080:8080` then `ssh -p 2222 root@localhost`
-> and `curl http://localhost:8080/…` (and open the page from the Mac at `http://localhost:8080/`).
+`make package` alone just builds `./packages/*.deb`. The package installs the agent to
+`/Library/MobileSubstrate/DynamicLibraries/` and the web client to `/var/mobile/rctl/`,
+shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
+
+> NOTE: the macOS `ldid` signature is rejected by on-device AMFI on arm64e, so the package's
+> `postinst` re-signs the dylib with the device's own `ldid` (and resprings). The SSH targets
+> are defined in `~/.ssh/config` (`rctl-device` = USB tunnel, `greatlove` = Wi-Fi).
 
 ## Roadmap
 

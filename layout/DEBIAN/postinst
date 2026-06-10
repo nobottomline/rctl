@@ -1,0 +1,16 @@
+#!/bin/sh
+# Re-sign the injected dylib with the device's own ldid — ad-hoc signatures made
+# off-device (macOS) are rejected by on-device AMFI on arm64e and the dylib is
+# refused at load. Then respring to load the tweak.
+set -e
+
+DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
+
+if [ -f "$DYLIB" ] && command -v ldid >/dev/null 2>&1; then
+    ldid -S "$DYLIB" || true
+fi
+
+# Respring so SpringBoard picks up the (re)installed agent.
+killall -9 SpringBoard 2>/dev/null || true
+
+exit 0
