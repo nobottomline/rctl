@@ -54,6 +54,16 @@ typedef char *(*rctl_rest_cb)(void *ctx, const char *path, const char *query,
                               int *out_len, const char **out_ctype);
 void rctl_http_set_rest(rctl_http_server *s, rctl_rest_cb cb, void *ctx);
 
+// Register a callback fired when the live-stream subscriber count transitions
+// between zero and non-zero: active=true when the FIRST /stream client connects,
+// active=false when the LAST one leaves. Lets the device idle (stop capture +
+// keep-awake) while nobody is watching, and wake on demand. Called off the mutex.
+typedef void (*rctl_session_cb)(void *ctx, bool active);
+void rctl_http_set_session(rctl_http_server *s, rctl_session_cb cb, void *ctx);
+
+// True if at least one /stream client is currently subscribed.
+bool rctl_http_has_clients(rctl_http_server *s);
+
 void rctl_http_stop(rctl_http_server *s);
 
 #ifdef __cplusplus

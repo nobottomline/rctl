@@ -35,8 +35,18 @@ struct rctl_http_server {
     void *key_ctx;
     rctl_rest_cb rest_cb;
     void *rest_ctx;
+    rctl_session_cb session_cb;
+    void *session_ctx;
+    bool was_active;               // last-notified state (a /stream client present)
     volatile bool running;
 };
+
+// Number of live /stream subscribers (caller holds the mutex).
+static int count_clients_locked(rctl_http_server *s) {
+    int n = 0;
+    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->clients[i] >= 0) n++;
+    return n;
+}
 
 static char *read_file(const char *path, size_t *outLen) {
     FILE *f = fopen(path, "rb");
@@ -206,8 +216,14 @@ static void handle_client(rctl_http_server *s, int fd) {
         { uint8_t ob = (uint8_t)s->orientation; send_frame_chunk(fd, 2, &ob, 1); }
         int slot = -1;
         for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->clients[i] < 0) { slot = i; break; }
-        if (slot >= 0) s->clients[slot] = fd; else close(fd);
+        bool became_active = false;
+        rctl_session_cb scb = s->session_cb; void *sctx = s->session_ctx;
+        if (slot >= 0) {
+            s->clients[slot] = fd;
+            if (!s->was_active) { s->was_active = true; became_active = true; }  // 0 -> 1: wake
+        } else close(fd);
         pthread_mutex_unlock(&s->mtx);
+        if (became_active && scb) scb(sctx, true);
         // keep fd open for streaming (pushed from rctl_http_push_au)
     } else if (strncmp(req, "GET /input", 10) == 0) {
         int phase = 0, id = 0; double x = 0, y = 0;
@@ -360,8 +376,12 @@ void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len, boo
         uint8_t *k = (uint8_t *)malloc(len);
         if (k) { memcpy(k, data, len); free(s->keyframe); s->keyframe = k; s->keyframe_len = len; }
     }
-    broadcast_locked(s, keyframe ? 1 : 0, data, len);
+    broadcast_locked(s, keyframe ? 1 : 0, data, len);   // may prune dead subscribers
+    bool became_idle = false;
+    rctl_session_cb scb = s->session_cb; void *sctx = s->session_ctx;
+    if (s->was_active && count_clients_locked(s) == 0) { s->was_active = false; became_idle = true; }  // 1 -> 0: sleep
     pthread_mutex_unlock(&s->mtx);
+    if (became_idle && scb) scb(sctx, false);
 }
 
 void rctl_http_set_orientation(rctl_http_server *s, int orientation) {
@@ -409,6 +429,21 @@ void rctl_http_set_rest(rctl_http_server *s, rctl_rest_cb cb, void *ctx) {
     pthread_mutex_lock(&s->mtx);
     s->rest_cb = cb; s->rest_ctx = ctx;
     pthread_mutex_unlock(&s->mtx);
+}
+
+void rctl_http_set_session(rctl_http_server *s, rctl_session_cb cb, void *ctx) {
+    if (!s) return;
+    pthread_mutex_lock(&s->mtx);
+    s->session_cb = cb; s->session_ctx = ctx;
+    pthread_mutex_unlock(&s->mtx);
+}
+
+bool rctl_http_has_clients(rctl_http_server *s) {
+    if (!s) return false;
+    pthread_mutex_lock(&s->mtx);
+    bool any = count_clients_locked(s) > 0;
+    pthread_mutex_unlock(&s->mtx);
+    return any;
 }
 
 void rctl_http_stop(rctl_http_server *s) {

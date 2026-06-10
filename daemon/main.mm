@@ -123,6 +123,27 @@ static void ipc_key(int page, int usage, int down) {
     rctl_ipc_key m = { (int32_t)page, (int32_t)usage, (int32_t)down }; send_to_sb(RCTL_MSG_KEY, &m, sizeof m);
 }
 
+// ---- Idle/active session gating (battery saver) -------------------------------
+// The capture+encode pipeline and the keep-awake idle-timer resets live in
+// SpringBoard and cost real battery (the display never sleeps). Run them ONLY
+// while a browser is actually watching: tell SB to wake when the first /stream
+// client connects, and to idle (let the device sleep) when the last one leaves.
+static int gSessionGen = 0;                     // bumped per transition (serialized on gAuto)
+static void send_active(bool on) {
+    uint8_t b = on ? 1 : 0;
+    send_to_sb(RCTL_MSG_ACTIVE, &b, 1);
+    dlog(on ? "session ACTIVE -> SB" : "session IDLE -> SB");
+}
+static void on_session(void *ctx, bool active) {
+    // Serialize on gAuto; debounce idle by a few seconds so a page refresh or a
+    // brief Wi-Fi blip doesn't thrash the capture session off and back on.
+    dispatch_async(gAuto, ^{
+        int gen = ++gSessionGen;
+        if (active) send_active(true);
+        else AFTER(4.0, ^{ if (gen == gSessionGen) send_active(false); });
+    });
+}
+
 static void url_decode(const char *in, char *out, size_t outsz) {
     size_t o = 0;
     for (size_t i = 0; in[i] && o + 1 < outsz; i++) {
@@ -387,6 +408,9 @@ static void *ipc_thread(void *unused) {
         if (!peer) { usleep(100000); continue; }
         dlog("SB connected");
         pthread_mutex_lock(&gSBLock); gSB = peer; pthread_mutex_unlock(&gSBLock);
+        // Sync the (re)connected SB agent to the current state: if a viewer is
+        // already watching (e.g. SB resprang mid-session) wake it; else stay idle.
+        send_active(rctl_http_has_clients(gHttp));
 
         uint8_t type; uint8_t *buf; uint32_t len;
         while (rctl_ipc_recv(peer, &type, &buf, &len)) {
@@ -438,6 +462,7 @@ int main(int argc, char **argv) {
         rctl_http_set_reconfigure(gHttp, on_reconfigure, NULL);
         gAuto = dispatch_queue_create("com.greatlove.rctl.auto", DISPATCH_QUEUE_SERIAL);
         rctl_http_set_rest(gHttp, rest_handler, NULL);
+        rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         dlog("http listening on :8080");
 
         pthread_t t;

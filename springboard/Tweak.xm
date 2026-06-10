@@ -147,6 +147,11 @@ static dispatch_source_t gAwakeTimer = NULL;
 static id                gOrientObserver = nil;   // FBSOrientationObserver
 static rctl_ipc         *gIpc = NULL;             // connection to rctld
 static pthread_mutex_t   gIpcLock = PTHREAD_MUTEX_INITIALIZER;
+static bool              gActive = false;         // a viewer is connected -> run the pipeline
+static int               gFps = 30;               // current encode settings (for (re)start)
+static double            gScale = 1.0;
+static int               gBitrate = 20000000;
+static void rctl_set_active(bool on);             // defined below; used by ipc_manager
 
 // Encoded frames go to the daemon (dropped if it isn't connected yet).
 static void net_sink(const uint8_t *data, size_t len, bool keyframe, void *ctx) {
@@ -228,11 +233,16 @@ static void rctl_open_url(NSString *urlStr) {
 }
 
 // Restart the capture/encode session with new settings (from the daemon's /config).
+// Remember the settings for the next (re)start; only churn the encoder if a
+// viewer is actually connected (otherwise we're idle and start with these later).
 static void reconfigure(int fps, double scale, int bitrate) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (gSession) { rctl_session_stop(gSession); gSession = NULL; }
-        gSession = rctl_session_start(fps, bitrate, scale, net_sink, NULL);
-        NSLog(@"[rctl-sbcap] reconfigured fps=%d scale=%.2f br=%d", fps, scale, bitrate);
+        gFps = fps; gScale = scale; gBitrate = bitrate;
+        if (gActive) {
+            if (gSession) { rctl_session_stop(gSession); gSession = NULL; }
+            gSession = rctl_session_start(fps, bitrate, scale, net_sink, NULL);
+            NSLog(@"[rctl-sbcap] reconfigured fps=%d scale=%.2f br=%d", fps, scale, bitrate);
+        }
     });
 }
 
@@ -286,6 +296,8 @@ static void *ipc_manager(void *unused) {
                                 : qtype == RCTL_Q_APPLIST   ? rctl_app_list() : @"";
                     send_reply(reqid, r);
                 });
+            } else if (type == RCTL_MSG_ACTIVE && len >= 1) {
+                rctl_set_active(buf[0] != 0);     // viewer connected (1) / gone (0)
             }
             free(buf);
         }
@@ -306,6 +318,64 @@ static int current_orientation(void) {
     return (int)o;
 }
 
+// Keep the display & lock at bay (reset the idle timer) while a viewer watches.
+static void start_awake_timer(void) {
+    if (gAwakeTimer) return;
+    gAwakeTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(gAwakeTimer, DISPATCH_TIME_NOW,
+                              (uint64_t)(10 * NSEC_PER_SEC), (uint64_t)NSEC_PER_SEC);
+    dispatch_source_set_event_handler(gAwakeTimer, ^{ rctl_keep_awake(); });
+    dispatch_resume(gAwakeTimer);
+}
+
+// Poll the foreground app's interface orientation and forward changes (debounced:
+// commit only after a reading holds for 2 ticks, to drop transients while rotating).
+static void start_orient_timer(void) {
+    if (gOrientTimer) return;
+    gOrientTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(gOrientTimer, DISPATCH_TIME_NOW,
+                              (uint64_t)(250 * NSEC_PER_MSEC), (uint64_t)(50 * NSEC_PER_MSEC));
+    dispatch_source_set_event_handler(gOrientTimer, ^{
+        int raw = current_orientation();
+        if (raw < 1 || raw > 4) raw = rctl_input_window_orientation();
+        static int cand = 0, candN = 0, sent = 1;
+        if (raw >= 1 && raw <= 4) {
+            if (raw == cand) candN++; else { cand = raw; candN = 1; }
+            if (candN >= 2) sent = cand;
+        }
+        send_orient(sent);
+    });
+    dispatch_resume(gOrientTimer);
+}
+
+static void stop_timer(__strong dispatch_source_t *t) {
+    if (*t) { dispatch_source_cancel(*t); *t = nil; }
+}
+
+// Turn the capture+keep-awake machinery on/off with viewer presence. IDLE by
+// default: with nobody watching we run NOTHING — no capture, no encoder, no
+// idle-timer resets — so the device sleeps normally and the battery is spared.
+// The daemon flips us ACTIVE when the first /stream client connects and IDLE
+// when the last leaves: opening the viewer is itself the wake signal.
+static void rctl_set_active(bool on) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (on == gActive) return;
+        gActive = on;
+        if (on) {
+            if (!gSession) gSession = rctl_session_start(gFps, gBitrate, gScale, net_sink, NULL);
+            start_awake_timer();
+            start_orient_timer();
+            rctl_keep_awake();                 // undim now so the viewer sees content immediately
+            NSLog(@"[rctl-sbcap] ACTIVE — capture + keep-awake on");
+        } else {
+            if (gSession) { rctl_session_stop(gSession); gSession = NULL; }
+            stop_timer(&gAwakeTimer);
+            stop_timer(&gOrientTimer);          // nothing left holding the device awake -> it sleeps
+            NSLog(@"[rctl-sbcap] IDLE — pipeline off, device may sleep");
+        }
+    });
+}
+
 %ctor {
     @autoreleasepool {
         if (![[[NSProcessInfo processInfo] processName] isEqualToString:@"SpringBoard"]) return;
@@ -315,42 +385,14 @@ static int current_orientation(void) {
             // Connect to the daemon (retrying) on a background thread.
             pthread_t t; pthread_create(&t, NULL, ipc_manager, NULL);
 
-            // Default: native resolution, 30fps, 20 Mbps, High profile (screen-recording quality).
-            gSession = rctl_session_start(30, 20000000, 1.0, net_sink, NULL);
-            NSLog(@"[rctl-sbcap] capture session started");
-
+            // Prepare the orientation observer, but DON'T start capturing yet.
+            // We stay IDLE (no capture, no keep-awake, device free to sleep) until
+            // the daemon reports a viewer is connected -> rctl_set_active(true).
             dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
             Class cls = NSClassFromString(@"FBSOrientationObserver");
             if (cls) gOrientObserver = ((id (*)(id, SEL))objc_msgSend)((id)cls, NSSelectorFromString(@"alloc"));
             if (gOrientObserver) gOrientObserver = ((id (*)(id, SEL))objc_msgSend)(gOrientObserver, NSSelectorFromString(@"init"));
-
-            gOrientTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-            dispatch_source_set_timer(gOrientTimer, DISPATCH_TIME_NOW,
-                                      (uint64_t)(250 * NSEC_PER_MSEC), (uint64_t)(50 * NSEC_PER_MSEC));
-            dispatch_source_set_event_handler(gOrientTimer, ^{
-                // Use the FOREGROUND app's actual interface orientation (FrontBoard's
-                // activeInterfaceOrientation). It is correct even for apps that force a
-                // fixed orientation (e.g. a portrait-only game on a landscape device),
-                // unlike the SpringBoard key window which tracks the device. Debounce:
-                // only commit a change after it holds for 2 ticks, to drop the rare
-                // transient reading seen while the device is being physically rotated.
-                int raw = current_orientation();              // FBS activeInterfaceOrientation
-                if (raw < 1 || raw > 4) raw = rctl_input_window_orientation();
-                static int cand = 0, candN = 0, sent = 1;
-                if (raw >= 1 && raw <= 4) {
-                    if (raw == cand) candN++; else { cand = raw; candN = 1; }
-                    if (candN >= 2) sent = cand;
-                }
-                send_orient(sent);
-            });
-            dispatch_resume(gOrientTimer);
-
-            // Keep the device awake + unlocked for remote use (reset the idle timer).
-            gAwakeTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-            dispatch_source_set_timer(gAwakeTimer, DISPATCH_TIME_NOW,
-                                      (uint64_t)(10 * NSEC_PER_SEC), (uint64_t)NSEC_PER_SEC);
-            dispatch_source_set_event_handler(gAwakeTimer, ^{ rctl_keep_awake(); });
-            dispatch_resume(gAwakeTimer);
+            NSLog(@"[rctl-sbcap] ready (idle until a viewer connects)");
         });
     }
 }
