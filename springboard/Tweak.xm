@@ -39,12 +39,18 @@ static void rctl_system_action(int code) {
     });
 }
 
-// App launching is deferred: the correct in-SpringBoard launch API still needs to
-// be verified (SBSLaunchApplicationWithIdentifier is a client->SpringBoard call,
-// unproven from inside SpringBoard). For now just log the request so the rest of
-// the automation API stays stable.
+// Launch an app by bundle id via SpringBoardServices. Runs on the main thread.
 static void rctl_launch_app(NSString *bid) {
-    if (bid) NSLog(@"[rctl-sbcap] launch requested (not yet wired): %@", bid);
+    if (!bid) return;
+    static int (*SBSLaunch)(CFStringRef, Boolean) = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *h = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
+        SBSLaunch = (int (*)(CFStringRef, Boolean))dlsym(h ? h : RTLD_DEFAULT, "SBSLaunchApplicationWithIdentifier");
+    });
+    int rc = SBSLaunch ? SBSLaunch((__bridge CFStringRef)bid, false) : -999;
+    FILE *f = fopen("/tmp/rctl_input.log", "a");
+    if (f) { fprintf(f, "[launch] %s fn=%p rc=%d\n", bid.UTF8String, (void *)SBSLaunch, rc); fclose(f); }
 }
 
 static rctl_session     *gSession = NULL;

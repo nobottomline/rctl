@@ -199,8 +199,8 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         if (!get_param(query,"text",raw,sizeof raw)) { *status = 400; return strdup("{\"error\":\"text required\"}"); }
         url_decode(raw, text, sizeof text); schedule_type(text, 0);
     } else if (!strcmp(path, "/v1/launch")) {
-        // Deferred: needs a verified in-SpringBoard launch API (see rctl_launch_app).
-        *status = 501; return strdup("{\"error\":\"launch not implemented yet\"}");
+        char bundle[256]; if (!get_param(query,"bundle",bundle,sizeof bundle)) { *status = 400; return strdup("{\"error\":\"bundle required\"}"); }
+        send_to_sb(RCTL_MSG_LAUNCH, bundle, (uint32_t)strlen(bundle));
     } else if (!strcmp(path, "/v1/script")) {
         return run_script(body, status);
     } else {
