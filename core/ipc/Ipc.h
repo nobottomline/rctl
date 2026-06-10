@@ -19,7 +19,9 @@ enum {
     RCTL_MSG_INPUT  = 0x10,  // daemon->SB: rctl_ipc_input
     RCTL_MSG_KEY    = 0x11,  // daemon->SB: rctl_ipc_key
     RCTL_MSG_CONFIG = 0x12,  // daemon->SB: rctl_ipc_config
-    RCTL_MSG_LAUNCH = 0x13,  // daemon->SB: bundle id (UTF-8, not NUL-terminated)
+    RCTL_MSG_LAUNCH = 0x13,  // daemon->SB: bundle id (UTF-8)
+    RCTL_MSG_ALERT  = 0x14,  // daemon->SB: "title\nmessage" (UTF-8)
+    RCTL_MSG_TOAST  = 0x15,  // daemon->SB: toast text (UTF-8)
 };
 
 #pragma pack(push, 1)

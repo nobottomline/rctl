@@ -51,6 +51,49 @@ static void rctl_launch_app(NSString *bid) {
     if (SBSLaunch) SBSLaunch((__bridge CFStringRef)bid, false);
 }
 
+// System alert (CFUserNotification) — shows over any app. Blocks a background
+// thread until the user taps OK (so the notification ref stays alive).
+typedef struct __CFUserNotification *CFUserNotificationRef;
+extern CFUserNotificationRef CFUserNotificationCreate(CFAllocatorRef, CFTimeInterval, CFOptionFlags, SInt32 *, CFDictionaryRef);
+extern SInt32 CFUserNotificationReceiveResponse(CFUserNotificationRef, CFTimeInterval, CFOptionFlags *);
+
+static void rctl_show_alert(NSString *title, NSString *message) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSDictionary *d = @{ @"AlertHeader": title.length ? title : @"rctl",
+                             @"AlertMessage": message ?: @"",
+                             @"DefaultButtonTitle": @"OK" };
+        SInt32 err = 0;
+        CFUserNotificationRef n = CFUserNotificationCreate(NULL, 0, 0, &err, (__bridge CFDictionaryRef)d);
+        if (n && !err) { CFOptionFlags resp; CFUserNotificationReceiveResponse(n, 0, &resp); }
+        if (n) CFRelease(n);
+    });
+}
+
+// Toast: a small pill that floats over everything for a moment.
+static void rctl_show_toast(NSString *text, double seconds) {
+    if (!text.length) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+        UIFont *font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+        CGSize ts = [text sizeWithAttributes:@{NSFontAttributeName: font}];
+        CGFloat h = ts.height + 22, w = MIN(ts.width + 44, sw - 40);
+        UIWindow *win = [[UIWindow alloc] initWithFrame:CGRectMake((sw - w) / 2, 58, w, h)];
+        win.windowLevel = UIWindowLevelAlert + 1;
+        win.backgroundColor = [UIColor colorWithWhite:0 alpha:0.82];
+        win.layer.cornerRadius = h / 2;
+        win.clipsToBounds = YES;
+        win.userInteractionEnabled = NO;
+        UILabel *lbl = [[UILabel alloc] initWithFrame:win.bounds];
+        lbl.text = text; lbl.font = font; lbl.textColor = [UIColor whiteColor];
+        lbl.textAlignment = NSTextAlignmentCenter;
+        [win addSubview:lbl];
+        win.hidden = NO;
+        double dur = seconds > 0 ? seconds : 2.0;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(dur * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ win.hidden = YES; });
+    });
+}
+
 // Keep the device awake and unlocked for remote use: reset SpringBoard's idle
 // timer (which drives auto-dim and auto-lock) and undim the display.
 static void rctl_keep_awake(void) {
@@ -116,6 +159,15 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_LAUNCH && len > 0) {
                 NSString *bid = [[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding];
                 dispatch_async(dispatch_get_main_queue(), ^{ rctl_launch_app(bid); });
+            } else if (type == RCTL_MSG_ALERT && len > 0) {
+                NSString *s = [[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding];
+                NSRange nl = [s rangeOfString:@"\n"];
+                NSString *title = nl.location == NSNotFound ? s : [s substringToIndex:nl.location];
+                NSString *msg   = nl.location == NSNotFound ? @"" : [s substringFromIndex:nl.location + 1];
+                rctl_show_alert(title, msg);
+            } else if (type == RCTL_MSG_TOAST && len > 0) {
+                NSString *s = [[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding];
+                rctl_show_toast(s, 2.0);
             }
             free(buf);
         }

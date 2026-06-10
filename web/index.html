@@ -31,6 +31,23 @@
     padding:7px 4px;font-size:12px;white-space:nowrap}
   #panel button:active{background:#3478f6}
   #panel button.on{background:#3478f6}
+  /* Console (playground) modal */
+  #pg{position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;
+    background:rgba(0,0,0,.55)}
+  #pg.open{display:flex}
+  #pgcard{width:min(400px,92vw);max-height:86vh;overflow:auto;box-sizing:border-box;
+    background:rgba(30,30,33,.97);border-radius:18px;padding:16px 16px 14px;
+    -webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);box-shadow:0 14px 44px rgba(0,0,0,.6)}
+  #pgcard h2{margin:0 0 12px;font-size:17px;font-weight:600;color:#f2f2f7}
+  .fld{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
+  .fld label{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#86868b}
+  .fld input,.fld textarea{background:#1b1b1e;border:1px solid #3a3a3d;border-radius:9px;
+    color:#f2f2f7;padding:9px 10px;font-size:14px;font-family:inherit;outline:none;box-sizing:border-box}
+  .fld input:focus,.fld textarea:focus{border-color:#3478f6}
+  .fld textarea{min-height:58px;resize:vertical}
+  .fld .act{display:flex;gap:8px;margin-top:1px}
+  #pgcard .act button{flex:1;border:0;border-radius:9px;padding:9px;font-size:14px;font-weight:500;color:#fff;background:#3478f6}
+  #pgcard .act button.sec{background:#3a3a3d}
 </style></head>
 <body>
 <div id="hud">rctl: connecting…</div>
@@ -57,6 +74,8 @@
     <button id="oAuto" class="on">Auto</button>
     <button id="oRot">⟳ Rotate</button>
   </div>
+  <div class="sect">Tools</div>
+  <div class="row"><button id="pgOpen">⌨ Console</button></div>
   <div class="sect">Quality</div>
   <div class="row">
     <button data-q="hq" class="on">High</button>
@@ -64,6 +83,25 @@
     <button data-q="lat">Low&nbsp;latency</button>
   </div>
 </div>
+
+<div id="pg"><div id="pgcard">
+  <h2>Console</h2>
+  <div class="fld"><label>Alert</label>
+    <input id="aTitle" placeholder="Title"><input id="aMsg" placeholder="Message">
+    <div class="act"><button id="aBtn">Show alert</button></div></div>
+  <div class="fld"><label>Toast</label>
+    <input id="tText" placeholder="Text">
+    <div class="act"><button id="tBtn">Show toast</button></div></div>
+  <div class="fld"><label>Launch app</label>
+    <input id="lBundle" placeholder="com.apple.Preferences">
+    <div class="act"><button id="lBtn">Launch</button></div></div>
+  <div class="fld"><label>Type text (into focused field)</label>
+    <input id="yText" placeholder="hello world">
+    <div class="act"><button id="yBtn">Type</button></div></div>
+  <div class="fld"><label>Script (JSON macro)</label>
+    <textarea id="sJson" placeholder='{"actions":[{"type":"tap","x":0.5,"y":0.5}]}'></textarea>
+    <div class="act"><button id="sBtn">Run</button><button id="pgX" class="sec">Close</button></div></div>
+</div></div>
 
 <script>
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
@@ -164,9 +202,11 @@ function key(u,d){ fetch(`/key?p=7&u=${u}&d=${d}`).catch(()=>{}); }
 // Modifiers held (press/release); regular keys as one atomic tap (d=2) so a
 // lost/late release can't make iOS auto-repeat ("ls -la" -> "ls -laa").
 const MODS=new Set([0xE0,0xE1,0xE2,0xE3,0xE4,0xE5,0xE6,0xE7]);
-addEventListener('keydown',e=>{const u=codeToUsage(e.code);if(!u)return;e.preventDefault();
+// Don't forward keystrokes to the device while typing into the Console fields.
+function inField(e){const t=e.target&&e.target.tagName;return t==='INPUT'||t==='TEXTAREA';}
+addEventListener('keydown',e=>{if(inField(e))return;const u=codeToUsage(e.code);if(!u)return;e.preventDefault();
   if(MODS.has(u)){if(!e.repeat)key(u,1);}else{key(u,2);}});
-addEventListener('keyup',e=>{const u=codeToUsage(e.code);if(!u)return;e.preventDefault();
+addEventListener('keyup',e=>{if(inField(e))return;const u=codeToUsage(e.code);if(!u)return;e.preventDefault();
   if(MODS.has(u))key(u,0);});
 // ---- hardware buttons (HID Consumer page 0x0C) + SpringBoard actions ----
 const SYS={home:0x40,lock:0x30,volup:0xE9,voldn:0xEA};
@@ -176,6 +216,16 @@ document.querySelectorAll('#panel button[data-b]').forEach(b=>b.onclick=()=>sysP
 // page 0xF0=240: 1=Control Center, 2=Cover Sheet.
 document.querySelectorAll('#panel button[data-sb]').forEach(b=>b.onclick=()=>
   fetch(`/key?p=240&u=${b.dataset.sb}&d=1`).catch(()=>{}));
+// ---- Console (playground): spawn alerts/toasts, launch apps, type, run macros ----
+const pg=document.getElementById('pg'),$=id=>document.getElementById(id),enc=encodeURIComponent;
+$('pgOpen').onclick=()=>{ setPanel(false); pg.classList.add('open'); };
+$('pgX').onclick=()=>pg.classList.remove('open');
+pg.onclick=e=>{ if(e.target===pg) pg.classList.remove('open'); };
+$('aBtn').onclick=()=>fetch(`/v1/alert?title=${enc($('aTitle').value)}&message=${enc($('aMsg').value)}`).catch(()=>{});
+$('tBtn').onclick=()=>fetch(`/v1/toast?text=${enc($('tText').value)}`).catch(()=>{});
+$('lBtn').onclick=()=>fetch(`/v1/launch?bundle=${enc($('lBundle').value)}`).catch(()=>{});
+$('yBtn').onclick=()=>fetch(`/v1/type?text=${enc($('yText').value)}`).catch(()=>{});
+$('sBtn').onclick=()=>fetch('/v1/script',{method:'POST',body:$('sJson').value}).catch(()=>{});
 (async()=>{
   let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
   const reader=resp.body.getReader();let buf=new Uint8Array(0);

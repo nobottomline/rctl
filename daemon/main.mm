@@ -201,6 +201,18 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
     } else if (!strcmp(path, "/v1/launch")) {
         char bundle[256]; if (!get_param(query,"bundle",bundle,sizeof bundle)) { *status = 400; return strdup("{\"error\":\"bundle required\"}"); }
         send_to_sb(RCTL_MSG_LAUNCH, bundle, (uint32_t)strlen(bundle));
+    } else if (!strcmp(path, "/v1/alert")) {
+        char rawT[256], rawM[1024], title[256], msg[1024];
+        get_param(query,"title",rawT,sizeof rawT); url_decode(rawT, title, sizeof title);
+        if (!get_param(query,"message",rawM,sizeof rawM) && !title[0]) { *status = 400; return strdup("{\"error\":\"title or message required\"}"); }
+        url_decode(rawM, msg, sizeof msg);
+        char payload[1300]; int pn = snprintf(payload, sizeof payload, "%s\n%s", title, msg);
+        send_to_sb(RCTL_MSG_ALERT, payload, (uint32_t)pn);
+    } else if (!strcmp(path, "/v1/toast")) {
+        char raw[1024], text[1024];
+        if (!get_param(query,"text",raw,sizeof raw)) { *status = 400; return strdup("{\"error\":\"text required\"}"); }
+        url_decode(raw, text, sizeof text);
+        send_to_sb(RCTL_MSG_TOAST, text, (uint32_t)strlen(text));
     } else if (!strcmp(path, "/v1/script")) {
         return run_script(body, status);
     } else {
