@@ -26,6 +26,7 @@ include $(THEOS)/makefiles/common.mk
 
 SUBPROJECTS += springboard
 SUBPROJECTS += daemon
+SUBPROJECTS += msd
 
 include $(THEOS)/makefiles/aggregate.mk
 

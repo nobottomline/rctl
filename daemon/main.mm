@@ -432,19 +432,18 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         float pitch = 0.45f, rate = 0.38f; char *sy = (char *)malloc(9 + tl);
         sy[0] = 1; memcpy(sy + 1, &pitch, 4); memcpy(sy + 5, &rate, 4); memcpy(sy + 9, text, tl);
         send_to_sb(RCTL_MSG_FX, sy, (uint32_t)(9 + tl)); free(sy);
-    } else if (!strcmp(path, "/v1/camera")) {         // snap a photo via the isolated helper
+    } else if (!strcmp(path, "/v1/camera")) {         // snap a photo via SpringBoard (an app client)
         int pos = 1; char posp[16];                   // 1=back, 2=front
         if (get_param(query, "pos", posp, sizeof posp) && (!strcmp(posp, "front") || !strcmp(posp, "2"))) pos = 2;
-        const char *outpath = "/tmp/rctl_cam.jpg";
-        unlink(outpath);
-        char posarg[4]; snprintf(posarg, sizeof posarg, "%d", pos);
-        char *av[] = { (char *)"rctlcam", posarg, (char *)outpath, NULL };
-        pid_t pid;
-        if (posix_spawn(&pid, "/usr/local/bin/rctlcam", NULL, NULL, av, environ) != 0) { *status = 500; return strdup("{\"error\":\"spawn failed\"}"); }
-        int st = 0; waitpid(pid, &st, 0);
-        int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-        FILE *f = fopen(outpath, "rb");
-        if (!f) { *status = 500; char *o = (char *)malloc(64); snprintf(o, 64, "{\"error\":\"capture failed rc=%d\"}", code); return o; }
+        char pb = (char)pos;
+        char *rpath = sb_query(RCTL_Q_CAMERA, &pb, 1, 8.0);   // SB captures, replies with the file path (or ERR:)
+        if (!rpath || rpath[0] != '/') {
+            char *out = (char *)malloc(160);
+            snprintf(out, 160, "{\"error\":\"%s\"}", (rpath && rpath[0]) ? rpath : "no reply from device");
+            free(rpath); *status = 500; return out;
+        }
+        FILE *f = fopen(rpath, "rb"); free(rpath);
+        if (!f) { *status = 500; return strdup("{\"error\":\"no image file\"}"); }
         fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
         if (sz <= 0 || sz > (32 << 20)) { fclose(f); *status = 500; return strdup("{\"error\":\"bad image\"}"); }
         char *buf = (char *)malloc(sz); size_t rd = fread(buf, 1, sz, f); fclose(f);

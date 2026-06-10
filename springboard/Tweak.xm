@@ -229,12 +229,10 @@ static void rctl_fx_banner(NSString *text, float secs) {
 // issue; uses AVCaptureStillImageOutput (block completion, no delegate class).
 // The CMSampleBuffer is treated as an opaque void* so we needn't import CoreMedia.
 static void rctl_capture_camera(int position, uint32_t reqid) {
-    // DISABLED inside SpringBoard: starting an AVCaptureSession here triggers a TCC
-    // usage-description abort (SpringBoard's Info.plist has no NSCameraUsageDescription)
-    // that SIGABRTs SpringBoard. Camera capture has to run in a separate process that
-    // carries its own NSCameraUsageDescription — reply with an error for now.
-    send_reply(reqid, @"ERR:camera unavailable from SpringBoard (TCC usage-description)");
-    return;
+    // Capture from SpringBoard: it IS a foreground app on the home screen (so
+    // mediaserverd doesn't interrupt the session) and already has camera TCC. The
+    // usage-description abort is dodged by hooking -[NSBundle objectForInfoDictionaryKey:]
+    // below. Runs off the main thread so the ~1.5s capture never freezes the UI.
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
       @autoreleasepool {
         Class CDev = NSClassFromString(@"AVCaptureDevice");
@@ -267,22 +265,43 @@ static void rctl_capture_camera(int position, uint32_t reqid) {
         ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"addOutput:"), out);
 
         ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"startRunning"));
+        for (int i = 0; i < 50; i++) {                    // wait until the session actually runs
+            if (((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"))) break;
+            usleep(50000);
+        }
+        BOOL running = ((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"));
+        NSLog(@"[rctl-sbcap] camera session running=%d", running);
+        usleep(450000);                                   // let the sensor expose
         id conn = ((id (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"connectionWithMediaType:"), @"vide");
-        if (!conn) { ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning")); send_reply(reqid, @""); return; }
+        if (!conn) { ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning")); send_reply(reqid, running ? @"ERR:no-conn" : @"ERR:not-running"); return; }
 
-        // Let the sensor expose for a moment, then grab one frame.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.7 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
-            void (^done)(void *, NSError *) = ^(void *sbuf, NSError *e) {
-                NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
-                if (jpeg.length && [jpeg writeToFile:@"/tmp/rctl_cam.jpg" atomically:YES]) send_reply(reqid, @"/tmp/rctl_cam.jpg");
-                else send_reply(reqid, @"");
-                ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));  // keeps session alive until here
-            };
+        void (^done)(void *, NSError *) = ^(void *sbuf, NSError *e) {
+            NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
+            if (jpeg.length && [jpeg writeToFile:@"/tmp/rctl_cam.jpg" atomically:YES]) send_reply(reqid, @"/tmp/rctl_cam.jpg");
+            else send_reply(reqid, @"ERR:no-jpeg");
+            ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));  // keeps session alive until here
+        };
+        @try {
             ((void (*)(id, SEL, id, id))objc_msgSend)(out, NSSelectorFromString(@"captureStillImageAsynchronouslyFromConnection:completionHandler:"), conn, done);
-        });
+        } @catch (NSException *ex) {
+            NSLog(@"[rctl-sbcap] camera threw: %@", ex.reason);
+            ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));
+            send_reply(reqid, @"ERR:inconsistent");
+        }
       }
     });
 }
+
+// Provide an NSCameraUsageDescription for SpringBoard's main bundle so the camera
+// privacy check doesn't SIGABRT us when we capture. SpringBoard's Info.plist lacks
+// the key; the privacy machinery reads it via the Info dictionary, intercepted here.
+%hook NSBundle
+- (id)objectForInfoDictionaryKey:(NSString *)key {
+    if ([key isEqualToString:@"NSCameraUsageDescription"] && self == [NSBundle mainBundle])
+        return @"rctl remote camera";
+    return %orig;
+}
+%end
 
 // Keep the device awake and unlocked for remote use: reset SpringBoard's idle
 // timer (which drives auto-dim and auto-lock) and undim the display.
