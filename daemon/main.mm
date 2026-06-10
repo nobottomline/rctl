@@ -289,6 +289,10 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         char *info = sb_query(RCTL_Q_DEVINFO, NULL, 0, 1.5);
         if (info) return info;            // SB already returns JSON
         *status = 504; return strdup("{\"error\":\"no reply from device\"}");
+    } else if (!strcmp(path, "/v1/apps")) {
+        char *apps = sb_query(RCTL_Q_APPLIST, NULL, 0, 3.0);   // enumeration can be slower
+        if (apps) return apps;            // JSON array [{id,name}]
+        *status = 504; return strdup("[]");
     } else if (!strcmp(path, "/v1/openurl")) {
         char raw[1024], url[1024];
         if (!get_param(query,"url",raw,sizeof raw)) { *status = 400; return strdup("{\"error\":\"url required\"}"); }

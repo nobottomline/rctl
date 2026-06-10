@@ -163,6 +163,23 @@ static NSString *rctl_device_info(void) {  // call on the main thread
 
 // Open a URL via SpringBoardServices (and unlock). Off the main thread — it's a
 // client->SpringBoard call that would self-deadlock on the main thread.
+// Installed apps as a JSON array [{id,name}], sorted by name. Main thread.
+static NSString *rctl_app_list(void) {
+    id ws = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"LSApplicationWorkspace"),
+                                            NSSelectorFromString(@"defaultWorkspace"));
+    NSArray *apps = ws ? ((NSArray *(*)(id, SEL))objc_msgSend)(ws, NSSelectorFromString(@"allApplications")) : nil;
+    NSMutableArray *out = [NSMutableArray array];
+    for (id app in apps) {
+        NSString *bid  = ((NSString *(*)(id, SEL))objc_msgSend)(app, NSSelectorFromString(@"bundleIdentifier"));
+        NSString *name = ((NSString *(*)(id, SEL))objc_msgSend)(app, NSSelectorFromString(@"localizedName"));
+        if (bid.length && name.length) [out addObject:@{@"id": bid, @"name": name}];
+    }
+    [out sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"name"] caseInsensitiveCompare:b[@"name"]]; }];
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:out options:0 error:nil];
+    return jd ? [[NSString alloc] initWithData:jd encoding:NSUTF8StringEncoding] : @"[]";
+}
+
 static void rctl_open_url(NSString *urlStr) {
     if (!urlStr.length) return;
     static void (*SBSOpenURL)(CFURLRef, Boolean) = NULL;
@@ -232,7 +249,8 @@ static void *ipc_manager(void *unused) {
                 uint8_t qtype = buf[4];
                 dispatch_async(dispatch_get_main_queue(), ^{
                     NSString *r = qtype == RCTL_Q_CLIPBOARD ? rctl_get_clipboard()
-                                : qtype == RCTL_Q_DEVINFO   ? rctl_device_info() : @"";
+                                : qtype == RCTL_Q_DEVINFO   ? rctl_device_info()
+                                : qtype == RCTL_Q_APPLIST   ? rctl_app_list() : @"";
                     send_reply(reqid, r);
                 });
             }

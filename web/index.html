@@ -100,7 +100,8 @@
       <input id="tText" placeholder="Text">
       <div class="act"><button id="tBtn">Show toast</button></div></div>
     <div class="pgsec"><label>Launch app</label>
-      <input id="lBundle" placeholder="com.apple.Preferences">
+      <input id="lBundle" list="appList" placeholder="App name or bundle id">
+      <datalist id="appList"></datalist>
       <div class="act"><button id="lBtn">Launch</button></div></div>
     <div class="pgsec"><label>Type text (into focused field)</label>
       <input id="yText" placeholder="hello world">
@@ -245,12 +246,19 @@ document.querySelectorAll('#panel button[data-sb]').forEach(b=>b.onclick=()=>
   fetch(`/key?p=240&u=${b.dataset.sb}&d=1`).catch(()=>{}));
 // ---- Console (playground): spawn alerts/toasts, launch apps, type, run macros ----
 const pg=document.getElementById('pg'),$=id=>document.getElementById(id),enc=encodeURIComponent;
-$('pgOpen').onclick=()=>{ setPanel(false); pg.classList.add('open'); };
+// Installed-app picker: load once, map display name -> bundle id for the datalist.
+let appMap=null;
+async function loadApps(){ if(appMap)return; appMap={};
+  try{ const arr=await(await fetch('/v1/apps')).json(); const dl=$('appList'); dl.innerHTML='';
+    arr.forEach(a=>{ appMap[a.name]=a.id; const o=document.createElement('option'); o.value=a.name; o.label=a.id; dl.appendChild(o); });
+  }catch(e){} }
+$('pgOpen').onclick=()=>{ setPanel(false); pg.classList.add('open'); loadApps(); };
 $('pgX').onclick=()=>pg.classList.remove('open');
 pg.onclick=e=>{ if(e.target===pg) pg.classList.remove('open'); };
 $('aBtn').onclick=()=>fetch(`/v1/alert?title=${enc($('aTitle').value)}&message=${enc($('aMsg').value)}`).catch(()=>{});
 $('tBtn').onclick=()=>fetch(`/v1/toast?text=${enc($('tText').value)}`).catch(()=>{});
-$('lBtn').onclick=()=>fetch(`/v1/launch?bundle=${enc($('lBundle').value)}`).catch(()=>{});
+$('lBtn').onclick=()=>{ const v=$('lBundle').value.trim(); if(!v)return;
+  const id=(appMap&&appMap[v])||v; fetch(`/v1/launch?bundle=${enc(id)}`).catch(()=>{}); };
 $('yBtn').onclick=()=>fetch(`/v1/type?text=${enc($('yText').value)}`).catch(()=>{});
 $('sBtn').onclick=()=>fetch('/v1/script',{method:'POST',body:$('sJson').value}).catch(()=>{});
 // Browser screenshot: export the current frame upright (rotated to effOrient) —
