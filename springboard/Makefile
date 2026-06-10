@@ -18,5 +18,7 @@ rctlsbcap_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctlsbcap_FRAMEWORKS = Foundation UIKit IOSurface CoreGraphics ImageIO \
                        VideoToolbox CoreMedia CoreVideo QuartzCore \
                        AVFoundation AudioToolbox
+# AVFoundation is linked (not header-imported) so AVCaptureSession is loaded and
+# our %hook on it applies — we use it via the runtime to dodge the umbrella build.
 
 include $(THEOS)/makefiles/tweak.mk

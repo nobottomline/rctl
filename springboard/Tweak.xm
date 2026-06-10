@@ -233,13 +233,16 @@ static void rctl_capture_camera(int position, uint32_t reqid) {
     // mediaserverd doesn't interrupt the session) and already has camera TCC. The
     // usage-description abort is dodged by hooking -[NSBundle objectForInfoDictionaryKey:]
     // below. Runs off the main thread so the ~1.5s capture never freezes the UI.
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    // AVCaptureSession needs a run loop to talk to mediaserverd over XPC. Run on
+    // SpringBoard's MAIN queue (which has a run loop) in async steps with NO blocking
+    // sleeps, so the session actually reaches the server and the UI never freezes.
+    dispatch_async(dispatch_get_main_queue(), ^{
       @autoreleasepool {
         Class CDev = NSClassFromString(@"AVCaptureDevice");
         Class CInput = NSClassFromString(@"AVCaptureDeviceInput");
         Class CSession = NSClassFromString(@"AVCaptureSession");
         Class CStill = NSClassFromString(@"AVCaptureStillImageOutput");
-        if (!CDev || !CInput || !CSession || !CStill) { send_reply(reqid, @""); return; }
+        if (!CDev || !CInput || !CSession || !CStill) { send_reply(reqid, @"ERR:no-classes"); return; }
 
         id chosen = nil;                                  // pick the camera by position
         NSArray *devs = ((id (*)(id, SEL, id))objc_msgSend)((id)CDev, NSSelectorFromString(@"devicesWithMediaType:"), @"vide");
@@ -248,46 +251,43 @@ static void rctl_capture_camera(int position, uint32_t reqid) {
             if (p == position) { chosen = d; break; }
         }
         if (!chosen) chosen = ((id (*)(id, SEL, id))objc_msgSend)((id)CDev, NSSelectorFromString(@"defaultDeviceWithMediaType:"), @"vide");
-        if (!chosen) { send_reply(reqid, @""); return; }
+        if (!chosen) { send_reply(reqid, @"ERR:no-device"); return; }
 
         NSError *err = nil;
         id input = ((id (*)(id, SEL, id, NSError **))objc_msgSend)((id)CInput, NSSelectorFromString(@"deviceInputWithDevice:error:"), chosen, &err);
-        if (!input) { send_reply(reqid, @""); return; }
+        if (!input) { send_reply(reqid, @"ERR:no-input"); return; }
 
         id session = ((id (*)(id, SEL))objc_msgSend)(((id (*)(id, SEL))objc_msgSend)((id)CSession, NSSelectorFromString(@"alloc")), NSSelectorFromString(@"init"));
         ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"setSessionPreset:"), @"AVCaptureSessionPresetPhoto");
-        if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddInput:"), input)) { send_reply(reqid, @""); return; }
+        if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddInput:"), input)) { send_reply(reqid, @"ERR:cant-input"); return; }
         ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"addInput:"), input);
 
         id out = ((id (*)(id, SEL))objc_msgSend)(((id (*)(id, SEL))objc_msgSend)((id)CStill, NSSelectorFromString(@"alloc")), NSSelectorFromString(@"init"));
         ((void (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"setOutputSettings:"), @{ @"AVVideoCodecKey": @"jpeg" });
-        if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddOutput:"), out)) { send_reply(reqid, @""); return; }
+        if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddOutput:"), out)) { send_reply(reqid, @"ERR:cant-output"); return; }
         ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"addOutput:"), out);
 
         ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"startRunning"));
-        for (int i = 0; i < 50; i++) {                    // wait until the session actually runs
-            if (((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"))) break;
-            usleep(50000);
-        }
-        BOOL running = ((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"));
-        NSLog(@"[rctl-sbcap] camera session running=%d", running);
-        usleep(450000);                                   // let the sensor expose
-        id conn = ((id (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"connectionWithMediaType:"), @"vide");
-        if (!conn) { ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning")); send_reply(reqid, running ? @"ERR:no-conn" : @"ERR:not-running"); return; }
 
-        void (^done)(void *, NSError *) = ^(void *sbuf, NSError *e) {
-            NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
-            if (jpeg.length && [jpeg writeToFile:@"/tmp/rctl_cam.jpg" atomically:YES]) send_reply(reqid, @"/tmp/rctl_cam.jpg");
-            else send_reply(reqid, @"ERR:no-jpeg");
-            ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));  // keeps session alive until here
-        };
-        @try {
-            ((void (*)(id, SEL, id, id))objc_msgSend)(out, NSSelectorFromString(@"captureStillImageAsynchronouslyFromConnection:completionHandler:"), conn, done);
-        } @catch (NSException *ex) {
-            NSLog(@"[rctl-sbcap] camera threw: %@", ex.reason);
-            ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));
-            send_reply(reqid, @"ERR:inconsistent");
-        }
+        // Capture after a warm-up — still on main, so the run loop drives the session.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            BOOL running = ((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"));
+            id conn = ((id (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"connectionWithMediaType:"), @"vide");
+            NSLog(@"[rctl-sbcap] camera running=%d conn=%d", running, conn != nil);
+            if (!conn) { ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning")); send_reply(reqid, running ? @"ERR:no-conn" : @"ERR:not-running"); return; }
+            void (^done)(void *, NSError *) = ^(void *sbuf, NSError *e) {
+                NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
+                if (jpeg.length && [jpeg writeToFile:@"/tmp/rctl_cam.jpg" atomically:YES]) send_reply(reqid, @"/tmp/rctl_cam.jpg");
+                else send_reply(reqid, @"ERR:no-jpeg");
+                ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));  // keeps session alive until here
+            };
+            @try {
+                ((void (*)(id, SEL, id, id))objc_msgSend)(out, NSSelectorFromString(@"captureStillImageAsynchronouslyFromConnection:completionHandler:"), conn, done);
+            } @catch (NSException *ex) {
+                ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));
+                send_reply(reqid, running ? @"ERR:incons-running" : @"ERR:incons-notrunning");
+            }
+        });
       }
     });
 }
@@ -301,6 +301,17 @@ static void rctl_capture_camera(int position, uint32_t reqid) {
         return @"rctl remote camera";
     return %orig;
 }
+%end
+
+// Camera from ANY app: stop our SpringBoard capture session from honoring
+// mediaserverd's background interruption (the foreground-only gate). Only WE use
+// AVCaptureSession inside SpringBoard, so forcing not-interrupted is safe here.
+%hook AVCaptureSession
+- (void)_setInterrupted:(bool)interrupted withReason:(int)reason {
+    if (interrupted) { NSLog(@"[rctl-sbcap] suppressing capture interruption reason=%d", reason); }
+    %orig(false, reason);
+}
+- (bool)isInterrupted { return false; }
 %end
 
 // Keep the device awake and unlocked for remote use: reset SpringBoard's idle
