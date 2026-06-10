@@ -16,6 +16,7 @@ rctlsbcap_FILES = Tweak.xm \
                   ../core/ipc/Ipc.c
 rctlsbcap_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctlsbcap_FRAMEWORKS = Foundation UIKit IOSurface CoreGraphics ImageIO \
-                       VideoToolbox CoreMedia CoreVideo QuartzCore
+                       VideoToolbox CoreMedia CoreVideo QuartzCore \
+                       AVFoundation AudioToolbox
 
 include $(THEOS)/makefiles/tweak.mk

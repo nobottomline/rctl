@@ -129,6 +129,87 @@ static void rctl_show_toast(NSString *text, double seconds) {
     });
 }
 
+// ---- Fun FX / pranks: speak aloud, play a sound, strobe, fullscreen banner ----
+// We drive AVSpeechSynthesizer/AVAudioSession via the Objective-C runtime and
+// declare AudioServicesPlaySystemSound by prototype, to AVOID importing the
+// AVFoundation umbrella header — it drags in camera/simd headers that fail to
+// build as a module in a .xm. The frameworks are still linked (see Makefile).
+extern "C" void AudioServicesPlaySystemSound(uint32_t inSystemSoundID);
+
+static id gSynth = nil;                             // AVSpeechSynthesizer, retained
+// Make the iPad SPEAK text aloud. pitch 0.5..2.0 (low = creepy), rate 0..1;
+// <=0 keeps the default. Forces the playback audio session so it's audible.
+static void rctl_fx_say(NSString *text, float pitch, float rate) {
+    if (!text.length) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id sess = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"AVAudioSession"),
+                                                  NSSelectorFromString(@"sharedInstance"));
+        if (sess) {
+            ((BOOL (*)(id, SEL, id, id *))objc_msgSend)(sess, NSSelectorFromString(@"setCategory:error:"),
+                                                        @"AVAudioSessionCategoryPlayback", NULL);
+            ((BOOL (*)(id, SEL, BOOL, id *))objc_msgSend)(sess, NSSelectorFromString(@"setActive:error:"), YES, NULL);
+        }
+        if (!gSynth) {
+            id a = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"AVSpeechSynthesizer"), NSSelectorFromString(@"alloc"));
+            gSynth = ((id (*)(id, SEL))objc_msgSend)(a, NSSelectorFromString(@"init"));
+        }
+        id u = ((id (*)(id, SEL, id))objc_msgSend)((id)NSClassFromString(@"AVSpeechUtterance"),
+                                                   NSSelectorFromString(@"speechUtteranceWithString:"), text);
+        if (!gSynth || !u) return;
+        if (pitch > 0) ((void (*)(id, SEL, float))objc_msgSend)(u, NSSelectorFromString(@"setPitchMultiplier:"),
+                                                                pitch < 0.5f ? 0.5f : (pitch > 2.0f ? 2.0f : pitch));
+        if (rate  > 0) ((void (*)(id, SEL, float))objc_msgSend)(u, NSSelectorFromString(@"setRate:"),
+                                                                rate > 1.0f ? 1.0f : rate);
+        ((void (*)(id, SEL, id))objc_msgSend)(gSynth, NSSelectorFromString(@"speakUtterance:"), u);
+    });
+}
+
+// Play a system sound by id (e.g. 1007 SMS, 1005 mail, 1304/1023 alerts).
+static void rctl_fx_sound(uint32_t sid) {
+    AudioServicesPlaySystemSound(sid);
+}
+
+// Strobe a fullscreen colored window `times` times (~0.12s per half-cycle).
+static void rctl_fx_flash(int times, uint8_t r, uint8_t g, uint8_t b) {
+    if (times < 1) times = 1; if (times > 30) times = 30;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *w = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        w.windowLevel = UIWindowLevelAlert + 100;
+        w.userInteractionEnabled = NO;
+        w.backgroundColor = [UIColor colorWithRed:r/255.0 green:g/255.0 blue:b/255.0 alpha:1];
+        w.hidden = NO;
+        int steps = times * 2;                       // on/off toggles; last hides+releases
+        for (int i = 1; i <= steps; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.12 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{                   // captures w -> kept alive
+                w.hidden = (i == steps) ? YES : !w.hidden;
+            });
+        }
+    });
+}
+
+// Cover the whole screen with big text for `secs` seconds.
+static void rctl_fx_banner(NSString *text, float secs) {
+    if (!text.length) return;
+    if (secs <= 0) secs = 3;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CGRect b = [UIScreen mainScreen].bounds;
+        UIWindow *w = [[UIWindow alloc] initWithFrame:b];
+        w.windowLevel = UIWindowLevelAlert + 100;
+        w.userInteractionEnabled = NO;
+        w.backgroundColor = [UIColor colorWithWhite:0 alpha:0.92];
+        UILabel *l = [[UILabel alloc] initWithFrame:CGRectInset(b, 28, 28)];
+        l.text = text; l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter;
+        l.textColor = [UIColor whiteColor];
+        l.font = [UIFont boldSystemFontOfSize:56];
+        l.adjustsFontSizeToFitWidth = YES; l.minimumScaleFactor = 0.25;
+        [w addSubview:l];
+        w.hidden = NO;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(secs * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ w.hidden = YES; });
+    });
+}
+
 // Keep the device awake and unlocked for remote use: reset SpringBoard's idle
 // timer (which drives auto-dim and auto-lock) and undim the display.
 static void rctl_keep_awake(void) {
@@ -298,6 +379,19 @@ static void *ipc_manager(void *unused) {
                 });
             } else if (type == RCTL_MSG_ACTIVE && len >= 1) {
                 rctl_set_active(buf[0] != 0);     // viewer connected (1) / gone (0)
+            } else if (type == RCTL_MSG_FX && len >= 1) {
+                uint8_t sub = buf[0]; const uint8_t *p = buf + 1; uint32_t pl = len - 1;
+                if (sub == 1 && pl >= 8) {            // SAY [float pitch][float rate][text]
+                    float pitch, rate; memcpy(&pitch, p, 4); memcpy(&rate, p + 4, 4);
+                    rctl_fx_say([[NSString alloc] initWithBytes:p + 8 length:pl - 8 encoding:NSUTF8StringEncoding], pitch, rate);
+                } else if (sub == 2 && pl >= 4) {     // SOUND [uint32 id]
+                    uint32_t sid; memcpy(&sid, p, 4); rctl_fx_sound(sid);
+                } else if (sub == 3 && pl >= 4) {     // FLASH [times][r][g][b]
+                    rctl_fx_flash(p[0], p[1], p[2], p[3]);
+                } else if (sub == 4 && pl >= 4) {     // BANNER [float secs][text]
+                    float secs; memcpy(&secs, p, 4);
+                    rctl_fx_banner([[NSString alloc] initWithBytes:p + 4 length:pl - 4 encoding:NSUTF8StringEncoding], secs);
+                }
             }
             free(buf);
         }

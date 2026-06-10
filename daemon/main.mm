@@ -392,6 +392,45 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         struct stat st;
         int rc = (stat(target, &st) == 0 && S_ISDIR(st.st_mode)) ? rmdir(target) : unlink(target);
         if (rc != 0) { *status = 500; return strdup("{\"error\":\"delete failed\"}"); }
+    } else if (!strcmp(path, "/v1/say")) {            // FX: speak text aloud
+        char raw[2048], text[2048];
+        if (!get_param(query, "text", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"text required\"}"); }
+        url_decode(raw, text, sizeof text);
+        float pitch = (float)get_d(query, "pitch", 0), rate = (float)get_d(query, "rate", 0);
+        int tl = (int)strlen(text); char *buf = (char *)malloc(9 + tl);
+        buf[0] = 1; memcpy(buf + 1, &pitch, 4); memcpy(buf + 5, &rate, 4); memcpy(buf + 9, text, tl);
+        send_to_sb(RCTL_MSG_FX, buf, (uint32_t)(9 + tl)); free(buf);
+    } else if (!strcmp(path, "/v1/sound")) {          // FX: play a system sound id
+        uint32_t id = (uint32_t)get_i(query, "id", 1007);
+        uint8_t buf[5]; buf[0] = 2; memcpy(buf + 1, &id, 4);
+        send_to_sb(RCTL_MSG_FX, buf, 5);
+    } else if (!strcmp(path, "/v1/flash")) {          // FX: strobe the screen
+        int times = get_i(query, "times", 6), r = 255, g = 0, b = 0; char col[16];
+        if (get_param(query, "color", col, sizeof col)) { unsigned v = (unsigned)strtoul(col, NULL, 16); r = (v >> 16) & 255; g = (v >> 8) & 255; b = v & 255; }
+        else { r = get_i(query, "r", 255); g = get_i(query, "g", 0); b = get_i(query, "b", 0); }
+        uint8_t buf[5] = { 3, (uint8_t)times, (uint8_t)r, (uint8_t)g, (uint8_t)b };
+        send_to_sb(RCTL_MSG_FX, buf, 5);
+    } else if (!strcmp(path, "/v1/banner")) {         // FX: fullscreen text
+        char raw[2048], text[2048];
+        if (!get_param(query, "text", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"text required\"}"); }
+        url_decode(raw, text, sizeof text);
+        float secs = (float)get_d(query, "secs", 3);
+        int tl = (int)strlen(text); char *buf = (char *)malloc(5 + tl);
+        buf[0] = 4; memcpy(buf + 1, &secs, 4); memcpy(buf + 5, text, tl);
+        send_to_sb(RCTL_MSG_FX, buf, (uint32_t)(5 + tl)); free(buf);
+    } else if (!strcmp(path, "/v1/spook")) {          // FX combo: banner + strobe + creepy voice
+        char raw[2048], text[2048];
+        if (get_param(query, "text", raw, sizeof raw)) url_decode(raw, text, sizeof text);
+        else strncpy(text, "I SEE YOU", sizeof text);
+        int tl = (int)strlen(text);
+        float secs = 4.0f; char *bn = (char *)malloc(5 + tl);
+        bn[0] = 4; memcpy(bn + 1, &secs, 4); memcpy(bn + 5, text, tl);
+        send_to_sb(RCTL_MSG_FX, bn, (uint32_t)(5 + tl)); free(bn);
+        uint8_t fl[5] = { 3, 6, 255, 0, 0 };
+        send_to_sb(RCTL_MSG_FX, fl, 5);
+        float pitch = 0.45f, rate = 0.38f; char *sy = (char *)malloc(9 + tl);
+        sy[0] = 1; memcpy(sy + 1, &pitch, 4); memcpy(sy + 5, &rate, 4); memcpy(sy + 9, text, tl);
+        send_to_sb(RCTL_MSG_FX, sy, (uint32_t)(9 + tl)); free(sy);
     } else {
         *status = 404; return strdup("{\"error\":\"unknown action\"}");
     }

@@ -67,6 +67,9 @@
   .frow .fsz{color:#86868b;font-size:11px;white-space:nowrap}
   .frow .fb{flex:0 0 auto;width:auto;padding:4px 9px;font-size:12px;background:#3a3a3d}
   .frow .fb.del{background:#5a2b2b}
+  .pgsec .fxbtns{display:flex;gap:7px;flex-wrap:wrap}
+  .pgsec .fxbtns button{flex:1 1 28%;min-width:84px}
+  .pgsec .fxbtns #fxSpook{flex-basis:100%;background:#7b1fa2}
 </style></head>
 <body>
 <div id="hud">rctl: connecting…</div>
@@ -108,6 +111,16 @@
 <div id="pg"><div id="pgcard">
   <div class="pghdr"><h2>Console</h2><button id="pgX">✕</button></div>
   <div id="pggrid">
+    <div class="pgsec wide"><label>FX / Pranks 👻</label>
+      <input id="fxText" placeholder="text to speak / show on screen" spellcheck="false">
+      <div class="fxbtns">
+        <button id="fxSay" class="sec">🗣 Speak</button>
+        <button id="fxCreepy" class="sec">🧟 Creepy</button>
+        <button id="fxBanner" class="sec">📢 Banner</button>
+        <button id="fxFlash" class="sec">⚡️ Flash</button>
+        <button id="fxSound" class="sec">🔊 Sound</button>
+        <button id="fxSpook">👻 SPOOK!</button>
+      </div></div>
     <div class="pgsec"><label>Alert</label>
       <input id="aTitle" placeholder="Title"><input id="aMsg" placeholder="Message">
       <div class="act"><button id="aBtn">Show alert</button></div></div>
@@ -336,6 +349,15 @@ $('fUpBtn').onclick=()=>$('fUpload').click();
 $('fUpload').onchange=async()=>{ const f=$('fUpload').files[0]; if(!f)return;
   try{ await fetch('/v1/push?path='+enc(fJoin(fPath.value,f.name)),{method:'POST',body:await f.arrayBuffer()}); }catch(e){}
   $('fUpload').value=''; fLoad(); };
+
+// FX / pranks (harmless fun on your own device).
+const fxT=()=>enc($('fxText').value||'Boo!');
+$('fxSay').onclick    =()=>fetch(`/v1/say?text=${fxT()}`).catch(()=>{});
+$('fxCreepy').onclick =()=>fetch(`/v1/say?text=${fxT()}&pitch=0.45&rate=0.38`).catch(()=>{});
+$('fxBanner').onclick =()=>fetch(`/v1/banner?text=${fxT()}&secs=4`).catch(()=>{});
+$('fxFlash').onclick  =()=>fetch(`/v1/flash?times=8&color=ff0000`).catch(()=>{});
+$('fxSound').onclick  =()=>fetch(`/v1/sound?id=1304`).catch(()=>{});
+$('fxSpook').onclick  =()=>fetch(`/v1/spook?text=${fxT()}`).catch(()=>{});
 $('aBtn').onclick=()=>fetch(`/v1/alert?title=${enc($('aTitle').value)}&message=${enc($('aMsg').value)}`).catch(()=>{});
 $('tBtn').onclick=()=>fetch(`/v1/toast?text=${enc($('tText').value)}`).catch(()=>{});
 $('lBtn').onclick=()=>{ const v=$('lBundle').value.trim(); if(!v)return;

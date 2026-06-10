@@ -27,6 +27,7 @@ enum {
     RCTL_MSG_QUERY  = 0x18,  // daemon->SB: [4B BE reqid][1B qtype][payload], expects a REPLY
     RCTL_MSG_REPLY  = 0x19,  // SB->daemon: [4B BE reqid][payload]
     RCTL_MSG_ACTIVE = 0x1A,  // daemon->SB: [1B active] run capture+keep-awake (1) or idle/sleep (0)
+    RCTL_MSG_FX     = 0x1B,  // daemon->SB: [1B subtype][data] fun FX (1=say,2=sound,3=flash,4=banner)
 };
 
 // Query types carried in RCTL_MSG_QUERY (request/response over the socket).
