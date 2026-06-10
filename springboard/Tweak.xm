@@ -1,13 +1,19 @@
-// rctlsbcap — runs the capture+encode session inside SpringBoard and serves the
-// live H.264 stream over HTTP (MVP: server co-located here; will move to the daemon).
+// rctlsbcap — the thin SpringBoard agent. Captures + H.264-encodes the screen and
+// injects touch/keyboard, but no longer hosts the network server: it streams
+// encoded frames to the rctld daemon and receives input/config back over a local
+// Unix socket. Keeping transport out of SpringBoard means a network bug can't
+// respring the UI. Reconnects automatically if the daemon restarts.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <pthread.h>
+#import <string.h>
+#import <unistd.h>
 #import <dlfcn.h>
 #import "stream/CaptureSession.h"
-#import "net/HttpStreamServer.h"
 #import "input/TouchInjector.h"
+#import "ipc/Ipc.h"
 
 // Edge system gestures (Control Center, Cover Sheet) can't be synthesized into
 // the right window via HID, so trigger them directly through SpringBoard's
@@ -33,35 +39,65 @@ static void rctl_system_action(int code) {
     });
 }
 
-static rctl_http_server *gServer = NULL;
-static rctl_session *gSession = NULL;
+static rctl_session     *gSession = NULL;
 static dispatch_source_t gOrientTimer = NULL;
-static id gOrientObserver = nil; // FBSOrientationObserver
+static id                gOrientObserver = nil;   // FBSOrientationObserver
+static rctl_ipc         *gIpc = NULL;             // connection to rctld
+static pthread_mutex_t   gIpcLock = PTHREAD_MUTEX_INITIALIZER;
 
+// Encoded frames go to the daemon (dropped if it isn't connected yet).
 static void net_sink(const uint8_t *data, size_t len, bool keyframe, void *ctx) {
-    rctl_http_push_au((rctl_http_server *)ctx, data, len, keyframe);
+    pthread_mutex_lock(&gIpcLock);
+    if (gIpc) (void)rctl_ipc_send_prefixed(gIpc, RCTL_MSG_VIDEO, keyframe ? 1 : 0, data, (uint32_t)len);
+    pthread_mutex_unlock(&gIpcLock);
 }
 
-// Restart the capture/encode session with new settings (from GET /config).
-static void reconfigure(void *ctx, int fps, double scale, int bitrate) {
+static void send_orient(int o) {
+    uint8_t b = (uint8_t)o;
+    pthread_mutex_lock(&gIpcLock);
+    if (gIpc) (void)rctl_ipc_send(gIpc, RCTL_MSG_ORIENT, &b, 1);
+    pthread_mutex_unlock(&gIpcLock);
+}
+
+// Restart the capture/encode session with new settings (from the daemon's /config).
+static void reconfigure(int fps, double scale, int bitrate) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gSession) { rctl_session_stop(gSession); gSession = NULL; }
-        rctl_http_signal_reset(gServer);
-        gSession = rctl_session_start(fps, bitrate, scale, net_sink, gServer);
+        gSession = rctl_session_start(fps, bitrate, scale, net_sink, NULL);
         NSLog(@"[rctl-sbcap] reconfigured fps=%d scale=%.2f br=%d", fps, scale, bitrate);
     });
 }
 
-// Inject client input directly here in SpringBoard (iOS 14 method enqueues into
-// the foreground UIApplication = SpringBoard for the home screen / system UI).
-static void input_handler(void *ctx, int phase, int finger, double nx, double ny) {
-    rctl_input_touch(finger, nx, ny, phase);
-}
+// Connect to rctld, pump its commands, reconnect if it drops/restarts.
+static void *ipc_manager(void *unused) {
+    for (;;) {
+        rctl_ipc *peer = rctl_ipc_connect(RCTL_IPC_SOCK_PATH);
+        if (!peer) { usleep(500000); continue; }      // daemon not up yet
+        NSLog(@"[rctl-sbcap] connected to rctld");
+        pthread_mutex_lock(&gIpcLock); gIpc = peer; pthread_mutex_unlock(&gIpcLock);
 
-static void key_handler(void *ctx, int page, int usage, int down) {
-    // Sentinel page 0xF0 = SpringBoard presentation actions (fire on key-down).
-    if (page == 0xF0) { if (down) rctl_system_action(usage); return; }
-    rctl_input_key(page, usage, down);
+        uint8_t type; uint8_t *buf; uint32_t len;
+        while (rctl_ipc_recv(peer, &type, &buf, &len)) {
+            if (type == RCTL_MSG_INPUT && len >= sizeof(rctl_ipc_input)) {
+                rctl_ipc_input m; memcpy(&m, buf, sizeof m);
+                rctl_input_touch(m.finger, m.x, m.y, m.phase);
+            } else if (type == RCTL_MSG_KEY && len >= sizeof(rctl_ipc_key)) {
+                rctl_ipc_key m; memcpy(&m, buf, sizeof m);
+                if (m.page == 0xF0) { if (m.down) rctl_system_action(m.usage); }
+                else rctl_input_key(m.page, m.usage, m.down);
+            } else if (type == RCTL_MSG_CONFIG && len >= sizeof(rctl_ipc_config)) {
+                rctl_ipc_config m; memcpy(&m, buf, sizeof m);
+                reconfigure(m.fps, m.scale, m.bitrate);
+            }
+            free(buf);
+        }
+
+        NSLog(@"[rctl-sbcap] rctld disconnected");
+        pthread_mutex_lock(&gIpcLock); if (gIpc == peer) gIpc = NULL; pthread_mutex_unlock(&gIpcLock);
+        rctl_ipc_close(peer);
+        usleep(300000);
+    }
+    return NULL;
 }
 
 // Authoritative interface orientation from FrontBoard (matches the framebuffer).
@@ -78,15 +114,12 @@ static int current_orientation(void) {
         NSLog(@"[rctl-sbcap] loaded in SpringBoard");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            gServer = rctl_http_start(8080);
-            if (!gServer) { NSLog(@"[rctl-sbcap] server failed to start"); return; }
-            rctl_http_set_reconfigure(gServer, reconfigure, NULL);
-            rctl_http_set_input(gServer, input_handler, NULL);
-            rctl_http_set_key(gServer, key_handler, NULL);
+            // Connect to the daemon (retrying) on a background thread.
+            pthread_t t; pthread_create(&t, NULL, ipc_manager, NULL);
 
             // Default: native resolution, 30fps, 20 Mbps, High profile (screen-recording quality).
-            gSession = rctl_session_start(30, 20000000, 1.0, net_sink, gServer);
-            NSLog(@"[rctl-sbcap] streaming on :8080");
+            gSession = rctl_session_start(30, 20000000, 1.0, net_sink, NULL);
+            NSLog(@"[rctl-sbcap] capture session started");
 
             dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
             Class cls = NSClassFromString(@"FBSOrientationObserver");
@@ -99,7 +132,7 @@ static int current_orientation(void) {
             dispatch_source_set_event_handler(gOrientTimer, ^{
                 int o = rctl_input_window_orientation();      // reliable: from the key window
                 if (o < 1 || o > 4) o = current_orientation(); // fallback to FBS
-                if (o >= 1 && o <= 4) rctl_http_set_orientation(gServer, o);
+                if (o >= 1 && o <= 4) send_orient(o);
             });
             dispatch_resume(gOrientTimer);
         });

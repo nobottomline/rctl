@@ -30,24 +30,26 @@ Next: keyboard input, and control inside 3rd-party apps.
 
 ```
 rctl/
-├── core/           # shared C/ObjC++ modules, linked by the on-device target
+├── core/           # shared C/ObjC++ modules, linked by the on-device targets
 │   ├── capture/    #   screen capture (CARenderServerRenderDisplay → IOSurface) + keep-awake
 │   ├── encode/     #   VideoToolbox H.264 encoder (+ GPU downscale)
 │   ├── stream/     #   capture→encode session loop
-│   ├── net/        #   HTTP server: WebCodecs stream + /input + /config (moving to WebRTC)
+│   ├── net/        #   HTTP server: WebCodecs stream + /input + /config (linked into rctld)
 │   ├── input/      #   touch (+ keyboard) injection via IOHIDEvent (runs in SpringBoard)
+│   ├── ipc/        #   SB↔daemon Unix-socket message channel (video↑, input↓)
 │   └── vendor/     #   vendored private headers
-├── springboard/    # the injected agent (rctlsbcap): capture + encode + serve + inject
+├── springboard/    # the injected agent (rctlsbcap): capture + encode + inject (thin)
+├── daemon/         # rctld — root daemon (launchd KeepAlive): hosts the transport + relay
 ├── web/            # browser client (WebCodecs decoder, pointer/keyboard input)
-├── layout/         # extra package payload (web client) + maintainer scripts (postinst/prerm)
+├── layout/         # package payload: LaunchDaemon plist, web client, postinst/prerm
 ├── control         # Debian package metadata
 ├── Makefile        # Theos aggregate: builds every component into one .deb
 └── docs/           # design & operational docs
 ```
 
-Planned, not yet created: `daemon/` (rctld — root daemon hosting transport + the REST
-automation API, supervised by launchd), `relay/` (Go signaling + TURN), `proto/` (shared
-protocol). The HTTP server lives in the SpringBoard agent today; it moves into `rctld` next
+The transport runs in `rctld` (out of SpringBoard, so a network bug can't respring the UI);
+the agent streams encoded frames to it over a local socket and gets input back. Planned, not
+yet created: `relay/` (Go signaling + TURN) and `proto/` (shared protocol) for internet (P3)
 so a network/transport bug can't respring SpringBoard.
 
 ## Transport / decode decision

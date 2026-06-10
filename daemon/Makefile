@@ -7,7 +7,9 @@ ARCHS := arm64 arm64e
 include $(THEOS)/makefiles/common.mk
 
 TOOL_NAME = rctld
-rctld_FILES = main.mm
+rctld_FILES = main.mm \
+              ../core/net/HttpStreamServer.mm \
+              ../core/ipc/Ipc.c
 rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctld_FRAMEWORKS = Foundation
 rctld_INSTALL_PATH = /usr/local/bin
