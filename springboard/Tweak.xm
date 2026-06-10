@@ -48,9 +48,7 @@ static void rctl_launch_app(NSString *bid) {
         void *h = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
         SBSLaunch = (int (*)(CFStringRef, Boolean))dlsym(h ? h : RTLD_DEFAULT, "SBSLaunchApplicationWithIdentifier");
     });
-    int rc = SBSLaunch ? SBSLaunch((__bridge CFStringRef)bid, false) : -999;
-    FILE *f = fopen("/tmp/rctl_input.log", "a");
-    if (f) { fprintf(f, "[launch] %s fn=%p rc=%d\n", bid.UTF8String, (void *)SBSLaunch, rc); fclose(f); }
+    if (SBSLaunch) SBSLaunch((__bridge CFStringRef)bid, false);
 }
 
 static rctl_session     *gSession = NULL;
@@ -147,9 +145,20 @@ static int current_orientation(void) {
             dispatch_source_set_timer(gOrientTimer, DISPATCH_TIME_NOW,
                                       (uint64_t)(250 * NSEC_PER_MSEC), (uint64_t)(50 * NSEC_PER_MSEC));
             dispatch_source_set_event_handler(gOrientTimer, ^{
-                int o = rctl_input_window_orientation();      // reliable: from the key window
-                if (o < 1 || o > 4) o = current_orientation(); // fallback to FBS
-                if (o >= 1 && o <= 4) send_orient(o);
+                // Use the FOREGROUND app's actual interface orientation (FrontBoard's
+                // activeInterfaceOrientation). It is correct even for apps that force a
+                // fixed orientation (e.g. a portrait-only game on a landscape device),
+                // unlike the SpringBoard key window which tracks the device. Debounce:
+                // only commit a change after it holds for 2 ticks, to drop the rare
+                // transient reading seen while the device is being physically rotated.
+                int raw = current_orientation();              // FBS activeInterfaceOrientation
+                if (raw < 1 || raw > 4) raw = rctl_input_window_orientation();
+                static int cand = 0, candN = 0, sent = 1;
+                if (raw >= 1 && raw <= 4) {
+                    if (raw == cand) candN++; else { cand = raw; candN = 1; }
+                    if (candN >= 2) sent = cand;
+                }
+                send_orient(sent);
             });
             dispatch_resume(gOrientTimer);
         });
