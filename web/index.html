@@ -10,41 +10,72 @@
     -webkit-user-select:none;user-select:none}
   #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
   canvas{transform-origin:center center}
-  #hud{position:fixed;top:6px;left:8px;font-size:11px;opacity:.55;z-index:10}
-  #bar{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);z-index:10;
-    display:flex;gap:6px;background:rgba(20,20,22,.55);padding:6px;border-radius:11px;
-    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
-  #bar button{background:#2b2b2f;color:#eee;border:0;border-radius:8px;padding:7px 11px;font-size:12px}
-  #bar button.on{background:#3478f6}
-  #sys{position:fixed;top:8px;right:10px;z-index:10;display:flex;gap:6px;
-    background:rgba(20,20,22,.55);padding:6px;border-radius:11px;
-    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
-  #sys button{background:#2b2b2f;color:#eee;border:0;border-radius:8px;padding:7px 10px;font-size:12px}
-  #sys button:active{background:#3478f6}
+  #hud{position:fixed;top:6px;left:8px;font-size:11px;opacity:.5;z-index:10;pointer-events:none}
+  /* Floating controls: a small button that opens a popover, so the screen is
+     unobstructed while viewing. */
+  #fab{position:fixed;right:14px;bottom:14px;z-index:20;width:46px;height:46px;
+    border-radius:50%;border:0;background:rgba(22,22,24,.6);color:#f2f2f7;font-size:20px;
+    -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+    box-shadow:0 2px 12px rgba(0,0,0,.45);transition:background .12s}
+  #fab:active,#fab.open{background:#3478f6}
+  #panel{position:fixed;right:14px;bottom:70px;z-index:20;width:244px;box-sizing:border-box;
+    background:rgba(26,26,29,.74);border-radius:16px;padding:11px;
+    -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+    box-shadow:0 8px 28px rgba(0,0,0,.5);
+    display:flex;flex-direction:column;gap:7px;
+    opacity:0;transform:translateY(8px) scale(.98);pointer-events:none;transition:opacity .14s,transform .14s}
+  #panel.open{opacity:1;transform:none;pointer-events:auto}
+  .sect{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:#86868b;margin:3px 2px -1px}
+  .row{display:flex;gap:6px}
+  #panel button{flex:1;min-width:0;background:#3a3a3d;color:#f2f2f7;border:0;border-radius:9px;
+    padding:9px 6px;font-size:13px;white-space:nowrap}
+  #panel button:active{background:#3478f6}
+  #panel button.on{background:#3478f6}
 </style></head>
 <body>
 <div id="hud">rctl: connecting…</div>
 <div id="stage"><canvas id="c"></canvas></div>
-<div id="bar">
-  <button data-q="hq" class="on">High</button>
-  <button data-q="bal">Balanced</button>
-  <button data-q="lat">Low latency</button>
+
+<button id="fab" aria-label="controls">⚙</button>
+<div id="panel">
+  <div class="sect">System</div>
+  <div class="row">
+    <button data-b="home">⌂ Home</button>
+    <button data-b="lock">⏻ Lock</button>
+  </div>
+  <div class="row">
+    <button data-sb="1">Control&nbsp;Center</button>
+    <button data-sb="2">Shade</button>
+  </div>
+  <div class="sect">Volume</div>
+  <div class="row">
+    <button data-b="voldn">Vol&nbsp;−</button>
+    <button data-b="volup">Vol&nbsp;+</button>
+  </div>
+  <div class="sect">Orientation</div>
+  <div class="row">
+    <button id="oAuto" class="on">Auto</button>
+    <button id="oRot">⟳ Rotate</button>
+  </div>
+  <div class="sect">Quality</div>
+  <div class="row">
+    <button data-q="hq" class="on">High</button>
+    <button data-q="bal">Balanced</button>
+    <button data-q="lat">Low&nbsp;latency</button>
+  </div>
 </div>
-<div id="sys">
-  <button data-b="home">⌂ Home</button>
-  <button data-b="lock">⏻ Lock</button>
-  <button data-sb="1">CC</button>
-  <button data-sb="2">Shade</button>
-  <button data-b="volup">Vol+</button>
-  <button data-b="voldn">Vol−</button>
-</div>
+
 <script>
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
 let dec=null,ts=0,frames=0,started=false,orient=1,codec='avc1.640033';
+// Manual orientation override (null = follow the device). Applies to BOTH the
+// displayed rotation and the input coordinate mapping, so they stay consistent.
+let manualOrient=null;
+function effOrient(){ return manualOrient!=null?manualOrient:orient; }
 // UIInterfaceOrientation -> CSS rotation (deg) to make content upright.
 const DEG={1:0,2:180,3:-90,4:90};
 function applyOrient(){
-  const deg=DEG[orient]||0,cw=canvas.width||1,ch=canvas.height||1;
+  const deg=DEG[effOrient()]||0,cw=canvas.width||1,ch=canvas.height||1;
   const r90=(deg===90||deg===-90);
   const bbW=r90?ch:cw,bbH=r90?cw:ch;
   const sc=Math.min(innerWidth/bbW,innerHeight/bbH);
@@ -70,21 +101,32 @@ function mkdec(){
   });
   dec.configure({codec,optimizeForLatency:true});
 }
-setInterval(()=>{hud.textContent=`rctl — ${frames}f ${canvas.width}x${canvas.height} o=${orient} ${codec}`;},1000);
-document.querySelectorAll('#bar button').forEach(b=>b.onclick=()=>{
+setInterval(()=>{hud.textContent=`rctl — ${frames}f ${canvas.width}x${canvas.height} o=${effOrient()}${manualOrient!=null?'*':''}`;},1000);
+
+// ---- floating control panel ----
+const fab=document.getElementById('fab'),panel=document.getElementById('panel');
+function setPanel(open){ panel.classList.toggle('open',open); fab.classList.toggle('open',open); }
+fab.onclick=e=>{ e.stopPropagation(); setPanel(!panel.classList.contains('open')); };
+
+// Quality presets
+document.querySelectorAll('#panel button[data-q]').forEach(b=>b.onclick=()=>{
   const q={hq:'scale=1.0&fps=30&bitrate=24000000',
            bal:'scale=0.75&fps=45&bitrate=14000000',
            lat:'scale=0.6&fps=60&bitrate=8000000'}[b.dataset.q];
   fetch('/config?'+q);
-  document.querySelectorAll('#bar button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  document.querySelectorAll('#panel button[data-q]').forEach(x=>x.classList.remove('on'));b.classList.add('on');
 });
+// Orientation override: Auto follows the device; Rotate steps the view 90° CW.
+const oAuto=document.getElementById('oAuto'),oRot=document.getElementById('oRot');
+const ROT=[1,4,2,3]; // DEG steps 0,90,180,270
+function setOrientUI(){ oAuto.classList.toggle('on',manualOrient==null); }
+oAuto.onclick=()=>{ manualOrient=null; setOrientUI(); applyOrient(); };
+oRot.onclick=()=>{ let i=ROT.indexOf(effOrient()); if(i<0)i=0; manualOrient=ROT[(i+1)%4]; setOrientUI(); applyOrient(); };
+
 // ---- input: map a click on the displayed (rotated/scaled) canvas back to
-// normalized framebuffer coordinates, send to the device ----
-// Map a click on the displayed (rotated/scaled) canvas back to normalized
-// coordinates in the captured frame = the screen's FIXED space. The device
-// converts that to the window's point space via UIKit (handles all rotations).
+// normalized framebuffer coordinates (the screen's FIXED space), send to device ----
 function clientToNorm(cx,cy){
-  const deg=DEG[orient]||0, rad=-deg*Math.PI/180;
+  const deg=DEG[effOrient()]||0, rad=-deg*Math.PI/180;
   const cw=canvas.width||1, ch=canvas.height||1, r90=(deg===90||deg===-90);
   const bbW=r90?ch:cw, bbH=r90?cw:ch;
   const sc=Math.min(innerWidth/bbW, innerHeight/bbH);
@@ -96,7 +138,9 @@ function send(p,nx,ny){ fetch(`/input?phase=${p}&id=0&x=${nx.toFixed(4)}&y=${ny.
 const stage=document.getElementById('stage');
 stage.style.touchAction='none';
 let down=false,lastMove=0;
-stage.addEventListener('pointerdown',e=>{down=true;try{stage.setPointerCapture(e.pointerId)}catch(_){}
+stage.addEventListener('pointerdown',e=>{
+  if(panel.classList.contains('open')){ setPanel(false); e.preventDefault(); return; } // tap-away closes panel
+  down=true;try{stage.setPointerCapture(e.pointerId)}catch(_){}
   const[x,y]=clientToNorm(e.clientX,e.clientY);send(0,x,y);e.preventDefault();});
 stage.addEventListener('pointermove',e=>{if(!down)return;const now=performance.now();if(now-lastMove<16)return;lastMove=now;
   const[x,y]=clientToNorm(e.clientX,e.clientY);send(1,x,y);e.preventDefault();});
@@ -117,23 +161,20 @@ function codeToUsage(c){
     ControlRight:0xE4,ShiftRight:0xE5,AltRight:0xE6,MetaRight:0xE7})[c]||0;
 }
 function key(u,d){ fetch(`/key?p=7&u=${u}&d=${d}`).catch(()=>{}); }
-// Modifiers (Ctrl/Shift/Alt/Meta) are held: press on keydown, release on keyup so
-// they combine with other keys. Regular keys are sent as one atomic tap (d=2 =
-// press+release in order on the device) — a separate keyup is unreliable over
-// independent HTTP requests, and a lost/late release makes iOS auto-repeat the
-// key, which corrupted fast typing ("ls -la" -> "ls -laa").
+// Modifiers held (press/release); regular keys as one atomic tap (d=2) so a
+// lost/late release can't make iOS auto-repeat ("ls -la" -> "ls -laa").
 const MODS=new Set([0xE0,0xE1,0xE2,0xE3,0xE4,0xE5,0xE6,0xE7]);
 addEventListener('keydown',e=>{const u=codeToUsage(e.code);if(!u)return;e.preventDefault();
   if(MODS.has(u)){if(!e.repeat)key(u,1);}else{key(u,2);}});
 addEventListener('keyup',e=>{const u=codeToUsage(e.code);if(!u)return;e.preventDefault();
   if(MODS.has(u))key(u,0);});
-// ---- hardware buttons (HID Consumer page 0x0C): Home / Lock / Volume ----
+// ---- hardware buttons (HID Consumer page 0x0C) + SpringBoard actions ----
 const SYS={home:0x40,lock:0x30,volup:0xE9,voldn:0xEA};
 function sysPress(name){const u=SYS[name];if(!u)return;
   fetch(`/key?p=12&u=${u}&d=1`).then(()=>setTimeout(()=>fetch(`/key?p=12&u=${u}&d=0`),70));}
-document.querySelectorAll('#sys button[data-b]').forEach(b=>b.onclick=()=>sysPress(b.dataset.b));
-// SpringBoard presentation actions (page 0xF0=240): 1=Control Center, 2=Cover Sheet.
-document.querySelectorAll('#sys button[data-sb]').forEach(b=>b.onclick=()=>
+document.querySelectorAll('#panel button[data-b]').forEach(b=>b.onclick=()=>sysPress(b.dataset.b));
+// page 0xF0=240: 1=Control Center, 2=Cover Sheet.
+document.querySelectorAll('#panel button[data-sb]').forEach(b=>b.onclick=()=>
   fetch(`/key?p=240&u=${b.dataset.sb}&d=1`).catch(()=>{}));
 (async()=>{
   let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
