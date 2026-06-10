@@ -183,17 +183,23 @@ function clientToNorm(cx,cy){
   const rx=dx*Math.cos(rad)-dy*Math.sin(rad), ry=dx*Math.sin(rad)+dy*Math.cos(rad);
   return [(rx+cw/2)/cw, (ry+ch/2)/ch];
 }
-function send(p,nx,ny){ fetch(`/input?phase=${p}&id=0&x=${nx.toFixed(4)}&y=${ny.toFixed(4)}`).catch(()=>{}); }
+function send(p,nx,ny,f){ fetch(`/input?phase=${p}&id=${f}&x=${nx.toFixed(4)}&y=${ny.toFixed(4)}`).catch(()=>{}); }
 const stage=document.getElementById('stage');
 stage.style.touchAction='none';
-let down=false,lastMove=0;
+// Multitouch: each active pointer (finger) gets its own index 0..10.
+const ptrs=new Map(); // pointerId -> {finger,lastMove}
+function allocFinger(){ const used=new Set(); ptrs.forEach(p=>used.add(p.finger));
+  for(let i=0;i<11;i++) if(!used.has(i)) return i; return 0; }
 stage.addEventListener('pointerdown',e=>{
   if(panel.classList.contains('open')){ setPanel(false); e.preventDefault(); return; } // tap-away closes panel
-  down=true;try{stage.setPointerCapture(e.pointerId)}catch(_){}
-  const[x,y]=clientToNorm(e.clientX,e.clientY);send(0,x,y);e.preventDefault();});
-stage.addEventListener('pointermove',e=>{if(!down)return;const now=performance.now();if(now-lastMove<16)return;lastMove=now;
-  const[x,y]=clientToNorm(e.clientX,e.clientY);send(1,x,y);e.preventDefault();});
-function up(e){if(!down)return;down=false;const[x,y]=clientToNorm(e.clientX,e.clientY);send(2,x,y);e.preventDefault();}
+  const f=allocFinger(); ptrs.set(e.pointerId,{finger:f,lastMove:0});
+  try{stage.setPointerCapture(e.pointerId)}catch(_){}
+  const[x,y]=clientToNorm(e.clientX,e.clientY);send(0,x,y,f);e.preventDefault();});
+stage.addEventListener('pointermove',e=>{const p=ptrs.get(e.pointerId);if(!p)return;
+  const now=performance.now();if(now-p.lastMove<16)return;p.lastMove=now;
+  const[x,y]=clientToNorm(e.clientX,e.clientY);send(1,x,y,p.finger);e.preventDefault();});
+function up(e){const p=ptrs.get(e.pointerId);if(!p)return;ptrs.delete(e.pointerId);
+  const[x,y]=clientToNorm(e.clientX,e.clientY);send(2,x,y,p.finger);e.preventDefault();}
 stage.addEventListener('pointerup',up);
 stage.addEventListener('pointercancel',up);
 // ---- keyboard: forward physical keystrokes as HID key events ----

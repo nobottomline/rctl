@@ -206,9 +206,29 @@ static UIWindow *key_window(void) {
     return app.keyWindow;
 }
 
+// Multitouch state: a digitizer event must carry ALL currently-down fingers each
+// time, so the system tracks them together (pinch, two-finger gestures, etc.).
+// Only touched on the main thread, so no locking.
+#define RCTL_MAX_FINGERS 11
+static struct { bool active, lifting; double x, y; uint32_t mask; } gFinger[RCTL_MAX_FINGERS];
+
 // System-wide path: dispatch a digitizer event with the real senderID so it
 // reaches the foreground app. (x,y) normalized [0,1] in the screen's fixed space.
 static void do_touch_system(int finger, int phase, double nx, double ny) {
+    if (finger < 0) finger = 0;
+    if (finger >= RCTL_MAX_FINGERS) finger = RCTL_MAX_FINGERS - 1;
+
+    // Update this finger's state. down: range+touch; move: position; up: touch
+    // (sent once with touch=0, then removed below).
+    if (phase == 2) {
+        if (!gFinger[finger].active) return;
+        gFinger[finger].lifting = true; gFinger[finger].mask = kEvTouch;
+    } else {
+        gFinger[finger].active = true; gFinger[finger].lifting = false;
+        gFinger[finger].mask = (phase == 0) ? (kEvRange | kEvTouch) : kEvPosition;
+    }
+    gFinger[finger].x = nx; gFinger[finger].y = ny;
+
     uint64_t ts = mach_absolute_time();
     IOHIDEventRef parent = _CreateDigitizer(kCFAllocatorDefault, ts, kHand, 99, 1, 0, 0,
                                             0, 0, 0, 0, 0, 0, 0, 0);
@@ -216,22 +236,34 @@ static void do_touch_system(int finger, int phase, double nx, double ny) {
     _SetInt(parent, kFieldIsDisplayIntegrated, 1);
     _SetInt(parent, 0x4, 1);   // digitizer event flag
 
-    uint32_t mask = (phase == 1) ? kEvPosition : (phase == 2 ? kEvTouch : (kEvRange | kEvTouch));
-    int range = (phase == 2) ? 0 : 1;
-    int touch = (phase == 2) ? 0 : 1;
-    IOHIDEventRef child = _CreateFinger(kCFAllocatorDefault, ts, (uint32_t)finger, 3, mask,
-                                        nx, ny, 0, 0, 0, range, touch, 0);
-    if (child) {
-        if (_SetFloat) { _SetFloat(child, kFieldMajorRadius, 0.04); _SetFloat(child, kFieldMinorRadius, 0.04); }
-        _Append(parent, child, 0);
+    for (int i = 0; i < RCTL_MAX_FINGERS; i++) {
+        if (!gFinger[i].active) continue;
+        int touch = gFinger[i].lifting ? 0 : 1;
+        int range = gFinger[i].lifting ? 0 : 1;
+        IOHIDEventRef child = _CreateFinger(kCFAllocatorDefault, ts, (uint32_t)i, 3, gFinger[i].mask,
+                                            gFinger[i].x, gFinger[i].y, 0, 0, 0, range, touch, 0);
+        if (child) {
+            if (_SetFloat) { _SetFloat(child, kFieldMajorRadius, 0.04); _SetFloat(child, kFieldMinorRadius, 0.04); }
+            _Append(parent, child, 0);
+        }
     }
     _SetInt(parent, kFieldChildCount, 0x23);
     _SetInt(parent, kFieldButtonMask, 1);
     _SetInt(parent, kFieldEventMaskField, 1);
 
+    static int mtdbg = 0;
+    if (mtdbg++ < 16) { int c = 0; for (int i = 0; i < RCTL_MAX_FINGERS; i++) if (gFinger[i].active) c++;
+        char b[80]; snprintf(b, sizeof b, "[mt] finger=%d phase=%d activeFingers=%d", finger, phase, c); ilog(b); }
+
     if (_SetSenderID) _SetSenderID(parent, gSenderID);
     _ClientDispatch(gClient, parent);
     CFRelease(parent);
+
+    // Lifted fingers are gone now; held fingers continue with position updates.
+    for (int i = 0; i < RCTL_MAX_FINGERS; i++) {
+        if (gFinger[i].lifting) { gFinger[i].active = false; gFinger[i].lifting = false; }
+        else if (gFinger[i].active) gFinger[i].mask = kEvPosition;
+    }
 }
 
 // Fallback path (used only until a senderID is known): enqueue into the
