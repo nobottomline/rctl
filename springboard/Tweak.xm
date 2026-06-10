@@ -39,7 +39,9 @@ static void rctl_system_action(int code) {
     });
 }
 
-// Launch an app by bundle id via SpringBoardServices. Runs on the main thread.
+// Launch an app by bundle id via SpringBoardServices. Call OFF the main thread
+// (it's a synchronous client request to SpringBoard; on the main thread it
+// self-deadlocks until a long timeout).
 static void rctl_launch_app(NSString *bid) {
     if (!bid) return;
     static int (*SBSLaunch)(CFStringRef, Boolean) = NULL;
@@ -158,7 +160,11 @@ static void *ipc_manager(void *unused) {
                 reconfigure(m.fps, m.scale, m.bitrate);
             } else if (type == RCTL_MSG_LAUNCH && len > 0) {
                 NSString *bid = [[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding];
-                dispatch_async(dispatch_get_main_queue(), ^{ rctl_launch_app(bid); });
+                // MUST run off the main thread: SBSLaunch... is a client->SpringBoard
+                // request, and calling it ON SpringBoard's main thread self-deadlocks
+                // until a ~10s timeout (the UI freezes, then the app opens).
+                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
+                               ^{ rctl_launch_app(bid); });
             } else if (type == RCTL_MSG_ALERT && len > 0) {
                 NSString *s = [[NSString alloc] initWithBytes:buf length:len encoding:NSUTF8StringEncoding];
                 NSRange nl = [s rangeOfString:@"\n"];
