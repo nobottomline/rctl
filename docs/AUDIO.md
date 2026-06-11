@@ -10,6 +10,12 @@ browser or native media client together with the screen stream.
   through SpringBoard IPC, `rctld`, and the browser decoder.
 - The current stream frame parser ignores unknown frame types, so future audio
   frames can be added without making old video clients feed them to WebCodecs.
+- `/audio_test?on=1&hz=440` enables a synthetic daemon-generated PCM test tone.
+  It sends `/stream` frame type `4` with payload
+  `[8B BE pts_us][4B BE sample_rate][1B channels][1B bytes_per_sample][2B BE frames][s16le PCM]`.
+  The browser panel's `Tone` button unlocks Web Audio and renders these frames.
+  This validates audio framing, timestamps, browser scheduling, and playback
+  without touching system playback capture.
 
 ## Non-goals
 
@@ -106,5 +112,5 @@ speaker/Bluetooth output. Candidate approaches, in order:
 1. Add a diagnostic-only audio probe target that is not loaded by default.
 2. Confirm process/class/symbol surfaces on the real iPad without altering audio.
 3. Add an in-daemon audio ring-buffer/packet API with a synthetic test source.
-4. Add a browser-safe audio frame type or a WebRTC prototype sink.
+4. Replace the synthetic source with an in-daemon audio ring-buffer/packet API.
 5. Only then attempt a real system-audio tap.

@@ -18,6 +18,8 @@
 #import <stdio.h>
 
 #define RCTL_MAX_CLIENTS 8
+#define RCTL_AUDIO_TEST_RATE 48000
+#define RCTL_AUDIO_TEST_FRAMES 960
 
 struct rctl_http_server {
     int listen_fd;
@@ -39,6 +41,12 @@ struct rctl_http_server {
     void *rest_ctx;
     rctl_session_cb session_cb;
     void *session_ctx;
+    pthread_t audio_thread;
+    bool audio_thread_started;
+    bool audio_test_on;
+    int audio_test_hz;
+    uint64_t audio_test_pts_us;
+    double audio_test_phase;
     bool was_active;               // last-notified state (a /stream client present)
     volatile bool running;
 };
@@ -181,6 +189,16 @@ static void put_be64(uint8_t *p, uint64_t v) {
     p[6] = (v >> 8) & 0xff;  p[7] = v & 0xff;
 }
 
+static void put_be32(uint8_t *p, uint32_t v) {
+    p[0] = (v >> 24) & 0xff; p[1] = (v >> 16) & 0xff;
+    p[2] = (v >> 8) & 0xff;  p[3] = v & 0xff;
+}
+
+static void put_le16(uint8_t *p, int16_t v) {
+    p[0] = (uint8_t)(v & 0xff);
+    p[1] = (uint8_t)(((uint16_t)v >> 8) & 0xff);
+}
+
 static bool send_frame_chunk(int fd, uint8_t type, const uint8_t *data, size_t len) {
     char hdr[32];
     size_t af_len = 5 + len;
@@ -220,6 +238,55 @@ static bool send_video_chunk(int fd, uint8_t type, uint64_t pts_us, const uint8_
     bool ok = send_full(fd, b, total);
     free(b);
     return ok;
+}
+
+static void broadcast_locked(rctl_http_server *s, uint8_t type, const uint8_t *data, size_t len);
+
+static void *audio_test_loop(void *arg) {
+    rctl_http_server *s = (rctl_http_server *)arg;
+    const int frames = RCTL_AUDIO_TEST_FRAMES;       // 20 ms at 48 kHz
+    const size_t payload_len = 16 + frames * 2;      // pts/rate/channels/format + s16le mono
+    uint8_t payload[16 + RCTL_AUDIO_TEST_FRAMES * 2];
+
+    while (s->running) {
+        bool became_idle = false;
+        rctl_session_cb scb = NULL; void *sctx = NULL;
+
+        pthread_mutex_lock(&s->mtx);
+        if (s->audio_test_on && count_clients_locked(s) > 0) {
+            put_be64(payload, s->audio_test_pts_us);
+            put_be32(payload + 8, RCTL_AUDIO_TEST_RATE);
+            payload[12] = 1; // channels
+            payload[13] = 2; // bytes per sample
+            payload[14] = (frames >> 8) & 0xff;
+            payload[15] = frames & 0xff;
+
+            double phase = s->audio_test_phase;
+            double inc = (double)s->audio_test_hz / (double)RCTL_AUDIO_TEST_RATE;
+            for (int i = 0; i < frames; i++) {
+                double tri = phase < 0.5 ? (-1.0 + 4.0 * phase) : (3.0 - 4.0 * phase);
+                int16_t sample = (int16_t)(tri * 7000.0);
+                put_le16(payload + 16 + i * 2, sample);
+                phase += inc;
+                if (phase >= 1.0) phase -= 1.0;
+            }
+            s->audio_test_phase = phase;
+            s->audio_test_pts_us += 20000;
+            broadcast_locked(s, 4, payload, payload_len);
+
+            if (s->was_active && count_clients_locked(s) == 0) {
+                s->was_active = false;
+                became_idle = true;
+                scb = s->session_cb;
+                sctx = s->session_ctx;
+            }
+        }
+        pthread_mutex_unlock(&s->mtx);
+
+        if (became_idle && scb) scb(sctx, false);
+        usleep(20000);
+    }
+    return NULL;
 }
 
 static void send_data(int fd, const char *status, const char *ctype,
@@ -301,6 +368,23 @@ static void handle_client(rctl_http_server *s, int fd) {
         fprintf(stderr, "[http] /config fps=%d scale=%.2f bitrate=%d\n", fps, sc, br);
         if (cb) cb(cx, fps, sc, br);
         send_text(fd, "200 OK", "text/plain", "ok");
+        close(fd);
+    } else if (strncmp(req, "GET /audio_test", 15) == 0) {
+        bool on = strstr(req, "on=1") != NULL;
+        int hz = 440;
+        char *p;
+        if ((p = strstr(req, "hz="))) hz = atoi(p + 3);
+        if (hz < 80) hz = 80;
+        if (hz > 2000) hz = 2000;
+        pthread_mutex_lock(&s->mtx);
+        s->audio_test_on = on;
+        s->audio_test_hz = hz;
+        if (on) {
+            s->audio_test_pts_us = 0;
+            s->audio_test_phase = 0;
+        }
+        pthread_mutex_unlock(&s->mtx);
+        send_text(fd, "200 OK", "text/plain", on ? "on" : "off");
         close(fd);
     } else if (strncmp(req, "GET /orient", 11) == 0) {
         char body[16];
@@ -405,8 +489,10 @@ rctl_http_server *rctl_http_start(int port) {
 
     rctl_http_server *s = (rctl_http_server *)calloc(1, sizeof(rctl_http_server));
     s->listen_fd = lfd; s->port = port; s->running = true; s->orientation = 1;
+    s->audio_test_hz = 440;
     for (int i = 0; i < RCTL_MAX_CLIENTS; i++) s->clients[i] = -1;
     pthread_mutex_init(&s->mtx, NULL);
+    s->audio_thread_started = pthread_create(&s->audio_thread, NULL, audio_test_loop, s) == 0;
     pthread_create(&s->thread, NULL, accept_loop, s);
     fprintf(stderr, "[http] serving on 0.0.0.0:%d\n", port);
     return s;
@@ -518,6 +604,7 @@ void rctl_http_stop(rctl_http_server *s) {
     if (!s) return;
     s->running = false;
     close(s->listen_fd);
+    if (s->audio_thread_started) pthread_join(s->audio_thread, NULL);
     pthread_mutex_lock(&s->mtx);
     for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->clients[i] >= 0) close(s->clients[i]);
     free(s->keyframe);

@@ -99,7 +99,7 @@
     <button id="oRot">⟳ Rotate</button>
   </div>
   <div class="sect">Tools</div>
-  <div class="row"><button id="pgOpen">⌨ Console</button><button id="rspPanel">↻ Respring</button></div>
+  <div class="row"><button id="pgOpen">⌨ Console</button><button id="audTest">Tone</button><button id="rspPanel">↻ Respring</button></div>
   <div class="sect">Quality</div>
   <div class="row">
     <button data-q="hq" class="on">High</button>
@@ -196,6 +196,7 @@ function ptsFromPayload(data){
   const lo=((data[4]<<24)>>>0)+(data[5]<<16)+(data[6]<<8)+data[7];
   return hi*4294967296+lo;
 }
+function be32(data,off){ return (data[off]*16777216)+(data[off+1]<<16)+(data[off+2]<<8)+data[off+3]; }
 function mkdec(){
   if(dec){try{dec.close()}catch(e){}}
   dec=new VideoDecoder({
@@ -236,6 +237,41 @@ const ROT=[1,4,2,3]; // DEG steps 0,90,180,270
 function setOrientUI(){ oAuto.classList.toggle('on',manualOrient==null); }
 oAuto.onclick=()=>{ manualOrient=null; setOrientUI(); applyOrient(); };
 oRot.onclick=()=>{ let i=ROT.indexOf(effOrient()); if(i<0)i=0; manualOrient=ROT[(i+1)%4]; setOrientUI(); applyOrient(); };
+
+// Synthetic audio transport test: daemon sends type=4 PCM frames over /stream.
+let audioCtx=null,audioEnabled=false,audioBasePts=null,audioBaseTime=0;
+const audBtn=document.getElementById('audTest');
+function resetAudioClock(pts){
+  if(!audioCtx)return;
+  audioBasePts=pts;
+  audioBaseTime=audioCtx.currentTime+0.08;
+}
+function playAudioPayload(data){
+  if(!audioEnabled||!audioCtx||data.length<16)return;
+  const pts=ptsFromPayload(data),rate=be32(data,8),channels=data[12],bytes=data[13];
+  const frames=(data[14]<<8)+data[15],off=16;
+  if(channels!==1||bytes!==2||frames<=0||data.length<off+frames*2)return;
+  if(audioBasePts==null)resetAudioClock(pts);
+  let when=audioBaseTime+(pts-audioBasePts)/1000000;
+  const now=audioCtx.currentTime;
+  if(when<now+0.01||when>now+1.0){resetAudioClock(pts);when=audioBaseTime;}
+  const buf=audioCtx.createBuffer(1,frames,rate),ch=buf.getChannelData(0);
+  const dv=new DataView(data.buffer,data.byteOffset+off,frames*2);
+  for(let i=0;i<frames;i++)ch[i]=dv.getInt16(i*2,true)/32768;
+  const src=audioCtx.createBufferSource();src.buffer=buf;src.connect(audioCtx.destination);src.start(when);
+}
+audBtn.onclick=async()=>{
+  audioEnabled=!audioEnabled;
+  audBtn.classList.toggle('on',audioEnabled);
+  audioBasePts=null;
+  if(audioEnabled){
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC){audioEnabled=false;audBtn.classList.remove('on');return;}
+    if(!audioCtx)audioCtx=new AC();
+    try{await audioCtx.resume();}catch(e){}
+  }
+  fetch(`/audio_test?on=${audioEnabled?1:0}&hz=440`).catch(()=>{});
+};
 
 // ---- input: map a click on the displayed (rotated/scaled) canvas back to
 // normalized framebuffer coordinates (the screen's FIXED space), send to device ----
@@ -431,6 +467,7 @@ $('playBtn').onclick=()=>{ if(!macro||!macro.length)return;
       const data=buf.slice(5,5+len);buf=buf.subarray(5+len);
       if(type===2){if(data.length>=1){orient=data[0];applyOrient();}continue;}
       if(type===3){started=false;if(dec){try{dec.close()}catch(e){}}dec=null;continue;}
+      if(type===4){playAudioPayload(data);continue;}
       if(type!==0&&type!==1)continue;
       if(data.length<8)continue;
       const pts=ptsFromPayload(data),au=data.slice(8);
