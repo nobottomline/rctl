@@ -91,4 +91,3 @@ shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
    Remaining: keyboard input, and control inside 3rd-party apps.
 3. **P3** — internet access: WebRTC transport + our own signaling + TURN relay.
 4. **P4** — clipboard sync, file transfer, audio, autostart/persistence, auth & encryption.
-```
