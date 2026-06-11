@@ -4,6 +4,7 @@
 # Default is status only. Loading the probe into mediaserverd is explicit:
 #   scripts/audioprobe.sh status
 #   scripts/audioprobe.sh stage
+#   scripts/audioprobe.sh once
 #   scripts/audioprobe.sh load
 #   scripts/audioprobe.sh remove
 #
@@ -20,12 +21,12 @@ LOG="/tmp/rctl-audioprobe.log"
 MODE="${1:-status}"
 
 usage() {
-  echo "usage: $0 [status|stage|load|remove]" >&2
+  echo "usage: $0 [status|stage|once|load|remove]" >&2
   exit 2
 }
 
 case "$MODE" in
-  status|stage|load|remove) ;;
+  status|stage|once|load|remove) ;;
   *) usage ;;
 esac
 
@@ -86,17 +87,37 @@ load_probe() {
   "
 }
 
+once_probe() {
+  load_probe
+  remove_probe
+}
+
 remove_probe() {
   ssh "$HOST" "set -e
-    rm -f '$DYLIB' '$PLIST'
+    LINE=\$(ps -A | grep ' /usr/sbin/mediaserverd$' | head -n 1 || true)
+    set -- \$LINE
+    BEFORE=\${1:-}
+    rm -f '$DYLIB' '$PLIST' /tmp/rctlaudioprobe.dylib /tmp/rctlaudioprobe.plist
     killall mediaserverd 2>/dev/null || true
-    echo '[audioprobe] removed and mediaserverd restart requested'
+    i=0
+    while [ \$i -lt 20 ]; do
+      i=\$((i+1)); sleep 1
+      LINE=\$(ps -A | grep ' /usr/sbin/mediaserverd$' | head -n 1 || true)
+      set -- \$LINE
+      NOW=\${1:-}
+      if [ -n \"\$NOW\" ] && [ \"\$NOW\" != \"\$BEFORE\" ]; then
+        echo \"[audioprobe] removed; clean mediaserverd pid=\$NOW at \${i}s\"
+        exit 0
+      fi
+    done
+    echo '[audioprobe] removed; mediaserverd restart not observed'
   "
 }
 
 case "$MODE" in
   status) remote_status ;;
   stage) stage_probe; remote_status ;;
+  once) once_probe; remote_status ;;
   load) load_probe ;;
   remove) remove_probe; remote_status ;;
 esac

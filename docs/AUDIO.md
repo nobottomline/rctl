@@ -38,6 +38,31 @@ rootfs surfaces:
   `BWAudioSourceNode`, `FigAudioCaptureConnectionConfiguration`, and related
   audio file/data sink configurations.
 
+## One-shot probe result
+
+`scripts/audioprobe.sh once` was run on the iPad with no active browser viewer.
+The script activated `rctlaudioprobe`, restarted `mediaserverd`, captured the log,
+removed the active probe dylib/plist, and restarted `mediaserverd` cleanly.
+
+Observed in `mediaserverd`:
+
+- Classes present: `Core_Audio_Daemon`, `AVAudioSession`, `AVAudioPlayer`,
+  `AVAudioRecorder`, `AVCaptureAudioDataOutput`, `AVCaptureFigAudioDevice`,
+  `BWAudioSourceNode`, `FigAudioCaptureConnectionConfiguration`,
+  `FigCaptureAudioDataSinkConfiguration`, `FigCaptureAudioDataSinkPipeline`,
+  `FigCaptureAudioFileSinkConfiguration`, `FigCaptureAudioFileSinkPipeline`.
+- Symbols present: `AudioComponentFindNext`, `AudioComponentInstanceNew`,
+  `AudioOutputUnitStart`, `AudioOutputUnitStop`, `AudioUnitGetProperty`,
+  `AudioUnitSetProperty`, `AudioUnitRender`, `AudioQueueNewOutput`,
+  `AudioQueueStart`, `AudioQueueEnqueueBuffer`, `CMSessionCreate`.
+- `FigAudioQueueCreate` was not present through `RTLD_DEFAULT`.
+
+Operational note: after restarting `mediaserverd`, one `/stream` attempt returned
+only the cached keyframe. Sending `/config?scale=1.0&fps=30&bitrate=24000000`
+forced SpringBoard to recreate the capture/VideoToolbox session, after which
+live frames resumed normally. This reinforces the rule: do not probe/restart
+`mediaserverd` while a real viewer session is active.
+
 ## Preferred product architecture
 
 Use one capture core with multiple sinks:
