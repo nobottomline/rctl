@@ -81,6 +81,11 @@ static void rctl_capture(int position) {
             id conn = ((id (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"connectionWithMediaType:"), @"vide");
             caplog([NSString stringWithFormat:@"running=%d conn=%d", run, conn != nil]);
             if (!conn) { ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning")); return; }
+            // Match the photo to the device/app orientation (else it's sideways in
+            // landscape). UIInterfaceOrientation 1..4 maps 1:1 to AVCaptureVideoOrientation.
+            long io = ((long (*)(id, SEL))objc_msgSend)([UIApplication sharedApplication], NSSelectorFromString(@"statusBarOrientation"));
+            if (io >= 1 && io <= 4 && ((BOOL (*)(id, SEL))objc_msgSend)(conn, NSSelectorFromString(@"isVideoOrientationSupported")))
+                ((void (*)(id, SEL, long))objc_msgSend)(conn, NSSelectorFromString(@"setVideoOrientation:"), io);
             void (^done)(void *, NSError *) = ^(void *sbuf, NSError *e) {
               @try {
                 NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
