@@ -431,6 +431,7 @@ $('playBtn').onclick=()=>{ if(!macro||!macro.length)return;
       const data=buf.slice(5,5+len);buf=buf.subarray(5+len);
       if(type===2){if(data.length>=1){orient=data[0];applyOrient();}continue;}
       if(type===3){started=false;if(dec){try{dec.close()}catch(e){}}dec=null;continue;}
+      if(type!==0&&type!==1)continue;
       if(data.length<8)continue;
       const pts=ptsFromPayload(data),au=data.slice(8);
       const key=(type===1);
