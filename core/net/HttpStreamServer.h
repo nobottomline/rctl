@@ -19,6 +19,14 @@ rctl_http_server *rctl_http_start(int port);
 void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len,
                        bool keyframe, uint64_t pts_us);
 
+// Push one interleaved signed 16-bit little-endian PCM packet to all connected
+// stream clients. The payload is carried as stream frame type 4:
+// [8B BE pts_us][4B BE sample_rate][1B channels][1B bytes_per_sample]
+// [2B BE frames][interleaved s16le PCM].
+void rctl_http_push_pcm_s16le(rctl_http_server *s, const int16_t *samples,
+                              uint16_t frames, uint8_t channels,
+                              uint32_t sample_rate, uint64_t pts_us);
+
 // Set the current display orientation (UIInterfaceOrientation: 1=portrait,
 // 2=portrait-upside-down, 3=landscape-right, 4=landscape-left). Broadcast to clients.
 void rctl_http_set_orientation(rctl_http_server *s, int orientation);

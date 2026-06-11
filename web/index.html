@@ -250,14 +250,18 @@ function playAudioPayload(data){
   if(!audioEnabled||!audioCtx||data.length<16)return;
   const pts=ptsFromPayload(data),rate=be32(data,8),channels=data[12],bytes=data[13];
   const frames=(data[14]<<8)+data[15],off=16;
-  if(channels!==1||bytes!==2||frames<=0||data.length<off+frames*2)return;
+  if((channels!==1&&channels!==2)||bytes!==2||frames<=0||data.length<off+frames*channels*2)return;
   if(audioBasePts==null)resetAudioClock(pts);
   let when=audioBaseTime+(pts-audioBasePts)/1000000;
   const now=audioCtx.currentTime;
   if(when<now+0.01||when>now+1.0){resetAudioClock(pts);when=audioBaseTime;}
-  const buf=audioCtx.createBuffer(1,frames,rate),ch=buf.getChannelData(0);
-  const dv=new DataView(data.buffer,data.byteOffset+off,frames*2);
-  for(let i=0;i<frames;i++)ch[i]=dv.getInt16(i*2,true)/32768;
+  const buf=audioCtx.createBuffer(channels,frames,rate);
+  const dv=new DataView(data.buffer,data.byteOffset+off,frames*channels*2);
+  const outs=[];
+  for(let c=0;c<channels;c++)outs[c]=buf.getChannelData(c);
+  for(let i=0;i<frames;i++){
+    for(let c=0;c<channels;c++)outs[c][i]=dv.getInt16((i*channels+c)*2,true)/32768;
+  }
   const src=audioCtx.createBufferSource();src.buffer=buf;src.connect(audioCtx.destination);src.start(when);
 }
 audBtn.onclick=async()=>{

@@ -16,6 +16,9 @@ browser or native media client together with the screen stream.
   The browser panel's `Tone` button unlocks Web Audio and renders these frames.
   This validates audio framing, timestamps, browser scheduling, and playback
   without touching system playback capture.
+- `rctl_http_push_pcm_s16le()` is the transport contract for future capture
+  sources. It accepts interleaved mono/stereo S16LE packets and hides HTTP
+  chunking from the eventual system-audio tap.
 
 ## Non-goals
 
@@ -111,6 +114,6 @@ speaker/Bluetooth output. Candidate approaches, in order:
 
 1. Add a diagnostic-only audio probe target that is not loaded by default.
 2. Confirm process/class/symbol surfaces on the real iPad without altering audio.
-3. Add an in-daemon audio ring-buffer/packet API with a synthetic test source.
-4. Replace the synthetic source with an in-daemon audio ring-buffer/packet API.
+3. Add an in-daemon audio packet API with a synthetic test source.
+4. Replace the synthetic source with a real capture source feeding that API.
 5. Only then attempt a real system-audio tap.

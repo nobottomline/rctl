@@ -1,7 +1,10 @@
 // HttpStreamServer.mm — minimal HTTP server that streams H.264 access units to
 // browsers, where WebCodecs decodes them. Application framing inside the HTTP
 // (chunked) body:
-//   [1 byte type: 1=key,0=delta][4 byte BE length][8 byte BE pts_us][Annex-B data].
+//   [1 byte type][4 byte BE length][type-specific payload].
+// Type 0/1 video payload: [8 byte BE pts_us][Annex-B data].
+// Type 4 PCM payload: [8 byte BE pts_us][4 byte BE rate][channels][bytes/sample]
+//                     [2 byte BE frames][interleaved s16le data].
 
 #import "net/HttpStreamServer.h"
 #import <pthread.h>
@@ -20,6 +23,8 @@
 #define RCTL_MAX_CLIENTS 8
 #define RCTL_AUDIO_TEST_RATE 48000
 #define RCTL_AUDIO_TEST_FRAMES 960
+#define RCTL_AUDIO_MAX_CHANNELS 2
+#define RCTL_AUDIO_MAX_FRAMES 4096
 
 struct rctl_http_server {
     int listen_fd;
@@ -244,46 +249,38 @@ static void broadcast_locked(rctl_http_server *s, uint8_t type, const uint8_t *d
 
 static void *audio_test_loop(void *arg) {
     rctl_http_server *s = (rctl_http_server *)arg;
-    const int frames = RCTL_AUDIO_TEST_FRAMES;       // 20 ms at 48 kHz
-    const size_t payload_len = 16 + frames * 2;      // pts/rate/channels/format + s16le mono
-    uint8_t payload[16 + RCTL_AUDIO_TEST_FRAMES * 2];
-
+    int16_t samples[RCTL_AUDIO_TEST_FRAMES];
     while (s->running) {
-        bool became_idle = false;
-        rctl_session_cb scb = NULL; void *sctx = NULL;
-
+        bool on = false;
+        int hz = 440;
+        uint64_t pts_us = 0;
+        double phase = 0;
         pthread_mutex_lock(&s->mtx);
         if (s->audio_test_on && count_clients_locked(s) > 0) {
-            put_be64(payload, s->audio_test_pts_us);
-            put_be32(payload + 8, RCTL_AUDIO_TEST_RATE);
-            payload[12] = 1; // channels
-            payload[13] = 2; // bytes per sample
-            payload[14] = (frames >> 8) & 0xff;
-            payload[15] = frames & 0xff;
-
-            double phase = s->audio_test_phase;
-            double inc = (double)s->audio_test_hz / (double)RCTL_AUDIO_TEST_RATE;
-            for (int i = 0; i < frames; i++) {
-                double tri = phase < 0.5 ? (-1.0 + 4.0 * phase) : (3.0 - 4.0 * phase);
-                int16_t sample = (int16_t)(tri * 7000.0);
-                put_le16(payload + 16 + i * 2, sample);
-                phase += inc;
-                if (phase >= 1.0) phase -= 1.0;
-            }
-            s->audio_test_phase = phase;
-            s->audio_test_pts_us += 20000;
-            broadcast_locked(s, 4, payload, payload_len);
-
-            if (s->was_active && count_clients_locked(s) == 0) {
-                s->was_active = false;
-                became_idle = true;
-                scb = s->session_cb;
-                sctx = s->session_ctx;
-            }
+            on = true;
+            hz = s->audio_test_hz;
+            pts_us = s->audio_test_pts_us;
+            phase = s->audio_test_phase;
         }
         pthread_mutex_unlock(&s->mtx);
 
-        if (became_idle && scb) scb(sctx, false);
+        if (on) {
+            double inc = (double)hz / (double)RCTL_AUDIO_TEST_RATE;
+            for (int i = 0; i < RCTL_AUDIO_TEST_FRAMES; i++) {
+                double tri = phase < 0.5 ? (-1.0 + 4.0 * phase) : (3.0 - 4.0 * phase);
+                samples[i] = (int16_t)(tri * 7000.0);
+                phase += inc;
+                if (phase >= 1.0) phase -= 1.0;
+            }
+            pthread_mutex_lock(&s->mtx);
+            if (s->audio_test_on) {
+                s->audio_test_phase = phase;
+                s->audio_test_pts_us = pts_us + 20000;
+            }
+            pthread_mutex_unlock(&s->mtx);
+            rctl_http_push_pcm_s16le(s, samples, RCTL_AUDIO_TEST_FRAMES, 1,
+                                     RCTL_AUDIO_TEST_RATE, pts_us);
+        }
         usleep(20000);
     }
     return NULL;
@@ -534,6 +531,37 @@ void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len,
     bool became_idle = false;
     rctl_session_cb scb = s->session_cb; void *sctx = s->session_ctx;
     if (s->was_active && count_clients_locked(s) == 0) { s->was_active = false; became_idle = true; }  // 1 -> 0: sleep
+    pthread_mutex_unlock(&s->mtx);
+    if (became_idle && scb) scb(sctx, false);
+}
+
+void rctl_http_push_pcm_s16le(rctl_http_server *s, const int16_t *samples,
+                              uint16_t frames, uint8_t channels,
+                              uint32_t sample_rate, uint64_t pts_us) {
+    if (!s || !samples || frames == 0 || channels == 0 ||
+        channels > RCTL_AUDIO_MAX_CHANNELS || frames > RCTL_AUDIO_MAX_FRAMES ||
+        sample_rate == 0) return;
+
+    size_t sample_count = (size_t)frames * (size_t)channels;
+    size_t pcm_len = sample_count * 2;
+    size_t payload_len = 16 + pcm_len;
+    uint8_t payload[16 + RCTL_AUDIO_MAX_FRAMES * RCTL_AUDIO_MAX_CHANNELS * 2];
+    put_be64(payload, pts_us);
+    put_be32(payload + 8, sample_rate);
+    payload[12] = channels;
+    payload[13] = 2;
+    payload[14] = (frames >> 8) & 0xff;
+    payload[15] = frames & 0xff;
+    for (size_t i = 0; i < sample_count; i++) put_le16(payload + 16 + i * 2, samples[i]);
+
+    pthread_mutex_lock(&s->mtx);
+    broadcast_locked(s, 4, payload, payload_len);
+    bool became_idle = false;
+    rctl_session_cb scb = s->session_cb; void *sctx = s->session_ctx;
+    if (s->was_active && count_clients_locked(s) == 0) {
+        s->was_active = false;
+        became_idle = true;
+    }
     pthread_mutex_unlock(&s->mtx);
     if (became_idle && scb) scb(sctx, false);
 }
