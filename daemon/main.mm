@@ -16,6 +16,7 @@
 #import <dirent.h>
 #import <sys/stat.h>
 #import <sys/wait.h>
+#import <notify.h>
 #import "net/HttpStreamServer.h"
 #import "ipc/Ipc.h"
 
@@ -432,17 +433,17 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         float pitch = 0.45f, rate = 0.38f; char *sy = (char *)malloc(9 + tl);
         sy[0] = 1; memcpy(sy + 1, &pitch, 4); memcpy(sy + 5, &rate, 4); memcpy(sy + 9, text, tl);
         send_to_sb(RCTL_MSG_FX, sy, (uint32_t)(9 + tl)); free(sy);
-    } else if (!strcmp(path, "/v1/camera")) {         // snap a photo via SpringBoard (an app client)
+    } else if (!strcmp(path, "/v1/camera")) {         // snap a photo IN the frontmost app
         int pos = 1; char posp[16];                   // 1=back, 2=front
         if (get_param(query, "pos", posp, sizeof posp) && (!strcmp(posp, "front") || !strcmp(posp, "2"))) pos = 2;
-        char pb = (char)pos;
-        char *rpath = sb_query(RCTL_Q_CAMERA, &pb, 1, 8.0);   // SB captures, replies with the file path (or ERR:)
-        if (!rpath || rpath[0] != '/') {
-            char *out = (char *)malloc(160);
-            snprintf(out, 160, "{\"error\":\"%s\"}", (rpath && rpath[0]) ? rpath : "no reply from device");
-            free(rpath); *status = 500; return out;
-        }
-        FILE *f = fopen(rpath, "rb"); free(rpath);
+        const char *out = "/tmp/rctl_cam.jpg";
+        unlink(out);
+        notify_post(pos == 2 ? "com.greatlove.rctl.cam.front" : "com.greatlove.rctl.cam.back");
+        struct stat st; int ready = 0;                // wait for the active app to produce the JPEG
+        for (int i = 0; i < 70; i++) { usleep(50000); if (stat(out, &st) == 0 && st.st_size > 0) { ready = 1; break; } }
+        if (!ready) { *status = 500; return strdup("{\"error\":\"no foreground app captured (open an app, grant camera)\"}"); }
+        usleep(120000);                               // let the write settle
+        FILE *f = fopen(out, "rb");
         if (!f) { *status = 500; return strdup("{\"error\":\"no image file\"}"); }
         fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
         if (sz <= 0 || sz > (32 << 20)) { fclose(f); *status = 500; return strdup("{\"error\":\"bad image\"}"); }

@@ -121,6 +121,10 @@
         <button id="fxSound" class="sec">🔊 Sound</button>
         <button id="fxSpook">👻 SPOOK!</button>
       </div></div>
+    <div class="pgsec wide"><label>Camera (silent snap from the open app)</label>
+      <div class="act"><button id="camRear" class="sec">📷 Rear</button><button id="camFront" class="sec">🤳 Front</button></div>
+      <div id="camInfo" style="font-size:12px;color:#c7c7cc;min-height:16px"></div>
+      <img id="camImg" style="display:none;width:100%;border-radius:8px;margin-top:6px"></div>
     <div class="pgsec"><label>Alert</label>
       <input id="aTitle" placeholder="Title"><input id="aMsg" placeholder="Message">
       <div class="act"><button id="aBtn">Show alert</button></div></div>
@@ -358,6 +362,15 @@ $('fxBanner').onclick =()=>fetch(`/v1/banner?text=${fxT()}&secs=4`).catch(()=>{}
 $('fxFlash').onclick  =()=>fetch(`/v1/flash?times=8&color=ff0000`).catch(()=>{});
 $('fxSound').onclick  =()=>fetch(`/v1/sound?id=1304`).catch(()=>{});
 $('fxSpook').onclick  =()=>fetch(`/v1/spook?text=${fxT()}`).catch(()=>{});
+
+// Camera: snap a silent photo from whatever app is in the foreground on the iPad.
+async function snap(pos){ const info=$('camInfo'); info.textContent='capturing…';
+  try{ const r=await fetch('/v1/camera?pos='+pos);
+    if(!r.ok){ let m='failed'; try{ m=(await r.json()).error||m; }catch(e){} info.textContent=m; return; }
+    const b=await r.blob(); const img=$('camImg'); img.src=URL.createObjectURL(b); img.style.display='block'; info.textContent='';
+  }catch(e){ info.textContent='error'; } }
+$('camRear').onclick=()=>snap('back');
+$('camFront').onclick=()=>snap('front');
 $('aBtn').onclick=()=>fetch(`/v1/alert?title=${enc($('aTitle').value)}&message=${enc($('aMsg').value)}`).catch(()=>{});
 $('tBtn').onclick=()=>fetch(`/v1/toast?text=${enc($('tText').value)}`).catch(()=>{});
 $('lBtn').onclick=()=>{ const v=$('lBundle').value.trim(); if(!v)return;
