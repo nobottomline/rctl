@@ -1,91 +1,273 @@
-# rctl — Architecture
+# rctl — Architecture & Engineering Notes
 
-## 1. Goal
+Remote-control system for a jailbroken iPad: view the screen and inject
+touch/keyboard/buttons from a browser, plus camera, file transfer, FX, and device
+control. "scrcpy / AnyDesk for jailbroken iOS." LAN today; internet is the north star.
 
-Fully control a jailbroken iPad remotely: see the live screen and inject input, with
-latency low enough to feel direct (target < 100 ms glass-to-glass on LAN), reachable from
-a browser or a native iOS app, on LAN today and over the internet later.
+Target device this was built on: **iPad Air 3 (A12, arm64e), iOS 14.4, unc0ver +
+Substitute** (NOT Cydia Substrate), with Choicy + Heimdallr installed.
 
-## 2. High-level design
+Why jailbreak is required: App Store remote apps (TeamViewer/AnyDesk/RustDesk) can
+only *view* an iOS screen — they can never inject input. Only root + a jailbreak's
+AMFI bypass enable real touch/keyboard injection and camera-from-any-app.
 
-`rctl` follows the *scrcpy* model: a lightweight server on the controlled device captures
-and hardware-encodes the screen, streams it to a client, and the client streams input
-events back, which the server injects as real HID events.
+---
+
+## 1. Component map
 
 ```
-┌──────────────────────────────┐                 ┌───────────────────────────┐
-│  iPad (jailbroken, root)      │                 │  Client (browser / iOS)   │
-│  ── rctld (launchd daemon) ── │                 │                           │
-│                               │   video (RTP)   │  decode (WebCodecs/VT)    │
-│  capture ─► VideoToolbox enc ─┼────────────────►│  render                   │
-│                               │                 │                           │
-│  IOKit HID inject ◄───────────┼─────────────────┤  pointer / key events     │
-│  files / clipboard            │   control (DC)  │  file & clipboard UI      │
-└───────────────┬───────────────┘                 └─────────────┬─────────────┘
-                └────────────── transport (WebRTC) ─────────────┘
-        LAN-direct during dev → signaling + TURN relay for internet
+  ┌─────────── iPad (jailbroken) ────────────────────────────┐
+  │                                                          │
+  │  SpringBoard ──[rctlsbcap.dylib]──┐   every app ──[rctlcap.dylib]
+  │   screen capture + H.264 encode   │    camera capture in the
+  │   touch/key injection             │    FRONTMOST app
+  │   SB private-API actions, FX      │         │ raw-socket POST
+  │         │ Unix socket IPC         │         ▼
+  │         ▼                         │   ┌──────────────┐
+  │   rctld  (root daemon) ◄──────────┘   │ /v1/cam_upload│
+  │   HTTP :8080  (live /stream + REST /v1/*)              │
+  └─────────┼────────────────────────────────────────────┘
+            │ Wi-Fi / USB (iproxy)            (internet: TODO, §6)
+            ▼
+       Browser (web/index.html): WebCodecs decode, input forwarding, console
 ```
 
-## 3. On-device daemon (`rctld`)
+Four parts ship in one `.deb` (`com.greatlove.rctl`):
 
-A **standalone root `launchd` daemon**, deliberately *not* a MobileSubstrate tweak: it does
-not need to be injected into another process, which avoids the `arm64e` injection
-complexity on the A12 and keeps it a clean, self-contained service. Built with Theos
-(`TARGET := iphone:clang:14.5:14.0`, `ARCHS := arm64 arm64e`), ad-hoc signed with `ldid`,
-entitlements added as required by the private frameworks it touches.
+| Component | Where it runs | What it does |
+|---|---|---|
+| **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
+| **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
+| **rctlcap** (`cap/`) | injected into **every** app | captures a camera still in the frontmost app on a Darwin-notification pulse; uploads the JPEG to the daemon over a raw loopback socket |
+| **web** (`web/index.html`) | the controlling browser | decodes the H.264 stream via WebCodecs, forwards pointer/keyboard input, hosts the console (FX, camera, files, launch, etc.) |
 
-Modules:
+`core/` holds the shared C/C++/ObjC modules (capture, encode, stream, net, input,
+ipc) so rctlsbcap and rctld don't duplicate code. `layout/` is the static payload
+(LaunchDaemon plist, web client). `docs/` holds these notes + the mediaserverd
+class dump. `scripts/deploy.sh` is the one-command safe deploy.
 
-- **Capture.** Acquire the framebuffer as an `IOSurface`. Candidate paths, in order of
-  preference: `CARenderServerRenderDisplay` / `CARenderServerRenderLayerWithTransform`
-  rendering the system layer tree into an `IOSurface`, or direct
-  `IOMobileFramebuffer` surface access. Driven off a `CADisplayLink`-equivalent tick on a
-  dedicated thread; no work on the main thread; no busy-waiting.
-- **Encode.** `VideoToolbox` hardware encoder (H.264 baseline/main first for universal
-  client decode; HEVC as an option for the native client). Real-time settings, periodic
-  keyframes, bitrate adapted to the channel.
-- **Input injection.** `IOKit` `IOHIDEvent` digitizer events posted to the HID event
-  system (reference implementations: `xuan32546/IOS13-SimulateTouch`, julioverne's
-  `SimulateTouch`). Covers touch, multitouch, and the hardware buttons; keyboard via
-  keyboard HID usages.
-- **Files / clipboard.** Direct root filesystem access for transfer; pasteboard bridge for
-  clipboard sync.
-- **Session/control.** Connection management, authentication, and the control channel.
+---
 
-## 4. Transport
+## 2. Data flow
 
-- **WebRTC** for both media (encoded video over RTP/SRTP) and a reliable/unreliable data
-  channel for control, files, and clipboard. DTLS-SRTP gives end-to-end encryption.
-- **LAN-direct** during development (the daemon offers a local signaling endpoint).
-- **Internet** via our own **signaling server + TURN relay** (`relay/`, Go): P2P when NAT
-  traversal succeeds, relayed otherwise. A mesh VPN (e.g. WireGuard-based) is a fallback
-  option but the goal is a self-contained, zero-dependency relay.
+**Screen → browser.** rctlsbcap captures the framebuffer via
+`CARenderServerRenderDisplay` (off a render timer), encodes H.264 with VideoToolbox
+(High profile, native res, ~30 fps), and ships Annex-B access units over the IPC
+socket to rctld. rctld broadcasts them to `/stream` subscribers as HTTP chunks with
+app-framing `[1B type:0=delta,1=key,2=orient,3=reset][4B BE len][data]`. The browser
+decodes with WebCodecs and draws to a canvas. Capture/encode run **only while a
+viewer is connected** (idle-by-default, §4).
 
-## 5. Clients
+**Input → device.** The browser sends `GET /input?phase=&id=&x=&y=` (touch) and
+`/key?p=&u=&d=` (keyboard/buttons). rctld forwards them over IPC to rctlsbcap, which
+injects a **digitizer IOHIDEvent tagged with the real hardware senderID** so the
+foreground app receives it (works in all apps/games, not just SpringBoard).
 
-- **Web client** (`web/`): WebRTC + `WebCodecs`/`<video>`, runs in any browser including
-  Safari on a non-jailbroken iPhone — zero install. Built first for fast iteration.
-- **Native iOS client** (`ios/`): the flagship — `VideoToolbox` hardware decode + Metal
-  rendering for the lowest latency, signed with the user's Apple Developer account.
+**Automation.** REST `/v1/*` (tap/swipe/type/button/launch/alert/toast/clipboard/
+brightness/openurl/apps/files/say/sound/flash/banner/spook/camera/script) — curl-
+and script-friendly, separate from the realtime plane, shares the IPC action path.
 
-## 6. Security
+**Camera → browser.** `/v1/camera?pos=` posts a Darwin notification; the **frontmost
+app** (via rctlcap) silently captures a still and POSTs it back over a raw loopback
+socket to `/v1/cam_upload`; rctld returns the JPEG. See §5 for why this convoluted
+path is necessary.
 
-A root daemon that accepts control over the network is a large attack surface and is
-treated as security-critical from the start:
+**IPC.** Unix socket `/var/run/rctl-ipc.sock`, framing `[1B type][4B BE len][payload]`.
+Daemon listens (chmod 0777 so mobile-uid SpringBoard can connect); SB connects with
+retry and auto-reconnects when the daemon restarts. Request/response (clipboard,
+device info, app list) via a reqid + dispatch_semaphore on the daemon side.
 
-- mandatory authentication (per-device key / pairing), no anonymous control;
-- all transport encrypted (DTLS-SRTP / TLS);
-- bind to loopback/LAN until pairing is configured; explicit opt-in for internet exposure.
+---
 
-## 7. Operational constraints
+## 3. The hard problems, and how they were solved
 
-- unc0ver is **semi-untethered**: a full reboot drops the jailbreak and the daemon until
-  the unc0ver app is reopened on-device. Unattended use therefore requires the iPad to stay
-  powered and not reboot. Resprings are survivable; the daemon must auto-start on respring.
+These are the non-obvious wins. Each cost real reverse-engineering.
 
-## 8. Roadmap
+**System-wide touch injection.** The naive path (enqueue into SpringBoard's
+UIApplication with a fake senderID) only controls SpringBoard. The working method:
+build a digitizer `IOHIDEvent` with **normalized [0,1] fixed-space coords** and the
+**real hardware digitizer senderID** (captured once from a physical touch via
+`IOHIDEventSystemClientRegisterEventCallback`, persisted to disk keyed by
+`KERN_BOOTTIME`), then `IOHIDEventSystemClientDispatchEvent` — no `_enqueueHIDEvent:`,
+no contextID. The genuine sender id makes the system route the event to the
+foreground app. Coords are in the screen's FIXED (orientation-independent) space.
 
-1. **P1** — capture + H.264 encode + stream to browser over LAN (view only).
-2. **P2** — touch injection from the client (real control).
-3. **P3** — internet access via signaling + TURN relay.
-4. **P4** — keyboard, clipboard, file transfer, audio, autostart, auth & encryption.
+**Idle-by-default power saving.** Capture + encode + the keep-awake idle-timer ran
+24/7 from boot → the display never slept and the battery drained (80%→12% in ~6h
+idle). Fix: run the pipeline **only while a viewer is connected**. rctld fires a
+session callback on the `/stream` subscriber count crossing 0↔1; SB starts/stops
+capture, keep-awake, and the orientation timer. Opening the viewer is itself the
+wake signal (Wake-on-LAN / APNs pattern: cheap always-on listener, expensive media
+on demand). Whether the screen actually sleeps then depends on the device's iOS
+Auto-Lock setting (we no longer override it).
+
+**Camera from ANY open app (the big one — see §5).**
+
+**Orientation.** Screen: the foreground app's `FBSOrientationObserver
+activeInterfaceOrientation` (correct even for force-orientation apps), debounced.
+Camera: set the capture connection's `videoOrientation` to the app's
+`statusBarOrientation` (UIInterfaceOrientation 1..4 maps 1:1 to
+AVCaptureVideoOrientation). FX overlays: size to `fixedCoordinateSpace.bounds` and
+rotate the content to the current orientation (a SpringBoard window doesn't rotate
+with the UI).
+
+---
+
+## 4. Idle/active gating detail
+
+- IPC message `RCTL_MSG_ACTIVE [1B]` (daemon→SB).
+- rctld `on_session(active)`: serialize on a GCD queue, debounce idle by 4s (no
+  thrash on refresh/Wi-Fi blip), and re-sync state to SB on (re)connect.
+- SB `rctl_set_active(on)`: start/stop the capture session, the keep-awake timer,
+  and the orientation timer. `%ctor` no longer starts them — idle until a viewer
+  connects.
+
+---
+
+## 5. Camera — the full story (most reverse-engineering went here)
+
+**The gate.** iOS only lets the **frontmost app** use the camera. mediaserverd
+enforces it: a daemon or SpringBoard is rejected at hardware client validation
+(`BWFigVideoCaptureDevice initWith…applicationID:clientAuditToken:error:` returns
+`-16401`; no `FigCaptureClientSessionMonitor` is even created, so the
+foreground-state hook in mediaserverd can't help). Proven by injecting a diagnostic
+dylib into mediaserverd (`docs/mediaserverd-capture-classes.txt` is the class dump).
+SpringBoard never even reaches mediaserverd (its sandbox forbids it as a camera
+client).
+
+**The solution: capture IN the frontmost app.** `rctlcap` is injected into every app
+(`Filter.Bundles = com.apple.UIKit`). On a Darwin-notification pulse from rctld, the
+foreground-active app (a *valid* camera client) silently grabs a still with
+`AVCaptureStillImageOutput` (driven via the ObjC runtime to dodge the AVFoundation
+umbrella build issue), then ships it back. SpringBoard is explicitly excluded (it
+reports Active but can't capture and would race the real app for the device).
+
+**Three App-Store-app problems, all solved:**
+1. **usage-description SIGABRT** — accessing the camera without an
+   `NSCameraUsageDescription` aborts the process. Fix: `%hook NSBundle
+   objectForInfoDictionaryKey:` returns a camera string for the main bundle.
+2. **TCC** — mediaserverd checks camera authorization server-side per audit token.
+   Fix: the `postinst` grants `kTCCServiceCamera` to **every installed app** via
+   `plutil -key CFBundleIdentifier` + `sqlite3 INSERT … access (…auth_value=2…)` +
+   `killall tccd`. (`defaults` is absent on-device; `plutil -key` works.) The
+   `prerm` revokes them on uninstall.
+3. **Sandbox + ATS** — a sandboxed App Store app can't write `/tmp` (outside its
+   container) and ATS blocks `NSURLSession http://`. Fix: rctlcap POSTs the JPEG over
+   a **raw loopback socket** (`connect 127.0.0.1:8080`, hand-written HTTP) — exempt
+   from ATS, allowed by the sandbox; the root daemon writes the file.
+   This also forced the HTTP server to become **thread-per-connection**, because
+   `/v1/camera` (which polls for the upload) would otherwise deadlock the in-app
+   `/v1/cam_upload`.
+
+**Limitation.** Works only while an *app* is foreground. On the home screen the
+frontmost "app" is SpringBoard, which can't capture — the user just opens any app.
+
+**Why not the daemon-side approaches:** a standalone helper (`rctlcam`, since
+removed) with `com.apple.private.tcc.allow` + an embedded usage-description got
+`authorizationStatus=3` but the session was still rejected at the hardware
+validation — confirming the capturer must be a real foreground app.
+
+---
+
+## 6. Internet access (P3, the north star) — roadmap
+
+Goal: control the iPad from anywhere, low latency, behind any NAT, self-contained.
+
+| Approach | Latency | Effort | Notes |
+|---|---|---|---|
+| **Relay via VPS** | medium | low | daemon holds an *outbound* tunnel to a cheap VPS; browser connects to the VPS; it forwards. Reuses our HTTP. Works behind any NAT. Doubles as the always-reachable channel for a sleeping device (APNs pattern). |
+| **WebRTC** (libdatachannel / libwebrtc) | lowest (P2P) | high | cross-compile under arm64e iOS 14 + a TURN server (coturn) + signaling. libdatachannel is lighter than full libwebrtc. |
+
+**Recommendation:** ship the **relay first** (a tiny Go/Node relay on a $5 VPS + a
+reverse tunnel from rctld), get internet working fast, then evolve the media path to
+WebRTC if latency demands it, keeping the relay for signaling. "Ship, then optimize."
+
+**Prerequisite: auth.** Today `:8080` has no authentication (LAN-only is the
+implicit boundary). Before exposing anything to the internet, add a token/password
+gate (and ideally TLS, or rely on the relay's TLS). This is non-negotiable for the
+internet phase.
+
+---
+
+## 7. Build, deploy, and on-device gotchas
+
+- **Theos aggregate** (`SUBPROJECTS = springboard daemon cap`). One `.deb`.
+- **On-device re-sign with `ldid -S`** in `postinst` — macOS ad-hoc signatures are
+  rejected by on-device AMFI on arm64e (the binary loads non-executable → SIGBUS).
+- **Never upgrade-in-place.** Upgrading a dylib over a running SpringBoard leaves a
+  stale codesign state → SpringBoard SIGBUS-crashes at load and can loop into
+  Substitute safe mode. `deploy.sh` does `dpkg -r` (clean respring) then `dpkg -i`,
+  under a watchdog that disables the dylib + resprings if a new crash appears.
+- **`mediaserverd` injection** (the RE diagnostic, now removed) needed
+  `killall mediaserverd` to load/unload — it disrupts the active VideoToolbox screen
+  encoder, which can crash rctlsbcap. Don't kill mediaserverd while streaming.
+- **Same-basename `.o` collision:** two subprojects both named `Tweak.xm` collide in
+  `.theos/obj`. Name each tweak's source after the tweak (`rctlsbcap.xm`,
+  `rctlcap.xm`). This is also the answer to "Tweak.xm vs rctlcam.xm": unique names
+  per tweak in a monorepo.
+- **AVFoundation umbrella won't build in a `.xm`** — it drags in camera/simd headers
+  whose libc++ `<cmath>` isn't on the include path. Drive AVFoundation classes via
+  the ObjC runtime (NSClassFromString + objc_msgSend), no header import; link the
+  framework only.
+- **C functions in a `.mm`/`.xm`** need `extern "C"` prototypes (else the C++-mangled
+  symbol isn't found at link, e.g. `AudioServicesPlaySystemSound`).
+- **ARC + dispatch sources:** a helper taking `dispatch_source_t *` needs the
+  `__strong` qualifier; forward-declare functions used before their definition.
+- **No `awk`/`seq`/`defaults`/`plutil -p`** on this device; `plutil -key`, `sqlite3`,
+  `dpkg`, `ldid`, `cut` are present.
+- **Wi-Fi `greatlove` / 192.168.178.45 is reliable**; the USB iproxy tunnel (2222)
+  is flaky. Deploy with `RCTL_SSH=greatlove scripts/deploy.sh`.
+- After a deploy/respring the first camera capture can `http=000` for a few seconds
+  while the device settles — retry.
+
+---
+
+## 8. Security posture (honest)
+
+- **Camera TCC granted to all apps** = a real privacy reduction: any app (and any
+  tweak inside it) can use the camera without a prompt. Mitigations: capture still
+  requires the app to be foreground (mediaserverd), iOS 14 shows the camera-in-use
+  indicator, and the `prerm` revokes the grants on uninstall. TCC is per-process, so
+  there is no way to scope it to "only our code." A more private alternative would
+  grant on-demand and revoke after each shot, but that needs a `tccd` restart per
+  capture. Acceptable for a personal device; flag it for a product.
+- **`:8080` is unauthenticated.** Fine on a trusted LAN; **must** gain auth before
+  internet exposure (see §6).
+- **The daemon is root** and exposes file read/write (`/v1/ls,pull,push,rm`), app
+  launch, and input injection. Anyone who reaches `:8080` controls the device.
+- The screen stream and camera are obviously sensitive; the whole system is a
+  surveillance/remote-admin tool by design and should only run on a device the
+  operator owns.
+
+---
+
+## 9. iOS 17 / 18 porting considerations (future)
+
+Plan: a used iPhone on a Dopamine-style (rootless) jailbreak. Expected work:
+- **Rootless paths:** binaries/dylibs/plists move under `/var/jb/...`. Update the
+  layout, the LaunchDaemon path, the MobileSubstrate dir, and any absolute paths.
+- **Injection layer:** ElleKit (Dopamine) instead of Substitute; the `%hook`/filter
+  model is the same, but verify selectors.
+- **Still capture API:** `AVCaptureStillImageOutput` is deprecated; on newer iOS use
+  `AVCapturePhotoOutput` with a (runtime-built) delegate, or `AVCaptureVideoDataOutput`
+  grabbing one sample buffer. The **frontmost-app capture technique is
+  version-independent** — only the capture call changes.
+- **TCC.db schema** and the camera codename may differ; re-verify the INSERT columns
+  and `kTCCServiceCamera`.
+- **Private APIs** (SpringBoard selectors, FBSOrientationObserver, the senderID flow,
+  CARenderServerRenderDisplay) shift between versions — expect a re-probe pass.
+- **arm64e / AMFI / entitlements:** the re-sign and entitlement story changes with
+  the jailbreak; on rootless, code signing and the trust cache work differently.
+- The architecture (3 tweaks + root daemon + web) ports cleanly; the device-specific
+  glue (paths, selectors, capture API) is what needs redoing.
+
+---
+
+## 10. Known limitations / TODO
+
+- Internet access (relay → WebRTC) — not started (§6).
+- Auth on `:8080` — required before internet (§6, §8).
+- WebSocket realtime channel — deferred; chunked HTTP + REST works today.
+- Camera works only with an app foreground (§5).
+- Settings/PreferenceBundle — deferred ("we don't know what they'll be yet").
+- A README at the repo root would help newcomers; this file is the deep reference.
