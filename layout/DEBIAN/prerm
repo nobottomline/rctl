@@ -9,4 +9,15 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
     killall -9 SpringBoard 2>/dev/null || true
 fi
 
+# On full removal, revoke the camera TCC grants we added (restore "apps must ask").
+# Not on upgrade — the postinst re-applies them. (We added every camera row, so a
+# blanket delete is correct here; pre-existing per-app grants would also be dropped.)
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    TCCDB=/var/mobile/Library/TCC/TCC.db
+    if [ -f "$TCCDB" ] && command -v sqlite3 >/dev/null 2>&1; then
+        sqlite3 "$TCCDB" "DELETE FROM access WHERE service='kTCCServiceCamera';" 2>/dev/null || true
+        killall tccd 2>/dev/null || true
+    fi
+fi
+
 exit 0

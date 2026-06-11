@@ -6,24 +6,14 @@
 set -e
 
 DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
-MSDLIB=/Library/MobileSubstrate/DynamicLibraries/rctlmsd.dylib
 CAPLIB=/Library/MobileSubstrate/DynamicLibraries/rctlcap.dylib
 DAEMON=/usr/local/bin/rctld
-CAM=/usr/local/bin/rctlcam
 PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
-
-CAMENT=/usr/local/share/rctl/cam-ent.plist
 
 if command -v ldid >/dev/null 2>&1; then
     [ -f "$DYLIB" ]   && ldid -S "$DYLIB"   || true
-    [ -f "$MSDLIB" ]  && ldid -S "$MSDLIB"  || true
     [ -f "$CAPLIB" ]  && ldid -S "$CAPLIB"  || true
     [ -f "$DAEMON" ]  && ldid -S "$DAEMON"  || true
-    # Sign the camera helper WITH the TCC-allow entitlement (camera service).
-    if [ -f "$CAM" ]; then
-        if [ -f "$CAMENT" ]; then ldid -S"$CAMENT" "$CAM" || ldid -S "$CAM" || true
-        else ldid -S "$CAM" || true; fi
-    fi
 fi
 
 # (Re)load the launchd daemon.

@@ -8,17 +8,18 @@ ARCHS := arm64 arm64e
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = rctlsbcap
-rctlsbcap_FILES = Tweak.xm \
+rctlsbcap_FILES = rctlsbcap.xm \
                   ../core/capture/ScreenCapture.mm \
                   ../core/encode/H264Encoder.mm \
                   ../core/stream/CaptureSession.mm \
                   ../core/input/TouchInjector.mm \
                   ../core/ipc/Ipc.c
 rctlsbcap_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
+# AVFoundation/AudioToolbox are linked (not header-imported) for the FX module's
+# AVSpeechSynthesizer + AudioServicesPlaySystemSound, driven via the runtime to
+# dodge the AVFoundation umbrella's camera/simd module-build failure.
 rctlsbcap_FRAMEWORKS = Foundation UIKit IOSurface CoreGraphics ImageIO \
                        VideoToolbox CoreMedia CoreVideo QuartzCore \
                        AVFoundation AudioToolbox
-# AVFoundation is linked (not header-imported) so AVCaptureSession is loaded and
-# our %hook on it applies — we use it via the runtime to dodge the umbrella build.
 
 include $(THEOS)/makefiles/tweak.mk

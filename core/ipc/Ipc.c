@@ -64,6 +64,8 @@ bool rctl_ipc_recv(rctl_ipc *c, uint8_t *type, uint8_t **out, uint32_t *len) {
     if (!read_all(c->fd, hdr, 5)) return false;
     uint32_t n = ((uint32_t)hdr[1] << 24) | ((uint32_t)hdr[2] << 16) |
                  ((uint32_t)hdr[3] << 8)  |  (uint32_t)hdr[4];
+    if (n > (64u << 20)) return false;                  // sanity cap: a desync'd frame
+                                                        // length -> drop the connection
     uint8_t *buf = NULL;
     if (n) {
         buf = (uint8_t *)malloc(n);

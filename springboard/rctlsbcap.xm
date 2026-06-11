@@ -131,7 +131,7 @@ static void rctl_show_toast(NSString *text, double seconds) {
 
 // ---- Fun FX / pranks: speak aloud, play a sound, strobe, fullscreen banner ----
 static int current_orientation(void);              // defined below; for upright overlays
-static void send_reply(uint32_t reqid, NSString *result);   // defined below; for camera capture
+static void send_reply(uint32_t reqid, NSString *result);   // defined below; used by the QUERY handler
 // We drive AVSpeechSynthesizer/AVAudioSession via the Objective-C runtime and
 // declare AudioServicesPlaySystemSound by prototype, to AVOID importing the
 // AVFoundation umbrella header — it drags in camera/simd headers that fail to
@@ -222,97 +222,6 @@ static void rctl_fx_banner(NSString *text, float secs) {
                        dispatch_get_main_queue(), ^{ w.hidden = YES; });
     });
 }
-
-// Capture a still photo from the camera (position 1=back, 2=front) and write it
-// as JPEG to /tmp/rctl_cam.jpg, then reply to the daemon with the path (or "" on
-// failure). Driven via the ObjC runtime to avoid the AVFoundation umbrella build
-// issue; uses AVCaptureStillImageOutput (block completion, no delegate class).
-// The CMSampleBuffer is treated as an opaque void* so we needn't import CoreMedia.
-static void rctl_capture_camera(int position, uint32_t reqid) {
-    // Capture from SpringBoard: it IS a foreground app on the home screen (so
-    // mediaserverd doesn't interrupt the session) and already has camera TCC. The
-    // usage-description abort is dodged by hooking -[NSBundle objectForInfoDictionaryKey:]
-    // below. Runs off the main thread so the ~1.5s capture never freezes the UI.
-    // AVCaptureSession needs a run loop to talk to mediaserverd over XPC. Run on
-    // SpringBoard's MAIN queue (which has a run loop) in async steps with NO blocking
-    // sleeps, so the session actually reaches the server and the UI never freezes.
-    dispatch_async(dispatch_get_main_queue(), ^{
-      @autoreleasepool {
-        Class CDev = NSClassFromString(@"AVCaptureDevice");
-        Class CInput = NSClassFromString(@"AVCaptureDeviceInput");
-        Class CSession = NSClassFromString(@"AVCaptureSession");
-        Class CStill = NSClassFromString(@"AVCaptureStillImageOutput");
-        if (!CDev || !CInput || !CSession || !CStill) { send_reply(reqid, @"ERR:no-classes"); return; }
-
-        id chosen = nil;                                  // pick the camera by position
-        NSArray *devs = ((id (*)(id, SEL, id))objc_msgSend)((id)CDev, NSSelectorFromString(@"devicesWithMediaType:"), @"vide");
-        for (id d in devs) {
-            long p = ((long (*)(id, SEL))objc_msgSend)(d, NSSelectorFromString(@"position"));  // 1=back,2=front
-            if (p == position) { chosen = d; break; }
-        }
-        if (!chosen) chosen = ((id (*)(id, SEL, id))objc_msgSend)((id)CDev, NSSelectorFromString(@"defaultDeviceWithMediaType:"), @"vide");
-        if (!chosen) { send_reply(reqid, @"ERR:no-device"); return; }
-
-        NSError *err = nil;
-        id input = ((id (*)(id, SEL, id, NSError **))objc_msgSend)((id)CInput, NSSelectorFromString(@"deviceInputWithDevice:error:"), chosen, &err);
-        if (!input) { send_reply(reqid, @"ERR:no-input"); return; }
-
-        id session = ((id (*)(id, SEL))objc_msgSend)(((id (*)(id, SEL))objc_msgSend)((id)CSession, NSSelectorFromString(@"alloc")), NSSelectorFromString(@"init"));
-        ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"setSessionPreset:"), @"AVCaptureSessionPresetPhoto");
-        if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddInput:"), input)) { send_reply(reqid, @"ERR:cant-input"); return; }
-        ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"addInput:"), input);
-
-        id out = ((id (*)(id, SEL))objc_msgSend)(((id (*)(id, SEL))objc_msgSend)((id)CStill, NSSelectorFromString(@"alloc")), NSSelectorFromString(@"init"));
-        ((void (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"setOutputSettings:"), @{ @"AVVideoCodecKey": @"jpeg" });
-        if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddOutput:"), out)) { send_reply(reqid, @"ERR:cant-output"); return; }
-        ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"addOutput:"), out);
-
-        ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"startRunning"));
-
-        // Capture after a warm-up — still on main, so the run loop drives the session.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            BOOL running = ((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"));
-            id conn = ((id (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"connectionWithMediaType:"), @"vide");
-            NSLog(@"[rctl-sbcap] camera running=%d conn=%d", running, conn != nil);
-            if (!conn) { ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning")); send_reply(reqid, running ? @"ERR:no-conn" : @"ERR:not-running"); return; }
-            void (^done)(void *, NSError *) = ^(void *sbuf, NSError *e) {
-                NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
-                if (jpeg.length && [jpeg writeToFile:@"/tmp/rctl_cam.jpg" atomically:YES]) send_reply(reqid, @"/tmp/rctl_cam.jpg");
-                else send_reply(reqid, @"ERR:no-jpeg");
-                ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));  // keeps session alive until here
-            };
-            @try {
-                ((void (*)(id, SEL, id, id))objc_msgSend)(out, NSSelectorFromString(@"captureStillImageAsynchronouslyFromConnection:completionHandler:"), conn, done);
-            } @catch (NSException *ex) {
-                ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));
-                send_reply(reqid, running ? @"ERR:incons-running" : @"ERR:incons-notrunning");
-            }
-        });
-      }
-    });
-}
-
-// Provide an NSCameraUsageDescription for SpringBoard's main bundle so the camera
-// privacy check doesn't SIGABRT us when we capture. SpringBoard's Info.plist lacks
-// the key; the privacy machinery reads it via the Info dictionary, intercepted here.
-%hook NSBundle
-- (id)objectForInfoDictionaryKey:(NSString *)key {
-    if ([key isEqualToString:@"NSCameraUsageDescription"] && self == [NSBundle mainBundle])
-        return @"rctl remote camera";
-    return %orig;
-}
-%end
-
-// Camera from ANY app: stop our SpringBoard capture session from honoring
-// mediaserverd's background interruption (the foreground-only gate). Only WE use
-// AVCaptureSession inside SpringBoard, so forcing not-interrupted is safe here.
-%hook AVCaptureSession
-- (void)_setInterrupted:(bool)interrupted withReason:(int)reason {
-    if (interrupted) { NSLog(@"[rctl-sbcap] suppressing capture interruption reason=%d", reason); }
-    %orig(false, reason);
-}
-- (bool)isInterrupted { return false; }
-%end
 
 // Keep the device awake and unlocked for remote use: reset SpringBoard's idle
 // timer (which drives auto-dim and auto-lock) and undim the display.
@@ -475,17 +384,12 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_QUERY && len >= 5) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 uint8_t qtype = buf[4];
-                if (qtype == RCTL_Q_CAMERA) {              // async still capture, replies when done
-                    int pos = (len >= 6) ? buf[5] : 1;     // 1=back, 2=front
-                    rctl_capture_camera(pos, reqid);
-                } else {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        NSString *r = qtype == RCTL_Q_CLIPBOARD ? rctl_get_clipboard()
-                                    : qtype == RCTL_Q_DEVINFO   ? rctl_device_info()
-                                    : qtype == RCTL_Q_APPLIST   ? rctl_app_list() : @"";
-                        send_reply(reqid, r);
-                    });
-                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSString *r = qtype == RCTL_Q_CLIPBOARD ? rctl_get_clipboard()
+                                : qtype == RCTL_Q_DEVINFO   ? rctl_device_info()
+                                : qtype == RCTL_Q_APPLIST   ? rctl_app_list() : @"";
+                    send_reply(reqid, r);
+                });
             } else if (type == RCTL_MSG_ACTIVE && len >= 1) {
                 rctl_set_active(buf[0] != 0);     // viewer connected (1) / gone (0)
             } else if (type == RCTL_MSG_FX && len >= 1) {
