@@ -323,6 +323,15 @@ static void handle_client(rctl_http_server *s, int fd) {
     }
 }
 
+// One connection per thread so a slow request (e.g. /v1/camera waiting for the
+// in-app capturer to POST its photo back) can't block other requests.
+struct rctl_conn { rctl_http_server *s; int fd; };
+static void *conn_thread(void *arg) {
+    struct rctl_conn *c = (struct rctl_conn *)arg;
+    handle_client(c->s, c->fd);
+    free(c);
+    return NULL;
+}
 static void *accept_loop(void *arg) {
     rctl_http_server *s = (rctl_http_server *)arg;
     while (s->running) {
@@ -330,7 +339,11 @@ static void *accept_loop(void *arg) {
         int fd = accept(s->listen_fd, (struct sockaddr *)&ca, &cl);
         if (fd < 0) { if (!s->running) break; continue; }
         int one = 1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-        handle_client(s, fd);
+        struct rctl_conn *c = (struct rctl_conn *)malloc(sizeof *c);
+        c->s = s; c->fd = fd;
+        pthread_t t;
+        if (pthread_create(&t, NULL, conn_thread, c) == 0) pthread_detach(t);
+        else { handle_client(s, fd); free(c); }   // fall back to inline on failure
     }
     return NULL;
 }

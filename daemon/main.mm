@@ -433,6 +433,12 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         float pitch = 0.45f, rate = 0.38f; char *sy = (char *)malloc(9 + tl);
         sy[0] = 1; memcpy(sy + 1, &pitch, 4); memcpy(sy + 5, &rate, 4); memcpy(sy + 9, text, tl);
         send_to_sb(RCTL_MSG_FX, sy, (uint32_t)(9 + tl)); free(sy);
+    } else if (!strcmp(path, "/v1/cam_upload")) {     // the in-app capturer POSTs its JPEG here
+        if (body_len > 0) {
+            FILE *f = fopen("/tmp/rctl_cam.jpg", "wb");
+            if (f) { fwrite(body, 1, body_len, f); fclose(f); }
+        }
+        // -> default {"ok":true}
     } else if (!strcmp(path, "/v1/camera")) {         // snap a photo IN the frontmost app
         int pos = 1; char posp[16];                   // 1=back, 2=front
         if (get_param(query, "pos", posp, sizeof posp) && (!strcmp(posp, "front") || !strcmp(posp, "2"))) pos = 2;

