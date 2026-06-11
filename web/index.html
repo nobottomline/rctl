@@ -167,7 +167,7 @@
 
 <script>
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
-let dec=null,ts=0,frames=0,started=false,orient=1,codec='avc1.640033';
+let dec=null,frames=0,started=false,orient=1,codec='avc1.640033';
 // Manual orientation override (null = follow the device). Applies to BOTH the
 // displayed rotation and the input coordinate mapping, so they stay consistent.
 let manualOrient=null;
@@ -190,6 +190,11 @@ function codecFromAU(au){
     }
   }
   return null;
+}
+function ptsFromPayload(data){
+  const hi=(data[0]*16777216)+(data[1]<<16)+(data[2]<<8)+data[3];
+  const lo=((data[4]<<24)>>>0)+(data[5]<<16)+(data[6]<<8)+data[7];
+  return hi*4294967296+lo;
 }
 function mkdec(){
   if(dec){try{dec.close()}catch(e){}}
@@ -426,10 +431,12 @@ $('playBtn').onclick=()=>{ if(!macro||!macro.length)return;
       const data=buf.slice(5,5+len);buf=buf.subarray(5+len);
       if(type===2){if(data.length>=1){orient=data[0];applyOrient();}continue;}
       if(type===3){started=false;if(dec){try{dec.close()}catch(e){}}dec=null;continue;}
+      if(data.length<8)continue;
+      const pts=ptsFromPayload(data),au=data.slice(8);
       const key=(type===1);
-      if(!started){if(!key)continue;const cs=codecFromAU(data);if(cs)codec=cs;mkdec();started=true;}
+      if(!started){if(!key)continue;const cs=codecFromAU(au);if(cs)codec=cs;mkdec();started=true;}
       try{
-        dec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:ts,data}));ts+=10000;
+        dec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:pts,data:au}));
       }catch(e){hud.textContent='decode err: '+e.message;}
     }
   }

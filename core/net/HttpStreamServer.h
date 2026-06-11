@@ -14,8 +14,10 @@ typedef struct rctl_http_server rctl_http_server;
 // a live H.264 stream at "/stream". Returns NULL on failure.
 rctl_http_server *rctl_http_start(int port);
 
-// Push one Annex-B access unit to all connected stream clients.
-void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len, bool keyframe);
+// Push one Annex-B access unit to all connected stream clients. `pts_us` is a
+// microsecond presentation timestamp relative to the current capture session.
+void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len,
+                       bool keyframe, uint64_t pts_us);
 
 // Set the current display orientation (UIInterfaceOrientation: 1=portrait,
 // 2=portrait-upside-down, 3=landscape-right, 4=landscape-left). Broadcast to clients.

@@ -247,11 +247,27 @@ static double            gScale = 1.0;
 static int               gBitrate = 20000000;
 static void rctl_set_active(bool on);             // defined below; used by ipc_manager
 
+static void put_be64(uint8_t *p, uint64_t v) {
+    p[0] = (v >> 56) & 0xff; p[1] = (v >> 48) & 0xff;
+    p[2] = (v >> 40) & 0xff; p[3] = (v >> 32) & 0xff;
+    p[4] = (v >> 24) & 0xff; p[5] = (v >> 16) & 0xff;
+    p[6] = (v >> 8) & 0xff;  p[7] = v & 0xff;
+}
+
 // Encoded frames go to the daemon (dropped if it isn't connected yet).
-static void net_sink(const uint8_t *data, size_t len, bool keyframe, void *ctx) {
+// Payload: [1B keyframe][8B BE pts_us][Annex-B access unit].
+static void net_sink(const uint8_t *data, size_t len, bool keyframe, int64_t pts_us, void *ctx) {
+    if (len > UINT32_MAX - 9) return;
+    uint32_t blen = (uint32_t)len + 9;
+    uint8_t *buf = (uint8_t *)malloc(blen);
+    if (!buf) return;
+    buf[0] = keyframe ? 1 : 0;
+    put_be64(buf + 1, pts_us < 0 ? 0 : (uint64_t)pts_us);
+    memcpy(buf + 9, data, len);
     pthread_mutex_lock(&gIpcLock);
-    if (gIpc) (void)rctl_ipc_send_prefixed(gIpc, RCTL_MSG_VIDEO, keyframe ? 1 : 0, data, (uint32_t)len);
+    if (gIpc) (void)rctl_ipc_send(gIpc, RCTL_MSG_VIDEO, buf, blen);
     pthread_mutex_unlock(&gIpcLock);
+    free(buf);
 }
 
 static void send_orient(int o) {

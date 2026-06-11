@@ -1,6 +1,7 @@
 // HttpStreamServer.mm — minimal HTTP server that streams H.264 access units to
 // browsers, where WebCodecs decodes them. Application framing inside the HTTP
-// (chunked) body: [1 byte type: 1=key,0=delta][4 byte BE length][Annex-B data].
+// (chunked) body:
+//   [1 byte type: 1=key,0=delta][4 byte BE length][8 byte BE pts_us][Annex-B data].
 
 #import "net/HttpStreamServer.h"
 #import <pthread.h>
@@ -26,6 +27,7 @@ struct rctl_http_server {
     int clients[RCTL_MAX_CLIENTS]; // stream subscriber fds (-1 = empty)
     uint8_t *keyframe;
     size_t keyframe_len;
+    uint64_t keyframe_pts_us;
     int orientation;
     rctl_reconfigure_cb recfg;
     void *recfg_ctx;
@@ -91,7 +93,7 @@ static const char *kHtml = R"HTML(<!doctype html>
 </div>
 <script>
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
-let dec=null,ts=0,frames=0,started=false,orient=1,codec='avc1.640033';
+let dec=null,frames=0,started=false,orient=1,codec='avc1.640033';
 const DEG={1:0,2:180,3:-90,4:90};
 function applyOrient(){
   const deg=DEG[orient]||0,cw=canvas.width||1,ch=canvas.height||1;
@@ -108,6 +110,11 @@ function codecFromAU(au){
     }
   }
   return null;
+}
+function ptsFromPayload(data){
+  const hi=(data[0]*16777216)+(data[1]<<16)+(data[2]<<8)+data[3];
+  const lo=((data[4]<<24)>>>0)+(data[5]<<16)+(data[6]<<8)+data[7];
+  return hi*4294967296+lo;
 }
 function mkdec(){
   if(dec){try{dec.close()}catch(e){}}
@@ -141,10 +148,12 @@ document.querySelectorAll('#bar button').forEach(b=>b.onclick=()=>{
       const data=buf.slice(5,5+len);buf=buf.subarray(5+len);
       if(type===2){if(data.length>=1){orient=data[0];applyOrient();}continue;}
       if(type===3){started=false;if(dec){try{dec.close()}catch(e){}}dec=null;continue;}
+      if(data.length<8)continue;
+      const pts=ptsFromPayload(data),au=data.slice(8);
       const key=(type===1);
-      if(!started){if(!key)continue;const cs=codecFromAU(data);if(cs)codec=cs;mkdec();started=true;}
+      if(!started){if(!key)continue;const cs=codecFromAU(au);if(cs)codec=cs;mkdec();started=true;}
       try{
-        dec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:ts,data}));ts+=10000;
+        dec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:pts,data:au}));
       }catch(e){hud.textContent='decode err: '+e.message;}
     }
   }
@@ -164,6 +173,13 @@ static bool send_full(int fd, const void *buf, size_t len) {
 }
 
 // Send one access unit as a single HTTP chunk: "<hex>\r\n" + appframe + "\r\n".
+static void put_be64(uint8_t *p, uint64_t v) {
+    p[0] = (v >> 56) & 0xff; p[1] = (v >> 48) & 0xff;
+    p[2] = (v >> 40) & 0xff; p[3] = (v >> 32) & 0xff;
+    p[4] = (v >> 24) & 0xff; p[5] = (v >> 16) & 0xff;
+    p[6] = (v >> 8) & 0xff;  p[7] = v & 0xff;
+}
+
 static bool send_frame_chunk(int fd, uint8_t type, const uint8_t *data, size_t len) {
     char hdr[32];
     size_t af_len = 5 + len;
@@ -177,6 +193,28 @@ static bool send_frame_chunk(int fd, uint8_t type, const uint8_t *data, size_t l
     af[1] = (len >> 24) & 0xff; af[2] = (len >> 16) & 0xff;
     af[3] = (len >> 8) & 0xff;  af[4] = len & 0xff;
     if (len) memcpy(af + 5, data, len);
+    b[total - 2] = '\r'; b[total - 1] = '\n';
+    bool ok = send_full(fd, b, total);
+    free(b);
+    return ok;
+}
+
+static bool send_video_chunk(int fd, uint8_t type, uint64_t pts_us, const uint8_t *data, size_t len) {
+    if (len > UINT32_MAX - 8 || len > SIZE_MAX - 13) return false;
+    char hdr[32];
+    size_t af_len = 5 + 8 + len;
+    int hl = snprintf(hdr, sizeof(hdr), "%zx\r\n", af_len);
+    size_t total = (size_t)hl + af_len + 2;
+    uint8_t *b = (uint8_t *)malloc(total);
+    if (!b) return false;
+    memcpy(b, hdr, hl);
+    uint8_t *af = b + hl;
+    af[0] = type;
+    size_t payload_len = 8 + len;
+    af[1] = (payload_len >> 24) & 0xff; af[2] = (payload_len >> 16) & 0xff;
+    af[3] = (payload_len >> 8) & 0xff;  af[4] = payload_len & 0xff;
+    put_be64(af + 5, pts_us);
+    if (len) memcpy(af + 13, data, len);
     b[total - 2] = '\r'; b[total - 1] = '\n';
     bool ok = send_full(fd, b, total);
     free(b);
@@ -212,7 +250,7 @@ static void handle_client(rctl_http_server *s, int fd) {
         struct timeval tv = { 1, 0 }; // drop a stalled (e.g. dropped-Wi-Fi) client fast
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         pthread_mutex_lock(&s->mtx);
-        if (s->keyframe) send_frame_chunk(fd, 1, s->keyframe, s->keyframe_len);
+        if (s->keyframe) send_video_chunk(fd, 1, s->keyframe_pts_us, s->keyframe, s->keyframe_len);
         { uint8_t ob = (uint8_t)s->orientation; send_frame_chunk(fd, 2, &ob, 1); }
         int slot = -1;
         for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->clients[i] < 0) { slot = i; break; }
@@ -373,7 +411,7 @@ rctl_http_server *rctl_http_start(int port) {
     return s;
 }
 
-// Broadcast a typed frame to all subscribers (caller holds the mutex).
+// Broadcast a typed control frame to all subscribers (caller holds the mutex).
 static void broadcast_locked(rctl_http_server *s, uint8_t type, const uint8_t *data, size_t len) {
     for (int i = 0; i < RCTL_MAX_CLIENTS; i++) {
         int fd = s->clients[i];
@@ -382,14 +420,30 @@ static void broadcast_locked(rctl_http_server *s, uint8_t type, const uint8_t *d
     }
 }
 
-void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len, bool keyframe) {
+static void broadcast_video_locked(rctl_http_server *s, uint8_t type, uint64_t pts_us,
+                                   const uint8_t *data, size_t len) {
+    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) {
+        int fd = s->clients[i];
+        if (fd < 0) continue;
+        if (!send_video_chunk(fd, type, pts_us, data, len)) { close(fd); s->clients[i] = -1; }
+    }
+}
+
+void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len,
+                       bool keyframe, uint64_t pts_us) {
     if (!s) return;
     pthread_mutex_lock(&s->mtx);
     if (keyframe) {
         uint8_t *k = (uint8_t *)malloc(len);
-        if (k) { memcpy(k, data, len); free(s->keyframe); s->keyframe = k; s->keyframe_len = len; }
+        if (k) {
+            memcpy(k, data, len);
+            free(s->keyframe);
+            s->keyframe = k;
+            s->keyframe_len = len;
+            s->keyframe_pts_us = pts_us;
+        }
     }
-    broadcast_locked(s, keyframe ? 1 : 0, data, len);   // may prune dead subscribers
+    broadcast_video_locked(s, keyframe ? 1 : 0, pts_us, data, len);   // may prune dead subscribers
     bool became_idle = false;
     rctl_session_cb scb = s->session_cb; void *sctx = s->session_ctx;
     if (s->was_active && count_clients_locked(s) == 0) { s->was_active = false; became_idle = true; }  // 1 -> 0: sleep

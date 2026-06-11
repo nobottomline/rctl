@@ -73,7 +73,11 @@ static void emit_annexb(rctl_encoder *e, CMSampleBufferRef sb, bool keyframe) {
         }
     }
 
-    if (e->cb && out.p && out.len) e->cb(out.p, out.len, keyframe, e->ctx);
+    CMTime pts = CMSampleBufferGetPresentationTimeStamp(sb);
+    CMTime ptsScaled = CMTIME_IS_VALID(pts) ? CMTimeConvertScale(pts, 1000000, kCMTimeRoundingMethod_Default)
+                                            : kCMTimeZero;
+    int64_t pts_us = ptsScaled.value;
+    if (e->cb && out.p && out.len) e->cb(out.p, out.len, keyframe, pts_us, e->ctx);
     free(out.p);
 }
 

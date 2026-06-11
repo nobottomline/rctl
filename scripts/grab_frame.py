@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Pull a few seconds of /stream, de-chunk the HTTP body, parse the app framing
-# ([1B type:0=delta,1=key,2=orient,3=reset][4B BE len][data]), write the video
-# NALs as Annex-B. Used to self-verify capture/wake without WebCodecs.
+# ([1B type:0=delta,1=key,2=orient,3=reset][4B BE len][payload]), where video
+# payload is [8B BE pts_us][Annex-B access unit]. Writes the video NALs as
+# Annex-B. Used to self-verify capture/wake without WebCodecs.
 #   python3 grab_frame.py <ip> <seconds> <out.h264>
 import socket, struct, sys, time
 
@@ -60,10 +61,10 @@ while i + 5 <= len(app):
         break
     payload = app[i + 5:i + 5 + ln]
     i += 5 + ln
-    if t == 1:
-        nals += payload; nkey += 1
-    elif t == 0:
-        nals += payload; ndelta += 1
+    if t == 1 and len(payload) >= 8:
+        nals += payload[8:]; nkey += 1
+    elif t == 0 and len(payload) >= 8:
+        nals += payload[8:]; ndelta += 1
 
 open(out, "wb").write(nals)
 print(f"app={len(app)}B video={len(nals)}B keyframes={nkey} deltas={ndelta}")

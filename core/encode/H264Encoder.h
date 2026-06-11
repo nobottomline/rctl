@@ -10,8 +10,11 @@ extern "C" {
 #endif
 
 // Called for each encoded access unit, in Annex-B format (start codes), with
-// SPS/PPS prepended on keyframes. Invoked on the encoder's internal queue.
-typedef void (*rctl_nal_cb)(const uint8_t *data, size_t len, bool keyframe, void *ctx);
+// SPS/PPS prepended on keyframes. `pts_us` is the capture presentation timestamp
+// in microseconds, relative to the current capture session. Invoked on the
+// encoder's internal queue.
+typedef void (*rctl_nal_cb)(const uint8_t *data, size_t len, bool keyframe,
+                            int64_t pts_us, void *ctx);
 
 typedef struct rctl_encoder rctl_encoder;
 

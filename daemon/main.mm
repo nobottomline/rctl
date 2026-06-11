@@ -32,6 +32,13 @@ static void dlog(const char *msg) {
     if (f) { fprintf(f, "[%ld pid=%d] %s\n", (long)time(NULL), getpid(), msg); fclose(f); }
 }
 
+static uint64_t read_be64(const uint8_t *p) {
+    return ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48) |
+           ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32) |
+           ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16) |
+           ((uint64_t)p[6] << 8)  | (uint64_t)p[7];
+}
+
 static rctl_http_server *gHttp = NULL;
 static rctl_ipc        *gSB    = NULL;                       // current SB connection
 static pthread_mutex_t  gSBLock = PTHREAD_MUTEX_INITIALIZER;
@@ -478,8 +485,8 @@ static void *ipc_thread(void *unused) {
 
         uint8_t type; uint8_t *buf; uint32_t len;
         while (rctl_ipc_recv(peer, &type, &buf, &len)) {
-            if (type == RCTL_MSG_VIDEO && len >= 1) {
-                rctl_http_push_au(gHttp, buf + 1, len - 1, buf[0] != 0);
+            if (type == RCTL_MSG_VIDEO && len >= 9) {
+                rctl_http_push_au(gHttp, buf + 9, len - 9, buf[0] != 0, read_be64(buf + 1));
             } else if (type == RCTL_MSG_ORIENT && len >= 1) {
                 rctl_http_set_orientation(gHttp, buf[0]);
             } else if (type == RCTL_MSG_REPLY && len >= 4) {
