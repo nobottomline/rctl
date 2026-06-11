@@ -22,6 +22,13 @@ browser or native media client together with the screen stream.
 - `/var/run/rctl-audio.sock` is the daemon-side ingest socket for audio sources
   outside SpringBoard, such as a future `mediaserverd` tap. The IPC frame type is
   `RCTL_MSG_AUDIO` and its payload is the same PCM packet described above.
+- `127.0.0.1:8079` accepts the same raw audio ingest frames as a localhost-only
+  fallback for sandboxed processes that cannot connect to `/var/run` Unix
+  sockets. The mediaserverd skeleton tries Unix first and falls back to TCP.
+- `audiosource/` contains a diagnostic-only mediaserverd source skeleton. It is
+  not part of the normal package and has no hooks. When explicitly loaded with
+  `/tmp/rctl-audiosource-tone` present, it sends a short synthetic PCM stream to
+  the ingest socket so we can validate the future capture-process boundary.
 
 ## Non-goals
 
@@ -75,6 +82,23 @@ forced SpringBoard to recreate the capture/VideoToolbox session, after which
 live frames resumed normally. This reinforces the rule: do not probe/restart
 `mediaserverd` while a real viewer session is active.
 
+## Audio-source skeleton result
+
+`scripts/audiosource.sh once` was run with no active browser viewer. The script
+activated `rctlaudiosource`, restarted `mediaserverd`, captured the log, removed
+the active dylib/plist/marker, and restarted `mediaserverd` cleanly.
+
+Observed:
+
+- `mediaserverd` cannot connect to `/var/run/rctl-audio.sock`; connect fails
+  with `errno=1 Operation not permitted`.
+- The same process can connect to the daemon's localhost TCP ingest fallback
+  (`127.0.0.1:8079`).
+- The skeleton sent `150` synthetic PCM packets through that TCP path.
+- `rctld` logged `audio tcp source connected` and `audio tcp source disconnected`.
+- A post-test H.264 sample still contained live key/delta frames and probed as
+  `h264 1668x2224 25/1`.
+
 ## Preferred product architecture
 
 Use one capture core with multiple sinks:
@@ -118,6 +142,8 @@ speaker/Bluetooth output. Candidate approaches, in order:
 1. Add a diagnostic-only audio probe target that is not loaded by default.
 2. Confirm process/class/symbol surfaces on the real iPad without altering audio.
 3. Add an in-daemon audio packet API with a synthetic test source.
-4. Replace the synthetic source with a real capture source feeding the audio
+4. Validate the diagnostic mediaserverd source skeleton end-to-end, then remove
+   it from the active MobileSubstrate path.
+5. Replace the synthetic source with a real capture source feeding the audio
    ingest socket.
-5. Only then attempt a real system-audio tap.
+6. Only then attempt a real system-audio tap.

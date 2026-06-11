@@ -13,6 +13,7 @@ extern "C" {
 
 #define RCTL_IPC_SOCK_PATH "/var/run/rctl-ipc.sock"
 #define RCTL_AUDIO_IPC_SOCK_PATH "/var/run/rctl-audio.sock"
+#define RCTL_AUDIO_TCP_PORT 8079
 
 enum {
     RCTL_MSG_VIDEO  = 0x01,  // SB->daemon: [1B keyframe flag][Annex-B AU]

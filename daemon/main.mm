@@ -18,7 +18,11 @@
 #import <spawn.h>
 #import <dirent.h>
 #import <sys/stat.h>
+#import <sys/socket.h>
 #import <sys/wait.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
+#import <errno.h>
 #import <notify.h>
 #import "net/HttpStreamServer.h"
 #import "ipc/Ipc.h"
@@ -184,6 +188,34 @@ static void handle_audio_packet(const uint8_t *buf, uint32_t len) {
     for (size_t i = 0; i < sample_count; i++) samples[i] = read_le16s(pcm + i * 2);
     rctl_http_push_pcm_s16le(gHttp, samples, frames, channels, sample_rate, pts_us);
     free(samples);
+}
+
+static bool read_full_fd(int fd, void *buf, size_t n) {
+    uint8_t *p = (uint8_t *)buf;
+    size_t off = 0;
+    while (off < n) {
+        ssize_t k = read(fd, p + off, n - off);
+        if (k == 0) return false;
+        if (k < 0) { if (errno == EINTR) continue; return false; }
+        off += (size_t)k;
+    }
+    return true;
+}
+
+static void pump_audio_frames_fd(int fd) {
+    for (;;) {
+        uint8_t hdr[5];
+        if (!read_full_fd(fd, hdr, sizeof(hdr))) return;
+        uint8_t type = hdr[0];
+        uint32_t len = ((uint32_t)hdr[1] << 24) | ((uint32_t)hdr[2] << 16) |
+                       ((uint32_t)hdr[3] << 8)  |  (uint32_t)hdr[4];
+        if (len > (4u << 20)) return;
+        uint8_t *buf = len ? (uint8_t *)malloc(len) : NULL;
+        if (len && !buf) return;
+        if (len && !read_full_fd(fd, buf, len)) { free(buf); return; }
+        if (type == RCTL_MSG_AUDIO) handle_audio_packet(buf, len);
+        free(buf);
+    }
 }
 
 static void url_decode(const char *in, char *out, size_t outsz) {
@@ -523,6 +555,36 @@ static void *audio_ipc_thread(void *unused) {
     }
 }
 
+static void *audio_tcp_thread(void *unused) {
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd < 0) { dlog("audio tcp socket FAILED"); return NULL; }
+    int one = 1;
+    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(RCTL_AUDIO_TCP_PORT);
+    if (bind(lfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        dlog("audio tcp bind FAILED");
+        close(lfd);
+        return NULL;
+    }
+    if (listen(lfd, 4) < 0) {
+        dlog("audio tcp listen FAILED");
+        close(lfd);
+        return NULL;
+    }
+    dlog("audio tcp listening on 127.0.0.1:8079");
+    for (;;) {
+        int fd = accept(lfd, NULL, NULL);
+        if (fd < 0) { usleep(100000); continue; }
+        dlog("audio tcp source connected");
+        pump_audio_frames_fd(fd);
+        dlog("audio tcp source disconnected");
+        close(fd);
+    }
+}
+
 static void *ipc_thread(void *unused) {
     rctl_ipc_server *srv = rctl_ipc_listen(RCTL_IPC_SOCK_PATH);
     if (!srv) { dlog("ipc listen FAILED"); return NULL; }
@@ -593,6 +655,8 @@ int main(int argc, char **argv) {
         pthread_create(&t, NULL, ipc_thread, NULL);
         pthread_t at;
         pthread_create(&at, NULL, audio_ipc_thread, NULL);
+        pthread_t tt;
+        pthread_create(&tt, NULL, audio_tcp_thread, NULL);
 
         dispatch_main();
     }
