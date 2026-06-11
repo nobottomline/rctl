@@ -12,10 +12,12 @@ extern "C" {
 #endif
 
 #define RCTL_IPC_SOCK_PATH "/var/run/rctl-ipc.sock"
+#define RCTL_AUDIO_IPC_SOCK_PATH "/var/run/rctl-audio.sock"
 
 enum {
     RCTL_MSG_VIDEO  = 0x01,  // SB->daemon: [1B keyframe flag][Annex-B AU]
     RCTL_MSG_ORIENT = 0x02,  // SB->daemon: [1B UIInterfaceOrientation 1..4]
+    RCTL_MSG_AUDIO  = 0x03,  // audio-source->daemon: PCM packet, see HttpStreamServer.h
     RCTL_MSG_INPUT  = 0x10,  // daemon->SB: rctl_ipc_input
     RCTL_MSG_KEY    = 0x11,  // daemon->SB: rctl_ipc_key
     RCTL_MSG_CONFIG = 0x12,  // daemon->SB: rctl_ipc_config

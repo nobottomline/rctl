@@ -3,6 +3,9 @@
 // relays between browsers and the SpringBoard agent over a local Unix socket:
 //   SB -> daemon: encoded H.264 access units + orientation
 //   daemon -> SB: touch / key / reconfigure commands
+// A second local socket accepts timestamped PCM packets from future audio
+// capture sources (for example a mediaserverd tap) without joining the SB
+// command channel.
 // Keeping transport here means a network bug can't respring SpringBoard, and
 // launchd restarts us on any crash.
 
@@ -37,6 +40,17 @@ static uint64_t read_be64(const uint8_t *p) {
            ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32) |
            ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16) |
            ((uint64_t)p[6] << 8)  | (uint64_t)p[7];
+}
+static uint32_t read_be32(const uint8_t *p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+}
+static uint16_t read_be16(const uint8_t *p) {
+    return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
+}
+static int16_t read_le16s(const uint8_t *p) {
+    uint16_t u = (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+    return (int16_t)u;
 }
 
 static rctl_http_server *gHttp = NULL;
@@ -151,6 +165,25 @@ static void on_session(void *ctx, bool active) {
         if (active) send_active(true);
         else AFTER(4.0, ^{ if (gen == gSessionGen) send_active(false); });
     });
+}
+
+static void handle_audio_packet(const uint8_t *buf, uint32_t len) {
+    if (len < 16) return;
+    uint64_t pts_us = read_be64(buf);
+    uint32_t sample_rate = read_be32(buf + 8);
+    uint8_t channels = buf[12];
+    uint8_t bytes_per_sample = buf[13];
+    uint16_t frames = read_be16(buf + 14);
+    if (sample_rate == 0 || bytes_per_sample != 2 || channels == 0 || channels > 2 || frames == 0) return;
+    size_t sample_count = (size_t)frames * (size_t)channels;
+    size_t pcm_len = sample_count * 2;
+    if (len < 16 || pcm_len > (size_t)len - 16) return;
+    int16_t *samples = (int16_t *)malloc(sample_count * sizeof(int16_t));
+    if (!samples) return;
+    const uint8_t *pcm = buf + 16;
+    for (size_t i = 0; i < sample_count; i++) samples[i] = read_le16s(pcm + i * 2);
+    rctl_http_push_pcm_s16le(gHttp, samples, frames, channels, sample_rate, pts_us);
+    free(samples);
 }
 
 static void url_decode(const char *in, char *out, size_t outsz) {
@@ -470,6 +503,26 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
 }
 
 // Accept the SB agent, pump its messages to the HTTP server, re-accept on drop.
+static void *audio_ipc_thread(void *unused) {
+    rctl_ipc_server *srv = rctl_ipc_listen(RCTL_AUDIO_IPC_SOCK_PATH);
+    if (!srv) { dlog("audio ipc listen FAILED"); return NULL; }
+    dlog("audio ipc listening");
+    for (;;) {
+        rctl_ipc *peer = rctl_ipc_accept(srv);
+        if (!peer) { usleep(100000); continue; }
+        dlog("audio source connected");
+
+        uint8_t type; uint8_t *buf; uint32_t len;
+        while (rctl_ipc_recv(peer, &type, &buf, &len)) {
+            if (type == RCTL_MSG_AUDIO) handle_audio_packet(buf, len);
+            free(buf);
+        }
+
+        dlog("audio source disconnected");
+        rctl_ipc_close(peer);
+    }
+}
+
 static void *ipc_thread(void *unused) {
     rctl_ipc_server *srv = rctl_ipc_listen(RCTL_IPC_SOCK_PATH);
     if (!srv) { dlog("ipc listen FAILED"); return NULL; }
@@ -538,6 +591,8 @@ int main(int argc, char **argv) {
 
         pthread_t t;
         pthread_create(&t, NULL, ipc_thread, NULL);
+        pthread_t at;
+        pthread_create(&at, NULL, audio_ipc_thread, NULL);
 
         dispatch_main();
     }

@@ -19,6 +19,9 @@ browser or native media client together with the screen stream.
 - `rctl_http_push_pcm_s16le()` is the transport contract for future capture
   sources. It accepts interleaved mono/stereo S16LE packets and hides HTTP
   chunking from the eventual system-audio tap.
+- `/var/run/rctl-audio.sock` is the daemon-side ingest socket for audio sources
+  outside SpringBoard, such as a future `mediaserverd` tap. The IPC frame type is
+  `RCTL_MSG_AUDIO` and its payload is the same PCM packet described above.
 
 ## Non-goals
 
@@ -115,5 +118,6 @@ speaker/Bluetooth output. Candidate approaches, in order:
 1. Add a diagnostic-only audio probe target that is not loaded by default.
 2. Confirm process/class/symbol surfaces on the real iPad without altering audio.
 3. Add an in-daemon audio packet API with a synthetic test source.
-4. Replace the synthetic source with a real capture source feeding that API.
+4. Replace the synthetic source with a real capture source feeding the audio
+   ingest socket.
 5. Only then attempt a real system-audio tap.
