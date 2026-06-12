@@ -16,7 +16,6 @@
 
 typedef void (*CARenderServerRenderDisplay_f)(uint32_t client, CFStringRef display,
                                               IOSurfaceRef surface, int x, int y);
-typedef void (*SBSUndimScreen_f)(void);
 
 static CARenderServerRenderDisplay_f gRender = NULL;
 static CFStringRef gDisplayName = NULL;
@@ -45,23 +44,39 @@ static void ensure_init(void) {
     });
 }
 
-static SBSUndimScreen_f gUndim = NULL;
-static void ensure_undim(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
-        gUndim = (SBSUndimScreen_f)dlsym(RTLD_DEFAULT, "SBSUndimScreen");
-    });
+static void reset_idle_timer_on_main(void) {
+    UIApplication *app = [UIApplication sharedApplication];
+    SEL withArg = NSSelectorFromString(@"resetIdleTimerAndUndim:");
+    if ([app respondsToSelector:withArg]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(app, withArg, YES);
+        return;
+    }
+    SEL priv = NSSelectorFromString(@"_resetIdleTimerAndUndim:");
+    if ([app respondsToSelector:priv]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(app, priv, YES);
+        return;
+    }
+    SEL noArg = NSSelectorFromString(@"resetIdleTimerAndUndim");
+    if ([app respondsToSelector:noArg]) ((void (*)(id, SEL))objc_msgSend)(app, noArg);
+}
+
+static void reset_idle_timer(bool wait) {
+    if ([NSThread isMainThread]) {
+        reset_idle_timer_on_main();
+    } else if (wait) {
+        dispatch_sync(dispatch_get_main_queue(), ^{ reset_idle_timer_on_main(); });
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{ reset_idle_timer_on_main(); });
+    }
 }
 
 void rctl_capture_wake_display(void) {
-    ensure_undim();
-    if (gUndim) { gUndim(); usleep(350000); }
+    reset_idle_timer(true);
+    usleep(350000);
 }
 
 void rctl_capture_undim(void) {
-    ensure_undim();
-    if (gUndim) gUndim();
+    reset_idle_timer(false);
 }
 
 void rctl_capture_keep_awake(void) {

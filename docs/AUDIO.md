@@ -99,6 +99,32 @@ Observed:
 - A post-test H.264 sample still contained live key/delta frames and probed as
   `h264 1668x2224 25/1`.
 
+## Real playback capture probe
+
+An opt-in `audiosource` capture run was tested in `mediaserverd` using
+`/tmp/rctl-audiosource-capture`. The active dylib/plist/marker were removed
+after the probe and `mediaserverd` was restarted cleanly.
+
+Observed:
+
+- Hooks installed for `AudioQueueEnqueueBuffer`,
+  `AudioQueueEnqueueBufferWithParameters`, and `AudioUnitRender`.
+- During `/v1/say` plus `/v1/sound`, `/stream` received real audio frame type
+  `4`: `80` packets, first packet `48000 Hz`, `2` channels, `1024` frames.
+- This confirms the viable capture boundary is inside `mediaserverd`, and the
+  source can feed `rctld` over `127.0.0.1:8079`.
+
+Recovery note:
+
+- A SpringBoard crash occurred after manually forcing `/config` while recovering
+  from the probe. Symbolication showed `rctlsbcap.dylib` crashed in
+  `rctl_capture_wake_display` at the direct `SBSUndimScreen` call.
+- The fix is to avoid direct `SBSUndimScreen` and use SpringBoard/UIKit idle
+  reset selectors instead.
+- Post-fix deployment was verified: package status `install ok installed`,
+  no new SpringBoard crash report, `SB connected`, and H.264 sample
+  `1668x2224 25/1` with key/delta frames.
+
 ## Preferred product architecture
 
 Use one capture core with multiple sinks:
@@ -144,6 +170,9 @@ speaker/Bluetooth output. Candidate approaches, in order:
 3. Add an in-daemon audio packet API with a synthetic test source.
 4. Validate the diagnostic mediaserverd source skeleton end-to-end, then remove
    it from the active MobileSubstrate path.
-5. Replace the synthetic source with a real capture source feeding the audio
-   ingest socket.
-6. Only then attempt a real system-audio tap.
+5. Convert the diagnostic real capture hook into a guarded audio-source service:
+   preallocated queue/ring buffer, watchdog, explicit enable/disable, and
+   reliable reconnect to `rctld`.
+6. Add output routing control: browser only, iPad only, or both.
+7. Move the realtime browser path from PCM-over-HTTP to Opus/WebRTC once the
+   capture source is stable.

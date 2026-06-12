@@ -6,6 +6,8 @@
 #   scripts/audiosource.sh stage
 #   scripts/audiosource.sh once
 #   scripts/audiosource.sh load
+#   scripts/audiosource.sh capture-load
+#   scripts/audiosource.sh capture-once
 #   scripts/audiosource.sh remove
 set -euo pipefail
 
@@ -16,15 +18,16 @@ DYLIB="$REMOTE_DIR/rctlaudiosource.dylib"
 PLIST="$REMOTE_DIR/rctlaudiosource.plist"
 LOG="/tmp/rctl-audiosource.log"
 MARKER="/tmp/rctl-audiosource-tone"
+CAPTURE_MARKER="/tmp/rctl-audiosource-capture"
 MODE="${1:-status}"
 
 usage() {
-  echo "usage: $0 [status|stage|once|load|remove]" >&2
+  echo "usage: $0 [status|stage|once|load|capture-load|capture-once|remove]" >&2
   exit 2
 }
 
 case "$MODE" in
-  status|stage|once|load|remove) ;;
+  status|stage|once|load|capture-load|capture-once|remove) ;;
   *) usage ;;
 esac
 
@@ -35,7 +38,7 @@ remote_status() {
     echo '[audiosource] staged:'
     ls -l /tmp/rctlaudiosource.dylib /tmp/rctlaudiosource.plist 2>/dev/null || true
     echo '[audiosource] marker:'
-    ls -l '$MARKER' 2>/dev/null || true
+    ls -l '$MARKER' '$CAPTURE_MARKER' 2>/dev/null || true
     echo '[audiosource] sockets:'
     ls -l /var/run/rctl-audio.sock 2>/dev/null || true
     echo '[audiosource] mediaserverd:'
@@ -65,11 +68,14 @@ activate_source() {
   "
 }
 
-load_source() {
+load_source_with_marker() {
+  local marker="$1"
+  local wait_secs="$2"
   activate_source
   ssh "$HOST" "set -e
     rm -f '$LOG'
-    touch '$MARKER'
+    rm -f '$MARKER' '$CAPTURE_MARKER'
+    touch '$marker'
     LINE=\$(ps -A | grep ' /usr/sbin/mediaserverd$' | head -n 1 || true)
     set -- \$LINE
     BEFORE=\${1:-}
@@ -85,9 +91,17 @@ load_source() {
         break
       fi
     done
-    sleep 8
+    sleep '$wait_secs'
     test -e '$LOG' && tail -n 80 '$LOG' || { echo '[audiosource] no log produced'; exit 1; }
   "
+}
+
+load_source() {
+  load_source_with_marker "$MARKER" 8
+}
+
+load_capture_source() {
+  load_source_with_marker "$CAPTURE_MARKER" 18
 }
 
 remove_source() {
@@ -95,7 +109,7 @@ remove_source() {
     LINE=\$(ps -A | grep ' /usr/sbin/mediaserverd$' | head -n 1 || true)
     set -- \$LINE
     BEFORE=\${1:-}
-    rm -f '$DYLIB' '$PLIST' /tmp/rctlaudiosource.dylib /tmp/rctlaudiosource.plist '$MARKER'
+    rm -f '$DYLIB' '$PLIST' /tmp/rctlaudiosource.dylib /tmp/rctlaudiosource.plist '$MARKER' '$CAPTURE_MARKER'
     killall mediaserverd 2>/dev/null || true
     i=0
     while [ \$i -lt 20 ]; do
@@ -117,10 +131,17 @@ once_source() {
   remove_source
 }
 
+capture_once_source() {
+  load_capture_source
+  remove_source
+}
+
 case "$MODE" in
   status) remote_status ;;
   stage) stage_source; remote_status ;;
   once) once_source; remote_status ;;
   load) load_source ;;
+  capture-load) load_capture_source ;;
+  capture-once) capture_once_source; remote_status ;;
   remove) remove_source; remote_status ;;
 esac

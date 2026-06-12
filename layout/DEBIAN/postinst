@@ -22,20 +22,9 @@ if [ -f "$PLIST" ]; then
     launchctl load "$PLIST"   2>/dev/null || true
 fi
 
-# Grant the camera TCC service to every installed app so the in-app capture
-# (rctlcap, runs in the FRONTMOST app) works anywhere. mediaserverd checks TCC
-# server-side by audit token, so the grant must be a real access-table row.
-TCCDB=/var/mobile/Library/TCC/TCC.db
-if [ -f "$TCCDB" ] && command -v sqlite3 >/dev/null 2>&1; then
-    set +e
-    for plist in /Applications/*/Info.plist /var/containers/Bundle/Application/*/*.app/Info.plist; do
-        [ -f "$plist" ] || continue
-        bid=$(plutil -key CFBundleIdentifier "$plist" 2>/dev/null)
-        [ -n "$bid" ] && sqlite3 "$TCCDB" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags) VALUES ('kTCCServiceCamera','$bid',0,2,2,1,'UNUSED',0);" 2>/dev/null
-    done
-    killall tccd 2>/dev/null
-    set -e
-fi
+# Do not enumerate every installed app here. That TCC grant path is expensive and
+# can leave dpkg stuck in postinst, which is unacceptable during recovery deploys.
+# Camera permissions are managed explicitly by the camera workflow instead.
 
 # Respring so SpringBoard picks up the (re)installed agent.
 killall -9 SpringBoard 2>/dev/null || true

@@ -5,7 +5,10 @@
 // ingest socket. The future real tap should reuse this send path.
 
 #import <Foundation/Foundation.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <AudioUnit/AudioUnit.h>
 #import <pthread.h>
+#import <substrate.h>
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <netinet/in.h>
@@ -15,12 +18,15 @@
 #import <errno.h>
 #import <string.h>
 #import <math.h>
+#import <dlfcn.h>
 #import "ipc/Ipc.h"
 
 #define RCTL_AUDIO_SOURCE_LOG "/tmp/rctl-audiosource.log"
 #define RCTL_AUDIO_SOURCE_MARKER "/tmp/rctl-audiosource-tone"
+#define RCTL_AUDIO_CAPTURE_MARKER "/tmp/rctl-audiosource-capture"
 #define RCTL_AUDIO_SOURCE_RATE 48000
 #define RCTL_AUDIO_SOURCE_FRAMES 960
+#define RCTL_CAPTURE_MAX_QUEUE 64
 
 static FILE *as_log_open(void) {
     return fopen(RCTL_AUDIO_SOURCE_LOG, "a");
@@ -111,16 +117,19 @@ static bool send_audio_frame(int fd, const uint8_t *payload, uint32_t len) {
     return write_all(fd, hdr, sizeof(hdr)) && write_all(fd, payload, len);
 }
 
-static bool send_pcm_packet(int fd, uint64_t pts_us,
+static bool send_pcm_packet(int fd, uint64_t pts_us, uint32_t rate, uint8_t channels,
                             const int16_t *samples, uint16_t frames) {
-    uint8_t payload[16 + RCTL_AUDIO_SOURCE_FRAMES * 2];
+    if (channels == 0 || channels > 2 || frames == 0) return false;
+    uint8_t payload[16 + 4096 * 2 * 2];
+    size_t sample_count = (size_t)frames * channels;
+    if (frames > 4096) return false;
     put_be64(payload, pts_us);
-    put_be32(payload + 8, RCTL_AUDIO_SOURCE_RATE);
-    payload[12] = 1;
+    put_be32(payload + 8, rate);
+    payload[12] = channels;
     payload[13] = 2;
     put_be16(payload + 14, frames);
-    for (uint16_t i = 0; i < frames; i++) put_le16(payload + 16 + i * 2, samples[i]);
-    return send_audio_frame(fd, payload, 16 + frames * 2);
+    for (size_t i = 0; i < sample_count; i++) put_le16(payload + 16 + i * 2, samples[i]);
+    return send_audio_frame(fd, payload, (uint32_t)(16 + sample_count * 2));
 }
 
 static void *tone_thread(void *arg) {
@@ -145,7 +154,8 @@ static void *tone_thread(void *arg) {
             phase += 440.0 / (double)RCTL_AUDIO_SOURCE_RATE;
             if (phase >= 1.0) phase -= 1.0;
         }
-        if (!send_pcm_packet(fd, (uint64_t)n * 20000, samples, RCTL_AUDIO_SOURCE_FRAMES)) break;
+        if (!send_pcm_packet(fd, (uint64_t)n * 20000, RCTL_AUDIO_SOURCE_RATE, 1,
+                             samples, RCTL_AUDIO_SOURCE_FRAMES)) break;
         sent++;
         usleep(20000);
     }
@@ -157,10 +167,315 @@ static void *tone_thread(void *arg) {
     return NULL;
 }
 
+typedef struct capture_packet {
+    struct capture_packet *next;
+    uint64_t pts_us;
+    uint32_t rate;
+    uint8_t channels;
+    uint16_t frames;
+    int16_t *samples;
+} capture_packet;
+
+static pthread_mutex_t gCaptureLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gCaptureCond = PTHREAD_COND_INITIALIZER;
+static capture_packet *gCaptureHead = NULL;
+static capture_packet *gCaptureTail = NULL;
+static int gCaptureQueued = 0;
+static uint64_t gCapturePtsUs = 0;
+static bool gCaptureEnabled = false;
+static bool gCaptureWorkerStarted = false;
+static int gCaptureLoggedFormats = 0;
+static int gCaptureDropped = 0;
+static OSStatus (*orig_AudioQueueEnqueueBuffer)(AudioQueueRef, AudioQueueBufferRef,
+                                                UInt32, const AudioStreamPacketDescription *) = NULL;
+static OSStatus (*orig_AudioQueueEnqueueBufferWithParameters)(AudioQueueRef, AudioQueueBufferRef,
+                                                              UInt32, const AudioStreamPacketDescription *,
+                                                              UInt32, UInt32, UInt32,
+                                                              const AudioQueueParameterEvent *,
+                                                              const AudioTimeStamp *, AudioTimeStamp *) = NULL;
+static OSStatus (*orig_AudioUnitRender)(AudioUnit, AudioUnitRenderActionFlags *,
+                                        const AudioTimeStamp *, UInt32, UInt32,
+                                        AudioBufferList *) = NULL;
+
+static void enqueue_capture_packet(capture_packet *pkt) {
+    pthread_mutex_lock(&gCaptureLock);
+    if (gCaptureQueued >= RCTL_CAPTURE_MAX_QUEUE) {
+        gCaptureDropped++;
+        pthread_mutex_unlock(&gCaptureLock);
+        free(pkt->samples);
+        free(pkt);
+        return;
+    }
+    if (gCaptureTail) gCaptureTail->next = pkt;
+    else gCaptureHead = pkt;
+    gCaptureTail = pkt;
+    gCaptureQueued++;
+    pthread_cond_signal(&gCaptureCond);
+    pthread_mutex_unlock(&gCaptureLock);
+}
+
+static capture_packet *dequeue_capture_packet(void) {
+    pthread_mutex_lock(&gCaptureLock);
+    while (!gCaptureHead) pthread_cond_wait(&gCaptureCond, &gCaptureLock);
+    capture_packet *pkt = gCaptureHead;
+    gCaptureHead = pkt->next;
+    if (!gCaptureHead) gCaptureTail = NULL;
+    gCaptureQueued--;
+    pthread_mutex_unlock(&gCaptureLock);
+    pkt->next = NULL;
+    return pkt;
+}
+
+static void *capture_worker(void *arg) {
+    as_log("capture worker starting");
+    int fd = -1;
+    while (fd < 0) {
+        fd = connect_tcp_audio();
+        if (fd < 0) usleep(250000);
+    }
+    int sent = 0;
+    for (;;) {
+        capture_packet *pkt = dequeue_capture_packet();
+        if (fd < 0 || !send_pcm_packet(fd, pkt->pts_us, pkt->rate, pkt->channels,
+                                       pkt->samples, pkt->frames)) {
+            if (fd >= 0) close(fd);
+            fd = -1;
+            while (fd < 0) {
+                fd = connect_tcp_audio();
+                if (fd < 0) usleep(250000);
+            }
+            (void)send_pcm_packet(fd, pkt->pts_us, pkt->rate, pkt->channels,
+                                  pkt->samples, pkt->frames);
+        }
+        sent++;
+        if ((sent % 250) == 0) {
+            char line[128];
+            snprintf(line, sizeof(line), "capture packets sent=%d dropped=%d", sent, gCaptureDropped);
+            as_log(line);
+        }
+        free(pkt->samples);
+        free(pkt);
+    }
+    return NULL;
+}
+
+static bool capture_format_supported(const AudioStreamBasicDescription *asbd) {
+    if (asbd->mFormatID != kAudioFormatLinearPCM) return false;
+    if (asbd->mChannelsPerFrame < 1 || asbd->mChannelsPerFrame > 2) return false;
+    if (asbd->mSampleRate < 8000 || asbd->mSampleRate > 192000) return false;
+    if (asbd->mBytesPerFrame == 0) return false;
+    if (asbd->mFormatFlags & kAudioFormatFlagIsBigEndian) return false;
+    if (asbd->mBitsPerChannel == 16 && (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger)) return true;
+    if (asbd->mBitsPerChannel == 32 && (asbd->mFormatFlags & kAudioFormatFlagIsFloat)) return true;
+    return false;
+}
+
+static void log_skipped_format(const char *source, const AudioStreamBasicDescription *asbd) {
+    if (gCaptureLoggedFormats >= 20) return;
+    char line[224];
+    snprintf(line, sizeof(line), "skip %s fmt id=0x%08x flags=0x%08x rate=%.0f ch=%u bits=%u bpf=%u",
+             source, (unsigned)asbd->mFormatID, (unsigned)asbd->mFormatFlags, asbd->mSampleRate,
+             (unsigned)asbd->mChannelsPerFrame, (unsigned)asbd->mBitsPerChannel,
+             (unsigned)asbd->mBytesPerFrame);
+    as_log(line);
+    gCaptureLoggedFormats++;
+}
+
+static void enqueue_interleaved_samples(const AudioStreamBasicDescription *asbd,
+                                        const void *data, uint32_t byte_size) {
+    if (!gCaptureEnabled || !data || byte_size == 0) return;
+    if (!capture_format_supported(asbd)) {
+        log_skipped_format("pcm", asbd);
+        return;
+    }
+
+    uint32_t channels = asbd->mChannelsPerFrame;
+    uint32_t bytes_per_frame = asbd->mBytesPerFrame;
+    uint32_t frames_total = byte_size / bytes_per_frame;
+    if (frames_total == 0) return;
+    uint32_t frames = frames_total > 4096 ? 4096 : frames_total;
+    size_t sample_count = (size_t)frames * channels;
+    int16_t *samples = (int16_t *)malloc(sample_count * sizeof(int16_t));
+    if (!samples) return;
+
+    const uint8_t *src = (const uint8_t *)data;
+    if (asbd->mBitsPerChannel == 16) {
+        memcpy(samples, src, sample_count * sizeof(int16_t));
+    } else {
+        const float *f = (const float *)src;
+        for (size_t i = 0; i < sample_count; i++) {
+            float v = f[i];
+            if (v > 1.0f) v = 1.0f;
+            else if (v < -1.0f) v = -1.0f;
+            samples[i] = (int16_t)(v * 32767.0f);
+        }
+    }
+
+    capture_packet *pkt = (capture_packet *)calloc(1, sizeof(*pkt));
+    if (!pkt) { free(samples); return; }
+    pkt->rate = (uint32_t)(asbd->mSampleRate + 0.5);
+    pkt->channels = (uint8_t)channels;
+    pkt->frames = (uint16_t)frames;
+    pkt->samples = samples;
+
+    pthread_mutex_lock(&gCaptureLock);
+    pkt->pts_us = gCapturePtsUs;
+    gCapturePtsUs += (uint64_t)((double)frames * 1000000.0 / asbd->mSampleRate);
+    pthread_mutex_unlock(&gCaptureLock);
+
+    enqueue_capture_packet(pkt);
+}
+
+static void maybe_capture_audioqueue(AudioQueueRef aq, AudioQueueBufferRef buffer) {
+    if (!gCaptureEnabled || !aq || !buffer || !buffer->mAudioData || buffer->mAudioDataByteSize == 0) return;
+
+    AudioStreamBasicDescription asbd;
+    UInt32 sz = sizeof(asbd);
+    if (AudioQueueGetProperty(aq, kAudioQueueProperty_StreamDescription, &asbd, &sz) != noErr) return;
+    if (sz < sizeof(asbd) || !capture_format_supported(&asbd)) {
+        if (gCaptureLoggedFormats < 12) {
+            log_skipped_format("aq", &asbd);
+        }
+        return;
+    }
+    enqueue_interleaved_samples(&asbd, buffer->mAudioData, buffer->mAudioDataByteSize);
+}
+
+static void maybe_capture_audiounit(AudioUnit unit, UInt32 bus, UInt32 frames, AudioBufferList *ioData) {
+    if (!gCaptureEnabled || !unit || !ioData || frames == 0) return;
+    AudioStreamBasicDescription asbd;
+    UInt32 sz = sizeof(asbd);
+    OSStatus st = AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
+                                       kAudioUnitScope_Output, bus, &asbd, &sz);
+    if (st != noErr || sz < sizeof(asbd)) {
+        st = AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
+                                  kAudioUnitScope_Input, bus, &asbd, &sz);
+        if (st != noErr || sz < sizeof(asbd)) return;
+    }
+
+    if (ioData->mNumberBuffers == 1) {
+        AudioBuffer *b = &ioData->mBuffers[0];
+        enqueue_interleaved_samples(&asbd, b->mData, b->mDataByteSize);
+        return;
+    }
+
+    if (!capture_format_supported(&asbd) || asbd.mChannelsPerFrame != ioData->mNumberBuffers) {
+        log_skipped_format("au", &asbd);
+        return;
+    }
+
+    uint32_t channels = ioData->mNumberBuffers;
+    uint32_t frames_avail = frames > 4096 ? 4096 : frames;
+    int16_t *samples = (int16_t *)malloc((size_t)frames_avail * channels * sizeof(int16_t));
+    if (!samples) return;
+
+    for (uint32_t c = 0; c < channels; c++) {
+        AudioBuffer *b = &ioData->mBuffers[c];
+        if (!b->mData || b->mDataByteSize == 0) { free(samples); return; }
+        if (asbd.mBitsPerChannel == 16) {
+            const int16_t *src = (const int16_t *)b->mData;
+            for (uint32_t i = 0; i < frames_avail; i++) samples[i * channels + c] = src[i];
+        } else {
+            const float *src = (const float *)b->mData;
+            for (uint32_t i = 0; i < frames_avail; i++) {
+                float v = src[i];
+                if (v > 1.0f) v = 1.0f;
+                else if (v < -1.0f) v = -1.0f;
+                samples[i * channels + c] = (int16_t)(v * 32767.0f);
+            }
+        }
+    }
+
+    AudioStreamBasicDescription interleaved = asbd;
+    interleaved.mChannelsPerFrame = channels;
+    interleaved.mBytesPerFrame = channels * 2;
+    interleaved.mBitsPerChannel = 16;
+    interleaved.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    enqueue_interleaved_samples(&interleaved, samples, frames_avail * channels * sizeof(int16_t));
+    free(samples);
+}
+
+static OSStatus hook_AudioQueueEnqueueBuffer(AudioQueueRef inAQ, AudioQueueBufferRef inBuffer,
+                                             UInt32 inNumPacketDescs,
+                                             const AudioStreamPacketDescription *inPacketDescs) {
+    maybe_capture_audioqueue(inAQ, inBuffer);
+    return orig_AudioQueueEnqueueBuffer(inAQ, inBuffer, inNumPacketDescs, inPacketDescs);
+}
+
+static OSStatus hook_AudioQueueEnqueueBufferWithParameters(AudioQueueRef inAQ, AudioQueueBufferRef inBuffer,
+                                                           UInt32 inNumPacketDescs,
+                                                           const AudioStreamPacketDescription *inPacketDescs,
+                                                           UInt32 inTrimFramesAtStart,
+                                                           UInt32 inTrimFramesAtEnd,
+                                                           UInt32 inNumParamValues,
+                                                           const AudioQueueParameterEvent *inParamValues,
+                                                           const AudioTimeStamp *inStartTime,
+                                                           AudioTimeStamp *outActualStartTime) {
+    maybe_capture_audioqueue(inAQ, inBuffer);
+    return orig_AudioQueueEnqueueBufferWithParameters(inAQ, inBuffer, inNumPacketDescs, inPacketDescs,
+                                                      inTrimFramesAtStart, inTrimFramesAtEnd,
+                                                      inNumParamValues, inParamValues,
+                                                      inStartTime, outActualStartTime);
+}
+
+static OSStatus hook_AudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *ioActionFlags,
+                                     const AudioTimeStamp *inTimeStamp, UInt32 inOutputBusNumber,
+                                     UInt32 inNumberFrames, AudioBufferList *ioData) {
+    OSStatus st = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber,
+                                       inNumberFrames, ioData);
+    if (st == noErr) maybe_capture_audiounit(inUnit, inOutputBusNumber, inNumberFrames, ioData);
+    return st;
+}
+
+static void start_capture_hook(void) {
+    if (gCaptureWorkerStarted) return;
+    gCaptureEnabled = true;
+    pthread_t t;
+    if (pthread_create(&t, NULL, capture_worker, NULL) == 0) {
+        pthread_detach(t);
+        gCaptureWorkerStarted = true;
+    } else {
+        as_log("capture worker create failed");
+        gCaptureEnabled = false;
+        return;
+    }
+
+    void *sym = dlsym(RTLD_DEFAULT, "AudioQueueEnqueueBuffer");
+    if (sym) {
+        MSHookFunction(sym, (void *)hook_AudioQueueEnqueueBuffer, (void **)&orig_AudioQueueEnqueueBuffer);
+        as_log("AudioQueueEnqueueBuffer hook installed");
+    } else {
+        as_log("AudioQueueEnqueueBuffer symbol missing");
+    }
+
+    sym = dlsym(RTLD_DEFAULT, "AudioQueueEnqueueBufferWithParameters");
+    if (sym) {
+        MSHookFunction(sym, (void *)hook_AudioQueueEnqueueBufferWithParameters,
+                       (void **)&orig_AudioQueueEnqueueBufferWithParameters);
+        as_log("AudioQueueEnqueueBufferWithParameters hook installed");
+    } else {
+        as_log("AudioQueueEnqueueBufferWithParameters symbol missing");
+    }
+
+    sym = dlsym(RTLD_DEFAULT, "AudioUnitRender");
+    if (sym) {
+        MSHookFunction(sym, (void *)hook_AudioUnitRender, (void **)&orig_AudioUnitRender);
+        as_log("AudioUnitRender hook installed");
+    } else {
+        as_log("AudioUnitRender symbol missing");
+    }
+}
+
 %ctor {
     @autoreleasepool {
         NSString *proc = [[NSProcessInfo processInfo] processName] ?: @"?";
         if (![proc isEqualToString:@"mediaserverd"]) return;
+
+        if (access(RCTL_AUDIO_CAPTURE_MARKER, F_OK) == 0) {
+            as_log("loaded with capture marker; installing hook");
+            start_capture_hook();
+            return;
+        }
 
         if (access(RCTL_AUDIO_SOURCE_MARKER, F_OK) != 0) {
             as_log("loaded without marker; idle");

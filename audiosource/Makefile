@@ -13,6 +13,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = rctlaudiosource
 rctlaudiosource_FILES = rctlaudiosource.xm
 rctlaudiosource_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -I../core
-rctlaudiosource_FRAMEWORKS = Foundation CoreFoundation
+rctlaudiosource_FRAMEWORKS = Foundation CoreFoundation AudioToolbox
 
 include $(THEOS)/makefiles/tweak.mk
