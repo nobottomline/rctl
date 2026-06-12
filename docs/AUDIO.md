@@ -113,6 +113,9 @@ Observed:
   `4`: `80` packets, first packet `48000 Hz`, `2` channels, `1024` frames.
 - This confirms the viable capture boundary is inside `mediaserverd`, and the
   source can feed `rctld` over `127.0.0.1:8079`.
+- Capture mode is guarded by an internal `180` second TTL watchdog. If the
+  diagnostic dylib is accidentally left loaded, it stops accepting new PCM after
+  the TTL and drains/stops its worker thread.
 
 Recovery note:
 

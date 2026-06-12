@@ -27,6 +27,7 @@
 #define RCTL_AUDIO_SOURCE_RATE 48000
 #define RCTL_AUDIO_SOURCE_FRAMES 960
 #define RCTL_CAPTURE_MAX_QUEUE 64
+#define RCTL_CAPTURE_TTL_SEC 180
 
 static FILE *as_log_open(void) {
     return fopen(RCTL_AUDIO_SOURCE_LOG, "a");
@@ -184,6 +185,7 @@ static int gCaptureQueued = 0;
 static uint64_t gCapturePtsUs = 0;
 static bool gCaptureEnabled = false;
 static bool gCaptureWorkerStarted = false;
+static time_t gCaptureDeadline = 0;
 static int gCaptureLoggedFormats = 0;
 static int gCaptureDropped = 0;
 static OSStatus (*orig_AudioQueueEnqueueBuffer)(AudioQueueRef, AudioQueueBufferRef,
@@ -216,7 +218,11 @@ static void enqueue_capture_packet(capture_packet *pkt) {
 
 static capture_packet *dequeue_capture_packet(void) {
     pthread_mutex_lock(&gCaptureLock);
-    while (!gCaptureHead) pthread_cond_wait(&gCaptureCond, &gCaptureLock);
+    while (!gCaptureHead && gCaptureEnabled) pthread_cond_wait(&gCaptureCond, &gCaptureLock);
+    if (!gCaptureHead) {
+        pthread_mutex_unlock(&gCaptureLock);
+        return NULL;
+    }
     capture_packet *pkt = gCaptureHead;
     gCaptureHead = pkt->next;
     if (!gCaptureHead) gCaptureTail = NULL;
@@ -236,6 +242,7 @@ static void *capture_worker(void *arg) {
     int sent = 0;
     for (;;) {
         capture_packet *pkt = dequeue_capture_packet();
+        if (!pkt) break;
         if (fd < 0 || !send_pcm_packet(fd, pkt->pts_us, pkt->rate, pkt->channels,
                                        pkt->samples, pkt->frames)) {
             if (fd >= 0) close(fd);
@@ -256,6 +263,22 @@ static void *capture_worker(void *arg) {
         free(pkt->samples);
         free(pkt);
     }
+    if (fd >= 0) close(fd);
+    char line[128];
+    snprintf(line, sizeof(line), "capture worker stopped sent=%d dropped=%d", sent, gCaptureDropped);
+    as_log(line);
+    return NULL;
+}
+
+static void *capture_watchdog(void *arg) {
+    sleep(RCTL_CAPTURE_TTL_SEC);
+    pthread_mutex_lock(&gCaptureLock);
+    if (gCaptureEnabled) {
+        gCaptureEnabled = false;
+        pthread_cond_signal(&gCaptureCond);
+    }
+    pthread_mutex_unlock(&gCaptureLock);
+    as_log("capture watchdog expired; disabled capture");
     return NULL;
 }
 
@@ -284,6 +307,12 @@ static void log_skipped_format(const char *source, const AudioStreamBasicDescrip
 static void enqueue_interleaved_samples(const AudioStreamBasicDescription *asbd,
                                         const void *data, uint32_t byte_size) {
     if (!gCaptureEnabled || !data || byte_size == 0) return;
+    if (gCaptureDeadline && time(NULL) >= gCaptureDeadline) {
+        gCaptureEnabled = false;
+        pthread_cond_signal(&gCaptureCond);
+        as_log("capture TTL expired; disabling capture");
+        return;
+    }
     if (!capture_format_supported(asbd)) {
         log_skipped_format("pcm", asbd);
         return;
@@ -430,6 +459,7 @@ static OSStatus hook_AudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlag
 static void start_capture_hook(void) {
     if (gCaptureWorkerStarted) return;
     gCaptureEnabled = true;
+    gCaptureDeadline = time(NULL) + RCTL_CAPTURE_TTL_SEC;
     pthread_t t;
     if (pthread_create(&t, NULL, capture_worker, NULL) == 0) {
         pthread_detach(t);
@@ -439,6 +469,12 @@ static void start_capture_hook(void) {
         gCaptureEnabled = false;
         return;
     }
+    pthread_t wt;
+    if (pthread_create(&wt, NULL, capture_watchdog, NULL) == 0) pthread_detach(wt);
+
+    char line[96];
+    snprintf(line, sizeof(line), "capture enabled ttl=%ds", RCTL_CAPTURE_TTL_SEC);
+    as_log(line);
 
     void *sym = dlsym(RTLD_DEFAULT, "AudioQueueEnqueueBuffer");
     if (sym) {
