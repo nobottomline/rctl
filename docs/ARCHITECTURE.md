@@ -2,8 +2,8 @@
 
 Remote-control system for a jailbroken iPad: view the screen, hear the device's
 real playback audio, inject touch/keyboard/buttons from a browser, plus camera,
-file transfer, automation, and device control. "scrcpy / AnyDesk for jailbroken
-iOS." LAN today; internet is the north star.
+file transfer, a root web terminal, automation, and device control. "scrcpy /
+AnyDesk for jailbroken iOS." LAN today; internet is the north star.
 
 Target device this was built on: **iPad Air 3 (A12, arm64e), iOS 14.4, unc0ver +
 Substitute** (NOT Cydia Substrate), with Choicy + Heimdallr installed.
@@ -42,7 +42,7 @@ Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 | Component | Where it runs | What it does |
 |---|---|---|
 | **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
-| **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
+| **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), WebSocket terminal `/ws/term`, relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
 | **rctlcap** (`cap/`) | injected into **every** app | captures a camera still in the frontmost app on a Darwin-notification pulse; uploads the JPEG to the daemon over a raw loopback socket |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/index.html`) | the controlling browser | decodes the H.264 stream via WebCodecs, forwards pointer/keyboard input, hosts the console (FX, camera, files, launch, etc.) |
@@ -80,6 +80,10 @@ with Web Audio.
 **Device audio output.** `/v1/audio_output?device=1|0|status=1` controls whether
 the iPad itself stays audible while the browser receives audio. Muting saves the
 previous volume and restore re-applies it.
+
+**Terminal.** `/ws/term` upgrades to a WebSocket and bridges raw binary frames to
+a root PTY shell created with `forkpty()`. xterm.js in the browser handles ANSI
+colors, cursor movement, Ctrl-C, and resize. See `docs/TERMINAL.md`.
 
 **Automation.** REST `/v1/*` (tap/swipe/type/button/launch/alert/toast/clipboard/
 brightness/openurl/apps/files/say/sound/flash/banner/camera/script/audio_capture/
@@ -261,7 +265,8 @@ internet phase.
 - **`:8080` is unauthenticated.** Fine on a trusted LAN; **must** gain auth before
   internet exposure (see §6).
 - **The daemon is root** and exposes file read/write (`/v1/ls,pull,push,rm`), app
-  launch, and input injection. Anyone who reaches `:8080` controls the device.
+  launch, input injection, and a root PTY terminal. Anyone who reaches `:8080`
+  controls the device.
 - The screen stream and camera are obviously sensitive; the whole system is a
   surveillance/remote-admin tool by design and should only run on a device the
   operator owns.

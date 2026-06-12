@@ -36,6 +36,8 @@ include $(THEOS)/makefiles/aggregate.mk
 after-stage::
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/var/mobile/rctl"$(ECHO_END)
 	$(ECHO_NOTHING)cp web/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
+	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/var/mobile/rctl/vendor"$(ECHO_END)
+	$(ECHO_NOTHING)cp web/vendor/xterm.css web/vendor/xterm.js web/vendor/xterm-addon-fit.js web/vendor/LICENSE.xterm.txt "$(THEOS_STAGING_DIR)/var/mobile/rctl/vendor/"$(ECHO_END)
 	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
 	$(ECHO_NOTHING)set -e; dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)

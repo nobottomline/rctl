@@ -7,6 +7,7 @@
 //                     [2 byte BE frames][interleaved s16le data].
 
 #import "net/HttpStreamServer.h"
+#import "net/Term.h"
 #import <pthread.h>
 #import <sys/socket.h>
 #import <netinet/in.h>
@@ -79,6 +80,10 @@ static char *read_file(const char *path, size_t *outLen) {
     if (outLen) *outLen = rd;
     return b;
 }
+
+static void send_data(int fd, const char *status, const char *ctype,
+                      const void *body, size_t len);
+static void send_text(int fd, const char *status, const char *ctype, const char *body);
 
 static const char *kHtml = R"HTML(<!doctype html>
 <html><head><meta charset="utf-8">
@@ -185,6 +190,15 @@ static bool send_full(int fd, const void *buf, size_t len) {
         off += (size_t)w;
     }
     return true;
+}
+
+static const char *ctype_for_path(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+    if (!strcmp(dot, ".js")) return "application/javascript; charset=utf-8";
+    if (!strcmp(dot, ".css")) return "text/css; charset=utf-8";
+    if (!strcmp(dot, ".html")) return "text/html; charset=utf-8";
+    return "application/octet-stream";
 }
 
 // Send one access unit as a single HTTP chunk: "<hex>\r\n" + appframe + "\r\n".
@@ -306,7 +320,9 @@ static void handle_client(rctl_http_server *s, int fd) {
     if (n <= 0) { close(fd); return; }
     req[n] = 0;
 
-    if (strncmp(req, "GET /stream", 11) == 0) {
+    if (strncmp(req, "GET /ws/term", 12) == 0) {
+        rctl_term_handle_ws(fd, req);
+    } else if (strncmp(req, "GET /stream", 11) == 0) {
         const char *h =
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
             "Transfer-Encoding: chunked\r\nCache-Control: no-cache\r\n"
@@ -430,6 +446,23 @@ static void handle_client(rctl_http_server *s, int fd) {
         else             // default: treat resp as a NUL-terminated JSON string
             send_data(fd, line, "application/json", resp ? resp : "{}", resp ? strlen(resp) : 2);
         free(resp); free(bodybuf);
+        close(fd);
+    } else if (strncmp(req, "GET /vendor/", 12) == 0) {
+        const char *target = req + 4;
+        char rel[256]; size_t ri = 0;
+        while (target[ri] && target[ri] != ' ' && ri < sizeof(rel) - 1) { rel[ri] = target[ri]; ri++; }
+        rel[ri] = 0;
+        if (strstr(rel, "..")) {
+            send_text(fd, "400 Bad Request", "text/plain", "bad path");
+        } else {
+            char path[384];
+            snprintf(path, sizeof(path), "/var/mobile/rctl%s", rel);
+            size_t len = 0;
+            char *body = read_file(path, &len);
+            if (body) send_data(fd, "200 OK", ctype_for_path(path), body, len);
+            else send_text(fd, "404 Not Found", "text/plain", "not found");
+            free(body);
+        }
         close(fd);
     } else if (strncmp(req, "GET / ", 6) == 0 || strncmp(req, "GET /index", 10) == 0) {
         size_t hlen = 0;

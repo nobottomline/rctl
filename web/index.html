@@ -4,6 +4,7 @@
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>rctl</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
 <style>
   html,body{margin:0;height:100%;background:#000;color:#ddd;
     font-family:-apple-system,system-ui,sans-serif;overflow:hidden;
@@ -70,6 +71,18 @@
   .pgsec .fxbtns{display:flex;gap:7px;flex-wrap:wrap}
   .pgsec .fxbtns button{flex:1 1 28%;min-width:84px}
   .pgsec .fxbtns #fxSpook{flex-basis:100%;background:#7b1fa2}
+  /* Root terminal */
+  #termModal{position:fixed;inset:0;z-index:35;display:none;flex-direction:column;
+    background:#0b0b0d;color:#f2f2f7}
+  #termModal.open{display:flex}
+  #termTop{height:44px;display:flex;align-items:center;gap:8px;padding:0 10px;box-sizing:border-box;
+    background:#18181b;border-bottom:1px solid #2b2b30}
+  #termTitle{font-size:13px;font-weight:600;color:#f2f2f7;margin-right:auto}
+  #termState{font-size:11px;color:#8e8e93}
+  #termTop button{border:0;border-radius:7px;background:#343438;color:#f2f2f7;padding:7px 10px;font-size:12px}
+  #termTop button.on{background:#3478f6}
+  #termView{flex:1;min-height:0;padding:8px;box-sizing:border-box;background:#050506}
+  #termView .xterm{height:100%}
 </style></head>
 <body>
 <div id="hud">rctl: connecting…</div>
@@ -99,7 +112,8 @@
     <button id="oRot">⟳ Rotate</button>
   </div>
   <div class="sect">Tools</div>
-  <div class="row"><button id="pgOpen">⌨ Console</button><button id="rspPanel">↻ Respring</button></div>
+  <div class="row"><button id="termOpen">⌘ Terminal</button><button id="pgOpen">⌨ Console</button></div>
+  <div class="row"><button id="rspPanel">↻ Respring</button></div>
   <div class="row"><button id="audListen">Audio</button><button id="audDevice" class="on">iPad</button></div>
   <div class="sect">Quality</div>
   <div class="row">
@@ -166,6 +180,20 @@
   </div>
 </div></div>
 
+<div id="termModal">
+  <div id="termTop">
+    <div id="termTitle">Root Terminal</div>
+    <div id="termState">disconnected</div>
+    <button id="termConnect">Connect</button>
+    <button id="termCtrlC">Ctrl-C</button>
+    <button id="termClear">Clear</button>
+    <button id="termClose">Close</button>
+  </div>
+  <div id="termView"></div>
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/xterm-addon-fit.js"></script>
 <script>
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
 let dec=null,frames=0,started=false,orient=1,codec='avc1.640033';
@@ -415,6 +443,75 @@ document.querySelectorAll('#panel button[data-sb]').forEach(b=>b.onclick=()=>
   fetch(`/key?p=240&u=${b.dataset.sb}&d=1`).catch(()=>{}));
 // ---- Console (playground): spawn alerts/toasts, launch apps, type, run macros ----
 const pg=document.getElementById('pg'),$=id=>document.getElementById(id),enc=encodeURIComponent;
+
+// ---- Root terminal: xterm.js UI backed by rctld's /ws/term PTY bridge ----
+let term=null,termFit=null,termWs=null,termDecoder=null,termResizeTimer=null;
+const termModal=$('termModal'),termState=$('termState'),termConnect=$('termConnect');
+function termSetState(s,on){termState.textContent=s;termConnect.classList.toggle('on',!!on);}
+function termEnsure(){
+  if(term)return;
+  term=new Terminal({
+    cursorBlink:true,
+    convertEol:true,
+    fontFamily:'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    fontSize:13,
+    lineHeight:1.15,
+    scrollback:5000,
+    allowProposedApi:false,
+    theme:{background:'#050506',foreground:'#f2f2f7',cursor:'#ffffff',selectionBackground:'#3a5f9f',
+      black:'#1c1c1e',red:'#ff453a',green:'#32d74b',yellow:'#ffd60a',blue:'#0a84ff',
+      magenta:'#bf5af2',cyan:'#64d2ff',white:'#f2f2f7',
+      brightBlack:'#636366',brightRed:'#ff6961',brightGreen:'#5ee677',brightYellow:'#ffe45e',
+      brightBlue:'#409cff',brightMagenta:'#da8fff',brightCyan:'#8ee8ff',brightWhite:'#ffffff'}
+  });
+  termFit=new FitAddon.FitAddon();
+  term.loadAddon(termFit);
+  term.open($('termView'));
+  term.onData(data=>{
+    if(!termWs||termWs.readyState!==WebSocket.OPEN)return;
+    const raw=new TextEncoder().encode(data), pkt=new Uint8Array(raw.length+1);
+    pkt[0]=1; pkt.set(raw,1); termWs.send(pkt);
+  });
+  term.onResize(({cols,rows})=>termSendResize(cols,rows));
+}
+function termFitNow(){
+  if(!termFit)return;
+  try{termFit.fit();}catch(e){}
+  if(term)termSendResize(term.cols,term.rows);
+}
+function termSendResize(cols,rows){
+  if(!termWs||termWs.readyState!==WebSocket.OPEN||!cols||!rows)return;
+  const pkt=new Uint8Array(5);
+  pkt[0]=2; pkt[1]=(cols>>8)&255; pkt[2]=cols&255; pkt[3]=(rows>>8)&255; pkt[4]=rows&255;
+  termWs.send(pkt);
+}
+function termConnectNow(){
+  termEnsure(); termFitNow();
+  if(termWs&&termWs.readyState===WebSocket.OPEN)return;
+  const proto=location.protocol==='https:'?'wss':'ws';
+  termDecoder=new TextDecoder();
+  termWs=new WebSocket(`${proto}://${location.host}/ws/term?cols=${term.cols||100}&rows=${term.rows||30}`);
+  termWs.binaryType='arraybuffer';
+  termSetState('connecting',false);
+  termWs.onopen=()=>{termSetState('connected',true);term.focus();termSendResize(term.cols,term.rows);};
+  termWs.onmessage=e=>{
+    if(e.data instanceof ArrayBuffer)term.write(termDecoder.decode(new Uint8Array(e.data),{stream:true}));
+    else term.write(String(e.data));
+  };
+  termWs.onclose=()=>termSetState('disconnected',false);
+  termWs.onerror=()=>termSetState('error',false);
+}
+function termDisconnect(){
+  if(termWs){try{termWs.close();}catch(e){}}
+  termWs=null; termSetState('disconnected',false);
+}
+$('termOpen').onclick=()=>{setPanel(false);termModal.classList.add('open');termEnsure();setTimeout(()=>{termFitNow();termConnectNow();},40);};
+$('termClose').onclick=()=>{termDisconnect();termModal.classList.remove('open');};
+termConnect.onclick=()=>termWs&&termWs.readyState===WebSocket.OPEN?termDisconnect():termConnectNow();
+$('termCtrlC').onclick=()=>{if(termWs&&termWs.readyState===WebSocket.OPEN){const p=new Uint8Array([1,3]);termWs.send(p);term.focus();}};
+$('termClear').onclick=()=>{if(term)term.clear();};
+addEventListener('resize',()=>{clearTimeout(termResizeTimer);termResizeTimer=setTimeout(termFitNow,120);});
+
 // Installed-app picker: load once, map display name -> bundle id for the datalist.
 let appMap=null;
 async function loadApps(){ if(appMap)return; appMap={};

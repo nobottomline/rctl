@@ -2,9 +2,9 @@
 
 `rctl` ("remote control") is a low-latency remote desktop stack for a
 **jailbroken iPad**: view the live screen, hear real device playback audio,
-inject real touches and keyboard input, transfer files, and automate device
-actions from a browser or native client. LAN works today; internet access is the
-next transport phase.
+inject real touches and keyboard input, transfer files, open a root terminal, and
+automate device actions from a browser or native client. LAN works today;
+internet access is the next transport phase.
 
 > Why jailbreak: Apple's iPhone Mirroring needs iOS 18 + the same Apple ID + a Mac + the
 > same network. App Store apps (TeamViewer / AnyDesk / RustDesk) can only *view* an iOS
@@ -17,7 +17,8 @@ A SpringBoard-injected agent captures the display, hardware-encodes H.264
 (VideoToolbox), streams it over HTTP to a browser (decoded with WebCodecs), and
 injects real touches back through `IOHIDEvent`. A guarded mediaserverd payload
 captures system playback PCM for browser audio. The browser can also toggle
-whether audio remains audible on the iPad itself.
+whether audio remains audible on the iPad itself. The web client includes a
+root PTY terminal rendered with xterm.js over `/ws/term`.
 
 ## Target device
 
@@ -45,6 +46,7 @@ rctl/
 ├── audio/          # rctlaudio — inactive mediaserverd system-audio payload
 ├── cap/            # rctlcap — frontmost-app camera still capture payload
 ├── web/            # browser client (WebCodecs decoder, pointer/keyboard input)
+│   └── vendor/     #   vendored xterm.js assets for the web terminal
 ├── layout/         # package payload: LaunchDaemon plist, web client, postinst/prerm
 ├── control         # Debian package metadata
 ├── Makefile        # Theos aggregate: builds every component into one .deb
@@ -96,6 +98,6 @@ shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
 1. **P1 — done.** Screen capture + hardware H.264 + browser stream over LAN.
 2. **P2 — done.** Real touch control through `IOHIDEvent`, correct in all orientations.
 3. **P2.5 — working.** Real system playback audio, camera stills, files, clipboard,
-   app launch, and automation endpoints.
+   app launch, root terminal, and automation endpoints.
 4. **P3.** Authenticated internet access: relay first, then WebRTC/Opus for the
    low-latency media path.
