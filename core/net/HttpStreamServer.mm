@@ -19,6 +19,7 @@
 #import <string.h>
 #import <stdlib.h>
 #import <stdio.h>
+#import <math.h>
 
 #define RCTL_MAX_CLIENTS 8
 #define RCTL_AUDIO_TEST_RATE 48000
@@ -267,8 +268,7 @@ static void *audio_test_loop(void *arg) {
         if (on) {
             double inc = (double)hz / (double)RCTL_AUDIO_TEST_RATE;
             for (int i = 0; i < RCTL_AUDIO_TEST_FRAMES; i++) {
-                double tri = phase < 0.5 ? (-1.0 + 4.0 * phase) : (3.0 - 4.0 * phase);
-                samples[i] = (int16_t)(tri * 7000.0);
+                samples[i] = (int16_t)(sin(phase * 2.0 * M_PI) * 4200.0);
                 phase += inc;
                 if (phase >= 1.0) phase -= 1.0;
             }

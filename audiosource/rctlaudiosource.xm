@@ -14,6 +14,7 @@
 #import <time.h>
 #import <errno.h>
 #import <string.h>
+#import <math.h>
 #import "ipc/Ipc.h"
 
 #define RCTL_AUDIO_SOURCE_LOG "/tmp/rctl-audiosource.log"
@@ -140,8 +141,7 @@ static void *tone_thread(void *arg) {
     int sent = 0;
     for (int n = 0; n < 150; n++) {
         for (int i = 0; i < RCTL_AUDIO_SOURCE_FRAMES; i++) {
-            double tri = phase < 0.5 ? (-1.0 + 4.0 * phase) : (3.0 - 4.0 * phase);
-            samples[i] = (int16_t)(tri * 7000.0);
+            samples[i] = (int16_t)(sin(phase * 2.0 * M_PI) * 4200.0);
             phase += 440.0 / (double)RCTL_AUDIO_SOURCE_RATE;
             if (phase >= 1.0) phase -= 1.0;
         }

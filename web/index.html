@@ -239,12 +239,12 @@ oAuto.onclick=()=>{ manualOrient=null; setOrientUI(); applyOrient(); };
 oRot.onclick=()=>{ let i=ROT.indexOf(effOrient()); if(i<0)i=0; manualOrient=ROT[(i+1)%4]; setOrientUI(); applyOrient(); };
 
 // Synthetic audio transport test: daemon sends type=4 PCM frames over /stream.
-let audioCtx=null,audioEnabled=false,audioBasePts=null,audioBaseTime=0;
+let audioCtx=null,audioGain=null,audioEnabled=false,audioBasePts=null,audioBaseTime=0;
 const audBtn=document.getElementById('audTest');
 function resetAudioClock(pts){
   if(!audioCtx)return;
   audioBasePts=pts;
-  audioBaseTime=audioCtx.currentTime+0.08;
+  audioBaseTime=audioCtx.currentTime+0.16;
 }
 function playAudioPayload(data){
   if(!audioEnabled||!audioCtx||data.length<16)return;
@@ -254,7 +254,7 @@ function playAudioPayload(data){
   if(audioBasePts==null)resetAudioClock(pts);
   let when=audioBaseTime+(pts-audioBasePts)/1000000;
   const now=audioCtx.currentTime;
-  if(when<now+0.01||when>now+1.0){resetAudioClock(pts);when=audioBaseTime;}
+  if(when<now+0.025||when>now+1.2){resetAudioClock(pts);when=audioBaseTime;}
   const buf=audioCtx.createBuffer(channels,frames,rate);
   const dv=new DataView(data.buffer,data.byteOffset+off,frames*channels*2);
   const outs=[];
@@ -262,7 +262,7 @@ function playAudioPayload(data){
   for(let i=0;i<frames;i++){
     for(let c=0;c<channels;c++)outs[c][i]=dv.getInt16((i*channels+c)*2,true)/32768;
   }
-  const src=audioCtx.createBufferSource();src.buffer=buf;src.connect(audioCtx.destination);src.start(when);
+  const src=audioCtx.createBufferSource();src.buffer=buf;src.connect(audioGain||audioCtx.destination);src.start(when);
 }
 audBtn.onclick=async()=>{
   audioEnabled=!audioEnabled;
@@ -272,6 +272,7 @@ audBtn.onclick=async()=>{
     const AC=window.AudioContext||window.webkitAudioContext;
     if(!AC){audioEnabled=false;audBtn.classList.remove('on');return;}
     if(!audioCtx)audioCtx=new AC();
+    if(!audioGain){audioGain=audioCtx.createGain();audioGain.gain.value=0.75;audioGain.connect(audioCtx.destination);}
     try{await audioCtx.resume();}catch(e){}
   }
   fetch(`/audio_test?on=${audioEnabled?1:0}&hz=440`).catch(()=>{});
