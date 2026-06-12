@@ -99,7 +99,8 @@
     <button id="oRot">⟳ Rotate</button>
   </div>
   <div class="sect">Tools</div>
-  <div class="row"><button id="pgOpen">⌨ Console</button><button id="audTest">Tone</button><button id="rspPanel">↻ Respring</button></div>
+  <div class="row"><button id="pgOpen">⌨ Console</button><button id="rspPanel">↻ Respring</button></div>
+  <div class="row"><button id="audListen">Audio</button><button id="audTest">Tone</button></div>
   <div class="sect">Quality</div>
   <div class="row">
     <button data-q="hq" class="on">High</button>
@@ -207,7 +208,12 @@ function mkdec(){
   });
   dec.configure({codec,optimizeForLatency:true});
 }
-setInterval(()=>{hud.textContent=`rctl — ${frames}f ${canvas.width}x${canvas.height} o=${effOrient()}${manualOrient!=null?'*':''}`;},1000);
+let audioPackets=0,audioLastPackets=0,audioRate=0,audioChannels=0,audioFrames=0;
+setInterval(()=>{
+  const ap=audioPackets-audioLastPackets;audioLastPackets=audioPackets;
+  const aud=audioEnabled?` a=${ap}/s ${audioRate||'?'}Hz/${audioChannels||'?'}ch`:'';
+  hud.textContent=`rctl — ${frames}f ${canvas.width}x${canvas.height} o=${effOrient()}${manualOrient!=null?'*':''}${aud}`;
+},1000);
 
 // ---- floating control panel ----
 const fab=document.getElementById('fab'),panel=document.getElementById('panel');
@@ -238,9 +244,22 @@ function setOrientUI(){ oAuto.classList.toggle('on',manualOrient==null); }
 oAuto.onclick=()=>{ manualOrient=null; setOrientUI(); applyOrient(); };
 oRot.onclick=()=>{ let i=ROT.indexOf(effOrient()); if(i<0)i=0; manualOrient=ROT[(i+1)%4]; setOrientUI(); applyOrient(); };
 
-// Synthetic audio transport test: daemon sends type=4 PCM frames over /stream.
-let audioCtx=null,audioGain=null,audioEnabled=false,audioBasePts=null,audioBaseTime=0;
-const audBtn=document.getElementById('audTest');
+// Audio playback: real captured iPad audio and optional synthetic transport test.
+let audioCtx=null,audioGain=null,audioEnabled=false,audioTestOn=false,audioBasePts=null,audioBaseTime=0;
+const audBtn=document.getElementById('audListen'),toneBtn=document.getElementById('audTest');
+async function ensureAudio(){
+  const AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC)return false;
+  if(!audioCtx)audioCtx=new AC();
+  if(!audioGain){audioGain=audioCtx.createGain();audioGain.gain.value=0.75;audioGain.connect(audioCtx.destination);}
+  try{await audioCtx.resume();}catch(e){}
+  return audioCtx.state==='running'||audioCtx.state==='interrupted';
+}
+function setAudioEnabled(on){
+  audioEnabled=on;
+  audBtn.classList.toggle('on',audioEnabled);
+  audioBasePts=null;
+}
 function resetAudioClock(pts){
   if(!audioCtx)return;
   audioBasePts=pts;
@@ -251,6 +270,7 @@ function playAudioPayload(data){
   const pts=ptsFromPayload(data),rate=be32(data,8),channels=data[12],bytes=data[13];
   const frames=(data[14]<<8)+data[15],off=16;
   if((channels!==1&&channels!==2)||bytes!==2||frames<=0||data.length<off+frames*channels*2)return;
+  audioPackets++;audioRate=rate;audioChannels=channels;audioFrames=frames;
   if(audioBasePts==null)resetAudioClock(pts);
   let when=audioBaseTime+(pts-audioBasePts)/1000000;
   const now=audioCtx.currentTime;
@@ -265,17 +285,21 @@ function playAudioPayload(data){
   const src=audioCtx.createBufferSource();src.buffer=buf;src.connect(audioGain||audioCtx.destination);src.start(when);
 }
 audBtn.onclick=async()=>{
-  audioEnabled=!audioEnabled;
-  audBtn.classList.toggle('on',audioEnabled);
-  audioBasePts=null;
-  if(audioEnabled){
-    const AC=window.AudioContext||window.webkitAudioContext;
-    if(!AC){audioEnabled=false;audBtn.classList.remove('on');return;}
-    if(!audioCtx)audioCtx=new AC();
-    if(!audioGain){audioGain=audioCtx.createGain();audioGain.gain.value=0.75;audioGain.connect(audioCtx.destination);}
-    try{await audioCtx.resume();}catch(e){}
+  if(!audioEnabled && !(await ensureAudio()))return;
+  setAudioEnabled(!audioEnabled);
+  if(!audioEnabled && audioTestOn){
+    audioTestOn=false;toneBtn.classList.remove('on');
+    fetch('/audio_test?on=0').catch(()=>{});
   }
-  fetch(`/audio_test?on=${audioEnabled?1:0}&hz=440`).catch(()=>{});
+};
+toneBtn.onclick=async()=>{
+  audioTestOn=!audioTestOn;
+  toneBtn.classList.toggle('on',audioTestOn);
+  if(audioTestOn){
+    if(await ensureAudio())setAudioEnabled(true);
+    else {audioTestOn=false;toneBtn.classList.remove('on');return;}
+  }
+  fetch(`/audio_test?on=${audioTestOn?1:0}&hz=440`).catch(()=>{});
 };
 
 // ---- input: map a click on the displayed (rotated/scaled) canvas back to
