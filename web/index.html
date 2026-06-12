@@ -245,7 +245,7 @@ oAuto.onclick=()=>{ manualOrient=null; setOrientUI(); applyOrient(); };
 oRot.onclick=()=>{ let i=ROT.indexOf(effOrient()); if(i<0)i=0; manualOrient=ROT[(i+1)%4]; setOrientUI(); applyOrient(); };
 
 // Audio playback: real captured iPad audio and optional synthetic transport test.
-let audioCtx=null,audioGain=null,audioEnabled=false,audioTestOn=false,audioBasePts=null,audioBaseTime=0;
+let audioCtx=null,audioGain=null,audioEnabled=false,audioTestOn=false,audioCaptureOn=false,audioCaptureBusy=false,audioBasePts=null,audioBaseTime=0;
 const audBtn=document.getElementById('audListen'),toneBtn=document.getElementById('audTest');
 async function ensureAudio(){
   const AC=window.AudioContext||window.webkitAudioContext;
@@ -257,8 +257,27 @@ async function ensureAudio(){
 }
 function setAudioEnabled(on){
   audioEnabled=on;
-  audBtn.classList.toggle('on',audioEnabled);
+  audBtn.classList.toggle('on',audioEnabled&&audioCaptureOn);
   audioBasePts=null;
+}
+async function setAudioCapture(on){
+  if(audioCaptureBusy)return false;
+  audioCaptureBusy=true;
+  const old=audBtn.textContent;
+  audBtn.textContent='Audio…';
+  try{
+    const r=await fetch(`/v1/audio_capture?on=${on?1:0}`);
+    if(!r.ok)throw new Error(await r.text());
+    audioCaptureOn=on;
+    audBtn.classList.toggle('on',audioEnabled&&audioCaptureOn);
+    return true;
+  }catch(e){
+    hud.textContent='audio capture failed';
+    return false;
+  }finally{
+    audioCaptureBusy=false;
+    audBtn.textContent=old;
+  }
 }
 function resetAudioClock(pts){
   if(!audioCtx)return;
@@ -285,9 +304,20 @@ function playAudioPayload(data){
   const src=audioCtx.createBufferSource();src.buffer=buf;src.connect(audioGain||audioCtx.destination);src.start(when);
 }
 audBtn.onclick=async()=>{
-  if(!audioEnabled && !(await ensureAudio()))return;
-  setAudioEnabled(!audioEnabled);
-  if(!audioEnabled && audioTestOn){
+  if(!audioEnabled){
+    if(!(await ensureAudio()))return;
+    setAudioEnabled(true);
+    if(!(await setAudioCapture(true))){
+      setAudioEnabled(false);
+      return;
+    }
+  }else{
+    setAudioEnabled(false);
+    audioCaptureOn=false;
+    audBtn.classList.remove('on');
+    fetch('/v1/audio_capture?on=0').catch(()=>{});
+  }
+  if(!audioEnabled&&audioTestOn){
     audioTestOn=false;toneBtn.classList.remove('on');
     fetch('/audio_test?on=0').catch(()=>{});
   }
@@ -301,6 +331,9 @@ toneBtn.onclick=async()=>{
   }
   fetch(`/audio_test?on=${audioTestOn?1:0}&hz=440`).catch(()=>{});
 };
+addEventListener('beforeunload',()=>{
+  if(audioCaptureOn)navigator.sendBeacon('/v1/audio_capture?on=0','');
+});
 
 // ---- input: map a click on the displayed (rotated/scaled) canvas back to
 // normalized framebuffer coordinates (the screen's FIXED space), send to device ----

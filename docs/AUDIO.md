@@ -134,6 +134,22 @@ Recovery note:
   `UIApplication.idleTimerDisabled` and keeps the existing power assertion.
   Deployment `0.3.0-101+debug` was verified with `/stream` producing
   `1668x2224 25/1` H.264 key/delta frames and no new SpringBoard crash report.
+- Real audio capture is now controlled by `rctld` through
+  `/v1/audio_capture?on=1|0|status=1`. The package ships the mediaserverd
+  source as an inactive payload under `/usr/local/lib/rctl/audio`; active
+  MobileSubstrate files and markers are created only on explicit enable and are
+  removed on disable, daemon startup, install, and viewer idle cleanup.
+- A crash on `2026-06-12 16:51:56 +0300` symbolicated to
+  `VTCompressionSessionEncodeFrame` on `com.greatlove.rctl.capture`. The cause
+  was stopping a capture session by cancelling its dispatch timer and immediately
+  destroying the VideoToolbox session/IOSurface while an encode block could still
+  be in flight. `rctl_session_stop` now drains the capture queue before destroy.
+- Restarting `mediaserverd` while SpringBoard capture is active can stall the
+  current H.264 session. Audio capture enable/disable now temporarily idles video
+  capture, restarts `mediaserverd`, sends a stream reset, then resumes video if a
+  viewer is still connected. Deployment `0.3.0-109+debug` was verified with
+  audio capture active, `capture packets sent=1750 dropped=0`, live H.264
+  key/delta frames, and no new SpringBoard crash report.
 
 ## Preferred product architecture
 

@@ -24,10 +24,20 @@
 #import <arpa/inet.h>
 #import <errno.h>
 #import <notify.h>
+#import <fcntl.h>
 #import "net/HttpStreamServer.h"
 #import "ipc/Ipc.h"
 
 extern char **environ;
+
+#define RCTL_AUDIO_PAYLOAD_DYLIB "/usr/local/lib/rctl/audio/rctlaudiosource.dylib"
+#define RCTL_AUDIO_PAYLOAD_PLIST "/usr/local/lib/rctl/audio/rctlaudiosource.plist"
+#define RCTL_AUDIO_ACTIVE_DYLIB "/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.dylib"
+#define RCTL_AUDIO_ACTIVE_PLIST "/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.plist"
+#define RCTL_AUDIO_CAPTURE_MARKER "/tmp/rctl-audiosource-capture"
+#define RCTL_AUDIO_TONE_MARKER "/tmp/rctl-audiosource-tone"
+#define RCTL_AUDIO_LOG "/tmp/rctl-audiosource.log"
+
 static void respring_device(void) {
     pid_t pid;
     char *argv[] = { (char *)"killall", (char *)"SpringBoard", NULL };
@@ -60,6 +70,8 @@ static int16_t read_le16s(const uint8_t *p) {
 static rctl_http_server *gHttp = NULL;
 static rctl_ipc        *gSB    = NULL;                       // current SB connection
 static pthread_mutex_t  gSBLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t  gAudioCtlLock = PTHREAD_MUTEX_INITIALIZER;
+static bool             gAudioCaptureDesired = false;
 
 // Forward an HTTP-side command to the SpringBoard agent (drops if SB is away).
 static void send_to_sb(uint8_t type, const void *data, uint32_t len) {
@@ -150,6 +162,8 @@ static void ipc_key(int page, int usage, int down) {
     rctl_ipc_key m = { (int32_t)page, (int32_t)usage, (int32_t)down }; send_to_sb(RCTL_MSG_KEY, &m, sizeof m);
 }
 
+static bool audio_capture_set(bool on, char *err, size_t errsz);
+
 // ---- Idle/active session gating (battery saver) -------------------------------
 // The capture+encode pipeline and the keep-awake idle-timer resets live in
 // SpringBoard and cost real battery (the display never sleeps). Run them ONLY
@@ -167,8 +181,156 @@ static void on_session(void *ctx, bool active) {
     dispatch_async(gAuto, ^{
         int gen = ++gSessionGen;
         if (active) send_active(true);
-        else AFTER(4.0, ^{ if (gen == gSessionGen) send_active(false); });
+        else AFTER(4.0, ^{
+            if (gen == gSessionGen) {
+                send_active(false);
+                audio_capture_set(false, NULL, 0);
+            }
+        });
     });
+}
+
+static bool file_exists(const char *path) {
+    return access(path, F_OK) == 0;
+}
+
+static bool copy_file(const char *src, const char *dst, mode_t mode) {
+    int in = open(src, O_RDONLY);
+    if (in < 0) return false;
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (out < 0) { close(in); return false; }
+    uint8_t buf[65536];
+    bool ok = true;
+    for (;;) {
+        ssize_t r = read(in, buf, sizeof(buf));
+        if (r == 0) break;
+        if (r < 0) { if (errno == EINTR) continue; ok = false; break; }
+        uint8_t *p = buf;
+        ssize_t left = r;
+        while (left > 0) {
+            ssize_t w = write(out, p, (size_t)left);
+            if (w < 0) { if (errno == EINTR) continue; ok = false; left = 0; break; }
+            p += w;
+            left -= w;
+        }
+        if (!ok) break;
+    }
+    close(out);
+    close(in);
+    chmod(dst, mode);
+    return ok;
+}
+
+static int run_wait(const char *path, char *const argv[]) {
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, path, NULL, NULL, argv, environ);
+    if (rc != 0) return -rc;
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0) {
+        if (errno != EINTR) return -errno;
+    }
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static void restart_mediaserverd(void) {
+    char *argv[] = { (char *)"killall", (char *)"mediaserverd", NULL };
+    (void)run_wait("/usr/bin/killall", argv);
+}
+
+static bool pause_video_for_media_restart(void) {
+    bool resume = gHttp && rctl_http_has_clients(gHttp);
+    if (resume) {
+        send_active(false);
+        usleep(350000);
+    }
+    return resume;
+}
+
+static void resume_video_after_media_restart(bool resume) {
+    if (!resume) return;
+    usleep(800000);
+    rctl_http_signal_reset(gHttp);
+    send_active(true);
+}
+
+static bool touch_file(const char *path) {
+    int fd = open(path, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) return false;
+    close(fd);
+    return true;
+}
+
+static void set_err(char *err, size_t errsz, const char *msg) {
+    if (err && errsz > 0) snprintf(err, errsz, "%s", msg);
+}
+
+static bool audio_capture_set(bool on, char *err, size_t errsz) {
+    pthread_mutex_lock(&gAudioCtlLock);
+    bool ok = true;
+    if (on) {
+        if (!file_exists(RCTL_AUDIO_PAYLOAD_DYLIB) || !file_exists(RCTL_AUDIO_PAYLOAD_PLIST)) {
+            set_err(err, errsz, "audio payload missing");
+            ok = false;
+        } else {
+            unlink(RCTL_AUDIO_TONE_MARKER);
+            unlink(RCTL_AUDIO_CAPTURE_MARKER);
+            unlink(RCTL_AUDIO_ACTIVE_DYLIB);
+            unlink(RCTL_AUDIO_ACTIVE_PLIST);
+            if (!copy_file(RCTL_AUDIO_PAYLOAD_DYLIB, RCTL_AUDIO_ACTIVE_DYLIB, 0755) ||
+                !copy_file(RCTL_AUDIO_PAYLOAD_PLIST, RCTL_AUDIO_ACTIVE_PLIST, 0644)) {
+                set_err(err, errsz, "copy audio payload failed");
+                ok = false;
+            } else {
+                char *ldid_argv[] = { (char *)"ldid", (char *)"-S", (char *)RCTL_AUDIO_ACTIVE_DYLIB, NULL };
+                (void)run_wait("/usr/bin/ldid", ldid_argv);
+                if (!touch_file(RCTL_AUDIO_CAPTURE_MARKER)) {
+                    set_err(err, errsz, "capture marker failed");
+                    ok = false;
+                } else {
+                    unlink(RCTL_AUDIO_LOG);
+                    bool resumeVideo = pause_video_for_media_restart();
+                    restart_mediaserverd();
+                    resume_video_after_media_restart(resumeVideo);
+                    gAudioCaptureDesired = true;
+                    dlog("audio capture enabled");
+                }
+            }
+        }
+    } else {
+        bool hadActive = file_exists(RCTL_AUDIO_ACTIVE_DYLIB) || file_exists(RCTL_AUDIO_ACTIVE_PLIST) ||
+                         file_exists(RCTL_AUDIO_CAPTURE_MARKER) || file_exists(RCTL_AUDIO_TONE_MARKER);
+        unlink(RCTL_AUDIO_ACTIVE_DYLIB);
+        unlink(RCTL_AUDIO_ACTIVE_PLIST);
+        unlink(RCTL_AUDIO_CAPTURE_MARKER);
+        unlink(RCTL_AUDIO_TONE_MARKER);
+        if (gAudioCaptureDesired || hadActive) {
+            bool resumeVideo = pause_video_for_media_restart();
+            restart_mediaserverd();
+            resume_video_after_media_restart(resumeVideo);
+        }
+        gAudioCaptureDesired = false;
+        dlog("audio capture disabled");
+    }
+    pthread_mutex_unlock(&gAudioCtlLock);
+    return ok;
+}
+
+static char *audio_capture_status_json(void) {
+    bool payload = file_exists(RCTL_AUDIO_PAYLOAD_DYLIB) && file_exists(RCTL_AUDIO_PAYLOAD_PLIST);
+    bool active = file_exists(RCTL_AUDIO_ACTIVE_DYLIB) && file_exists(RCTL_AUDIO_ACTIVE_PLIST);
+    bool marker = file_exists(RCTL_AUDIO_CAPTURE_MARKER);
+    bool desired = false;
+    pthread_mutex_lock(&gAudioCtlLock);
+    desired = gAudioCaptureDesired;
+    pthread_mutex_unlock(&gAudioCtlLock);
+    char body[256];
+    snprintf(body, sizeof(body),
+             "{\"ok\":true,\"payload\":%s,\"active\":%s,\"marker\":%s,\"desired\":%s}",
+             payload ? "true" : "false",
+             active ? "true" : "false",
+             marker ? "true" : "false",
+             desired ? "true" : "false");
+    return strdup(body);
 }
 
 static void handle_audio_packet(const uint8_t *buf, uint32_t len) {
@@ -404,6 +566,19 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         if (v < 0) { *status = 400; return strdup("{\"error\":\"v (0..1) required\"}"); }
         int permille = (int)(v * 1000 + 0.5); if (permille > 1000) permille = 1000;
         ipc_key(0xF1, permille, 1);          // page 0xF1 sentinel -> SB sets UIScreen brightness
+    } else if (!strcmp(path, "/v1/audio_capture")) {
+        if (strstr(query, "status=1") || (!strstr(query, "on=1") && !strstr(query, "on=0"))) {
+            return audio_capture_status_json();
+        }
+        char err[128] = {0};
+        bool on = strstr(query, "on=1") != NULL;
+        if (!audio_capture_set(on, err, sizeof(err))) {
+            *status = 500;
+            char out[192];
+            snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"%s\"}", err[0] ? err : "audio capture failed");
+            return strdup(out);
+        }
+        return audio_capture_status_json();
     } else if (!strcmp(path, "/v1/clipboard")) {
         if (body && body[0]) {            // POST body -> set the pasteboard
             send_to_sb(RCTL_MSG_SETCLIP, body, (uint32_t)strlen(body));
@@ -650,6 +825,7 @@ int main(int argc, char **argv) {
         rctl_http_set_rest(gHttp, rest_handler, NULL);
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         dlog("http listening on :8080");
+        audio_capture_set(false, NULL, 0);
 
         pthread_t t;
         pthread_create(&t, NULL, ipc_thread, NULL);

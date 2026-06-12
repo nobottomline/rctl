@@ -62,7 +62,11 @@ rctl_session *rctl_session_start(int fps, int bitrate, double scale, rctl_nal_cb
 
 void rctl_session_stop(rctl_session *s) {
     if (!s) return;
-    if (s->timer) { dispatch_source_cancel(s->timer); s->timer = NULL; }
+    if (s->timer) {
+        dispatch_source_cancel(s->timer);
+        dispatch_sync(s->queue, ^{}); // drain any in-flight encode before destroying VT/IOSurface
+        s->timer = NULL;
+    }
     if (s->enc) { rctl_encoder_destroy(s->enc); s->enc = NULL; }
     if (s->surface) { CFRelease(s->surface); s->surface = NULL; }
     fprintf(stderr, "[session] stopped after %lld frames\n", (long long)s->frames);

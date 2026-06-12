@@ -9,12 +9,28 @@ DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
 CAPLIB=/Library/MobileSubstrate/DynamicLibraries/rctlcap.dylib
 DAEMON=/usr/local/bin/rctld
 PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
+AUDIOSRC=/usr/local/lib/rctl/audio/rctlaudiosource.dylib
+AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.dylib
+AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.plist
+AUDIO_CAPTURE_MARKER=/tmp/rctl-audiosource-capture
+AUDIO_TONE_MARKER=/tmp/rctl-audiosource-tone
 
 if command -v ldid >/dev/null 2>&1; then
     [ -f "$DYLIB" ]   && ldid -S "$DYLIB"   || true
     [ -f "$CAPLIB" ]  && ldid -S "$CAPLIB"  || true
     [ -f "$DAEMON" ]  && ldid -S "$DAEMON"  || true
+    [ -f "$AUDIOSRC" ] && ldid -S "$AUDIOSRC" || true
 fi
+
+# Audio capture is opt-in. Never leave an active mediaserverd injection across
+# package installs/upgrades; only the inactive payload under /usr/local/lib ships.
+audio_was_active=0
+[ -e "$AUDIO_ACTIVE_DYLIB" ] && audio_was_active=1
+[ -e "$AUDIO_ACTIVE_PLIST" ] && audio_was_active=1
+[ -e "$AUDIO_CAPTURE_MARKER" ] && audio_was_active=1
+[ -e "$AUDIO_TONE_MARKER" ] && audio_was_active=1
+rm -f "$AUDIO_ACTIVE_DYLIB" "$AUDIO_ACTIVE_PLIST" "$AUDIO_CAPTURE_MARKER" "$AUDIO_TONE_MARKER"
+[ "$audio_was_active" = "1" ] && killall mediaserverd 2>/dev/null || true
 
 # (Re)load the launchd daemon.
 if [ -f "$PLIST" ]; then
