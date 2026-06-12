@@ -12,6 +12,7 @@
 #import <unistd.h>
 #import <dlfcn.h>
 #import "stream/CaptureSession.h"
+#import "capture/ScreenCapture.h"
 #import "input/TouchInjector.h"
 #import "ipc/Ipc.h"
 
@@ -226,13 +227,7 @@ static void rctl_fx_banner(NSString *text, float secs) {
 // Keep the device awake and unlocked for remote use: reset SpringBoard's idle
 // timer (which drives auto-dim and auto-lock) and undim the display.
 static void rctl_keep_awake(void) {
-    UIApplication *app = [UIApplication sharedApplication];
-    SEL withArg = NSSelectorFromString(@"resetIdleTimerAndUndim:");
-    if ([app respondsToSelector:withArg]) { ((void (*)(id, SEL, BOOL))objc_msgSend)(app, withArg, YES); return; }
-    SEL priv = NSSelectorFromString(@"_resetIdleTimerAndUndim:");
-    if ([app respondsToSelector:priv]) { ((void (*)(id, SEL, BOOL))objc_msgSend)(app, priv, YES); return; }
-    SEL noArg = NSSelectorFromString(@"resetIdleTimerAndUndim");
-    if ([app respondsToSelector:noArg]) ((void (*)(id, SEL))objc_msgSend)(app, noArg);
+    rctl_capture_undim();
 }
 
 static rctl_session     *gSession = NULL;

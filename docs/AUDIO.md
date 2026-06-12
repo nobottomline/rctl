@@ -127,6 +127,13 @@ Recovery note:
 - Post-fix deployment was verified: package status `install ok installed`,
   no new SpringBoard crash report, `SB connected`, and H.264 sample
   `1668x2224 25/1` with key/delta frames.
+- A later crash on `2026-06-12 16:31:43 +0300` again symbolicated to
+  `rctl_capture_wake_display`, this time through the replacement
+  `resetIdleTimerAndUndim*` path during capture start/reconfigure. Those private
+  idle-reset selectors are no longer used in the hot path; capture now only sets
+  `UIApplication.idleTimerDisabled` and keeps the existing power assertion.
+  Deployment `0.3.0-101+debug` was verified with `/stream` producing
+  `1668x2224 25/1` H.264 key/delta frames and no new SpringBoard crash report.
 
 ## Preferred product architecture
 

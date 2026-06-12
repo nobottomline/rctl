@@ -44,39 +44,26 @@ static void ensure_init(void) {
     });
 }
 
-static void reset_idle_timer_on_main(void) {
+static void set_idle_timer_disabled_on_main(void) {
     UIApplication *app = [UIApplication sharedApplication];
-    SEL withArg = NSSelectorFromString(@"resetIdleTimerAndUndim:");
-    if ([app respondsToSelector:withArg]) {
-        ((void (*)(id, SEL, BOOL))objc_msgSend)(app, withArg, YES);
-        return;
-    }
-    SEL priv = NSSelectorFromString(@"_resetIdleTimerAndUndim:");
-    if ([app respondsToSelector:priv]) {
-        ((void (*)(id, SEL, BOOL))objc_msgSend)(app, priv, YES);
-        return;
-    }
-    SEL noArg = NSSelectorFromString(@"resetIdleTimerAndUndim");
-    if ([app respondsToSelector:noArg]) ((void (*)(id, SEL))objc_msgSend)(app, noArg);
+    if (!app) return;
+    app.idleTimerDisabled = YES;
 }
 
-static void reset_idle_timer(bool wait) {
+static void set_idle_timer_disabled(void) {
     if ([NSThread isMainThread]) {
-        reset_idle_timer_on_main();
-    } else if (wait) {
-        dispatch_sync(dispatch_get_main_queue(), ^{ reset_idle_timer_on_main(); });
+        set_idle_timer_disabled_on_main();
     } else {
-        dispatch_async(dispatch_get_main_queue(), ^{ reset_idle_timer_on_main(); });
+        dispatch_async(dispatch_get_main_queue(), ^{ set_idle_timer_disabled_on_main(); });
     }
 }
 
 void rctl_capture_wake_display(void) {
-    reset_idle_timer(true);
-    usleep(350000);
+    set_idle_timer_disabled();
 }
 
 void rctl_capture_undim(void) {
-    reset_idle_timer(false);
+    set_idle_timer_disabled();
 }
 
 void rctl_capture_keep_awake(void) {
