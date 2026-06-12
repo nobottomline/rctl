@@ -72,6 +72,9 @@ static rctl_ipc        *gSB    = NULL;                       // current SB conne
 static pthread_mutex_t  gSBLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t  gAudioCtlLock = PTHREAD_MUTEX_INITIALIZER;
 static bool             gAudioCaptureDesired = false;
+static pthread_mutex_t  gAudioOutputLock = PTHREAD_MUTEX_INITIALIZER;
+static bool             gDeviceAudioEnabled = true;
+static double           gSavedDeviceVolume = 0.5;
 
 // Forward an HTTP-side command to the SpringBoard agent (drops if SB is away).
 static void send_to_sb(uint8_t type, const void *data, uint32_t len) {
@@ -408,6 +411,60 @@ static bool get_param(const char *query, const char *key, char *out, size_t outs
 static double get_d(const char *q, const char *k, double def) { char b[64]; return get_param(q,k,b,sizeof b) ? atof(b) : def; }
 static int    get_i(const char *q, const char *k, int def)    { char b[64]; return get_param(q,k,b,sizeof b) ? atoi(b) : def; }
 
+static double parse_json_number(const char *json, const char *key, double def) {
+    if (!json || !key) return def;
+    char pat[64];
+    snprintf(pat, sizeof(pat), "\"%s\":", key);
+    char *p = strstr((char *)json, pat);
+    return p ? atof(p + strlen(pat)) : def;
+}
+
+static double query_device_volume(void) {
+    char *info = sb_query(RCTL_Q_AUDIOOUT, NULL, 0, 1.5);
+    double v = parse_json_number(info, "volume", -1.0);
+    free(info);
+    return v;
+}
+
+static void set_device_volume(double v) {
+    if (v < 0) v = 0; else if (v > 1) v = 1;
+    int permille = (int)(v * 1000.0 + 0.5);
+    ipc_key(0xF2, permille, 1);
+}
+
+static char *audio_output_status_json(void) {
+    double volume = query_device_volume();
+    pthread_mutex_lock(&gAudioOutputLock);
+    bool enabled = gDeviceAudioEnabled;
+    double saved = gSavedDeviceVolume;
+    pthread_mutex_unlock(&gAudioOutputLock);
+    char body[192];
+    snprintf(body, sizeof(body),
+             "{\"ok\":true,\"device\":%s,\"volume\":%.3f,\"saved\":%.3f}",
+             enabled ? "true" : "false", volume < 0 ? 0.0 : volume, saved);
+    return strdup(body);
+}
+
+static bool set_device_audio_enabled(bool enabled) {
+    pthread_mutex_lock(&gAudioOutputLock);
+    if (!enabled) {
+        double current = query_device_volume();
+        if (current > 0.02) gSavedDeviceVolume = current;
+        gDeviceAudioEnabled = false;
+        pthread_mutex_unlock(&gAudioOutputLock);
+        set_device_volume(0.0);
+        dlog("device audio muted");
+        return true;
+    }
+    double restore = gSavedDeviceVolume;
+    if (restore < 0.02) restore = 0.5;
+    gDeviceAudioEnabled = true;
+    pthread_mutex_unlock(&gAudioOutputLock);
+    set_device_volume(restore);
+    dlog("device audio restored");
+    return true;
+}
+
 // US-keyboard ASCII -> HID usage (page 0x07); *shift set when the char needs Shift.
 static int ascii_to_hid(unsigned char c, int *shift) {
     *shift = 0;
@@ -579,6 +636,14 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
             return strdup(out);
         }
         return audio_capture_status_json();
+    } else if (!strcmp(path, "/v1/audio_output")) {
+        if (strstr(query, "status=1") || (!strstr(query, "device=1") && !strstr(query, "device=0") &&
+                                          !strstr(query, "mode=browser") && !strstr(query, "mode=both"))) {
+            return audio_output_status_json();
+        }
+        bool deviceOn = strstr(query, "device=0") || strstr(query, "mode=browser") ? false : true;
+        set_device_audio_enabled(deviceOn);
+        return audio_output_status_json();
     } else if (!strcmp(path, "/v1/clipboard")) {
         if (body && body[0]) {            // POST body -> set the pasteboard
             send_to_sb(RCTL_MSG_SETCLIP, body, (uint32_t)strlen(body));

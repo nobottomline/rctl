@@ -73,6 +73,63 @@ static float rctl_get_brightness(void) {
     return BKSGet ? BKSGet() : (float)[UIScreen mainScreen].brightness;
 }
 
+// Playback output volume via AVSystemController. The audio capture tap is
+// pre-output, so muting the device speaker does not mute browser playback.
+static id rctl_av_system_controller(void) {
+    static Class cls = Nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dlopen("/System/Library/PrivateFrameworks/Celestial.framework/Celestial", RTLD_NOW);
+        dlopen("/System/Library/PrivateFrameworks/MediaExperience.framework/MediaExperience", RTLD_NOW);
+        cls = NSClassFromString(@"AVSystemController");
+    });
+    if (!cls) return nil;
+    SEL shared = NSSelectorFromString(@"sharedAVSystemController");
+    return [cls respondsToSelector:shared] ? ((id (*)(id, SEL))objc_msgSend)((id)cls, shared) : nil;
+}
+
+static float rctl_get_output_volume(void) {
+    __block float vol = -1.0f;
+    void (^readVolume)(void) = ^{
+        id c = rctl_av_system_controller();
+        SEL get = NSSelectorFromString(@"getVolume:forCategory:");
+        if (c && [c respondsToSelector:get]) {
+            float v = 0;
+            BOOL ok = ((BOOL (*)(id, SEL, float *, id))objc_msgSend)(c, get, &v, @"Audio/Video");
+            if (ok) vol = v;
+        }
+    };
+    if ([NSThread isMainThread]) readVolume();
+    else dispatch_sync(dispatch_get_main_queue(), readVolume);
+    return vol;
+}
+
+static bool rctl_set_output_volume(double v) {
+    if (v < 0) v = 0; else if (v > 1) v = 1;
+    __block bool ok = false;
+    void (^setVolume)(void) = ^{
+        id c = rctl_av_system_controller();
+        SEL set = NSSelectorFromString(@"setVolumeTo:forCategory:");
+        if (c && [c respondsToSelector:set]) {
+            ok = ((BOOL (*)(id, SEL, float, id))objc_msgSend)(c, set, (float)v, @"Audio/Video");
+        }
+    };
+    if ([NSThread isMainThread]) setVolume();
+    else dispatch_sync(dispatch_get_main_queue(), setVolume);
+    if (ok) return true;
+
+    // Fallback: consumer volume keys. Less precise, but keeps the control usable
+    // if AVSystemController is unavailable on a build.
+    int usage = v <= 0.01 ? 0xEA : 0xE9;
+    int count = v <= 0.01 ? 18 : 8;
+    for (int i = 0; i < count; i++) {
+        rctl_input_key(12, usage, 1);
+        rctl_input_key(12, usage, 0);
+        usleep(25000);
+    }
+    return false;
+}
+
 // Launch an app by bundle id via SpringBoardServices. Call OFF the main thread
 // (it's a synchronous client request to SpringBoard; on the main thread it
 // self-deadlocks until a long timeout).
@@ -303,6 +360,11 @@ static NSString *rctl_device_info(void) {  // call on the main thread
             d.name, d.model, d.systemVersion, batt, bright];
 }
 
+static NSString *rctl_audio_output_info(void) {
+    float vol = rctl_get_output_volume();
+    return [NSString stringWithFormat:@"{\"volume\":%.3f}", vol < 0 ? 0.0 : vol];
+}
+
 // Open a URL via SpringBoardServices (and unlock). Off the main thread — it's a
 // client->SpringBoard call that would self-deadlock on the main thread.
 // Installed apps as a JSON array [{id,name}], sorted by name. Main thread.
@@ -368,6 +430,7 @@ static void *ipc_manager(void *unused) {
                 rctl_ipc_key m; memcpy(&m, buf, sizeof m);
                 if (m.page == 0xF0) { if (m.down) rctl_system_action(m.usage); }
                 else if (m.page == 0xF1) rctl_set_brightness(m.usage / 1000.0);
+                else if (m.page == 0xF2) rctl_set_output_volume(m.usage / 1000.0);
                 else rctl_input_key(m.page, m.usage, m.down);
             } else if (type == RCTL_MSG_CONFIG && len >= sizeof(rctl_ipc_config)) {
                 rctl_ipc_config m; memcpy(&m, buf, sizeof m);
@@ -398,7 +461,8 @@ static void *ipc_manager(void *unused) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     NSString *r = qtype == RCTL_Q_CLIPBOARD ? rctl_get_clipboard()
                                 : qtype == RCTL_Q_DEVINFO   ? rctl_device_info()
-                                : qtype == RCTL_Q_APPLIST   ? rctl_app_list() : @"";
+                                : qtype == RCTL_Q_APPLIST   ? rctl_app_list()
+                                : qtype == RCTL_Q_AUDIOOUT  ? rctl_audio_output_info() : @"";
                     send_reply(reqid, r);
                 });
             } else if (type == RCTL_MSG_ACTIVE && len >= 1) {
