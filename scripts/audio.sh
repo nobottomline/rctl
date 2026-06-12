@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Build/install/remove the diagnostic-only rctlaudiosource skeleton.
+# Build/install/remove the mediaserverd rctlaudio agent.
 #
 # Default is status only. Loading into mediaserverd is explicit:
-#   scripts/audiosource.sh status
-#   scripts/audiosource.sh stage
-#   scripts/audiosource.sh once
-#   scripts/audiosource.sh load
-#   scripts/audiosource.sh capture-load
-#   scripts/audiosource.sh capture-once
-#   scripts/audiosource.sh remove
+#   scripts/audio.sh status
+#   scripts/audio.sh stage
+#   scripts/audio.sh once
+#   scripts/audio.sh load
+#   scripts/audio.sh capture-load
+#   scripts/audio.sh capture-once
+#   scripts/audio.sh remove
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${RCTL_SSH:-greatlove}"
 REMOTE_DIR="/Library/MobileSubstrate/DynamicLibraries"
-DYLIB="$REMOTE_DIR/rctlaudiosource.dylib"
-PLIST="$REMOTE_DIR/rctlaudiosource.plist"
-LOG="/tmp/rctl-audiosource.log"
-MARKER="/tmp/rctl-audiosource-tone"
-CAPTURE_MARKER="/tmp/rctl-audiosource-capture"
+DYLIB="$REMOTE_DIR/rctlaudio.dylib"
+PLIST="$REMOTE_DIR/rctlaudio.plist"
+LOG="/tmp/rctl-audio.log"
+MARKER="/tmp/rctl-audio-tone"
+CAPTURE_MARKER="/tmp/rctl-audio-capture"
 MODE="${1:-status}"
 
 usage() {
@@ -33,38 +33,38 @@ esac
 
 remote_status() {
   ssh "$HOST" "set -e
-    echo '[audiosource] files:'
+    echo '[audio] files:'
     ls -l '$DYLIB' '$PLIST' 2>/dev/null || true
-    echo '[audiosource] staged:'
-    ls -l /tmp/rctlaudiosource.dylib /tmp/rctlaudiosource.plist 2>/dev/null || true
-    echo '[audiosource] marker:'
+    echo '[audio] staged:'
+    ls -l /tmp/rctlaudio.dylib /tmp/rctlaudio.plist 2>/dev/null || true
+    echo '[audio] marker:'
     ls -l '$MARKER' '$CAPTURE_MARKER' 2>/dev/null || true
-    echo '[audiosource] sockets:'
+    echo '[audio] sockets:'
     ls -l /var/run/rctl-audio.sock 2>/dev/null || true
-    echo '[audiosource] mediaserverd:'
+    echo '[audio] mediaserverd:'
     ps -A | grep ' /usr/sbin/mediaserverd$' || true
-    echo '[audiosource] log:'
+    echo '[audio] log:'
     test -e '$LOG' && tail -n 40 '$LOG' || echo '(no log)'
   "
 }
 
 stage_source() {
-  make -C "$ROOT/audiosource"
-  local built="$ROOT/audiosource/.theos/obj/debug/rctlaudiosource.dylib"
+  make -C "$ROOT/audio"
+  local built="$ROOT/audio/.theos/obj/debug/rctlaudio.dylib"
   test -f "$built"
-  scp -q "$built" "$HOST:/tmp/rctlaudiosource.dylib"
-  scp -q "$ROOT/audiosource/rctlaudiosource.plist" "$HOST:/tmp/rctlaudiosource.plist"
-  echo "[audiosource] staged in /tmp only"
+  scp -q "$built" "$HOST:/tmp/rctlaudio.dylib"
+  scp -q "$ROOT/audio/rctlaudio.plist" "$HOST:/tmp/rctlaudio.plist"
+  echo "[audio] staged in /tmp only"
 }
 
 activate_source() {
   stage_source
   ssh "$HOST" "set -e
-    cp /tmp/rctlaudiosource.dylib '$DYLIB'
-    cp /tmp/rctlaudiosource.plist '$PLIST'
+    cp /tmp/rctlaudio.dylib '$DYLIB'
+    cp /tmp/rctlaudio.plist '$PLIST'
     ldid -S '$DYLIB'
     chmod 644 '$PLIST'
-    echo '[audiosource] activated in MobileSubstrate path'
+    echo '[audio] activated in MobileSubstrate path'
   "
 }
 
@@ -87,12 +87,12 @@ load_source_with_marker() {
       set -- \$LINE
       NOW=\${1:-}
       if [ -n \"\$NOW\" ] && [ \"\$NOW\" != \"\$BEFORE\" ]; then
-        echo \"[audiosource] mediaserverd restarted pid=\$NOW at \${i}s\"
+        echo \"[audio] mediaserverd restarted pid=\$NOW at \${i}s\"
         break
       fi
     done
     sleep '$wait_secs'
-    test -e '$LOG' && tail -n 80 '$LOG' || { echo '[audiosource] no log produced'; exit 1; }
+    test -e '$LOG' && tail -n 80 '$LOG' || { echo '[audio] no log produced'; exit 1; }
   "
 }
 
@@ -109,7 +109,7 @@ remove_source() {
     LINE=\$(ps -A | grep ' /usr/sbin/mediaserverd$' | head -n 1 || true)
     set -- \$LINE
     BEFORE=\${1:-}
-    rm -f '$DYLIB' '$PLIST' /tmp/rctlaudiosource.dylib /tmp/rctlaudiosource.plist '$MARKER' '$CAPTURE_MARKER'
+    rm -f '$DYLIB' '$PLIST' /tmp/rctlaudio.dylib /tmp/rctlaudio.plist '$MARKER' '$CAPTURE_MARKER'
     killall mediaserverd 2>/dev/null || true
     i=0
     while [ \$i -lt 20 ]; do
@@ -118,11 +118,11 @@ remove_source() {
       set -- \$LINE
       NOW=\${1:-}
       if [ -n \"\$NOW\" ] && [ \"\$NOW\" != \"\$BEFORE\" ]; then
-        echo \"[audiosource] removed; clean mediaserverd pid=\$NOW at \${i}s\"
+        echo \"[audio] removed; clean mediaserverd pid=\$NOW at \${i}s\"
         exit 0
       fi
     done
-    echo '[audiosource] removed; mediaserverd restart not observed'
+    echo '[audio] removed; mediaserverd restart not observed'
   "
 }
 

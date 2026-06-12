@@ -1,8 +1,9 @@
-// rctlaudiosource — safe mediaserverd audio-source skeleton.
+// rctlaudio — guarded mediaserverd system-audio agent.
 //
-// No hooks and no render-path modification. When explicitly loaded with the
-// marker file present, sends a short synthetic PCM stream to rctld's audio
-// ingest socket. The future real tap should reuse this send path.
+// The dylib ships as an inactive payload. rctld enables it on demand by copying
+// it into the active MobileSubstrate path, creating a capture marker, and
+// restarting mediaserverd. Audio callbacks only copy supported Linear PCM into a
+// bounded queue; socket I/O runs on a worker thread.
 
 #import <Foundation/Foundation.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -21,9 +22,9 @@
 #import <dlfcn.h>
 #import "ipc/Ipc.h"
 
-#define RCTL_AUDIO_SOURCE_LOG "/tmp/rctl-audiosource.log"
-#define RCTL_AUDIO_SOURCE_MARKER "/tmp/rctl-audiosource-tone"
-#define RCTL_AUDIO_CAPTURE_MARKER "/tmp/rctl-audiosource-capture"
+#define RCTL_AUDIO_SOURCE_LOG "/tmp/rctl-audio.log"
+#define RCTL_AUDIO_SOURCE_MARKER "/tmp/rctl-audio-tone"
+#define RCTL_AUDIO_CAPTURE_MARKER "/tmp/rctl-audio-capture"
 #define RCTL_AUDIO_SOURCE_RATE 48000
 #define RCTL_AUDIO_SOURCE_FRAMES 960
 #define RCTL_CAPTURE_MAX_QUEUE 64

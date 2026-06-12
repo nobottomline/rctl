@@ -3,9 +3,30 @@
 set -e
 
 PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
+AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
+AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist
+AUDIO_CAPTURE_MARKER=/tmp/rctl-audio-capture
+AUDIO_TONE_MARKER=/tmp/rctl-audio-tone
+LEGACY_AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.dylib
+LEGACY_AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.plist
+LEGACY_AUDIO_CAPTURE_MARKER=/tmp/rctl-audiosource-capture
+LEGACY_AUDIO_TONE_MARKER=/tmp/rctl-audiosource-tone
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
     [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
+    audio_was_active=0
+    [ -e "$AUDIO_ACTIVE_DYLIB" ] && audio_was_active=1
+    [ -e "$AUDIO_ACTIVE_PLIST" ] && audio_was_active=1
+    [ -e "$AUDIO_CAPTURE_MARKER" ] && audio_was_active=1
+    [ -e "$AUDIO_TONE_MARKER" ] && audio_was_active=1
+    [ -e "$LEGACY_AUDIO_ACTIVE_DYLIB" ] && audio_was_active=1
+    [ -e "$LEGACY_AUDIO_ACTIVE_PLIST" ] && audio_was_active=1
+    [ -e "$LEGACY_AUDIO_CAPTURE_MARKER" ] && audio_was_active=1
+    [ -e "$LEGACY_AUDIO_TONE_MARKER" ] && audio_was_active=1
+    rm -f "$AUDIO_ACTIVE_DYLIB" "$AUDIO_ACTIVE_PLIST" "$AUDIO_CAPTURE_MARKER" "$AUDIO_TONE_MARKER" \
+          "$LEGACY_AUDIO_ACTIVE_DYLIB" "$LEGACY_AUDIO_ACTIVE_PLIST" \
+          "$LEGACY_AUDIO_CAPTURE_MARKER" "$LEGACY_AUDIO_TONE_MARKER"
+    [ "$audio_was_active" = "1" ] && killall mediaserverd 2>/dev/null || true
     killall -9 SpringBoard 2>/dev/null || true
 fi
 

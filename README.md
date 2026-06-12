@@ -1,9 +1,10 @@
 # rctl — remote control for jailbroken iOS
 
-`rctl` ("remote control") is a low-latency remote desktop stack for a **jailbroken iPad**:
-view the live screen, inject real touches and keyboard input, transfer files — from any
-browser or a native iOS client, over LAN or the internet. Think *scrcpy*, but for
-jailbroken iOS, and reachable from anywhere.
+`rctl` ("remote control") is a low-latency remote desktop stack for a
+**jailbroken iPad**: view the live screen, hear real device playback audio,
+inject real touches and keyboard input, transfer files, and automate device
+actions from a browser or native client. LAN works today; internet access is the
+next transport phase.
 
 > Why jailbreak: Apple's iPhone Mirroring needs iOS 18 + the same Apple ID + a Mac + the
 > same network. App Store apps (TeamViewer / AnyDesk / RustDesk) can only *view* an iOS
@@ -11,11 +12,12 @@ jailbroken iOS, and reachable from anywhere.
 
 ## Status
 
-Live screen streaming **and real touch control** work: a SpringBoard-injected agent captures the
-display, hardware-encodes H.264 (High profile, VideoToolbox), streams it over HTTP to a browser
-(decoded with **WebCodecs**), and injects real touches back (`IOHIDEvent`) — correct in all 4
-orientations. Resolution/fps/bitrate switch live; the display is kept awake during a session.
-Next: keyboard input, and control inside 3rd-party apps.
+Live screen streaming, real touch control, and real iPad playback audio work.
+A SpringBoard-injected agent captures the display, hardware-encodes H.264
+(VideoToolbox), streams it over HTTP to a browser (decoded with WebCodecs), and
+injects real touches back through `IOHIDEvent`. A guarded mediaserverd payload
+captures system playback PCM for browser audio. The browser can also toggle
+whether audio remains audible on the iPad itself.
 
 ## Target device
 
@@ -40,6 +42,8 @@ rctl/
 │   └── vendor/     #   vendored private headers
 ├── springboard/    # the injected agent (rctlsbcap): capture + encode + inject (thin)
 ├── daemon/         # rctld — root daemon (launchd KeepAlive): hosts the transport + relay
+├── audio/          # rctlaudio — inactive mediaserverd system-audio payload
+├── cap/            # rctlcap — frontmost-app camera still capture payload
 ├── web/            # browser client (WebCodecs decoder, pointer/keyboard input)
 ├── layout/         # package payload: LaunchDaemon plist, web client, postinst/prerm
 ├── control         # Debian package metadata
@@ -47,15 +51,17 @@ rctl/
 └── docs/           # design & operational docs
 ```
 
-The transport runs in `rctld` (out of SpringBoard, so a network bug can't respring the UI);
-the agent streams encoded frames to it over a local socket and gets input back. Planned, not
-yet created: `relay/` (Go signaling + TURN) and `proto/` (shared protocol) for internet (P3)
-so a network/transport bug can't respring SpringBoard.
+The transport and REST API run in `rctld`, out of SpringBoard, so a network bug
+does not respring the UI. SpringBoard streams encoded frames to it over a local
+socket and receives input/actions back. `audio/` is built into the package as an
+inactive payload and is copied into the active MobileSubstrate path only while
+browser audio capture is enabled.
 
 ## Transport / decode decision
 
 - **Decode: WebCodecs** (frame-level, low latency) — the client decoder, kept long-term.
-- **Transport now (LAN/dev): HTTP chunked** — simple, good enough on a local network.
+- **Transport now (LAN/dev): HTTP chunked** — H.264 video plus PCM audio frames,
+  simple and good enough on a local network.
 - **Transport for internet (P3): WebRTC** — DataChannel carrying encoded frames + WebCodecs
   decode (lowest latency, full control), with ICE/STUN/**TURN** for NAT traversal. On-device
   WebRTC via **libdatachannel** (lightweight) rather than libwebrtc. Signaling = small Go server.
@@ -80,14 +86,16 @@ THEOS_DEVICE_IP=greatlove THEOS_DEVICE_PORT=22 make package install
 `/Library/MobileSubstrate/DynamicLibraries/` and the web client to `/var/mobile/rctl/`,
 shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
 
-> NOTE: the macOS `ldid` signature is rejected by on-device AMFI on arm64e, so the package's
-> `postinst` re-signs the dylib with the device's own `ldid` (and resprings). The SSH targets
-> are defined in `~/.ssh/config` (`rctl-device` = USB tunnel, `greatlove` = Wi-Fi).
+> NOTE: the macOS `ldid` signature is rejected by on-device AMFI on arm64e, so
+> `postinst` re-signs installed binaries with the device's own `ldid`. The SSH
+> targets are defined in `~/.ssh/config` (`rctl-device` = USB tunnel,
+> `greatlove` = Wi-Fi).
 
 ## Roadmap
 
-1. **P1 — done.** Screen capture + hardware H.264 + live stream to a browser over LAN.
-2. **P2 — touch done.** Real touch control (`IOHIDEvent`), correct in all orientations.
-   Remaining: keyboard input, and control inside 3rd-party apps.
-3. **P3** — internet access: WebRTC transport + our own signaling + TURN relay.
-4. **P4** — clipboard sync, file transfer, audio, autostart/persistence, auth & encryption.
+1. **P1 — done.** Screen capture + hardware H.264 + browser stream over LAN.
+2. **P2 — done.** Real touch control through `IOHIDEvent`, correct in all orientations.
+3. **P2.5 — working.** Real system playback audio, camera stills, files, clipboard,
+   app launch, and automation endpoints.
+4. **P3.** Authenticated internet access: relay first, then WebRTC/Opus for the
+   low-latency media path.

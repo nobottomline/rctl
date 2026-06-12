@@ -1,8 +1,9 @@
 # rctl — Architecture & Engineering Notes
 
-Remote-control system for a jailbroken iPad: view the screen and inject
-touch/keyboard/buttons from a browser, plus camera, file transfer, FX, and device
-control. "scrcpy / AnyDesk for jailbroken iOS." LAN today; internet is the north star.
+Remote-control system for a jailbroken iPad: view the screen, hear the device's
+real playback audio, inject touch/keyboard/buttons from a browser, plus camera,
+file transfer, automation, and device control. "scrcpy / AnyDesk for jailbroken
+iOS." LAN today; internet is the north star.
 
 Target device this was built on: **iPad Air 3 (A12, arm64e), iOS 14.4, unc0ver +
 Substitute** (NOT Cydia Substrate), with Choicy + Heimdallr installed.
@@ -21,30 +22,36 @@ AMFI bypass enable real touch/keyboard injection and camera-from-any-app.
   │  SpringBoard ──[rctlsbcap.dylib]──┐   every app ──[rctlcap.dylib]
   │   screen capture + H.264 encode   │    camera capture in the
   │   touch/key injection             │    FRONTMOST app
-  │   SB private-API actions, FX      │         │ raw-socket POST
-  │         │ Unix socket IPC         │         ▼
-  │         ▼                         │   ┌──────────────┐
-  │   rctld  (root daemon) ◄──────────┘   │ /v1/cam_upload│
+  │   SB private-API actions          │         │ raw-socket POST
+  │   local output control            │         ▼
+  │         │ Unix socket IPC         │   ┌──────────────┐
+  │         ▼                         │   │ /v1/cam_upload│
+  │   rctld  (root daemon) ◄──────────┘   └──────────────┘
   │   HTTP :8080  (live /stream + REST /v1/*)              │
+  │         ▲                                                │
+  │         │ TCP 127.0.0.1:8079 PCM                         │
+  │  mediaserverd ──[rctlaudio.dylib] system playback audio │
   └─────────┼────────────────────────────────────────────┘
             │ Wi-Fi / USB (iproxy)            (internet: TODO, §6)
             ▼
-       Browser (web/index.html): WebCodecs decode, input forwarding, console
+       Browser (web/index.html): WebCodecs video, Web Audio, input, console
 ```
 
-Four parts ship in one `.deb` (`com.greatlove.rctl`):
+Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 
 | Component | Where it runs | What it does |
 |---|---|---|
 | **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
 | **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
 | **rctlcap** (`cap/`) | injected into **every** app | captures a camera still in the frontmost app on a Darwin-notification pulse; uploads the JPEG to the daemon over a raw loopback socket |
+| **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/index.html`) | the controlling browser | decodes the H.264 stream via WebCodecs, forwards pointer/keyboard input, hosts the console (FX, camera, files, launch, etc.) |
 
 `core/` holds the shared C/C++/ObjC modules (capture, encode, stream, net, input,
-ipc) so rctlsbcap and rctld don't duplicate code. `layout/` is the static payload
-(LaunchDaemon plist, web client). `docs/` holds these notes + the mediaserverd
-class dump. `scripts/deploy.sh` is the one-command safe deploy.
+ipc) so rctlsbcap, rctld, and the media payloads don't duplicate code. `layout/`
+is the static package payload (LaunchDaemon plist, web client, maintainer
+scripts). `docs/` holds these notes + the mediaserverd class dump.
+`scripts/deploy.sh` is the one-command safe deploy.
 
 ---
 
@@ -63,9 +70,21 @@ viewer is connected** (idle-by-default, §4).
 injects a **digitizer IOHIDEvent tagged with the real hardware senderID** so the
 foreground app receives it (works in all apps/games, not just SpringBoard).
 
+**Audio → browser.** `rctld` activates the inactive `audio/` payload only on
+`/v1/audio_capture?on=1`. After a coordinated mediaserverd restart,
+`rctlaudio.dylib` copies supported Linear PCM from playback paths into a bounded
+queue and sends timestamped packets to `rctld` over `127.0.0.1:8079`. `rctld`
+broadcasts them on `/stream` as frame type `4`; the browser schedules playback
+with Web Audio.
+
+**Device audio output.** `/v1/audio_output?device=1|0|status=1` controls whether
+the iPad itself stays audible while the browser receives audio. Muting saves the
+previous volume and restore re-applies it.
+
 **Automation.** REST `/v1/*` (tap/swipe/type/button/launch/alert/toast/clipboard/
-brightness/openurl/apps/files/say/sound/flash/banner/spook/camera/script) — curl-
-and script-friendly, separate from the realtime plane, shares the IPC action path.
+brightness/openurl/apps/files/say/sound/flash/banner/camera/script/audio_capture/
+audio_output) — curl- and script-friendly, separate from the realtime plane,
+shares the IPC action path where SpringBoard context is required.
 
 **Camera → browser.** `/v1/camera?pos=` posts a Darwin notification; the **frontmost
 app** (via rctlcap) silently captures a still and POSTs it back over a raw loopback
@@ -75,7 +94,8 @@ path is necessary.
 **IPC.** Unix socket `/var/run/rctl-ipc.sock`, framing `[1B type][4B BE len][payload]`.
 Daemon listens (chmod 0777 so mobile-uid SpringBoard can connect); SB connects with
 retry and auto-reconnects when the daemon restarts. Request/response (clipboard,
-device info, app list) via a reqid + dispatch_semaphore on the daemon side.
+device info, app list, audio output status) uses a reqid + dispatch_semaphore on
+the daemon side. Audio ingest is intentionally separate from this command channel.
 
 ---
 
@@ -102,6 +122,12 @@ on demand). Whether the screen actually sleeps then depends on the device's iOS
 Auto-Lock setting (we no longer override it).
 
 **Camera from ANY open app (the big one — see §5).**
+
+**System playback audio.** App audio is mixed inside mediaserverd, not SpringBoard
+or the root daemon. The working boundary is a mediaserverd payload that copies PCM
+from supported AudioQueue/AudioUnit playback paths and sends it to `rctld`. The
+payload is opt-in, removable, guarded by a TTL watchdog, and coordinated with
+video capture because restarting mediaserverd can stall the current H.264 session.
 
 **Orientation.** Screen: the foreground app's `FBSOrientationObserver
 activeInterfaceOrientation` (correct even for force-orientation apps), debounced.
@@ -198,9 +224,10 @@ internet phase.
   stale codesign state → SpringBoard SIGBUS-crashes at load and can loop into
   Substitute safe mode. `deploy.sh` does `dpkg -r` (clean respring) then `dpkg -i`,
   under a watchdog that disables the dylib + resprings if a new crash appears.
-- **`mediaserverd` injection** (the RE diagnostic, now removed) needed
-  `killall mediaserverd` to load/unload — it disrupts the active VideoToolbox screen
-  encoder, which can crash rctlsbcap. Don't kill mediaserverd while streaming.
+- **`mediaserverd` audio payload** (`audio/`) needs `killall mediaserverd` to
+  load/unload. `rctld` coordinates this by idling video capture, restarting
+  mediaserverd, signaling a stream reset, and resuming video if a viewer remains.
+  Do not manually kill mediaserverd while streaming.
 - **Same-basename `.o` collision:** two subprojects both named `Tweak.xm` collide in
   `.theos/obj`. Name each tweak's source after the tweak (`rctlsbcap.xm`,
   `rctlcap.xm`). This is also the answer to "Tweak.xm vs rctlcam.xm": unique names

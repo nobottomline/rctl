@@ -1,6 +1,8 @@
 # rctl — aggregate project. Builds every component into one Debian package:
 #   springboard/  -> rctlsbcap.dylib  (thin SpringBoard agent: capture/encode/inject)
 #   daemon/       -> rctld            (root daemon: transport + automation API)   [added in P2.5b]
+#   cap/          -> rctlcap.dylib    (frontmost-app camera still capture)
+#   audio/        -> rctlaudio.dylib  (inactive mediaserverd audio payload)
 # Extra payload (web client, LaunchDaemon plist) ships via layout/.
 #
 #   make package           build the .deb into ./packages/
@@ -34,7 +36,7 @@ include $(THEOS)/makefiles/aggregate.mk
 after-stage::
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/var/mobile/rctl"$(ECHO_END)
 	$(ECHO_NOTHING)cp web/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
-	$(ECHO_NOTHING)$(MAKE) -C audiosource$(ECHO_END)
+	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
-	$(ECHO_NOTHING)cp audiosource/.theos/obj/debug/rctlaudiosource.dylib "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudiosource.dylib"$(ECHO_END)
-	$(ECHO_NOTHING)cp audiosource/rctlaudiosource.plist "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudiosource.plist"$(ECHO_END)
+	$(ECHO_NOTHING)set -e; dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
+	$(ECHO_NOTHING)cp audio/rctlaudio.plist "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.plist"$(ECHO_END)
