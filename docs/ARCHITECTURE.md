@@ -127,6 +127,13 @@ Auto-Lock setting (we no longer override it).
 
 **Camera from ANY open app (the big one — see §5).**
 
+**Future live camera and microphone.** The planned model is a roaming foreground
+capture session: `rctld` owns desired camera/mic state, while the currently active
+foreground app owns the actual `AVCaptureSession`. On app switches, the old app
+stops and the new foreground app resumes if desired state is still enabled. This
+keeps `cam`, `mic`, `screen`, and `sys_audio` as separate tracks. See
+`docs/CAM.md`.
+
 **System playback audio.** App audio is mixed inside mediaserverd, not SpringBoard
 or the root daemon. The working boundary is a mediaserverd payload that copies PCM
 from supported AudioQueue/AudioUnit playback paths and sends it to `rctld`. The
