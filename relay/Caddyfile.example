@@ -1,0 +1,23 @@
+# Replace rctl.example.com with your domain and copy this to your Caddy config.
+# The relay container should stay bound to 127.0.0.1:8080 via compose.yaml.
+#
+# In relay/.env, set:
+#   RCTL_RELAY_PUBLIC_URL=https://rctl.example.com
+#   RCTL_RELAY_TRUST_PROXY_HEADERS=1
+
+rctl.example.com {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:8080 {
+		# Overwrite client-controlled forwarding headers before the relay sees them.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+}

@@ -19,12 +19,9 @@ token, so it must never be published as a GitHub release artifact.
    ```
 
    Put Caddy, Nginx, or another TLS reverse proxy in front of
-   `127.0.0.1:8080`.
-
-   Docker is the recommended self-hosted install path because it standardizes
-   environment variables, the SQLite volume, restarts, and port binding. The
-   relay is still a normal Go binary; advanced users can run it directly under
-   systemd.
+   `127.0.0.1:8080`. The repository includes production-oriented examples:
+   `relay/Caddyfile.example`, `relay/nginx.conf.example`, and
+   `relay/nginx_proxy_params.example`.
 
 2. User opens the admin panel and creates an enrollment token:
 
@@ -85,6 +82,100 @@ reloads `rctld`, so the daemon reads the config on startup.
 
 `scripts/personalize_deb.sh` is the lower-level command behind
 `make package-relay`. It can still be used directly by automation or CI.
+
+Docker is the recommended self-hosted install path because it standardizes
+environment variables, the SQLite volume, restarts, and port binding. The
+relay is still a normal Go binary; advanced users can run it directly under
+systemd.
+
+## VPS Deployment
+
+Recommended baseline:
+
+```sh
+cd relay
+cp .env.example .env
+openssl rand -base64 48
+openssl rand -base64 48
+$EDITOR .env
+docker compose up -d --build
+```
+
+Set these values in `.env`:
+
+```text
+RCTL_RELAY_PUBLIC_URL=https://rctl.example.com
+RCTL_RELAY_ADMIN_SECRET=<first openssl value>
+RCTL_RELAY_SESSION_SECRET=<second openssl value>
+RCTL_RELAY_TRUST_PROXY_HEADERS=1
+RCTL_RELAY_ALLOW_INSECURE=0
+```
+
+`compose.yaml` publishes the relay only on `127.0.0.1:8080`. Keep it that way
+on a public VPS. The public internet should reach only the TLS reverse proxy on
+ports 80 and 443.
+
+### Caddy
+
+Use Caddy when possible. It gets and renews certificates automatically.
+
+```sh
+sudo cp relay/Caddyfile.example /etc/caddy/Caddyfile
+sudo $EDITOR /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+The Caddy example overwrites forwarding headers before traffic reaches the
+relay, so `RCTL_RELAY_TRUST_PROXY_HEADERS=1` is safe with that topology.
+
+### Nginx
+
+Nginx is also supported, but certificate automation is separate.
+
+```sh
+sudo cp relay/nginx_proxy_params.example /etc/nginx/rctl_proxy_params
+sudo cp relay/nginx.conf.example /etc/nginx/sites-available/rctl
+sudo ln -s /etc/nginx/sites-available/rctl /etc/nginx/sites-enabled/rctl
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+The Nginx example overwrites `X-Forwarded-For` and `X-Real-IP` with
+`$remote_addr`; do not replace that with `$proxy_add_x_forwarded_for`.
+
+### Smoke Checks
+
+After DNS and TLS are active:
+
+```sh
+curl -fsS https://rctl.example.com/healthz
+curl -I https://rctl.example.com/admin
+```
+
+Then open:
+
+```text
+https://rctl.example.com/admin
+```
+
+Create an enrollment token, build a private package with `make package-relay`,
+install it, approve the pending device, then use the `Open` button in the admin
+panel.
+
+### Production Checklist
+
+- DNS `A`/`AAAA` record points to the VPS.
+- Only ports 80 and 443 are public; relay port 8080 is bound to `127.0.0.1`.
+- `RCTL_RELAY_PUBLIC_URL` is the final `https://` domain.
+- `RCTL_RELAY_ALLOW_INSECURE=0`.
+- `RCTL_RELAY_TRUST_PROXY_HEADERS=1` only when using a proxy config that
+  overwrites `X-Forwarded-For` and `X-Real-IP`.
+- `RCTL_RELAY_ADMIN_SECRET` and `RCTL_RELAY_SESSION_SECRET` are long random
+  values and are not reused anywhere else.
+- The public GitHub release `.deb` is built with plain `make package`, not
+  `make package-relay`.
+- The private relay-enabled `.deb` from `personalized/` is never uploaded to a
+  public release.
 
 ## Single Domain Routing
 
