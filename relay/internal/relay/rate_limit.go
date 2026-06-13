@@ -45,7 +45,7 @@ func loadRateLimit(prefix string, max int, window time.Duration) rateLimitConfig
 
 func (s *server) withRateLimit(name string, cfg rateLimitConfig, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		allowed, retryAfter := s.limiter.allow(name+":"+clientIP(r), cfg, time.Now())
+		allowed, retryAfter := s.limiter.allow(name+":"+s.clientIP(r), cfg, time.Now())
 		if !allowed {
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
 			writeErr(w, http.StatusTooManyRequests, "rate_limited")
@@ -86,11 +86,23 @@ func (l *rateLimiter) gcLocked(now time.Time) {
 	}
 }
 
-func clientIP(r *http.Request) string {
+func (s *server) clientIP(r *http.Request) string {
+	if s.cfg.TrustProxyHeaders {
+		if ip := forwardedClientIP(r); ip != "" {
+			return ip
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func forwardedClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
-		for i := len(parts) - 1; i >= 0; i-- {
-			ip := strings.TrimSpace(parts[i])
+		for _, part := range parts {
+			ip := strings.TrimSpace(part)
 			if net.ParseIP(ip) != nil {
 				return ip
 			}
@@ -99,10 +111,7 @@ func clientIP(r *http.Request) string {
 	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(xrip) != nil {
 		return xrip
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
+	return ""
 }
 
 func getenvInt(key string, fallback int) int {

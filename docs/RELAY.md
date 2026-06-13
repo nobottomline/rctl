@@ -240,6 +240,8 @@ removes `EnrollToken` from the plist.
 - Browser auth should use an admin login and `HttpOnly Secure SameSite` cookies.
 - The relay must support revoking browser sessions and devices.
 - Rate-limit login, enrollment, and device claim attempts.
+- Leave `RCTL_RELAY_TRUST_PROXY_HEADERS=0` unless the relay is reachable only
+  through a reverse proxy that sanitizes `X-Forwarded-For` and `X-Real-IP`.
 - Current app-level rate limits:
   - `RCTL_RELAY_LOGIN_MAX` / `RCTL_RELAY_LOGIN_WINDOW`
   - `RCTL_RELAY_ADMIN_MAX` / `RCTL_RELAY_ADMIN_WINDOW`

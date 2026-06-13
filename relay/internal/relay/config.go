@@ -17,6 +17,7 @@ type config struct {
 	SessionSecret      string
 	AllowInsecure      bool
 	CookieSecure       bool
+	TrustProxyHeaders  bool
 	TokenTTL           time.Duration
 	ReadLimitBytes     int64
 	HeartbeatEvery     time.Duration
@@ -40,6 +41,7 @@ func loadConfig() (config, error) {
 		AdminSecret:        os.Getenv("RCTL_RELAY_ADMIN_SECRET"),
 		SessionSecret:      os.Getenv("RCTL_RELAY_SESSION_SECRET"),
 		AllowInsecure:      getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),
+		TrustProxyHeaders:  getenvBool("RCTL_RELAY_TRUST_PROXY_HEADERS", false),
 		TokenTTL:           getenvDuration("RCTL_RELAY_ENROLL_TTL", 30*time.Minute),
 		ReadLimitBytes:     getenvInt64("RCTL_RELAY_READ_LIMIT", 8<<20),
 		HeartbeatEvery:     getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
