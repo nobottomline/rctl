@@ -95,6 +95,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin", s.handleAdminPage)
 	mux.HandleFunc("GET /assets/admin.css", s.handleAdminCSS)
 	mux.HandleFunc("GET /assets/admin.js", s.handleAdminJS)
+	mux.HandleFunc("GET /vendor/{path...}", s.handleWebVendor)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /api/admin/login", s.withRateLimit("login", s.cfg.LoginLimit, s.handleAdminLogin))
 	mux.HandleFunc("POST /api/admin/logout", s.withAdmin(s.handleAdminLogout))
@@ -110,4 +111,5 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /stream/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelStream)))
 	mux.HandleFunc("GET /device", s.withRateLimit("device", s.cfg.DeviceLimit, s.handleDeviceWS))
 	mux.HandleFunc("GET /client/devices/{id}", s.withAdmin(s.handleClientWS))
+	mux.HandleFunc("GET /control/devices/{id}", s.withAdmin(s.handleControlPage))
 }

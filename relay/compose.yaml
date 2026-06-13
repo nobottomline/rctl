@@ -1,6 +1,8 @@
 services:
   relay:
-    build: .
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile
     restart: unless-stopped
     env_file:
       - .env

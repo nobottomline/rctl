@@ -195,6 +195,26 @@
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/xterm-addon-fit.js"></script>
 <script>
+// Optional relay mode. Local LAN/USB mode remains the default: when these
+// globals are not injected, all paths stay unchanged and hit rctld directly.
+const RCTL_PROXY_BASE=(window.RCTL_PROXY_BASE||'').replace(/\/$/,'');
+const RCTL_STREAM_BASE=(window.RCTL_STREAM_BASE||'').replace(/\/$/,'');
+const RCTL_RELAY_MODE=!!(RCTL_PROXY_BASE||RCTL_STREAM_BASE);
+function rctlPath(path){
+  if(!RCTL_RELAY_MODE||typeof path!=='string'||path[0]!=='/')return path;
+  if(path==='/stream'||path.startsWith('/stream?')){
+    if(!RCTL_STREAM_BASE)return path;
+    return RCTL_STREAM_BASE+'/stream'+path.slice('/stream'.length);
+  }
+  if(path.startsWith('/v1/')||path.startsWith('/input')||path.startsWith('/key')||path.startsWith('/config')){
+    return RCTL_PROXY_BASE+path;
+  }
+  return path;
+}
+const rctlNativeFetch=window.fetch.bind(window);
+window.fetch=(input,init)=>rctlNativeFetch(typeof input==='string'?rctlPath(input):input,init);
+const rctlNativeBeacon=navigator.sendBeacon?navigator.sendBeacon.bind(navigator):null;
+if(rctlNativeBeacon)navigator.sendBeacon=(url,data)=>rctlNativeBeacon(typeof url==='string'?rctlPath(url):url,data);
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
 let dec=null,frames=0,started=false,orient=1,codec='avc1.640033';
 // Manual orientation override (null = follow the device). Applies to BOTH the

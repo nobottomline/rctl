@@ -70,6 +70,14 @@ token, so it must never be published as a GitHub release artifact.
 6. The device appears in the relay admin panel as pending.
 7. User approves the device from the browser. After approval, the relay issues a
    long-lived device secret and the enrollment token is no longer accepted.
+8. User opens the relay-hosted control page:
+
+   ```text
+   https://rctl.example.com/control/devices/{device_id}
+   ```
+
+   The relay serves the same browser client as local LAN mode, but injects
+   authenticated proxy and stream paths for that device.
 
 The iPad does not need any on-device setup after installing the personalized
 package. The package installs the relay config file and the existing `postinst`
@@ -86,6 +94,7 @@ One domain is enough, even for many devices:
 https://rctl.example.com/healthz
 https://rctl.example.com/api/admin/login
 https://rctl.example.com/api/admin/devices
+https://rctl.example.com/control/devices/{device_id}
 https://rctl.example.com/proxy/devices/{device_id}/v1/info
 https://rctl.example.com/stream/devices/{device_id}/stream
 wss://rctl.example.com/device
@@ -146,6 +155,30 @@ sends `stream_cancel` so the device closes the local stream.
 The local LAN/USB server remains independent. Installing a relay-enabled package
 does not disable or replace `http://<ipad-ip>:8080` or `http://localhost:8080`
 over USB forwarding.
+
+## Relay-Hosted Web Client
+
+The relay can serve the existing web client directly:
+
+```text
+/control/devices/{device_id}
+```
+
+This route requires an authenticated admin browser session and an approved
+device. It reads `web/index.html`, injects:
+
+```text
+RCTL_PROXY_BASE=/proxy/devices/{device_id}
+RCTL_STREAM_BASE=/stream/devices/{device_id}
+```
+
+and serves static client dependencies from `web/vendor/`. The normal released
+LAN package still opens the same `web/index.html` without injected globals, so
+all local paths keep going directly to `rctld`.
+
+In Docker, `web/` is copied into the image and `RCTL_RELAY_WEB_DIR=/app/web`.
+When running the Go binary directly, set `RCTL_RELAY_WEB_DIR` to the repository
+`web/` directory if the default `../web` does not match your working directory.
 
 ## Users Without a Domain
 
