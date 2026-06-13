@@ -21,6 +21,11 @@ token, so it must never be published as a GitHub release artifact.
    Put Caddy, Nginx, or another TLS reverse proxy in front of
    `127.0.0.1:8080`.
 
+   Docker is the recommended self-hosted install path because it standardizes
+   environment variables, the SQLite volume, restarts, and port binding. The
+   relay is still a normal Go binary; advanced users can run it directly under
+   systemd.
+
 2. User opens the admin panel and creates an enrollment token:
 
    ```text
@@ -108,6 +113,15 @@ For users who only have a VPS IP:
 
 The project should not document plain public HTTP as a safe setup.
 
+## Implementation Choice
+
+The relay is written in Go. Rust would also be valid, but Go is the better fit
+for this self-hosted relay right now: simple HTTP/WebSocket server code, one
+portable binary, fast iteration, easy Docker builds, and a lower maintenance
+burden for open source users. The latency-sensitive media path can still evolve
+to WebRTC/datachannel later; the relay remains useful for auth, signaling, and
+fallback forwarding.
+
 ## Device Config
 
 Personalized packages place this file on the device:
@@ -138,6 +152,11 @@ already exists.
 - Browser auth should use an admin login and `HttpOnly Secure SameSite` cookies.
 - The relay must support revoking browser sessions and devices.
 - Rate-limit login, enrollment, and device claim attempts.
+- Current app-level rate limits:
+  - `RCTL_RELAY_LOGIN_MAX` / `RCTL_RELAY_LOGIN_WINDOW`
+  - `RCTL_RELAY_ADMIN_MAX` / `RCTL_RELAY_ADMIN_WINDOW`
+  - `RCTL_RELAY_DEVICE_MAX` / `RCTL_RELAY_DEVICE_WINDOW`
+- Keep reverse-proxy or firewall rate limits as an outer layer too.
 
 ## Git Hygiene
 
