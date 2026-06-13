@@ -1,0 +1,245 @@
+package relay
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"nhooyr.io/websocket"
+)
+
+type deviceConn struct {
+	id   string
+	name string
+	ws   *websocket.Conn
+
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	viewer  *websocket.Conn
+}
+
+func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
+	token := bearerToken(r)
+	if token == "" {
+		writeErr(w, http.StatusUnauthorized, "missing_bearer_token")
+		return
+	}
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: s.cfg.AllowInsecure})
+	if err != nil {
+		return
+	}
+	ws.SetReadLimit(s.cfg.ReadLimitBytes)
+	defer ws.Close(websocket.StatusInternalError, "server error")
+
+	var hello struct {
+		Type       string `json:"type"`
+		DeviceID   string `json:"device_id"`
+		DeviceName string `json:"device_name"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := wsjsonRead(ctx, ws, &hello); err != nil || hello.Type != "hello" {
+		ws.Close(websocket.StatusUnsupportedData, "expected hello")
+		return
+	}
+	if hello.DeviceName == "" {
+		hello.DeviceName = "Unnamed device"
+	}
+
+	deviceID, status, err := s.authenticateDevice(r.Context(), token, hello.DeviceID, hello.DeviceName)
+	if err != nil {
+		s.log.Warn("device auth rejected", "error", err)
+		ws.Close(websocket.StatusPolicyViolation, "auth rejected")
+		return
+	}
+
+	dc := &deviceConn{id: deviceID, name: hello.DeviceName, ws: ws}
+	s.registerDevice(dc)
+	defer s.unregisterDevice(deviceID, dc)
+	defer ws.Close(websocket.StatusNormalClosure, "")
+
+	_ = wsjsonWrite(r.Context(), ws, map[string]any{"type": "hello_ack", "device_id": deviceID, "status": status})
+	s.log.Info("device connected", "device_id", deviceID, "status", status)
+	s.deviceReadLoop(r.Context(), dc)
+}
+
+func (s *server) handleClientWS(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("id")
+	dc := s.getDevice(deviceID)
+	if dc == nil {
+		writeErr(w, http.StatusNotFound, "device_offline")
+		return
+	}
+	if !s.deviceApproved(r.Context(), deviceID) {
+		writeErr(w, http.StatusForbidden, "device_not_approved")
+		return
+	}
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: s.cfg.AllowInsecure})
+	if err != nil {
+		return
+	}
+	ws.SetReadLimit(s.cfg.ReadLimitBytes)
+
+	dc.mu.Lock()
+	if dc.viewer != nil {
+		dc.mu.Unlock()
+		ws.Close(websocket.StatusPolicyViolation, "device already has a viewer")
+		return
+	}
+	dc.viewer = ws
+	dc.mu.Unlock()
+
+	defer func() {
+		dc.mu.Lock()
+		if dc.viewer == ws {
+			dc.viewer = nil
+		}
+		dc.mu.Unlock()
+		ws.Close(websocket.StatusNormalClosure, "")
+	}()
+
+	s.log.Info("client connected", "device_id", deviceID)
+	for {
+		msgType, payload, err := ws.Read(r.Context())
+		if err != nil {
+			return
+		}
+		writeCtx, cancel := context.WithTimeout(r.Context(), s.cfg.WriteTimeout)
+		err = dc.write(writeCtx, msgType, payload)
+		cancel()
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (s *server) authenticateDevice(ctx context.Context, token, claimedID, name string) (string, string, error) {
+	now := time.Now().Unix()
+	tokenHash := hashToken(token)
+	var status string
+	var deviceID string
+	err := s.db.QueryRowContext(ctx, `SELECT id, status FROM devices WHERE device_secret_hash=? AND status='approved'`, tokenHash).Scan(&deviceID, &status)
+	if err == nil {
+		_, _ = s.db.ExecContext(ctx, `UPDATE devices SET name=?, updated_at=?, last_seen_at=? WHERE id=?`, name, now, now, deviceID)
+		return deviceID, status, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+
+	var enrollmentID string
+	var expiresAt int64
+	var usedAt sql.NullInt64
+	err = s.db.QueryRowContext(ctx, `SELECT id, expires_at, used_at FROM enrollments WHERE token_hash=?`, tokenHash).Scan(&enrollmentID, &expiresAt, &usedAt)
+	if err != nil {
+		return "", "", errors.New("invalid token")
+	}
+	if usedAt.Valid {
+		return "", "", errors.New("enrollment already used")
+	}
+	if expiresAt < now {
+		return "", "", errors.New("enrollment expired")
+	}
+
+	if claimedID == "" {
+		claimedID = randomHex(16)
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO devices(id, name, status, enroll_token_hash, created_at, updated_at, last_seen_at)
+VALUES(?, ?, 'pending', ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at
+`, claimedID, name, tokenHash, now, now, now)
+	if err != nil {
+		return "", "", err
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE enrollments SET used_at=? WHERE id=?`, now, enrollmentID)
+	return claimedID, "pending", nil
+}
+
+func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
+	for {
+		msgType, payload, err := dc.ws.Read(ctx)
+		if err != nil {
+			return
+		}
+		dc.mu.Lock()
+		viewer := dc.viewer
+		dc.mu.Unlock()
+		if viewer != nil {
+			writeCtx, cancel := context.WithTimeout(ctx, s.cfg.WriteTimeout)
+			_ = viewer.Write(writeCtx, msgType, payload)
+			cancel()
+		}
+	}
+}
+
+func (dc *deviceConn) write(ctx context.Context, msgType websocket.MessageType, payload []byte) error {
+	dc.writeMu.Lock()
+	defer dc.writeMu.Unlock()
+	return dc.ws.Write(ctx, msgType, payload)
+}
+
+func (s *server) registerDevice(dc *deviceConn) {
+	s.mu.Lock()
+	if old := s.devices[dc.id]; old != nil {
+		_ = old.ws.Close(websocket.StatusPolicyViolation, "replaced by new connection")
+	}
+	s.devices[dc.id] = dc
+	s.mu.Unlock()
+}
+
+func (s *server) unregisterDevice(id string, dc *deviceConn) {
+	s.mu.Lock()
+	if s.devices[id] == dc {
+		delete(s.devices, id)
+	}
+	s.mu.Unlock()
+}
+
+func (s *server) getDevice(id string) *deviceConn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.devices[id]
+}
+
+func (s *server) isDeviceOnline(id string) bool {
+	return s.getDevice(id) != nil
+}
+
+func (s *server) closeDevice(id string, code websocket.StatusCode, reason string) {
+	if dc := s.getDevice(id); dc != nil {
+		_ = dc.ws.Close(code, reason)
+	}
+}
+
+func (s *server) sendDeviceControl(id string, msg map[string]any) {
+	if dc := s.getDevice(id); dc != nil {
+		payload, err := json.Marshal(msg)
+		if err == nil {
+			_ = dc.write(context.Background(), websocket.MessageText, payload)
+		}
+	}
+}
+
+func (s *server) deviceApproved(ctx context.Context, id string) bool {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM devices WHERE id=? AND status='approved'`, id).Scan(&n)
+	return err == nil && n == 1
+}
+
+func (s *server) deviceWebSocketURL() string {
+	base := strings.TrimRight(s.cfg.PublicURL, "/")
+	switch {
+	case strings.HasPrefix(base, "https://"):
+		return "wss://" + strings.TrimPrefix(base, "https://") + "/device"
+	case strings.HasPrefix(base, "http://"):
+		return "ws://" + strings.TrimPrefix(base, "http://") + "/device"
+	default:
+		return base + "/device"
+	}
+}
