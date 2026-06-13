@@ -1,0 +1,13 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - relay-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  relay-data:
