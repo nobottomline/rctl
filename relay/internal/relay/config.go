@@ -21,9 +21,12 @@ type config struct {
 	HeartbeatEvery  time.Duration
 	WriteTimeout    time.Duration
 	SessionLifetime time.Duration
+	TunnelTimeout   time.Duration
+	TunnelMaxBody   int64
 	LoginLimit      rateLimitConfig
 	AdminLimit      rateLimitConfig
 	DeviceLimit     rateLimitConfig
+	TunnelLimit     rateLimitConfig
 }
 
 func loadConfig() (config, error) {
@@ -39,9 +42,12 @@ func loadConfig() (config, error) {
 		HeartbeatEvery:  getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
 		WriteTimeout:    getenvDuration("RCTL_RELAY_WRITE_TIMEOUT", 10*time.Second),
 		SessionLifetime: getenvDuration("RCTL_RELAY_SESSION_LIFETIME", 30*24*time.Hour),
+		TunnelTimeout:   getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 20*time.Second),
+		TunnelMaxBody:   getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
 		LoginLimit:      loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
 		AdminLimit:      loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
 		DeviceLimit:     loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
+		TunnelLimit:     loadRateLimit("RCTL_RELAY_TUNNEL", 240, time.Minute),
 	}
 	cfg.CookieSecure = strings.HasPrefix(cfg.PublicURL, "https://")
 	if cfg.AdminSecret == "" {

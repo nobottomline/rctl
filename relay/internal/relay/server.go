@@ -102,6 +102,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/enrollments", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleCreateEnrollment)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/approve", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleApproveDevice)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeDevice)))
+	mux.HandleFunc("GET /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
+	mux.HandleFunc("POST /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
+	mux.HandleFunc("PUT /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
+	mux.HandleFunc("PATCH /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
+	mux.HandleFunc("DELETE /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
 	mux.HandleFunc("GET /device", s.withRateLimit("device", s.cfg.DeviceLimit, s.handleDeviceWS))
 	mux.HandleFunc("GET /client/devices/{id}", s.withAdmin(s.handleClientWS))
 }

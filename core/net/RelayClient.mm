@@ -186,7 +186,62 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         }
     } else if ([type isEqualToString:@"ping"]) {
         [self sendJSON:@{@"type": @"pong"}];
+    } else if ([type isEqualToString:@"http_request"]) {
+        [self handleHTTPRequest:dict];
     }
+}
+
+- (void)handleHTTPRequest:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
+    NSString *reqid = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
+    NSString *method = [dict[@"method"] isKindOfClass:[NSString class]] ? dict[@"method"] : @"GET";
+    NSString *path = [dict[@"path"] isKindOfClass:[NSString class]] ? dict[@"path"] : @"/";
+    if (!reqid.length || ![path hasPrefix:@"/"]) {
+        return;
+    }
+
+    NSString *urlString = [@"http://127.0.0.1:8080" stringByAppendingString:path];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        [self sendJSON:@{@"type": @"http_response", @"id": reqid, @"status": @502, @"error": @"bad_local_url"}];
+        return;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = method;
+    request.timeoutInterval = 20;
+
+    NSDictionary *headers = [dict[@"headers"] isKindOfClass:[NSDictionary class]] ? dict[@"headers"] : @{};
+    NSString *contentType = [headers[@"content-type"] isKindOfClass:[NSString class]] ? headers[@"content-type"] : nil;
+    if (contentType.length) [request setValue:contentType forHTTPHeaderField:@"Content-Type"];
+    NSString *accept = [headers[@"accept"] isKindOfClass:[NSString class]] ? headers[@"accept"] : nil;
+    if (accept.length) [request setValue:accept forHTTPHeaderField:@"Accept"];
+
+    NSString *body64 = [dict[@"body"] isKindOfClass:[NSString class]] ? dict[@"body"] : nil;
+    if (body64.length) {
+        NSData *body = [[NSData alloc] initWithBase64EncodedString:body64 options:0];
+        request.HTTPBody = body;
+    }
+
+    NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(self.queue, ^{
+            if (error) {
+                [self sendJSON:@{@"type": @"http_response", @"id": reqid, @"status": @502, @"error": @"local_request_failed"}];
+                return;
+            }
+            NSHTTPURLResponse *http = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
+            NSInteger status = http ? http.statusCode : 502;
+            NSString *ctype = http.allHeaderFields[@"Content-Type"];
+            NSData *payload = data ?: [NSData data];
+            NSString *encoded = [payload base64EncodedStringWithOptions:0] ?: @"";
+            NSMutableDictionary *reply = [@{@"type": @"http_response",
+                                            @"id": reqid,
+                                            @"status": @(status),
+                                            @"body": encoded} mutableCopy];
+            if ([ctype isKindOfClass:[NSString class]] && ctype.length) reply[@"content_type"] = ctype;
+            [self sendJSON:reply];
+        });
+    }];
+    [task resume];
 }
 
 - (void)sendJSON:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {

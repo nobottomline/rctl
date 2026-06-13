@@ -21,6 +21,7 @@ type deviceConn struct {
 	mu      sync.Mutex
 	writeMu sync.Mutex
 	viewer  *websocket.Conn
+	pending map[string]chan httpTunnelResponse
 }
 
 func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +59,7 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dc := &deviceConn{id: deviceID, name: hello.DeviceName, ws: ws}
+	dc := &deviceConn{id: deviceID, name: hello.DeviceName, ws: ws, pending: make(map[string]chan httpTunnelResponse)}
 	s.registerDevice(dc)
 	defer s.unregisterDevice(deviceID, dc)
 	defer ws.Close(websocket.StatusNormalClosure, "")
@@ -167,6 +168,9 @@ func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
 		if err != nil {
 			return
 		}
+		if msgType == websocket.MessageText && dc.handleControlMessage(payload) {
+			continue
+		}
 		dc.mu.Lock()
 		viewer := dc.viewer
 		dc.mu.Unlock()
@@ -178,10 +182,45 @@ func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
 	}
 }
 
+func (dc *deviceConn) handleControlMessage(payload []byte) bool {
+	var envelope struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return false
+	}
+	if envelope.Type != "http_response" || envelope.ID == "" {
+		return false
+	}
+	var response httpTunnelResponse
+	if json.Unmarshal(payload, &response) != nil {
+		return true
+	}
+	dc.mu.Lock()
+	ch := dc.pending[envelope.ID]
+	if ch != nil {
+		delete(dc.pending, envelope.ID)
+	}
+	dc.mu.Unlock()
+	if ch != nil {
+		ch <- response
+	}
+	return true
+}
+
 func (dc *deviceConn) write(ctx context.Context, msgType websocket.MessageType, payload []byte) error {
 	dc.writeMu.Lock()
 	defer dc.writeMu.Unlock()
 	return dc.ws.Write(ctx, msgType, payload)
+}
+
+func (dc *deviceConn) writeJSON(ctx context.Context, v any) error {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return dc.write(ctx, websocket.MessageText, payload)
 }
 
 func (s *server) registerDevice(dc *deviceConn) {
@@ -219,10 +258,7 @@ func (s *server) closeDevice(id string, code websocket.StatusCode, reason string
 
 func (s *server) sendDeviceControl(id string, msg map[string]any) {
 	if dc := s.getDevice(id); dc != nil {
-		payload, err := json.Marshal(msg)
-		if err == nil {
-			_ = dc.write(context.Background(), websocket.MessageText, payload)
-		}
+		_ = dc.writeJSON(context.Background(), msg)
 	}
 }
 

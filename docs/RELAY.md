@@ -86,6 +86,7 @@ One domain is enough, even for many devices:
 https://rctl.example.com/healthz
 https://rctl.example.com/api/admin/login
 https://rctl.example.com/api/admin/devices
+https://rctl.example.com/proxy/devices/{device_id}/v1/info
 wss://rctl.example.com/device
 wss://rctl.example.com/client/devices/{device_id}
 ```
@@ -97,6 +98,28 @@ because the relay forwards encrypted streams between browser and device.
 
 Subdomains are not required. They can be added later for hosted multi-tenant
 deployments, but path-based routing is simpler and better for self-hosted users.
+
+## HTTP Tunnel
+
+The relay exposes an authenticated request/response tunnel:
+
+```text
+/proxy/devices/{device_id}/{local_path...}
+```
+
+Example:
+
+```sh
+curl -b cookies.txt \
+  https://rctl.example.com/proxy/devices/ipad-air-3/v1/info
+```
+
+The relay sends a bounded `http_request` message to the online device over the
+device WebSocket. `rctld` performs the request against its local LAN server at
+`http://127.0.0.1:8080/{local_path...}` and returns `http_response`. This is for
+normal REST/control requests first. Long-lived streaming endpoints such as
+`/stream` need a separate streaming tunnel so one large response cannot block the
+control plane.
 
 ## Users Without a Domain
 
