@@ -49,9 +49,7 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		ws.Close(websocket.StatusUnsupportedData, "expected hello")
 		return
 	}
-	if hello.DeviceName == "" {
-		hello.DeviceName = "Unnamed device"
-	}
+	hello.DeviceName = normalizeDeviceName(hello.DeviceName)
 
 	deviceID, status, err := s.authenticateDevice(r.Context(), token, hello.DeviceID, hello.DeviceName)
 	if err != nil {
@@ -154,8 +152,9 @@ func (s *server) authenticateDevice(ctx context.Context, token, claimedID, name 
 		return "", "", errors.New("enrollment expired")
 	}
 
-	if claimedID == "" {
-		claimedID = randomHex(16)
+	claimedID, ok := normalizeDeviceID(claimedID)
+	if !ok {
+		return "", "", errors.New("invalid device id")
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO devices(id, name, status, enroll_token_hash, created_at, updated_at, last_seen_at)
