@@ -15,7 +15,10 @@ const adminHTML = `<!doctype html>
         <h1>rctl relay</h1>
         <p id="status">Not signed in</p>
       </div>
-      <button id="refresh" class="secondary" type="button">Refresh</button>
+      <div class="topActions">
+        <button id="refresh" class="secondary" type="button">Refresh</button>
+        <button id="logout" class="secondary hidden" type="button">Sign out</button>
+      </div>
     </header>
 
     <section id="loginPanel" class="panel">
@@ -48,11 +51,21 @@ const adminHTML = `<!doctype html>
         </div>
       </div>
 
-      <aside class="panel">
-        <h2>Enrollment</h2>
-        <p class="muted">Create a short-lived token, paste it into relay.env, then run make package-relay.</p>
-        <button id="createEnrollment" type="button">Create token</button>
-        <textarea id="enrollment" readonly spellcheck="false"></textarea>
+      <aside class="sideStack">
+        <section class="panel">
+          <h2>Enrollment</h2>
+          <p class="muted">Create a short-lived token, paste it into relay.env, then run make package-relay.</p>
+          <button id="createEnrollment" type="button">Create token</button>
+          <textarea id="enrollment" readonly spellcheck="false"></textarea>
+        </section>
+
+        <section class="panel">
+          <div class="panelHead">
+            <h2>Sessions</h2>
+            <button id="revokeOthers" class="danger compact" type="button">Revoke others</button>
+          </div>
+          <div id="sessions" class="sessionList"></div>
+        </section>
       </aside>
     </section>
   </main>
@@ -75,23 +88,30 @@ const adminCSS = `:root{
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .shell{width:min(1180px,calc(100vw - 32px));margin:28px auto}
-.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
 h1,h2,p{margin:0}
 h1{font-size:24px;font-weight:700}
 h2{font-size:15px;font-weight:700}
 .topbar p,.muted{color:var(--muted)}
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px}
+.topActions,.sideStack{display:flex;gap:10px}
+.sideStack{flex-direction:column}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:16px}
 .panelHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .form{display:flex;gap:10px;margin-top:12px}
 input,textarea{width:100%;border:1px solid var(--line);border-radius:6px;background:white;color:var(--text);font:inherit;padding:10px 11px}
 textarea{height:190px;margin-top:12px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 button{border:0;border-radius:6px;background:var(--strong);color:white;font-weight:700;padding:10px 13px;cursor:pointer;white-space:nowrap}
+button.compact{padding:7px 10px;font-size:12px}
 button.secondary{background:#344054}
 button.danger{background:var(--danger)}
 button:disabled{opacity:.55;cursor:not-allowed}
 .actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .buttonLink{display:inline-flex;align-items:center;border-radius:6px;background:#344054;color:white;font-weight:700;padding:10px 13px;text-decoration:none;white-space:nowrap}
+.sessionList{display:flex;flex-direction:column;gap:8px}
+.sessionItem{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border:1px solid var(--line);border-radius:6px;padding:10px;background:#fbfcfe}
+.sessionItem strong{display:block}
+.sessionItem small{display:block;color:var(--muted);margin-top:2px}
 .tableWrap{overflow:auto;border:1px solid var(--line);border-radius:6px}
 table{width:100%;border-collapse:collapse;background:white}
 th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
@@ -104,7 +124,7 @@ tr:last-child td{border-bottom:0}
 .hidden{display:none}
 @media (max-width: 820px){
   .shell{width:min(100vw - 20px,1180px);margin:14px auto}
-  .topbar,.form{align-items:stretch;flex-direction:column}
+  .topbar,.topActions,.form{align-items:stretch;flex-direction:column}
   .grid{grid-template-columns:1fr}
 }
 `
@@ -116,6 +136,7 @@ function setStatus(text) { $("status").textContent = text; }
 function showApp(show) {
   $("loginPanel").classList.toggle("hidden", show);
   $("appPanel").classList.toggle("hidden", !show);
+  $("logout").classList.toggle("hidden", !show);
   state.signedIn = show;
 }
 async function api(path, options = {}) {
@@ -141,6 +162,13 @@ function rowActions(device) {
   }
   return "";
 }
+function sessionActions(session) {
+  if (session.current) return '<span class="pill approved">current</span>';
+  return '<button class="danger compact" data-session-action="revoke" data-id="' + escapeHTML(session.id) + '">Revoke</button>';
+}
+function sessionLabel(session) {
+  return session.current ? "Current browser" : "Browser session";
+}
 async function refreshDevices() {
   const data = await api("/api/admin/devices");
   const devices = data.devices || [];
@@ -154,6 +182,19 @@ async function refreshDevices() {
       '<td>' + rowActions(d) + '</td>' +
     '</tr>'
   ).join("") : '<tr><td colspan="5" class="empty">No devices yet</td></tr>';
+}
+async function refreshSessions() {
+  const data = await api("/api/admin/sessions");
+  const sessions = data.sessions || [];
+  $("sessions").innerHTML = sessions.length ? sessions.map((s) =>
+    '<div class="sessionItem">' +
+      '<div><strong>' + sessionLabel(s) + '</strong><small>Last seen ' + fmtTime(s.last_seen_at) + '</small><small>Expires ' + fmtTime(s.expires_at) + '</small></div>' +
+      '<div>' + sessionActions(s) + '</div>' +
+    '</div>'
+  ).join("") : '<div class="empty">No active sessions</div>';
+}
+async function refreshAll() {
+  await Promise.all([refreshDevices(), refreshSessions()]);
   setStatus("Signed in");
 }
 function escapeHTML(value) {
@@ -165,14 +206,23 @@ $("loginForm").addEventListener("submit", async (event) => {
     await api("/api/admin/login", { method: "POST", body: JSON.stringify({ secret: $("adminSecret").value }) });
     $("adminSecret").value = "";
     showApp(true);
-    await refreshDevices();
+    await refreshAll();
   } catch (err) {
     setStatus("Login failed: " + err.message);
   }
 });
 $("refresh").addEventListener("click", async () => {
   if (!state.signedIn) return;
-  try { await refreshDevices(); } catch (err) { setStatus("Refresh failed: " + err.message); }
+  try { await refreshAll(); } catch (err) { setStatus("Refresh failed: " + err.message); }
+});
+$("logout").addEventListener("click", async () => {
+  try {
+    await api("/api/admin/logout", { method: "POST" });
+    showApp(false);
+    setStatus("Signed out");
+  } catch (err) {
+    setStatus("Logout failed: " + err.message);
+  }
 });
 $("createEnrollment").addEventListener("click", async () => {
   try {
@@ -188,11 +238,33 @@ $("devices").addEventListener("click", async (event) => {
   button.disabled = true;
   try {
     await api("/api/admin/devices/" + encodeURIComponent(button.dataset.id) + "/" + button.dataset.action, { method: "POST" });
-    await refreshDevices();
+    await refreshAll();
   } catch (err) {
     setStatus(button.dataset.action + " failed: " + err.message);
   } finally {
     button.disabled = false;
+  }
+});
+$("sessions").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-session-action]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await api("/api/admin/sessions/" + encodeURIComponent(button.dataset.id) + "/revoke", { method: "POST" });
+    await refreshSessions();
+  } catch (err) {
+    setStatus("Session revoke failed: " + err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("revokeOthers").addEventListener("click", async () => {
+  try {
+    const data = await api("/api/admin/sessions/revoke-others", { method: "POST" });
+    await refreshSessions();
+    setStatus("Revoked " + data.revoked + " other sessions");
+  } catch (err) {
+    setStatus("Session revoke failed: " + err.message);
   }
 });
 `

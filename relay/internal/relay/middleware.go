@@ -18,18 +18,30 @@ func (s *server) withAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *server) validSession(r *http.Request) bool {
+	sessionID, secret, ok := parseSessionCookie(r)
+	if !ok {
+		return false
+	}
+	return s.validSessionToken(r, sessionID, secret)
+}
+
+func parseSessionCookie(r *http.Request) (string, string, bool) {
 	c, err := r.Cookie("rctl_session")
 	if err != nil {
-		return false
+		return "", "", false
 	}
 	sessionID, secret, ok := strings.Cut(c.Value, ".")
 	if !ok || sessionID == "" || secret == "" {
-		return false
+		return "", "", false
 	}
+	return sessionID, secret, true
+}
+
+func (s *server) validSessionToken(r *http.Request, sessionID, secret string) bool {
 	now := time.Now().Unix()
 	var secretHash string
 	var expiresAt int64
-	err = s.db.QueryRowContext(r.Context(), `SELECT secret_hash, expires_at FROM sessions WHERE id=?`, sessionID).Scan(&secretHash, &expiresAt)
+	err := s.db.QueryRowContext(r.Context(), `SELECT secret_hash, expires_at FROM sessions WHERE id=?`, sessionID).Scan(&secretHash, &expiresAt)
 	if err != nil || expiresAt < now {
 		return false
 	}

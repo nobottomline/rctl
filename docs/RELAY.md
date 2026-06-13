@@ -94,6 +94,7 @@ One domain is enough, even for many devices:
 https://rctl.example.com/healthz
 https://rctl.example.com/api/admin/login
 https://rctl.example.com/api/admin/devices
+https://rctl.example.com/api/admin/sessions
 https://rctl.example.com/control/devices/{device_id}
 https://rctl.example.com/proxy/devices/{device_id}/v1/info
 https://rctl.example.com/stream/devices/{device_id}/stream
@@ -179,6 +180,20 @@ all local paths keep going directly to `rctld`.
 In Docker, `web/` is copied into the image and `RCTL_RELAY_WEB_DIR=/app/web`.
 When running the Go binary directly, set `RCTL_RELAY_WEB_DIR` to the repository
 `web/` directory if the default `../web` does not match your working directory.
+
+## Browser Sessions
+
+Admin browser sessions are stored server-side in SQLite and authenticated with
+`HttpOnly` cookies. The admin panel shows active sessions, marks the current
+browser, and can revoke another session or every other session. The API also
+supports revoking all sessions, which clears the current browser cookie too:
+
+```text
+GET  /api/admin/sessions
+POST /api/admin/sessions/{session_id}/revoke
+POST /api/admin/sessions/revoke-others
+POST /api/admin/sessions/revoke-all
+```
 
 ## Users Without a Domain
 

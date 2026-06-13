@@ -74,8 +74,91 @@ func (s *server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 			_, _ = s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE id=?`, sessionID)
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: "rctl_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
+	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	currentID, _, _ := parseSessionCookie(r)
+	now := time.Now().Unix()
+	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE expires_at<?`, now)
+	rows, err := s.db.QueryContext(r.Context(), `
+SELECT id, expires_at, created_at, last_seen_at
+FROM sessions
+WHERE expires_at>=?
+ORDER BY last_seen_at DESC`, now)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "session_list_failed")
+		return
+	}
+	defer rows.Close()
+
+	type session struct {
+		ID         string `json:"id"`
+		Current    bool   `json:"current"`
+		ExpiresAt  int64  `json:"expires_at"`
+		CreatedAt  int64  `json:"created_at"`
+		LastSeenAt int64  `json:"last_seen_at"`
+	}
+	out := []session{}
+	for rows.Next() {
+		var item session
+		if err := rows.Scan(&item.ID, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt); err != nil {
+			writeErr(w, http.StatusInternalServerError, "session_scan_failed")
+			return
+		}
+		item.Current = item.ID == currentID
+		out = append(out, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+func (s *server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	currentID, _, _ := parseSessionCookie(r)
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE id=?`, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "session_revoke_failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErr(w, http.StatusNotFound, "session_not_found")
+		return
+	}
+	if id == currentID {
+		s.clearSessionCookie(w)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "current_revoked": id == currentID})
+}
+
+func (s *server) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+	currentID, _, ok := parseSessionCookie(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE id<>?`, currentID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "session_revoke_failed")
+		return
+	}
+	n, _ := res.RowsAffected()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": n})
+}
+
+func (s *server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request) {
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM sessions`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "session_revoke_failed")
+		return
+	}
+	n, _ := res.RowsAffected()
+	s.clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": n, "current_revoked": true})
+}
+
+func (s *server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "rctl_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
 }
 
 func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
