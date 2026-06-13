@@ -90,6 +90,8 @@ button{border:0;border-radius:6px;background:var(--strong);color:white;font-weig
 button.secondary{background:#344054}
 button.danger{background:var(--danger)}
 button:disabled{opacity:.55;cursor:not-allowed}
+.actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.buttonLink{display:inline-flex;align-items:center;border-radius:6px;background:#344054;color:white;font-weight:700;padding:10px 13px;text-decoration:none;white-space:nowrap}
 .tableWrap{overflow:auto;border:1px solid var(--line);border-radius:6px}
 table{width:100%;border-collapse:collapse;background:white}
 th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
@@ -131,10 +133,11 @@ function fmtTime(sec) {
 }
 function rowActions(device) {
   if (device.status === "pending") {
-    return '<button data-action="approve" data-id="' + device.id + '">Approve</button>';
+    return '<div class="actions"><button data-action="approve" data-id="' + escapeHTML(device.id) + '">Approve</button></div>';
   }
   if (device.status !== "revoked") {
-    return '<button class="danger" data-action="revoke" data-id="' + device.id + '">Revoke</button>';
+    const controlURL = "/control/devices/" + encodeURIComponent(device.id);
+    return '<div class="actions"><a class="buttonLink" href="' + controlURL + '">Open</a><button class="danger" data-action="revoke" data-id="' + escapeHTML(device.id) + '">Revoke</button></div>';
   }
   return "";
 }
