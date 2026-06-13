@@ -21,11 +21,13 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     return out;
 }
 
-@interface RCTLRelayClient : NSObject
+@interface RCTLRelayClient : NSObject <NSURLSessionDataDelegate>
 @property(nonatomic, strong) NSURLSession *session;
 @property(nonatomic, strong) NSURLSessionWebSocketTask *task;
 @property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic, strong) NSMutableDictionary *config;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *streamIDs;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionDataTask *> *streamTasks;
 @property(nonatomic, copy) NSString *deviceID;
 @property(nonatomic, assign) BOOL running;
 @property(nonatomic, assign) NSInteger reconnectDelay;
@@ -46,6 +48,8 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     self = [super init];
     if (!self) return nil;
     _queue = dispatch_queue_create("com.greatlove.rctl.relay", DISPATCH_QUEUE_SERIAL);
+    _streamIDs = [NSMutableDictionary dictionary];
+    _streamTasks = [NSMutableDictionary dictionary];
     _reconnectDelay = 2;
     return self;
 }
@@ -118,7 +122,9 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         request.timeoutInterval = 20;
 
         NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
-        self.session = [NSURLSession sessionWithConfiguration:configuration];
+        NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
+        delegateQueue.maxConcurrentOperationCount = 1;
+        self.session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:delegateQueue];
         self.task = [self.session webSocketTaskWithRequest:request];
         [self.task resume];
         relay_log(@"connecting");
@@ -188,6 +194,10 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         [self sendJSON:@{@"type": @"pong"}];
     } else if ([type isEqualToString:@"http_request"]) {
         [self handleHTTPRequest:dict];
+    } else if ([type isEqualToString:@"stream_open"]) {
+        [self handleStreamOpen:dict];
+    } else if ([type isEqualToString:@"stream_cancel"]) {
+        [self handleStreamCancel:dict];
     }
 }
 
@@ -242,6 +252,93 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         });
     }];
     [task resume];
+}
+
+- (void)handleStreamOpen:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
+    NSString *streamID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
+    NSString *path = [dict[@"path"] isKindOfClass:[NSString class]] ? dict[@"path"] : @"/stream";
+    if (!streamID.length || ![path hasPrefix:@"/"]) return;
+
+    NSString *urlString = [@"http://127.0.0.1:8080" stringByAppendingString:path];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        [self sendJSON:@{@"type": @"stream_start", @"id": streamID, @"status": @502, @"error": @"bad_local_url"}];
+        [self sendJSON:@{@"type": @"stream_end", @"id": streamID}];
+        return;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"GET";
+    request.timeoutInterval = 0;
+    NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request];
+    @synchronized (self.streamIDs) {
+        self.streamIDs[@(task.taskIdentifier)] = streamID;
+        self.streamTasks[streamID] = task;
+    }
+    [task resume];
+}
+
+- (void)handleStreamCancel:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
+    NSString *streamID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
+    if (!streamID.length) return;
+    NSURLSessionDataTask *task = nil;
+    @synchronized (self.streamIDs) {
+        task = self.streamTasks[streamID];
+        [self.streamTasks removeObjectForKey:streamID];
+        if (task) [self.streamIDs removeObjectForKey:@(task.taskIdentifier)];
+    }
+    [task cancel];
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask
+didReceiveResponse:(NSURLResponse *)response
+ completionHandler:(void (^)(NSURLSessionResponseDisposition disposition))completionHandler {
+    NSString *streamID = nil;
+    @synchronized (self.streamIDs) {
+        streamID = self.streamIDs[@(dataTask.taskIdentifier)];
+    }
+    if (!streamID) {
+        completionHandler(NSURLSessionResponseAllow);
+        return;
+    }
+    NSHTTPURLResponse *http = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
+    NSInteger status = http ? http.statusCode : 200;
+    NSString *ctype = http.allHeaderFields[@"Content-Type"];
+    dispatch_async(self.queue, ^{
+        NSMutableDictionary *msg = [@{@"type": @"stream_start", @"id": streamID, @"status": @(status)} mutableCopy];
+        if ([ctype isKindOfClass:[NSString class]] && ctype.length) msg[@"content_type"] = ctype;
+        [self sendJSON:msg];
+    });
+    completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    NSString *streamID = nil;
+    @synchronized (self.streamIDs) {
+        streamID = self.streamIDs[@(dataTask.taskIdentifier)];
+    }
+    if (!streamID || !data.length) return;
+    NSString *encoded = [data base64EncodedStringWithOptions:0] ?: @"";
+    dispatch_async(self.queue, ^{
+        [self sendJSON:@{@"type": @"stream_chunk", @"id": streamID, @"body": encoded}];
+    });
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    NSString *streamID = nil;
+    @synchronized (self.streamIDs) {
+        streamID = self.streamIDs[@(task.taskIdentifier)];
+        if (streamID) {
+            [self.streamIDs removeObjectForKey:@(task.taskIdentifier)];
+            [self.streamTasks removeObjectForKey:streamID];
+        }
+    }
+    if (!streamID) return;
+    dispatch_async(self.queue, ^{
+        NSMutableDictionary *msg = [@{@"type": @"stream_end", @"id": streamID} mutableCopy];
+        if (error) msg[@"error"] = @"local_stream_failed";
+        [self sendJSON:msg];
+    });
 }
 
 - (void)sendJSON:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {

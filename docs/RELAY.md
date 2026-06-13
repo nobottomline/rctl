@@ -87,6 +87,7 @@ https://rctl.example.com/healthz
 https://rctl.example.com/api/admin/login
 https://rctl.example.com/api/admin/devices
 https://rctl.example.com/proxy/devices/{device_id}/v1/info
+https://rctl.example.com/stream/devices/{device_id}/stream
 wss://rctl.example.com/device
 wss://rctl.example.com/client/devices/{device_id}
 ```
@@ -120,6 +121,31 @@ device WebSocket. `rctld` performs the request against its local LAN server at
 normal REST/control requests first. Long-lived streaming endpoints such as
 `/stream` need a separate streaming tunnel so one large response cannot block the
 control plane.
+
+## Stream Tunnel
+
+Long-lived streams use a separate authenticated endpoint:
+
+```text
+/stream/devices/{device_id}/{local_path...}
+```
+
+Example:
+
+```sh
+curl -b cookies.txt \
+  https://rctl.example.com/stream/devices/ipad-air-3/stream
+```
+
+The relay sends `stream_open` over the device WebSocket. `rctld` opens the local
+LAN stream at `http://127.0.0.1:8080/{local_path...}` using a streaming
+`NSURLSessionDataDelegate` and forwards `stream_start`, `stream_chunk`, and
+`stream_end` messages back to the relay. If the browser disconnects, the relay
+sends `stream_cancel` so the device closes the local stream.
+
+The local LAN/USB server remains independent. Installing a relay-enabled package
+does not disable or replace `http://<ipad-ip>:8080` or `http://localhost:8080`
+over USB forwarding.
 
 ## Users Without a Domain
 

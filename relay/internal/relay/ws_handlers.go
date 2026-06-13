@@ -18,10 +18,11 @@ type deviceConn struct {
 	name string
 	ws   *websocket.Conn
 
-	mu      sync.Mutex
-	writeMu sync.Mutex
-	viewer  *websocket.Conn
-	pending map[string]chan httpTunnelResponse
+	mu            sync.Mutex
+	writeMu       sync.Mutex
+	viewer        *websocket.Conn
+	pendingHTTP   map[string]chan httpTunnelResponse
+	pendingStream map[string]chan streamTunnelEvent
 }
 
 func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +60,13 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dc := &deviceConn{id: deviceID, name: hello.DeviceName, ws: ws, pending: make(map[string]chan httpTunnelResponse)}
+	dc := &deviceConn{
+		id:            deviceID,
+		name:          hello.DeviceName,
+		ws:            ws,
+		pendingHTTP:   make(map[string]chan httpTunnelResponse),
+		pendingStream: make(map[string]chan streamTunnelEvent),
+	}
 	s.registerDevice(dc)
 	defer s.unregisterDevice(deviceID, dc)
 	defer ws.Close(websocket.StatusNormalClosure, "")
@@ -190,23 +197,66 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 	if json.Unmarshal(payload, &envelope) != nil {
 		return false
 	}
-	if envelope.Type != "http_response" || envelope.ID == "" {
+	if envelope.ID == "" {
 		return false
 	}
-	var response httpTunnelResponse
-	if json.Unmarshal(payload, &response) != nil {
-		return true
-	}
-	dc.mu.Lock()
-	ch := dc.pending[envelope.ID]
-	if ch != nil {
-		delete(dc.pending, envelope.ID)
-	}
-	dc.mu.Unlock()
-	if ch != nil {
-		ch <- response
+	switch envelope.Type {
+	case "http_response":
+		var response httpTunnelResponse
+		if json.Unmarshal(payload, &response) != nil {
+			return true
+		}
+		dc.mu.Lock()
+		ch := dc.pendingHTTP[envelope.ID]
+		if ch != nil {
+			delete(dc.pendingHTTP, envelope.ID)
+		}
+		dc.mu.Unlock()
+		if ch != nil {
+			ch <- response
+		}
+	case "stream_start", "stream_chunk", "stream_end":
+		var event streamTunnelEvent
+		if json.Unmarshal(payload, &event) != nil {
+			return true
+		}
+		dc.mu.Lock()
+		ch := dc.pendingStream[envelope.ID]
+		if envelope.Type == "stream_end" && ch != nil {
+			delete(dc.pendingStream, envelope.ID)
+		}
+		dc.mu.Unlock()
+		if ch != nil {
+			ch <- event
+		}
+	default:
+		return false
 	}
 	return true
+}
+
+func (dc *deviceConn) registerHTTP(id string, ch chan httpTunnelResponse) {
+	dc.mu.Lock()
+	dc.pendingHTTP[id] = ch
+	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) unregisterHTTP(id string) {
+	dc.mu.Lock()
+	delete(dc.pendingHTTP, id)
+	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) registerStream(id string, ch chan streamTunnelEvent) {
+	dc.mu.Lock()
+	dc.pendingStream[id] = ch
+	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) unregisterStream(id string) {
+	dc.mu.Lock()
+	delete(dc.pendingStream, id)
+	dc.mu.Unlock()
 }
 
 func (dc *deviceConn) write(ctx context.Context, msgType websocket.MessageType, payload []byte) error {

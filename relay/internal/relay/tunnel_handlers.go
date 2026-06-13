@@ -57,14 +57,8 @@ func (s *server) handleTunnelHTTP(w http.ResponseWriter, r *http.Request) {
 
 	requestID := "http_" + randomHex(12)
 	responseCh := make(chan httpTunnelResponse, 1)
-	dc.mu.Lock()
-	dc.pending[requestID] = responseCh
-	dc.mu.Unlock()
-	defer func() {
-		dc.mu.Lock()
-		delete(dc.pending, requestID)
-		dc.mu.Unlock()
-	}()
+	dc.registerHTTP(requestID, responseCh)
+	defer dc.unregisterHTTP(requestID)
 
 	msg := httpTunnelRequest{
 		Type:   "http_request",

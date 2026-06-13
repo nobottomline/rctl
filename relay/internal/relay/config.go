@@ -9,45 +9,47 @@ import (
 )
 
 type config struct {
-	ListenAddr      string
-	PublicURL       string
-	DatabasePath    string
-	AdminSecret     string
-	SessionSecret   string
-	AllowInsecure   bool
-	CookieSecure    bool
-	TokenTTL        time.Duration
-	ReadLimitBytes  int64
-	HeartbeatEvery  time.Duration
-	WriteTimeout    time.Duration
-	SessionLifetime time.Duration
-	TunnelTimeout   time.Duration
-	TunnelMaxBody   int64
-	LoginLimit      rateLimitConfig
-	AdminLimit      rateLimitConfig
-	DeviceLimit     rateLimitConfig
-	TunnelLimit     rateLimitConfig
+	ListenAddr         string
+	PublicURL          string
+	DatabasePath       string
+	AdminSecret        string
+	SessionSecret      string
+	AllowInsecure      bool
+	CookieSecure       bool
+	TokenTTL           time.Duration
+	ReadLimitBytes     int64
+	HeartbeatEvery     time.Duration
+	WriteTimeout       time.Duration
+	SessionLifetime    time.Duration
+	TunnelTimeout      time.Duration
+	TunnelMaxBody      int64
+	StreamStartTimeout time.Duration
+	LoginLimit         rateLimitConfig
+	AdminLimit         rateLimitConfig
+	DeviceLimit        rateLimitConfig
+	TunnelLimit        rateLimitConfig
 }
 
 func loadConfig() (config, error) {
 	cfg := config{
-		ListenAddr:      getenv("RCTL_RELAY_LISTEN", ":8080"),
-		PublicURL:       getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080"),
-		DatabasePath:    getenv("RCTL_RELAY_DB", "./data/rctl-relay.db"),
-		AdminSecret:     os.Getenv("RCTL_RELAY_ADMIN_SECRET"),
-		SessionSecret:   os.Getenv("RCTL_RELAY_SESSION_SECRET"),
-		AllowInsecure:   getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),
-		TokenTTL:        getenvDuration("RCTL_RELAY_ENROLL_TTL", 30*time.Minute),
-		ReadLimitBytes:  getenvInt64("RCTL_RELAY_READ_LIMIT", 8<<20),
-		HeartbeatEvery:  getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
-		WriteTimeout:    getenvDuration("RCTL_RELAY_WRITE_TIMEOUT", 10*time.Second),
-		SessionLifetime: getenvDuration("RCTL_RELAY_SESSION_LIFETIME", 30*24*time.Hour),
-		TunnelTimeout:   getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 20*time.Second),
-		TunnelMaxBody:   getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
-		LoginLimit:      loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
-		AdminLimit:      loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
-		DeviceLimit:     loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
-		TunnelLimit:     loadRateLimit("RCTL_RELAY_TUNNEL", 240, time.Minute),
+		ListenAddr:         getenv("RCTL_RELAY_LISTEN", ":8080"),
+		PublicURL:          getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080"),
+		DatabasePath:       getenv("RCTL_RELAY_DB", "./data/rctl-relay.db"),
+		AdminSecret:        os.Getenv("RCTL_RELAY_ADMIN_SECRET"),
+		SessionSecret:      os.Getenv("RCTL_RELAY_SESSION_SECRET"),
+		AllowInsecure:      getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),
+		TokenTTL:           getenvDuration("RCTL_RELAY_ENROLL_TTL", 30*time.Minute),
+		ReadLimitBytes:     getenvInt64("RCTL_RELAY_READ_LIMIT", 8<<20),
+		HeartbeatEvery:     getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
+		WriteTimeout:       getenvDuration("RCTL_RELAY_WRITE_TIMEOUT", 10*time.Second),
+		SessionLifetime:    getenvDuration("RCTL_RELAY_SESSION_LIFETIME", 30*24*time.Hour),
+		TunnelTimeout:      getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 20*time.Second),
+		TunnelMaxBody:      getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
+		StreamStartTimeout: getenvDuration("RCTL_RELAY_STREAM_START_TIMEOUT", 20*time.Second),
+		LoginLimit:         loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
+		AdminLimit:         loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
+		DeviceLimit:        loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
+		TunnelLimit:        loadRateLimit("RCTL_RELAY_TUNNEL", 240, time.Minute),
 	}
 	cfg.CookieSecure = strings.HasPrefix(cfg.PublicURL, "https://")
 	if cfg.AdminSecret == "" {
