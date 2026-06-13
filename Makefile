@@ -6,6 +6,7 @@
 # Extra payload (web client, LaunchDaemon plist) ships via layout/.
 #
 #   make package           build the .deb into ./packages/
+#   make package-relay     build a private relay-enabled .deb into ./personalized/
 #   make package install   ... and install it over SSH (USB tunnel: see below)
 #
 # Install over the USB tunnel (iproxy 2222:22):
@@ -42,3 +43,8 @@ after-stage::
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
 	$(ECHO_NOTHING)set -e; dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)cp audio/rctlaudio.plist "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.plist"$(ECHO_END)
+
+.PHONY: package-relay
+package-relay: package
+	@echo "==> Personalizing latest .deb with relay.env"
+	@scripts/personalize_deb.sh

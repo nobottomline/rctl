@@ -67,6 +67,9 @@ browser audio capture is enabled.
 - **Transport for internet (P3): WebRTC** — DataChannel carrying encoded frames + WebCodecs
   decode (lowest latency, full control), with ICE/STUN/**TURN** for NAT traversal. On-device
   WebRTC via **libdatachannel** (lightweight) rather than libwebrtc. Signaling = small Go server.
+- **Internet packaging:** public release `.deb` files stay LAN-only. Relay-enabled
+  packages are generated per user with `make package-relay` and must not be
+  published. See `docs/RELAY.md`.
 
 ## Build & deploy
 

@@ -13,6 +13,8 @@
 #import <pthread.h>
 #import <unistd.h>
 #import <stdio.h>
+#import <stdarg.h>
+#import <string.h>
 #import <time.h>
 #import <dlfcn.h>
 #import <spawn.h>
@@ -41,6 +43,14 @@ extern char **environ;
 #define RCTL_AUDIO_LEGACY_ACTIVE_PLIST "/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.plist"
 #define RCTL_AUDIO_LEGACY_CAPTURE_MARKER "/tmp/rctl-audiosource-capture"
 #define RCTL_AUDIO_LEGACY_TONE_MARKER "/tmp/rctl-audiosource-tone"
+#define RCTL_RELAY_CONFIG_PLIST "/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist"
+
+typedef struct {
+    bool enabled;
+    char relay_url[512];
+    char enroll_token[256];
+    char device_name[128];
+} rctl_relay_config;
 
 static void respring_device(void) {
     pid_t pid;
@@ -51,6 +61,60 @@ static void respring_device(void) {
 static void dlog(const char *msg) {
     FILE *f = fopen("/tmp/rctld.log", "a");
     if (f) { fprintf(f, "[%ld pid=%d] %s\n", (long)time(NULL), getpid(), msg); fclose(f); }
+}
+
+static void dlogf(const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    dlog(buf);
+}
+
+static void copy_nsstring(char *dst, size_t dst_len, id value) {
+    if (!dst || dst_len == 0) return;
+    dst[0] = 0;
+    if (![value isKindOfClass:[NSString class]]) return;
+    const char *s = [(NSString *)value UTF8String];
+    if (!s) return;
+    strlcpy(dst, s, dst_len);
+}
+
+static rctl_relay_config load_relay_config(void) {
+    rctl_relay_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:@RCTL_RELAY_CONFIG_PLIST];
+    if (![dict isKindOfClass:[NSDictionary class]]) {
+        dlog("relay disabled: config plist missing");
+        return cfg;
+    }
+
+    id enabled = dict[@"Enabled"];
+    cfg.enabled = [enabled respondsToSelector:@selector(boolValue)] && [enabled boolValue];
+    copy_nsstring(cfg.relay_url, sizeof(cfg.relay_url), dict[@"RelayURL"]);
+    copy_nsstring(cfg.enroll_token, sizeof(cfg.enroll_token), dict[@"EnrollToken"]);
+    copy_nsstring(cfg.device_name, sizeof(cfg.device_name), dict[@"DeviceName"]);
+
+    if (!cfg.enabled) {
+        dlog("relay disabled: Enabled=false");
+        return cfg;
+    }
+    if (strncmp(cfg.relay_url, "wss://", 6) != 0) {
+        dlog("relay disabled: RelayURL must start with wss://");
+        cfg.enabled = false;
+        return cfg;
+    }
+    if (strlen(cfg.enroll_token) < 32) {
+        dlog("relay disabled: EnrollToken is missing or too short");
+        cfg.enabled = false;
+        return cfg;
+    }
+
+    dlogf("relay configured: url set, token length=%zu, device name %s",
+          strlen(cfg.enroll_token), cfg.device_name[0] ? "set" : "unset");
+    return cfg;
 }
 
 static uint64_t read_be64(const uint8_t *p) {
@@ -889,6 +953,8 @@ int main(int argc, char **argv) {
 
     @autoreleasepool {
         dlog("rctld started");
+        rctl_relay_config relayConfig = load_relay_config();
+        (void)relayConfig; // Relay transport is wired in the next phase.
 
         // Port 8080 may briefly still be held by the old SpringBoard-hosted server
         // during an upgrade respring — retry the bind instead of dying.
