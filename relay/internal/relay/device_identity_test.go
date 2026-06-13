@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"database/sql"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -60,8 +61,9 @@ func TestNormalizeDeviceName(t *testing.T) {
 
 func TestAuthenticateDeviceRejectsInvalidClaimedIDWithoutUsingEnrollment(t *testing.T) {
 	s, token := newAuthTestServer(t)
+	r := httptest.NewRequest("GET", "/device", nil)
 
-	if _, _, err := s.authenticateDevice(context.Background(), token, "bad/id", "iPad"); err == nil {
+	if _, _, err := s.authenticateDevice(r, token, "bad/id", "iPad"); err == nil {
 		t.Fatal("authenticateDevice accepted invalid device id")
 	}
 
@@ -73,7 +75,7 @@ func TestAuthenticateDeviceRejectsInvalidClaimedIDWithoutUsingEnrollment(t *test
 		t.Fatalf("invalid device id consumed enrollment at %d", usedAt.Int64)
 	}
 
-	id, status, err := s.authenticateDevice(context.Background(), token, "good-id", "iPad")
+	id, status, err := s.authenticateDevice(r, token, "good-id", "iPad")
 	if err != nil {
 		t.Fatal(err)
 	}

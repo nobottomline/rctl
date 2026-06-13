@@ -250,6 +250,8 @@ removes `EnrollToken` from the plist.
 
 - Use a domain and TLS. The device endpoint must be `wss://`.
 - Never put secrets in committed files, release packages, screenshots, or logs.
+- Audit logs should record security events, device/session ids, and remote IPs,
+  but never admin secrets, enrollment tokens, device secrets, or cookies.
 - Do not use URL query parameters for browser secrets.
 - Enrollment tokens should be short-lived and single-use.
 - Browser auth should use an admin login and `HttpOnly Secure SameSite` cookies.

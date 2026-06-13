@@ -51,8 +51,9 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 	}
 	hello.DeviceName = normalizeDeviceName(hello.DeviceName)
 
-	deviceID, status, err := s.authenticateDevice(r.Context(), token, hello.DeviceID, hello.DeviceName)
+	deviceID, status, err := s.authenticateDevice(r, token, hello.DeviceID, hello.DeviceName)
 	if err != nil {
+		s.audit(r, "device_auth_failed", "claimed_device_id", hello.DeviceID, "reason", err.Error())
 		s.log.Warn("device auth rejected", "error", err)
 		ws.Close(websocket.StatusPolicyViolation, "auth rejected")
 		return
@@ -70,8 +71,10 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
 	_ = wsjsonWrite(r.Context(), ws, map[string]any{"type": "hello_ack", "device_id": deviceID, "status": status})
+	s.audit(r, "device_connected", "device_id", deviceID, "status", status)
 	s.log.Info("device connected", "device_id", deviceID, "status", status)
 	s.deviceReadLoop(r.Context(), dc)
+	s.audit(r, "device_disconnected", "device_id", deviceID)
 }
 
 func (s *server) handleClientWS(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +127,8 @@ func (s *server) handleClientWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) authenticateDevice(ctx context.Context, token, claimedID, name string) (string, string, error) {
+func (s *server) authenticateDevice(r *http.Request, token, claimedID, name string) (string, string, error) {
+	ctx := r.Context()
 	now := time.Now().Unix()
 	tokenHash := hashToken(token)
 	var status string
@@ -132,6 +136,7 @@ func (s *server) authenticateDevice(ctx context.Context, token, claimedID, name 
 	err := s.db.QueryRowContext(ctx, `SELECT id, status FROM devices WHERE device_secret_hash=? AND status='approved'`, tokenHash).Scan(&deviceID, &status)
 	if err == nil {
 		_, _ = s.db.ExecContext(ctx, `UPDATE devices SET name=?, updated_at=?, last_seen_at=? WHERE id=?`, name, now, now, deviceID)
+		s.audit(r, "device_secret_authenticated", "device_id", deviceID)
 		return deviceID, status, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -165,6 +170,7 @@ ON CONFLICT(id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at
 		return "", "", err
 	}
 	_, _ = s.db.ExecContext(ctx, `UPDATE enrollments SET used_at=? WHERE id=?`, now, enrollmentID)
+	s.audit(r, "device_enrollment_claimed", "device_id", claimedID, "enrollment_id", enrollmentID)
 	return claimedID, "pending", nil
 }
 

@@ -35,10 +35,12 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		Secret string `json:"secret"`
 	}
 	if err := readJSON(r, &req); err != nil {
+		s.audit(r, "admin_login_failed", "reason", "invalid_json")
 		writeErr(w, http.StatusBadRequest, "invalid_json")
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(req.Secret), []byte(s.cfg.AdminSecret)) != 1 {
+		s.audit(r, "admin_login_failed", "reason", "invalid_secret")
 		writeErr(w, http.StatusUnauthorized, "invalid_secret")
 		return
 	}
@@ -55,6 +57,7 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "session_create_failed")
 		return
 	}
+	s.audit(r, "admin_login_succeeded", "session_id", sessionID)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "rctl_session",
 		Value:    sessionID + "." + sessionSecret,
@@ -68,12 +71,15 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
+	sessionID := ""
 	if c, err := r.Cookie("rctl_session"); err == nil {
-		sessionID, _, ok := strings.Cut(c.Value, ".")
+		id, _, ok := strings.Cut(c.Value, ".")
 		if ok {
+			sessionID = id
 			_, _ = s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE id=?`, sessionID)
 		}
 	}
+	s.audit(r, "admin_logout", "session_id", sessionID)
 	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -128,6 +134,7 @@ func (s *server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	if id == currentID {
 		s.clearSessionCookie(w)
 	}
+	s.audit(r, "admin_session_revoked", "session_id", id, "current_revoked", id == currentID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "current_revoked": id == currentID})
 }
 
@@ -143,6 +150,7 @@ func (s *server) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	n, _ := res.RowsAffected()
+	s.audit(r, "admin_other_sessions_revoked", "current_session_id", currentID, "revoked", n)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": n})
 }
 
@@ -154,6 +162,7 @@ func (s *server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request)
 	}
 	n, _ := res.RowsAffected()
 	s.clearSessionCookie(w)
+	s.audit(r, "admin_all_sessions_revoked", "revoked", n)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": n, "current_revoked": true})
 }
 
@@ -176,6 +185,7 @@ func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "enrollment_create_failed")
 		return
 	}
+	s.audit(r, "admin_enrollment_created", "enrollment_id", tokenID, "expires_at", now.Add(s.cfg.TokenTTL).UTC().Format(time.RFC3339))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token":      token,
 		"expires_at": now.Add(s.cfg.TokenTTL).UTC().Format(time.RFC3339),
@@ -247,6 +257,7 @@ func (s *server) handleApproveDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "pending_device_not_found")
 		return
 	}
+	s.audit(r, "admin_device_approved", "device_id", id)
 	s.sendDeviceControl(id, map[string]any{"type": "approved", "device_secret": deviceSecretID + "." + deviceSecret})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -261,6 +272,7 @@ func (s *server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "device_revoke_failed")
 		return
 	}
+	s.audit(r, "admin_device_revoked", "device_id", id)
 	s.closeDevice(id, websocket.StatusPolicyViolation, "device revoked")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
