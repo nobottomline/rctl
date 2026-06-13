@@ -8,6 +8,7 @@ include $(THEOS)/makefiles/common.mk
 
 TOOL_NAME = rctld
 rctld_FILES = main.mm \
+              ../core/net/RelayClient.mm \
               ../core/net/HttpStreamServer.mm \
               ../core/net/Term.mm \
               ../core/ipc/Ipc.c

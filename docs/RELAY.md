@@ -136,12 +136,15 @@ Keys:
 Enabled      bool    true to enable internet relay mode
 RelayURL     string  wss:// URL for the device WebSocket endpoint
 EnrollToken  string  per-user enrollment token, minimum 32 chars
+DeviceID     string  generated on-device stable relay id
+DeviceSecret string  issued by relay after browser approval
 DeviceName   string  optional display name
 ```
 
-`rctld` currently reads and validates this config at startup. The actual relay
-WebSocket client is the next iPad-side implementation step. The server endpoint
-already exists.
+`rctld` reads this config at startup and opens the device WebSocket. It uses
+`DeviceSecret` after approval, otherwise the short-lived `EnrollToken`. When the
+relay sends an `approved` message, `rctld` stores `DeviceSecret` locally and
+removes `EnrollToken` from the plist.
 
 ## Security Rules
 

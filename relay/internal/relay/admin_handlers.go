@@ -85,15 +85,16 @@ func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now()
+	token := tokenID + "." + tokenSecret
 	_, err = s.db.ExecContext(r.Context(),
 		`INSERT INTO enrollments(id, token_hash, expires_at, created_at) VALUES(?,?,?,?)`,
-		tokenID, hashToken(tokenSecret), now.Add(s.cfg.TokenTTL).Unix(), now.Unix())
+		tokenID, hashToken(token), now.Add(s.cfg.TokenTTL).Unix(), now.Unix())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "enrollment_create_failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"token":      tokenID + "." + tokenSecret,
+		"token":      token,
 		"expires_at": now.Add(s.cfg.TokenTTL).UTC().Format(time.RFC3339),
 		"relay_url":  s.deviceWebSocketURL(),
 	})
