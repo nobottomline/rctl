@@ -30,6 +30,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionDataTask *> *streamTasks;
 @property(nonatomic, copy) NSString *deviceID;
 @property(nonatomic, assign) BOOL running;
+@property(nonatomic, assign) BOOL reconnectScheduled;
 @property(nonatomic, assign) NSInteger reconnectDelay;
 @end
 
@@ -51,6 +52,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     _streamIDs = [NSMutableDictionary dictionary];
     _streamTasks = [NSMutableDictionary dictionary];
     _reconnectDelay = 2;
+    _reconnectScheduled = NO;
     return self;
 }
 
@@ -109,6 +111,8 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 }
 
 - (void)connect {
+    self.reconnectScheduled = NO;
+    [self resetTransport];
     self.config = [self loadConfig];
     if (!self.config) {
         self.running = NO;
@@ -136,6 +140,28 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     }
 }
 
+- (void)resetTransport {
+    if (@available(iOS 13.0, *)) {
+        [self.task cancelWithCloseCode:NSURLSessionWebSocketCloseCodeGoingAway reason:nil];
+    } else {
+        [self.task cancel];
+    }
+    self.task = nil;
+
+    NSArray<NSURLSessionDataTask *> *tasks = nil;
+    @synchronized (self.streamIDs) {
+        tasks = [self.streamTasks.allValues copy];
+        [self.streamIDs removeAllObjects];
+        [self.streamTasks removeAllObjects];
+    }
+    for (NSURLSessionDataTask *task in tasks) {
+        [task cancel];
+    }
+
+    [self.session invalidateAndCancel];
+    self.session = nil;
+}
+
 - (void)sendHello API_AVAILABLE(ios(13.0)) {
     NSString *name = [self.config[@"DeviceName"] isKindOfClass:[NSString class]] ? self.config[@"DeviceName"] : @"rctl device";
     NSDictionary *hello = @{@"type": @"hello", @"device_id": self.deviceID ?: @"", @"device_name": name};
@@ -145,7 +171,9 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     [self.task sendMessage:message completionHandler:^(NSError *error) {
         if (error) {
             relay_log([NSString stringWithFormat:@"hello send failed: %@", error.localizedDescription]);
-            [self scheduleReconnect];
+            dispatch_async(self.queue, ^{
+                [self scheduleReconnect];
+            });
         }
     }];
 }
@@ -219,6 +247,11 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = method;
     request.timeoutInterval = 20;
+    NSURLSession *session = self.session;
+    if (!session) {
+        [self sendJSON:@{@"type": @"http_response", @"id": reqid, @"status": @502, @"error": @"relay_not_connected"}];
+        return;
+    }
 
     NSDictionary *headers = [dict[@"headers"] isKindOfClass:[NSDictionary class]] ? dict[@"headers"] : @{};
     NSString *contentType = [headers[@"content-type"] isKindOfClass:[NSString class]] ? headers[@"content-type"] : nil;
@@ -232,7 +265,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         request.HTTPBody = body;
     }
 
-    NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    NSURLSessionDataTask *task = [session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         dispatch_async(self.queue, ^{
             if (error) {
                 [self sendJSON:@{@"type": @"http_response", @"id": reqid, @"status": @502, @"error": @"local_request_failed"}];
@@ -270,7 +303,13 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"GET";
     request.timeoutInterval = 0;
-    NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request];
+    NSURLSession *session = self.session;
+    if (!session) {
+        [self sendJSON:@{@"type": @"stream_start", @"id": streamID, @"status": @502, @"error": @"relay_not_connected"}];
+        [self sendJSON:@{@"type": @"stream_end", @"id": streamID}];
+        return;
+    }
+    NSURLSessionDataTask *task = [session dataTaskWithRequest:request];
     @synchronized (self.streamIDs) {
         self.streamIDs[@(task.taskIdentifier)] = streamID;
         self.streamTasks[streamID] = task;
@@ -342,22 +381,31 @@ didReceiveResponse:(NSURLResponse *)response
 }
 
 - (void)sendJSON:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
+    if (!self.task) return;
     NSData *data = [NSJSONSerialization dataWithJSONObject:dict options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSURLSessionWebSocketMessage *message = [[NSURLSessionWebSocketMessage alloc] initWithString:json ?: @"{}"];
     [self.task sendMessage:message completionHandler:^(NSError *error) {
-        if (error) relay_log([NSString stringWithFormat:@"send failed: %@", error.localizedDescription]);
+        if (error) {
+            relay_log([NSString stringWithFormat:@"send failed: %@", error.localizedDescription]);
+            dispatch_async(self.queue, ^{
+                [self scheduleReconnect];
+            });
+        }
     }];
 }
 
 - (void)scheduleReconnect {
     if (!self.running) return;
-    [self.task cancelWithCloseCode:NSURLSessionWebSocketCloseCodeGoingAway reason:nil];
-    [self.session invalidateAndCancel];
+    if (self.reconnectScheduled) return;
+    self.reconnectScheduled = YES;
+    [self resetTransport];
     NSInteger delay = self.reconnectDelay;
     self.reconnectDelay = MIN(self.reconnectDelay * 2, 60);
-    relay_log([NSString stringWithFormat:@"reconnect in %lds", (long)delay]);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), self.queue, ^{
+    uint32_t jitterMs = arc4random_uniform(1000);
+    relay_log([NSString stringWithFormat:@"reconnect in %lds + %ums jitter", (long)delay, jitterMs]);
+    int64_t delayNs = (int64_t)(delay * NSEC_PER_SEC) + (int64_t)jitterMs * (int64_t)NSEC_PER_MSEC;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delayNs), self.queue, ^{
         [self connect];
     });
 }
