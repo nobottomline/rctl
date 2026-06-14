@@ -145,6 +145,16 @@ The Nginx example overwrites `X-Forwarded-For` and `X-Real-IP` with
 
 ### Smoke Checks
 
+Before touching a VPS, run the local relay smoke test:
+
+```sh
+make smoke-relay
+```
+
+It starts a temporary local relay, creates an enrollment, connects a synthetic
+device, approves it, checks the control page, HTTP tunnel, stream tunnel,
+sessions API, and device revocation.
+
 After DNS and TLS are active:
 
 ```sh

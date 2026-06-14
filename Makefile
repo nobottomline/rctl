@@ -48,3 +48,7 @@ after-stage::
 package-relay: package
 	@echo "==> Personalizing latest .deb with relay.env"
 	@scripts/personalize_deb.sh
+
+.PHONY: smoke-relay
+smoke-relay:
+	@scripts/smoke_relay.sh
