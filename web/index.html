@@ -410,8 +410,27 @@ function clientToNorm(cx,cy){
 // Macro record/playback: capture the input we send (with timing), replay later.
 let recording=null, recStart=0, macro=null;
 function recPush(e){ if(recording){ e.t=performance.now()-recStart; recording.push(e); } }
+let inputBusy=false;
+const inputQueue=[];
+function queueInput(ev){
+  if(ev.p===1){
+    const i=inputQueue.findIndex(x=>x.p===1&&x.f===ev.f);
+    if(i>=0){inputQueue[i]=ev;return;}
+  }
+  inputQueue.push(ev);
+}
+function pumpInput(){
+  if(inputBusy||!inputQueue.length)return;
+  inputBusy=true;
+  const ev=inputQueue.shift();
+  fetch(`/input?phase=${ev.p}&id=${ev.f}&x=${ev.x}&y=${ev.y}`).catch(()=>{}).finally(()=>{
+    inputBusy=false;
+    pumpInput();
+  });
+}
 function send(p,nx,ny,f){ recPush({k:'t',p,x:+nx.toFixed(4),y:+ny.toFixed(4),f});
-  fetch(`/input?phase=${p}&id=${f}&x=${nx.toFixed(4)}&y=${ny.toFixed(4)}`).catch(()=>{}); }
+  queueInput({p,f,x:nx.toFixed(4),y:ny.toFixed(4)});
+  pumpInput(); }
 const stage=document.getElementById('stage');
 stage.style.touchAction='none';
 // Multitouch: each active pointer (finger) gets its own index 0..10.

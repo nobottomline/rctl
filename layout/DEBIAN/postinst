@@ -20,6 +20,8 @@ LEGACY_AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosou
 LEGACY_AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.plist
 LEGACY_AUDIO_CAPTURE_MARKER=/tmp/rctl-audiosource-capture
 LEGACY_AUDIO_TONE_MARKER=/tmp/rctl-audiosource-tone
+RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
+RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
 
 if command -v ldid >/dev/null 2>&1; then
     [ -f "$DYLIB" ]   && ldid -S "$DYLIB"   || true
@@ -33,6 +35,20 @@ fi
 chown root:wheel "$PLIST" "$DAEMON" 2>/dev/null || chown root:0 "$PLIST" "$DAEMON" 2>/dev/null || true
 chmod 0644 "$PLIST" 2>/dev/null || true
 chmod 0755 "$DAEMON" 2>/dev/null || true
+
+# Personalized relay packages contain an enrollment token, but an already paired
+# device has a stronger persistent DeviceSecret. Preserve that secret across
+# remove+fresh-install deploys so reinstalling the tweak does not create a new
+# pending device or reuse an expired enrollment token.
+if [ -f "$RELAY_PREF_BACKUP" ] && grep -aq "DeviceSecret" "$RELAY_PREF_BACKUP"; then
+    if [ ! -f "$RELAY_PREF" ] || ! grep -aq "DeviceSecret" "$RELAY_PREF"; then
+        cp "$RELAY_PREF_BACKUP" "$RELAY_PREF" 2>/dev/null || true
+    fi
+fi
+if [ -f "$RELAY_PREF" ]; then
+    chown mobile:mobile "$RELAY_PREF" 2>/dev/null || chown mobile:501 "$RELAY_PREF" 2>/dev/null || true
+    chmod 0600 "$RELAY_PREF" 2>/dev/null || true
+fi
 
 # Audio capture is opt-in. Never leave an active mediaserverd injection across
 # package installs/upgrades; only the inactive payload under /usr/local/lib ships.

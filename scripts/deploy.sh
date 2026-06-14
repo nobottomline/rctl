@@ -39,14 +39,29 @@ set -e
 PKG=com.greatlove.rctl
 CRDIR=/var/mobile/Library/Logs/CrashReporter
 DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
+RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
+RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
 
 # 1) Remove any existing install (clean respring clears the codesign cache).
+if [ -f "$RELAY_PREF" ] && grep -aq "DeviceSecret" "$RELAY_PREF"; then
+  cp "$RELAY_PREF" "$RELAY_PREF_BACKUP" 2>/dev/null || true
+  chmod 0600 "$RELAY_PREF_BACKUP" 2>/dev/null || true
+fi
 if dpkg -l | grep -q "$PKG"; then dpkg -r "$PKG" >/dev/null 2>&1 || true; sleep 8; fi
 
 # 2) Fresh install, watched.
 BEFORE=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || echo 0)
 CONN0=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || echo 0)
 dpkg -i /tmp/rctl.deb 2>&1 | grep -iE "Setting up|error" || true
+if [ -f "$RELAY_PREF_BACKUP" ] && grep -aq "DeviceSecret" "$RELAY_PREF_BACKUP"; then
+  if [ ! -f "$RELAY_PREF" ] || ! grep -aq "DeviceSecret" "$RELAY_PREF"; then
+    cp "$RELAY_PREF_BACKUP" "$RELAY_PREF" 2>/dev/null || true
+    chown mobile:mobile "$RELAY_PREF" 2>/dev/null || chown mobile:501 "$RELAY_PREF" 2>/dev/null || true
+    chmod 0600 "$RELAY_PREF" 2>/dev/null || true
+    launchctl unload /Library/LaunchDaemons/com.greatlove.rctld.plist 2>/dev/null || true
+    launchctl load /Library/LaunchDaemons/com.greatlove.rctld.plist 2>/dev/null || true
+  fi
+fi
 
 i=0
 while [ $i -lt 20 ]; do

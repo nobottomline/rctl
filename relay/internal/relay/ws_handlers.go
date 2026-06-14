@@ -232,7 +232,11 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 		}
 		dc.mu.Unlock()
 		if ch != nil {
-			ch <- event
+			select {
+			case ch <- event:
+			default:
+				dc.closeStream(envelope.ID, ch)
+			}
 		}
 	default:
 		return false
@@ -261,6 +265,15 @@ func (dc *deviceConn) registerStream(id string, ch chan streamTunnelEvent) {
 func (dc *deviceConn) unregisterStream(id string) {
 	dc.mu.Lock()
 	delete(dc.pendingStream, id)
+	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) closeStream(id string, ch chan streamTunnelEvent) {
+	dc.mu.Lock()
+	if dc.pendingStream[id] == ch {
+		delete(dc.pendingStream, id)
+		close(ch)
+	}
 	dc.mu.Unlock()
 }
 

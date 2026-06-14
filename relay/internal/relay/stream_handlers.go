@@ -70,7 +70,10 @@ func (s *server) handleTunnelStream(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		select {
-		case event := <-eventCh:
+		case event, ok := <-eventCh:
+			if !ok {
+				return
+			}
 			switch event.Type {
 			case "stream_start":
 				if event.Error != "" {

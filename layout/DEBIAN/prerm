@@ -11,8 +11,14 @@ LEGACY_AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosou
 LEGACY_AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.plist
 LEGACY_AUDIO_CAPTURE_MARKER=/tmp/rctl-audiosource-capture
 LEGACY_AUDIO_TONE_MARKER=/tmp/rctl-audiosource-tone
+RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
+RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
+    if [ -f "$RELAY_PREF" ] && grep -aq "DeviceSecret" "$RELAY_PREF"; then
+        cp "$RELAY_PREF" "$RELAY_PREF_BACKUP" 2>/dev/null || true
+        chmod 0600 "$RELAY_PREF_BACKUP" 2>/dev/null || true
+    fi
     [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
     audio_was_active=0
     [ -e "$AUDIO_ACTIVE_DYLIB" ] && audio_was_active=1

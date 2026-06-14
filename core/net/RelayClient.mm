@@ -373,8 +373,11 @@ didReceiveResponse:(NSURLResponse *)response
     }
     if (!streamID || !data.length) return;
     NSString *encoded = [data base64EncodedStringWithOptions:0] ?: @"";
+    [dataTask suspend];
     dispatch_async(self.queue, ^{
-        [self sendJSON:@{@"type": @"stream_chunk", @"id": streamID, @"body": encoded}];
+        [self sendJSON:@{@"type": @"stream_chunk", @"id": streamID, @"body": encoded} completion:^{
+            [dataTask resume];
+        }];
     });
 }
 
@@ -396,13 +399,24 @@ didReceiveResponse:(NSURLResponse *)response
 }
 
 - (void)sendJSON:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
-    if (!self.task) return;
+    [self sendJSON:dict completion:nil];
+}
+
+- (void)sendJSON:(NSDictionary *)dict completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
+    void (^finish)(void) = ^{
+        if (completion) completion();
+    };
+    if (!self.task) {
+        finish();
+        return;
+    }
     NSData *data = [NSJSONSerialization dataWithJSONObject:dict options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     id message = [self webSocketMessageWithString:json];
     if (!message) {
         relay_log(@"send failed: NSURLSessionWebSocketMessage unavailable");
         [self scheduleReconnect];
+        finish();
         return;
     }
     [self.task sendMessage:message completionHandler:^(NSError *error) {
@@ -412,6 +426,7 @@ didReceiveResponse:(NSURLResponse *)response
                 [self scheduleReconnect];
             });
         }
+        finish();
     }];
 }
 
