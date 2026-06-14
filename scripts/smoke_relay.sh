@@ -164,6 +164,12 @@ func main() {
 				token = secret
 			}
 		case "stream_cancel", "hello_ack":
+		case "term_open":
+			id, _ := msg["id"].(string)
+			body := base64.StdEncoding.EncodeToString([]byte("term-ok\n"))
+			writeJSON(ctx, ws, map[string]any{"type": "term_data", "id": id, "body": body})
+		case "term_input":
+		case "term_cancel":
 		default:
 			fmt.Fprintf(os.Stderr, "ignored message type %v\n", msg["type"])
 		}
@@ -178,6 +184,66 @@ func writeJSON(ctx context.Context, ws *websocket.Conn, v any) {
 	if err := ws.Write(ctx, websocket.MessageText, payload); err != nil {
 		panic(err)
 	}
+}
+GO
+
+cat > "${WORK}/term_client.go" <<'GO'
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"nhooyr.io/websocket"
+)
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	url := os.Getenv("TERM_WS_URL")
+	cookieFile := os.Getenv("COOKIE_FILE")
+	if url == "" || cookieFile == "" {
+		panic("TERM_WS_URL and COOKIE_FILE are required")
+	}
+	cookieValue := readCookie(cookieFile, "rctl_session")
+	if cookieValue == "" {
+		panic("missing rctl_session cookie")
+	}
+	header := http.Header{}
+	header.Set("Cookie", "rctl_session="+cookieValue)
+	ws, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		panic(err)
+	}
+	defer ws.Close(websocket.StatusNormalClosure, "")
+	_, payload, err := ws.Read(ctx)
+	if err != nil {
+		panic(err)
+	}
+	if string(payload) != "term-ok\n" {
+		panic(fmt.Sprintf("unexpected terminal payload %q", string(payload)))
+	}
+}
+
+func readCookie(path, name string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" || (strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "#HttpOnly_")) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 7 && fields[5] == name {
+			return fields[6]
+		}
+	}
+	return ""
 }
 GO
 
@@ -258,6 +324,14 @@ say "checking stream tunnel"
 curl -fsS -b "${WORK}/admin.cookies" \
   "${BASE_URL}/stream/devices/smoke-device/stream" >"${WORK}/stream.txt"
 diff -u <(printf 'one\ntwo\nthree\n') "${WORK}/stream.txt"
+
+say "checking terminal tunnel"
+(
+  cd "${ROOT}/relay"
+  TERM_WS_URL="ws://127.0.0.1:${PORT}/term/devices/smoke-device?cols=80&rows=24" \
+  COOKIE_FILE="${WORK}/admin.cookies" \
+  go run "${WORK}/term_client.go"
+)
 
 say "checking browser sessions"
 curl -fsS -b "${WORK}/admin.cookies" "${BASE_URL}/api/admin/sessions" >"${WORK}/sessions.json"

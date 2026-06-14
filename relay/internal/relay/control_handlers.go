@@ -26,9 +26,11 @@ func (s *server) handleControlPage(w http.ResponseWriter, r *http.Request) {
 	}
 	proxyBase := "/proxy/devices/" + deviceID
 	streamBase := "/stream/devices/" + deviceID
+	termBase := "/term/devices/" + deviceID
 	inject := `<script>
 window.RCTL_PROXY_BASE="` + html.EscapeString(proxyBase) + `";
 window.RCTL_STREAM_BASE="` + html.EscapeString(streamBase) + `";
+window.RCTL_TERM_WS_BASE="` + html.EscapeString(termBase) + `";
 window.RCTL_RELAY_DEVICE_ID="` + html.EscapeString(deviceID) + `";
 </script>
 `

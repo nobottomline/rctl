@@ -199,6 +199,7 @@
 // globals are not injected, all paths stay unchanged and hit rctld directly.
 const RCTL_PROXY_BASE=(window.RCTL_PROXY_BASE||'').replace(/\/$/,'');
 const RCTL_STREAM_BASE=(window.RCTL_STREAM_BASE||'').replace(/\/$/,'');
+const RCTL_TERM_WS_BASE=(window.RCTL_TERM_WS_BASE||'').replace(/\/$/,'');
 const RCTL_RELAY_MODE=!!(RCTL_PROXY_BASE||RCTL_STREAM_BASE);
 function rctlPath(path){
   if(!RCTL_RELAY_MODE||typeof path!=='string'||path[0]!=='/')return path;
@@ -528,8 +529,9 @@ function termConnectNow(){
   termEnsure(); termFitNow();
   if(termWs&&termWs.readyState===WebSocket.OPEN)return;
   const proto=location.protocol==='https:'?'wss':'ws';
+  const termPath=RCTL_TERM_WS_BASE||'/ws/term';
   termDecoder=new TextDecoder();
-  termWs=new WebSocket(`${proto}://${location.host}/ws/term?cols=${term.cols||100}&rows=${term.rows||30}`);
+  termWs=new WebSocket(`${proto}://${location.host}${termPath}?cols=${term.cols||100}&rows=${term.rows||30}`);
   termWs.binaryType='arraybuffer';
   termSetState('connecting',false);
   termWs.onopen=()=>{termSetState('connected',true);term.focus();termSendResize(term.cols,term.rows);};

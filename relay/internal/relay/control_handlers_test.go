@@ -88,6 +88,7 @@ func TestControlPageInjectsRelayPaths(t *testing.T) {
 	for _, want := range []string{
 		`window.RCTL_PROXY_BASE="/proxy/devices/approved-ipad";`,
 		`window.RCTL_STREAM_BASE="/stream/devices/approved-ipad";`,
+		`window.RCTL_TERM_WS_BASE="/term/devices/approved-ipad";`,
 		`window.RCTL_RELAY_DEVICE_ID="approved-ipad";`,
 		`fetch('/v1/info')`,
 	} {

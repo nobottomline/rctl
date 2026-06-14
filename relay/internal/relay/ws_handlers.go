@@ -23,6 +23,7 @@ type deviceConn struct {
 	viewer        *websocket.Conn
 	pendingHTTP   map[string]chan httpTunnelResponse
 	pendingStream map[string]chan streamTunnelEvent
+	pendingTerm   map[string]chan termTunnelEvent
 }
 
 func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +66,7 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		ws:            ws,
 		pendingHTTP:   make(map[string]chan httpTunnelResponse),
 		pendingStream: make(map[string]chan streamTunnelEvent),
+		pendingTerm:   make(map[string]chan termTunnelEvent),
 	}
 	s.registerDevice(dc)
 	defer s.unregisterDevice(deviceID, dc)
@@ -305,6 +307,24 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 		if ch != nil {
 			dc.sendStreamEvent(envelope.ID, ch, event)
 		}
+	case "term_data", "term_close", "term_error":
+		var event termTunnelEvent
+		if json.Unmarshal(payload, &event) != nil {
+			return true
+		}
+		dc.mu.Lock()
+		ch := dc.pendingTerm[envelope.ID]
+		if (envelope.Type == "term_close" || envelope.Type == "term_error") && ch != nil {
+			delete(dc.pendingTerm, envelope.ID)
+		}
+		dc.mu.Unlock()
+		if ch != nil {
+			select {
+			case ch <- event:
+			default:
+				dc.closeTerm(envelope.ID, ch)
+			}
+		}
 	default:
 		return false
 	}
@@ -326,6 +346,27 @@ func (dc *deviceConn) unregisterHTTP(id string) {
 func (dc *deviceConn) registerStream(id string, ch chan streamTunnelEvent) {
 	dc.mu.Lock()
 	dc.pendingStream[id] = ch
+	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) registerTerm(id string, ch chan termTunnelEvent) {
+	dc.mu.Lock()
+	dc.pendingTerm[id] = ch
+	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) unregisterTerm(id string) {
+	dc.mu.Lock()
+	delete(dc.pendingTerm, id)
+	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) closeTerm(id string, ch chan termTunnelEvent) {
+	dc.mu.Lock()
+	if dc.pendingTerm[id] == ch {
+		delete(dc.pendingTerm, id)
+		close(ch)
+	}
 	dc.mu.Unlock()
 }
 

@@ -29,6 +29,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *streamIDs;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionDataTask *> *streamTasks;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, id> *streamSocketTasks;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, id> *termTasks;
 @property(nonatomic, copy) NSString *deviceID;
 @property(nonatomic, assign) BOOL running;
 @property(nonatomic, assign) BOOL reconnectScheduled;
@@ -53,6 +54,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     _streamIDs = [NSMutableDictionary dictionary];
     _streamTasks = [NSMutableDictionary dictionary];
     _streamSocketTasks = [NSMutableDictionary dictionary];
+    _termTasks = [NSMutableDictionary dictionary];
     _reconnectDelay = 2;
     _reconnectScheduled = NO;
     return self;
@@ -152,17 +154,27 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 
     NSArray<NSURLSessionDataTask *> *tasks = nil;
     NSArray *socketTasks = nil;
+    NSArray *termTasks = nil;
     @synchronized (self.streamIDs) {
         tasks = [self.streamTasks.allValues copy];
         socketTasks = [self.streamSocketTasks.allValues copy];
+        termTasks = [self.termTasks.allValues copy];
         [self.streamIDs removeAllObjects];
         [self.streamTasks removeAllObjects];
         [self.streamSocketTasks removeAllObjects];
+        [self.termTasks removeAllObjects];
     }
     for (NSURLSessionDataTask *task in tasks) {
         [task cancel];
     }
     for (id task in socketTasks) {
+        if ([task respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
+            [task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
+        } else if ([task respondsToSelector:@selector(cancel)]) {
+            [task cancel];
+        }
+    }
+    for (id task in termTasks) {
         if ([task respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
             [task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
         } else if ([task respondsToSelector:@selector(cancel)]) {
@@ -259,6 +271,12 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         [self handleStreamOpen:dict];
     } else if ([type isEqualToString:@"stream_cancel"]) {
         [self handleStreamCancel:dict];
+    } else if ([type isEqualToString:@"term_open"]) {
+        [self handleTermOpen:dict];
+    } else if ([type isEqualToString:@"term_input"]) {
+        [self handleTermInput:dict];
+    } else if ([type isEqualToString:@"term_cancel"]) {
+        [self handleTermCancel:dict];
     }
 }
 
@@ -410,6 +428,105 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     } else if ([wsTask respondsToSelector:@selector(cancel)]) {
         [wsTask cancel];
     }
+}
+
+- (void)handleTermOpen:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
+    NSString *termID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
+    if (!termID.length) return;
+    NSInteger cols = [dict[@"cols"] respondsToSelector:@selector(integerValue)] ? [dict[@"cols"] integerValue] : 100;
+    NSInteger rows = [dict[@"rows"] respondsToSelector:@selector(integerValue)] ? [dict[@"rows"] integerValue] : 30;
+    if (cols < 20) cols = 20;
+    if (rows < 5) rows = 5;
+
+    NSString *urlString = [NSString stringWithFormat:@"ws://127.0.0.1:8080/ws/term?cols=%ld&rows=%ld", (long)cols, (long)rows];
+    NSURL *url = [NSURL URLWithString:urlString];
+    NSURLSession *session = self.session;
+    if (!url || !session) {
+        [self sendJSON:@{@"type": @"term_error", @"id": termID, @"error": @"term_not_available"}];
+        return;
+    }
+
+    id oldTask = nil;
+    @synchronized (self.streamIDs) {
+        oldTask = self.termTasks[termID];
+        self.termTasks[termID] = [session webSocketTaskWithURL:url];
+    }
+    if ([oldTask respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
+        [oldTask cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
+    }
+
+    id task = nil;
+    @synchronized (self.streamIDs) {
+        task = self.termTasks[termID];
+    }
+    [task resume];
+    [self receiveTermLoop:termID task:task];
+}
+
+- (void)handleTermInput:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
+    NSString *termID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
+    NSString *body = [dict[@"body"] isKindOfClass:[NSString class]] ? dict[@"body"] : @"";
+    if (!termID.length || !body.length) return;
+    NSData *payload = [[NSData alloc] initWithBase64EncodedString:body options:0];
+    if (!payload.length) return;
+    id task = nil;
+    @synchronized (self.streamIDs) {
+        task = self.termTasks[termID];
+    }
+    if (!task) {
+        [self sendJSON:@{@"type": @"term_error", @"id": termID, @"error": @"term_not_open"}];
+        return;
+    }
+    [self sendData:payload toWebSocketTask:task completion:nil];
+}
+
+- (void)handleTermCancel:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
+    NSString *termID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
+    if (!termID.length) return;
+    id task = nil;
+    @synchronized (self.streamIDs) {
+        task = self.termTasks[termID];
+        [self.termTasks removeObjectForKey:termID];
+    }
+    if ([task respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
+        [task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1000 reason:nil];
+    } else if ([task respondsToSelector:@selector(cancel)]) {
+        [task cancel];
+    }
+}
+
+- (void)receiveTermLoop:(NSString *)termID task:(id)task API_AVAILABLE(ios(13.0)) {
+    if (!termID.length || !task) return;
+    [task receiveMessageWithCompletionHandler:^(id message, NSError *error) {
+        dispatch_async(self.queue, ^{
+            id current = nil;
+            @synchronized (self.streamIDs) {
+                current = self.termTasks[termID];
+            }
+            if (current != task) return;
+            if (error) {
+                @synchronized (self.streamIDs) {
+                    if (self.termTasks[termID] == task) [self.termTasks removeObjectForKey:termID];
+                }
+                [self sendJSON:@{@"type": @"term_close", @"id": termID}];
+                return;
+            }
+            NSData *data = nil;
+            if ([message respondsToSelector:@selector(data)]) {
+                NSData *messageData = [message data];
+                if ([messageData isKindOfClass:[NSData class]]) data = messageData;
+            }
+            if (!data.length && [message respondsToSelector:@selector(string)]) {
+                NSString *text = [message string];
+                if ([text isKindOfClass:[NSString class]]) data = [text dataUsingEncoding:NSUTF8StringEncoding];
+            }
+            if (data.length) {
+                NSString *encoded = [data base64EncodedStringWithOptions:0] ?: @"";
+                [self sendJSON:@{@"type": @"term_data", @"id": termID, @"body": encoded}];
+            }
+            [self receiveTermLoop:termID task:task];
+        });
+    }];
 }
 
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask
