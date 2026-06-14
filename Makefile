@@ -56,3 +56,7 @@ smoke-relay:
 .PHONY: release-check
 release-check:
 	@scripts/release_check.sh
+
+.PHONY: test-personalize
+test-personalize:
+	@scripts/test_personalize_deb.sh
