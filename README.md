@@ -70,6 +70,9 @@ browser audio capture is enabled.
 - **Internet packaging:** public release `.deb` files stay LAN-only. Relay-enabled
   packages are generated per user with `make package-relay` and must not be
   published. See `docs/RELAY.md`.
+- **Internet video architecture:** the current relay stream is a fallback/debug
+  path, not the final remote-video transport. The planned production path is
+  WebRTC DataChannels via `libdatachannel`; see `docs/TRANSPORT.md`.
 
 ## Build & deploy
 

@@ -323,6 +323,14 @@ LAN stream at `http://127.0.0.1:8080/{local_path...}` using a streaming
 `stream_end` messages back to the relay. If the browser disconnects, the relay
 sends `stream_cancel` so the device closes the local stream.
 
+This stream tunnel is a compatibility and debug path. It is reliable and
+TCP-based, so it is not the final production transport for internet video. Real
+remote-desktop video should prefer the newest frame and drop stale frames rather
+than queue old frames forever. The planned internet video architecture is
+WebRTC DataChannels via `libdatachannel`, with this Go relay kept for auth,
+signaling, TURN coordination, and fallback. See `docs/TRANSPORT.md` before
+working on video latency.
+
 The local LAN/USB server remains independent. Installing a relay-enabled package
 does not disable or replace `http://<ipad-ip>:8080` or `http://localhost:8080`
 over USB forwarding.
@@ -387,7 +395,8 @@ for this self-hosted relay right now: simple HTTP/WebSocket server code, one
 portable binary, fast iteration, easy Docker builds, and a lower maintenance
 burden for open source users. The latency-sensitive media path can still evolve
 to WebRTC/datachannel later; the relay remains useful for auth, signaling, and
-fallback forwarding.
+fallback forwarding. The detailed transport decision and migration plan live in
+`docs/TRANSPORT.md`.
 
 ## Device Config
 
