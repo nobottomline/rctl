@@ -184,6 +184,7 @@ panel.
   values and are not reused anywhere else.
 - The public GitHub release `.deb` is built with plain `make package`, not
   `make package-relay`.
+- Run `make release-check` before uploading a public `.deb`.
 - The private relay-enabled `.deb` from `personalized/` is never uploaded to a
   public release.
 
@@ -381,4 +382,9 @@ relay-config.plist
 ```
 
 Before publishing a release, verify that the `.deb` was produced by plain
-`make package`, not `make package-relay` or `scripts/personalize_deb.sh`.
+`make package`, not `make package-relay` or `scripts/personalize_deb.sh`, then
+run:
+
+```sh
+make release-check
+```

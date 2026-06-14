@@ -52,3 +52,7 @@ package-relay: package
 .PHONY: smoke-relay
 smoke-relay:
 	@scripts/smoke_relay.sh
+
+.PHONY: release-check
+release-check:
+	@scripts/release_check.sh
