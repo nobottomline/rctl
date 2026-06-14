@@ -21,9 +21,9 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     return out;
 }
 
-@interface RCTLRelayClient : NSObject <NSURLSessionDataDelegate>
+@interface RCTLRelayClient : NSObject
 @property(nonatomic, strong) NSURLSession *session;
-@property(nonatomic, strong) NSURLSessionWebSocketTask *task;
+@property(nonatomic, strong) id task;
 @property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic, strong) NSMutableDictionary *config;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *streamIDs;
@@ -128,7 +128,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
         NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
         delegateQueue.maxConcurrentOperationCount = 1;
-        self.session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:delegateQueue];
+        self.session = [NSURLSession sessionWithConfiguration:configuration delegate:(id<NSURLSessionDelegate>)self delegateQueue:delegateQueue];
         self.task = [self.session webSocketTaskWithRequest:request];
         [self.task resume];
         relay_log(@"connecting");
@@ -142,7 +142,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 
 - (void)resetTransport {
     if (@available(iOS 13.0, *)) {
-        [self.task cancelWithCloseCode:NSURLSessionWebSocketCloseCodeGoingAway reason:nil];
+        [self.task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
     } else {
         [self.task cancel];
     }
@@ -162,12 +162,24 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     self.session = nil;
 }
 
+- (id)webSocketMessageWithString:(NSString *)text API_AVAILABLE(ios(13.0)) {
+    Class cls = NSClassFromString(@"NSURLSessionWebSocketMessage");
+    if (!cls) return nil;
+    return [[cls alloc] initWithString:text ?: @"{}"];
+}
+
 - (void)sendHello API_AVAILABLE(ios(13.0)) {
     NSString *name = [self.config[@"DeviceName"] isKindOfClass:[NSString class]] ? self.config[@"DeviceName"] : @"rctl device";
     NSDictionary *hello = @{@"type": @"hello", @"device_id": self.deviceID ?: @"", @"device_name": name};
     NSData *data = [NSJSONSerialization dataWithJSONObject:hello options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSURLSessionWebSocketMessage *message = [[NSURLSessionWebSocketMessage alloc] initWithString:json ?: @"{}"];
+    id message = [self webSocketMessageWithString:json];
+    if (!message) {
+        relay_log(@"disabled: NSURLSessionWebSocketMessage unavailable");
+        self.running = NO;
+        [self resetTransport];
+        return;
+    }
     [self.task sendMessage:message completionHandler:^(NSError *error) {
         if (error) {
             relay_log([NSString stringWithFormat:@"hello send failed: %@", error.localizedDescription]);
@@ -179,7 +191,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 }
 
 - (void)receiveLoop API_AVAILABLE(ios(13.0)) {
-    [self.task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *message, NSError *error) {
+    [self.task receiveMessageWithCompletionHandler:^(id message, NSError *error) {
         dispatch_async(self.queue, ^{
             if (error) {
                 relay_log([NSString stringWithFormat:@"receive failed: %@", error.localizedDescription]);
@@ -192,12 +204,15 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     }];
 }
 
-- (void)handleMessage:(NSURLSessionWebSocketMessage *)message API_AVAILABLE(ios(13.0)) {
+- (void)handleMessage:(id)message API_AVAILABLE(ios(13.0)) {
     NSData *data = nil;
-    if (message.type == NSURLSessionWebSocketMessageTypeString) {
-        data = [message.string dataUsingEncoding:NSUTF8StringEncoding];
-    } else {
-        data = message.data;
+    NSString *string = [message respondsToSelector:@selector(string)] ? [message string] : nil;
+    if ([string isKindOfClass:[NSString class]]) {
+        data = [string dataUsingEncoding:NSUTF8StringEncoding];
+    }
+    if (!data.length && [message respondsToSelector:@selector(data)]) {
+        NSData *messageData = [message data];
+        if ([messageData isKindOfClass:[NSData class]]) data = messageData;
     }
     if (!data.length) return;
     NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
@@ -384,7 +399,12 @@ didReceiveResponse:(NSURLResponse *)response
     if (!self.task) return;
     NSData *data = [NSJSONSerialization dataWithJSONObject:dict options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSURLSessionWebSocketMessage *message = [[NSURLSessionWebSocketMessage alloc] initWithString:json ?: @"{}"];
+    id message = [self webSocketMessageWithString:json];
+    if (!message) {
+        relay_log(@"send failed: NSURLSessionWebSocketMessage unavailable");
+        [self scheduleReconnect];
+        return;
+    }
     [self.task sendMessage:message completionHandler:^(NSError *error) {
         if (error) {
             relay_log([NSString stringWithFormat:@"send failed: %@", error.localizedDescription]);

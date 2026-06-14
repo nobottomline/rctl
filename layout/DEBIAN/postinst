@@ -28,6 +28,12 @@ if command -v ldid >/dev/null 2>&1; then
     [ -f "$AUDIOSRC" ] && ldid -S "$AUDIOSRC" || true
 fi
 
+# dpkg packages built on macOS can preserve the builder's uid/gid. launchd is
+# strict about daemon plists, so normalize ownership on-device before loading.
+chown root:wheel "$PLIST" "$DAEMON" 2>/dev/null || chown root:0 "$PLIST" "$DAEMON" 2>/dev/null || true
+chmod 0644 "$PLIST" 2>/dev/null || true
+chmod 0755 "$DAEMON" 2>/dev/null || true
+
 # Audio capture is opt-in. Never leave an active mediaserverd injection across
 # package installs/upgrades; only the inactive payload under /usr/local/lib ships.
 audio_was_active=0

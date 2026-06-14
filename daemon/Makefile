@@ -2,7 +2,10 @@
 # launched by /Library/LaunchDaemons/com.greatlove.rctld.plist (shipped via layout/).
 
 TARGET := iphone:clang:14.5:14.0
-ARCHS := arm64 arm64e
+# Keep the daemon arm64-only. On iOS 14 arm64e devices, the arm64e tool slice
+# can hit pointer-auth failures while loading Objective-C metadata from the
+# optional relay client. The SpringBoard tweaks still build arm64e separately.
+ARCHS := arm64
 
 include $(THEOS)/makefiles/common.mk
 
