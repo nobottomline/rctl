@@ -42,6 +42,42 @@ xml_escape() {
       -e "s/'/\&apos;/g"
 }
 
+strip_optional_quotes() {
+  local value="$1"
+  if [[ "$value" == \"*\" && "$value" == *\" && "${#value}" -ge 2 ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' && "${#value}" -ge 2 ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  printf '%s' "$value"
+}
+
+load_env_file() {
+  local file="$1"
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
+    key="${line%%=*}"
+    value="$(strip_optional_quotes "${line#*=}")"
+    case "$key" in
+      RELAY_URL)
+        [[ -z "${RELAY_URL:-}" ]] && RELAY_URL="$value"
+        ;;
+      ENROLL_TOKEN)
+        [[ -z "${ENROLL_TOKEN:-}" ]] && ENROLL_TOKEN="$value"
+        ;;
+      DEVICE_NAME)
+        [[ -z "${DEVICE_NAME:-}" ]] && DEVICE_NAME="$value"
+        ;;
+      OUT_DIR)
+        [[ -z "${OUT_DIR:-}" ]] && OUT_DIR="$value"
+        ;;
+    esac
+  done < "$file"
+  return 0
+}
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
@@ -49,10 +85,7 @@ fi
 
 ENV_FILE="${RCTL_RELAY_ENV:-$ROOT/relay.env}"
 if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  load_env_file "$ENV_FILE"
 fi
 
 RELAY_URL="${RELAY_URL:-}"

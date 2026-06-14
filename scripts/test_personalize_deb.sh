@@ -85,4 +85,20 @@ if "${ROOT}/scripts/release_check.sh" "${generated}" >/dev/null 2>&1; then
   fail "release_check accepted personalized relay deb"
 fi
 
+say "checking relay.env parsing without shell execution"
+ENV_FILE="${WORK}/relay.env"
+OUT_FROM_ENV="${WORK}/out-from-env"
+cat >"${ENV_FILE}" <<ENV
+RELAY_URL=wss://rctl.example.test/device
+ENROLL_TOKEN=${TOKEN}
+DEVICE_NAME=iPad Air 3
+ENV
+generated_from_env="$(
+  RCTL_RELAY_ENV="${ENV_FILE}" \
+  OUT_DIR="${OUT_FROM_ENV}" \
+  "${ROOT}/scripts/personalize_deb.sh" "${BASE_DEB}"
+)"
+dpkg-deb -R "${generated_from_env}" "${WORK}/from-env"
+grep -F '<string>iPad Air 3</string>' "${WORK}/from-env/${PLIST}" >/dev/null || fail "DEVICE_NAME with spaces was not parsed from relay.env"
+
 say "personalize deb test passed"
