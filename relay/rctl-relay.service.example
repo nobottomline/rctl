@@ -1,0 +1,19 @@
+[Unit]
+Description=rctl internet relay
+After=network.target
+
+[Service]
+User=rctl-relay
+Group=rctl-relay
+EnvironmentFile=/etc/rctl-relay/relay.env
+ExecStart=/usr/local/bin/rctl-relay
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/rctl-relay
+
+[Install]
+WantedBy=multi-user.target

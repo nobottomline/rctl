@@ -90,6 +90,8 @@ systemd.
 
 ## VPS Deployment
 
+### Recommended Docker Deployment
+
 Recommended baseline:
 
 ```sh
@@ -114,6 +116,72 @@ RCTL_RELAY_ALLOW_INSECURE=0
 `compose.yaml` publishes the relay only on `127.0.0.1:8080`. Keep it that way
 on a public VPS. The public internet should reach only the TLS reverse proxy on
 ports 80 and 443.
+
+### Binary/Systemd Deployment
+
+Use this when Docker is unavailable or the VPS already runs another service on
+ports 80/443. The relay can run as a normal Linux binary behind a dedicated
+Nginx TLS proxy.
+
+Build the binary from the repository:
+
+```sh
+cd relay
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+  go build -trimpath -ldflags='-s -w' -o rctl-relay ./cmd/rctl-relay
+```
+
+Install on the VPS:
+
+```sh
+sudo install -m 0755 rctl-relay /usr/local/bin/rctl-relay
+sudo useradd --system --home-dir /var/lib/rctl-relay --shell /usr/sbin/nologin rctl-relay
+sudo install -d -m 0750 -o rctl-relay -g rctl-relay /var/lib/rctl-relay
+sudo install -d -m 0755 /opt/rctl-relay
+sudo cp -R ../web /opt/rctl-relay/web
+sudo install -d -m 0700 /etc/rctl-relay
+sudo cp rctl-relay.env.example /etc/rctl-relay/relay.env
+sudo chmod 0640 /etc/rctl-relay/relay.env
+sudo chown root:rctl-relay /etc/rctl-relay/relay.env
+sudo $EDITOR /etc/rctl-relay/relay.env
+sudo cp rctl-relay.service.example /etc/systemd/system/rctl-relay.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now rctl-relay
+```
+
+For a normal clean domain, set:
+
+```text
+RCTL_RELAY_LISTEN=127.0.0.1:8080
+RCTL_RELAY_PUBLIC_URL=https://rctl.example.com
+```
+
+and use the regular Caddy or Nginx examples below.
+
+For a side-by-side VPS where another process already owns 80/443, use a
+dedicated TLS port:
+
+```text
+RCTL_RELAY_LISTEN=127.0.0.1:18080
+RCTL_RELAY_PUBLIC_URL=https://rctl.example.com:9443
+```
+
+Then install the dedicated Nginx proxy:
+
+```sh
+sudo cp nginx_proxy_params.example /etc/nginx/rctl_proxy_params
+sudo cp nginx_dedicated_tls.conf.example /etc/nginx/rctl-relay-nginx.conf
+sudo $EDITOR /etc/nginx/rctl-relay-nginx.conf
+sudo cp rctl-relay-proxy.service.example /etc/systemd/system/rctl-relay-proxy.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now rctl-relay-proxy
+```
+
+The dedicated proxy runs its own Nginx master with `-c
+/etc/nginx/rctl-relay-nginx.conf`, so it does not start or reload the system's
+default Nginx configuration. That matters on shared VPS hosts where the default
+Nginx config may contain `listen 80` blocks that would conflict with an existing
+service.
 
 ### Caddy
 
