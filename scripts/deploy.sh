@@ -11,16 +11,26 @@
 # moved aside and SpringBoard resprung immediately, so one bad build can't loop
 # the device into safe mode.
 #
-# Usage: scripts/deploy.sh            (USB tunnel: iproxy 2222:22 8080:8080)
-#        RCTL_SSH=greatlove scripts/deploy.sh   (over Wi-Fi)
+# Usage: scripts/deploy.sh                         (USB tunnel: iproxy 2222:22 8080:8080)
+#        RCTL_SSH=greatlove scripts/deploy.sh      (over Wi-Fi)
+#        RCTL_DEB=personalized/...+relay.deb scripts/deploy.sh
 set -euo pipefail
 
 THEOS="${THEOS:-/Users/grigorij/theos}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${RCTL_SSH:-rctl-device}"        # ~/.ssh/config alias
 
-make -C "$ROOT" THEOS="$THEOS" package
-DEB="$(ls -t "$ROOT"/packages/*.deb | head -1)"
+if [[ -n "${RCTL_DEB:-}" ]]; then
+  DEB="$RCTL_DEB"
+  case "$DEB" in
+    /*) ;;
+    *) DEB="$ROOT/$DEB" ;;
+  esac
+  [[ -f "$DEB" ]] || { echo "[deploy] RCTL_DEB not found: $DEB" >&2; exit 1; }
+else
+  make -C "$ROOT" THEOS="$THEOS" package
+  DEB="$(ls -t "$ROOT"/packages/*.deb | head -1)"
+fi
 echo "[deploy] $DEB -> $HOST"
 scp -q "$DEB" "$HOST:/tmp/rctl.deb"
 
