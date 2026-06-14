@@ -46,6 +46,28 @@ func TestControlPageRequiresAdminSession(t *testing.T) {
 	}
 }
 
+func TestControlPageRequiresOnlineDevice(t *testing.T) {
+	ts := newControlPageTestServer(t)
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/control/devices/offline-ipad", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(ts.sessionCookie)
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	got := readResponseBody(t, resp)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d: %s", resp.StatusCode, http.StatusNotFound, got)
+	}
+	if !strings.Contains(got, "device_offline") {
+		t.Fatalf("response missing device_offline: %s", got)
+	}
+}
+
 func TestControlPageInjectsRelayPaths(t *testing.T) {
 	ts := newControlPageTestServer(t)
 
@@ -136,6 +158,7 @@ func newControlPageTestServer(t *testing.T) controlPageTestServer {
 	now := time.Now().Unix()
 	for id, status := range map[string]string{
 		"approved-ipad": "approved",
+		"offline-ipad":  "approved",
 		"pending-ipad":  "pending",
 	} {
 		if _, err := db.ExecContext(context.Background(),
@@ -145,6 +168,7 @@ func newControlPageTestServer(t *testing.T) controlPageTestServer {
 			t.Fatal(err)
 		}
 	}
+	s.devices["approved-ipad"] = &deviceConn{id: "approved-ipad"}
 
 	sessionID := "test-session"
 	sessionSecret := "test-secret"

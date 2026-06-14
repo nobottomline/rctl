@@ -154,13 +154,14 @@ function fmtTime(sec) {
 }
 function rowActions(device) {
   if (device.status === "pending") {
-    return '<div class="actions"><button data-action="approve" data-id="' + escapeHTML(device.id) + '">Approve</button></div>';
+    return '<div class="actions"><button data-action="approve" data-id="' + escapeHTML(device.id) + '">Approve</button><button class="danger" data-action="delete" data-id="' + escapeHTML(device.id) + '">Delete</button></div>';
   }
   if (device.status !== "revoked") {
     const controlURL = "/control/devices/" + encodeURIComponent(device.id);
-    return '<div class="actions"><a class="buttonLink" href="' + controlURL + '">Open</a><button class="danger" data-action="revoke" data-id="' + escapeHTML(device.id) + '">Revoke</button></div>';
+    const open = device.online ? '<a class="buttonLink" href="' + controlURL + '">Open</a>' : '<span class="muted">offline</span>';
+    return '<div class="actions">' + open + '<button class="danger" data-action="revoke" data-id="' + escapeHTML(device.id) + '">Revoke</button><button class="danger" data-action="delete" data-id="' + escapeHTML(device.id) + '">Delete</button></div>';
   }
-  return "";
+  return '<div class="actions"><button class="danger" data-action="delete" data-id="' + escapeHTML(device.id) + '">Delete</button></div>';
 }
 function sessionActions(session) {
   if (session.current) return '<span class="pill approved">current</span>';
@@ -237,6 +238,7 @@ $("devices").addEventListener("click", async (event) => {
   if (!button) return;
   button.disabled = true;
   try {
+    if (button.dataset.action === "delete" && !confirm("Delete device " + button.dataset.id + "?")) return;
     await api("/api/admin/devices/" + encodeURIComponent(button.dataset.id) + "/" + button.dataset.action, { method: "POST" });
     await refreshAll();
   } catch (err) {
@@ -267,4 +269,5 @@ $("revokeOthers").addEventListener("click", async () => {
     setStatus("Session revoke failed: " + err.message);
   }
 });
+refreshAll().then(() => showApp(true)).catch(() => showApp(false));
 `

@@ -47,6 +47,7 @@ func TestAdminSessionManagement(t *testing.T) {
 type adminSessionTestServer struct {
 	*httptest.Server
 	client *http.Client
+	db     *sql.DB
 }
 
 type testSession struct {
@@ -89,7 +90,7 @@ func newAdminSessionTestServer(t *testing.T) adminSessionTestServer {
 	s.routes(mux)
 	httpServer := httptest.NewServer(s.securityHeaders(mux))
 	t.Cleanup(httpServer.Close)
-	return adminSessionTestServer{Server: httpServer, client: httpServer.Client()}
+	return adminSessionTestServer{Server: httpServer, client: httpServer.Client(), db: db}
 }
 
 func (ts adminSessionTestServer) login(t *testing.T) testSession {

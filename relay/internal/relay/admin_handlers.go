@@ -276,3 +276,19 @@ func (s *server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	s.closeDevice(id, websocket.StatusPolicyViolation, "device revoked")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+func (s *server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM devices WHERE id=?`, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "device_delete_failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErr(w, http.StatusNotFound, "device_not_found")
+		return
+	}
+	s.audit(r, "admin_device_deleted", "device_id", id)
+	s.closeDevice(id, websocket.StatusPolicyViolation, "device deleted")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}

@@ -14,6 +14,10 @@ func (s *server) handleControlPage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "device_not_approved")
 		return
 	}
+	if s.getDevice(deviceID) == nil {
+		writeErr(w, http.StatusNotFound, "device_offline")
+		return
+	}
 	indexPath := filepath.Join(s.cfg.WebDir, "index.html")
 	raw, err := os.ReadFile(indexPath)
 	if err != nil {

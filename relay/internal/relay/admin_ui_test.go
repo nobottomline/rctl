@@ -10,6 +10,8 @@ func TestAdminUIIncludesControlPageAction(t *testing.T) {
 		`const controlURL = "/control/devices/" + encodeURIComponent(device.id);`,
 		`<a class="buttonLink" href="`,
 		`Open</a>`,
+		`device.online ?`,
+		`offline</span>`,
 	} {
 		if !strings.Contains(adminJS, want) {
 			t.Fatalf("adminJS missing %q", want)
@@ -17,6 +19,19 @@ func TestAdminUIIncludesControlPageAction(t *testing.T) {
 	}
 	if !strings.Contains(adminCSS, ".buttonLink") {
 		t.Fatal("adminCSS missing .buttonLink")
+	}
+}
+
+func TestAdminUIIncludesDeviceDeleteAndSessionRestore(t *testing.T) {
+	for _, want := range []string{
+		`data-action="delete"`,
+		`Delete</button>`,
+		`confirm("Delete device "`,
+		`refreshAll().then(() => showApp(true)).catch(() => showApp(false));`,
+	} {
+		if !strings.Contains(adminJS, want) {
+			t.Fatalf("adminJS missing %q", want)
+		}
 	}
 }
 
