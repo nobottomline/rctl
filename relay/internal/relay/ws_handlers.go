@@ -174,6 +174,19 @@ ON CONFLICT(id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at
 	return claimedID, "pending", nil
 }
 
+func (s *server) authenticateDeviceSecret(ctx context.Context, token string) (string, error) {
+	tokenHash := hashToken(token)
+	var deviceID string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM devices WHERE device_secret_hash=? AND status='approved'`, tokenHash).Scan(&deviceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", errors.New("invalid token")
+		}
+		return "", err
+	}
+	return deviceID, nil
+}
+
 func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
 	for {
 		msgType, payload, err := dc.ws.Read(ctx)
@@ -190,6 +203,64 @@ func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
 			writeCtx, cancel := context.WithTimeout(ctx, s.cfg.WriteTimeout)
 			_ = viewer.Write(writeCtx, msgType, payload)
 			cancel()
+		}
+	}
+}
+
+func (s *server) handleDeviceStreamWS(w http.ResponseWriter, r *http.Request) {
+	token := bearerToken(r)
+	if token == "" {
+		writeErr(w, http.StatusUnauthorized, "missing_bearer_token")
+		return
+	}
+	deviceID, err := s.authenticateDeviceSecret(r.Context(), token)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "auth_rejected")
+		return
+	}
+	dc := s.getDevice(deviceID)
+	if dc == nil {
+		writeErr(w, http.StatusNotFound, "device_offline")
+		return
+	}
+	streamID := r.PathValue("streamID")
+	ch := dc.streamChannel(streamID)
+	if ch == nil {
+		writeErr(w, http.StatusNotFound, "stream_not_found")
+		return
+	}
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: s.cfg.AllowInsecure})
+	if err != nil {
+		return
+	}
+	ws.SetReadLimit(s.cfg.ReadLimitBytes)
+	defer ws.Close(websocket.StatusNormalClosure, "")
+
+	for {
+		msgType, payload, err := ws.Read(r.Context())
+		if err != nil {
+			dc.sendStreamEvent(streamID, ch, streamTunnelEvent{Type: "stream_end", ID: streamID})
+			return
+		}
+		switch msgType {
+		case websocket.MessageText:
+			var event streamTunnelEvent
+			if json.Unmarshal(payload, &event) != nil {
+				continue
+			}
+			if event.ID == "" {
+				event.ID = streamID
+			}
+			if event.ID != streamID {
+				continue
+			}
+			dc.sendStreamEvent(streamID, ch, event)
+			if event.Type == "stream_end" {
+				return
+			}
+		case websocket.MessageBinary:
+			chunk := append([]byte(nil), payload...)
+			dc.sendStreamEvent(streamID, ch, streamTunnelEvent{Type: "stream_chunk", ID: streamID, BodyBytes: chunk})
 		}
 	}
 }
@@ -232,11 +303,7 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 		}
 		dc.mu.Unlock()
 		if ch != nil {
-			select {
-			case ch <- event:
-			default:
-				dc.closeStream(envelope.ID, ch)
-			}
+			dc.sendStreamEvent(envelope.ID, ch, event)
 		}
 	default:
 		return false
@@ -266,6 +333,20 @@ func (dc *deviceConn) unregisterStream(id string) {
 	dc.mu.Lock()
 	delete(dc.pendingStream, id)
 	dc.mu.Unlock()
+}
+
+func (dc *deviceConn) streamChannel(id string) chan streamTunnelEvent {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	return dc.pendingStream[id]
+}
+
+func (dc *deviceConn) sendStreamEvent(id string, ch chan streamTunnelEvent, event streamTunnelEvent) {
+	select {
+	case ch <- event:
+	default:
+		dc.closeStream(id, ch)
+	}
 }
 
 func (dc *deviceConn) closeStream(id string, ch chan streamTunnelEvent) {
@@ -345,5 +426,18 @@ func (s *server) deviceWebSocketURL() string {
 		return "ws://" + strings.TrimPrefix(base, "http://") + "/device"
 	default:
 		return base + "/device"
+	}
+}
+
+func (s *server) deviceStreamWebSocketURL(streamID string) string {
+	base := strings.TrimRight(s.cfg.PublicURL, "/")
+	path := "/device-streams/" + streamID
+	switch {
+	case strings.HasPrefix(base, "https://"):
+		return "wss://" + strings.TrimPrefix(base, "https://") + path
+	case strings.HasPrefix(base, "http://"):
+		return "ws://" + strings.TrimPrefix(base, "http://") + path
+	default:
+		return base + path
 	}
 }

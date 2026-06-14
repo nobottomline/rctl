@@ -28,6 +28,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 @property(nonatomic, strong) NSMutableDictionary *config;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *streamIDs;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionDataTask *> *streamTasks;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, id> *streamSocketTasks;
 @property(nonatomic, copy) NSString *deviceID;
 @property(nonatomic, assign) BOOL running;
 @property(nonatomic, assign) BOOL reconnectScheduled;
@@ -51,6 +52,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     _queue = dispatch_queue_create("com.greatlove.rctl.relay", DISPATCH_QUEUE_SERIAL);
     _streamIDs = [NSMutableDictionary dictionary];
     _streamTasks = [NSMutableDictionary dictionary];
+    _streamSocketTasks = [NSMutableDictionary dictionary];
     _reconnectDelay = 2;
     _reconnectScheduled = NO;
     return self;
@@ -149,13 +151,23 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     self.task = nil;
 
     NSArray<NSURLSessionDataTask *> *tasks = nil;
+    NSArray *socketTasks = nil;
     @synchronized (self.streamIDs) {
         tasks = [self.streamTasks.allValues copy];
+        socketTasks = [self.streamSocketTasks.allValues copy];
         [self.streamIDs removeAllObjects];
         [self.streamTasks removeAllObjects];
+        [self.streamSocketTasks removeAllObjects];
     }
     for (NSURLSessionDataTask *task in tasks) {
         [task cancel];
+    }
+    for (id task in socketTasks) {
+        if ([task respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
+            [task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
+        } else if ([task respondsToSelector:@selector(cancel)]) {
+            [task cancel];
+        }
     }
 
     [self.session invalidateAndCancel];
@@ -166,6 +178,12 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     Class cls = NSClassFromString(@"NSURLSessionWebSocketMessage");
     if (!cls) return nil;
     return [[cls alloc] initWithString:text ?: @"{}"];
+}
+
+- (id)webSocketMessageWithData:(NSData *)data API_AVAILABLE(ios(13.0)) {
+    Class cls = NSClassFromString(@"NSURLSessionWebSocketMessage");
+    if (!cls) return nil;
+    return [[cls alloc] initWithData:data ?: [NSData data]];
 }
 
 - (void)sendHello API_AVAILABLE(ios(13.0)) {
@@ -306,6 +324,11 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     NSString *streamID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
     NSString *path = [dict[@"path"] isKindOfClass:[NSString class]] ? dict[@"path"] : @"/stream";
     if (!streamID.length || ![path hasPrefix:@"/"]) return;
+    NSString *streamURL = [dict[@"stream_url"] isKindOfClass:[NSString class]] ? dict[@"stream_url"] : nil;
+    if ([streamURL hasPrefix:@"wss://"] || [streamURL hasPrefix:@"ws://"]) {
+        [self handleBinaryStreamOpen:streamID path:path streamURL:streamURL];
+        return;
+    }
 
     NSString *urlString = [@"http://127.0.0.1:8080" stringByAppendingString:path];
     NSURL *url = [NSURL URLWithString:urlString];
@@ -332,16 +355,61 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     [task resume];
 }
 
+- (void)handleBinaryStreamOpen:(NSString *)streamID path:(NSString *)path streamURL:(NSString *)streamURL API_AVAILABLE(ios(13.0)) {
+    NSString *urlString = [@"http://127.0.0.1:8080" stringByAppendingString:path];
+    NSURL *localURL = [NSURL URLWithString:urlString];
+    NSURL *remoteURL = [NSURL URLWithString:streamURL];
+    if (!localURL || !remoteURL) {
+        [self sendJSON:@{@"type": @"stream_start", @"id": streamID, @"status": @502, @"error": @"bad_stream_url"}];
+        [self sendJSON:@{@"type": @"stream_end", @"id": streamID}];
+        return;
+    }
+
+    NSURLSession *session = self.session;
+    if (!session) {
+        [self sendJSON:@{@"type": @"stream_start", @"id": streamID, @"status": @502, @"error": @"relay_not_connected"}];
+        [self sendJSON:@{@"type": @"stream_end", @"id": streamID}];
+        return;
+    }
+
+    NSMutableURLRequest *wsRequest = [NSMutableURLRequest requestWithURL:remoteURL];
+    NSString *token = [self tokenFromConfig:self.config];
+    [wsRequest setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+    id wsTask = [session webSocketTaskWithRequest:wsRequest];
+
+    NSMutableURLRequest *localRequest = [NSMutableURLRequest requestWithURL:localURL];
+    localRequest.HTTPMethod = @"GET";
+    localRequest.timeoutInterval = 0;
+    NSURLSessionDataTask *localTask = [session dataTaskWithRequest:localRequest];
+
+    @synchronized (self.streamIDs) {
+        self.streamIDs[@(localTask.taskIdentifier)] = streamID;
+        self.streamTasks[streamID] = localTask;
+        self.streamSocketTasks[streamID] = wsTask;
+    }
+
+    [wsTask resume];
+    [localTask resume];
+}
+
 - (void)handleStreamCancel:(NSDictionary *)dict API_AVAILABLE(ios(13.0)) {
     NSString *streamID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
     if (!streamID.length) return;
     NSURLSessionDataTask *task = nil;
+    id wsTask = nil;
     @synchronized (self.streamIDs) {
         task = self.streamTasks[streamID];
+        wsTask = self.streamSocketTasks[streamID];
         [self.streamTasks removeObjectForKey:streamID];
+        [self.streamSocketTasks removeObjectForKey:streamID];
         if (task) [self.streamIDs removeObjectForKey:@(task.taskIdentifier)];
     }
     [task cancel];
+    if ([wsTask respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
+        [wsTask cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
+    } else if ([wsTask respondsToSelector:@selector(cancel)]) {
+        [wsTask cancel];
+    }
 }
 
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask
@@ -361,7 +429,15 @@ didReceiveResponse:(NSURLResponse *)response
     dispatch_async(self.queue, ^{
         NSMutableDictionary *msg = [@{@"type": @"stream_start", @"id": streamID, @"status": @(status)} mutableCopy];
         if ([ctype isKindOfClass:[NSString class]] && ctype.length) msg[@"content_type"] = ctype;
-        [self sendJSON:msg];
+        id wsTask = nil;
+        @synchronized (self.streamIDs) {
+            wsTask = self.streamSocketTasks[streamID];
+        }
+        if (wsTask) {
+            [self sendJSON:msg toWebSocketTask:wsTask completion:nil];
+        } else {
+            [self sendJSON:msg];
+        }
     });
     completionHandler(NSURLSessionResponseAllow);
 }
@@ -372,29 +448,50 @@ didReceiveResponse:(NSURLResponse *)response
         streamID = self.streamIDs[@(dataTask.taskIdentifier)];
     }
     if (!streamID || !data.length) return;
-    NSString *encoded = [data base64EncodedStringWithOptions:0] ?: @"";
     [dataTask suspend];
     dispatch_async(self.queue, ^{
-        [self sendJSON:@{@"type": @"stream_chunk", @"id": streamID, @"body": encoded} completion:^{
-            [dataTask resume];
-        }];
+        id wsTask = nil;
+        @synchronized (self.streamIDs) {
+            wsTask = self.streamSocketTasks[streamID];
+        }
+        if (wsTask) {
+            [self sendData:data toWebSocketTask:wsTask completion:^{
+                [dataTask resume];
+            }];
+        } else {
+            NSString *encoded = [data base64EncodedStringWithOptions:0] ?: @"";
+            [self sendJSON:@{@"type": @"stream_chunk", @"id": streamID, @"body": encoded} completion:^{
+                [dataTask resume];
+            }];
+        }
     });
 }
 
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     NSString *streamID = nil;
+    id wsTask = nil;
     @synchronized (self.streamIDs) {
         streamID = self.streamIDs[@(task.taskIdentifier)];
         if (streamID) {
+            wsTask = self.streamSocketTasks[streamID];
             [self.streamIDs removeObjectForKey:@(task.taskIdentifier)];
             [self.streamTasks removeObjectForKey:streamID];
+            [self.streamSocketTasks removeObjectForKey:streamID];
         }
     }
     if (!streamID) return;
     dispatch_async(self.queue, ^{
         NSMutableDictionary *msg = [@{@"type": @"stream_end", @"id": streamID} mutableCopy];
         if (error) msg[@"error"] = @"local_stream_failed";
-        [self sendJSON:msg];
+        if (wsTask) {
+            [self sendJSON:msg toWebSocketTask:wsTask completion:^{
+                if ([wsTask respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
+                    [wsTask cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1000 reason:nil];
+                }
+            }];
+        } else {
+            [self sendJSON:msg];
+        }
     });
 }
 
@@ -403,10 +500,14 @@ didReceiveResponse:(NSURLResponse *)response
 }
 
 - (void)sendJSON:(NSDictionary *)dict completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
+    [self sendJSON:dict toWebSocketTask:self.task completion:completion];
+}
+
+- (void)sendJSON:(NSDictionary *)dict toWebSocketTask:(id)task completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
     void (^finish)(void) = ^{
         if (completion) completion();
     };
-    if (!self.task) {
+    if (!task) {
         finish();
         return;
     }
@@ -419,13 +520,35 @@ didReceiveResponse:(NSURLResponse *)response
         finish();
         return;
     }
-    [self.task sendMessage:message completionHandler:^(NSError *error) {
+    [task sendMessage:message completionHandler:^(NSError *error) {
         if (error) {
             relay_log([NSString stringWithFormat:@"send failed: %@", error.localizedDescription]);
-            dispatch_async(self.queue, ^{
-                [self scheduleReconnect];
-            });
+            if (task == self.task) {
+                dispatch_async(self.queue, ^{
+                    [self scheduleReconnect];
+                });
+            }
         }
+        finish();
+    }];
+}
+
+- (void)sendData:(NSData *)data toWebSocketTask:(id)task completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
+    void (^finish)(void) = ^{
+        if (completion) completion();
+    };
+    if (!task) {
+        finish();
+        return;
+    }
+    id message = [self webSocketMessageWithData:data];
+    if (!message) {
+        relay_log(@"send failed: NSURLSessionWebSocketMessage unavailable");
+        finish();
+        return;
+    }
+    [task sendMessage:message completionHandler:^(NSError *error) {
+        if (error) relay_log([NSString stringWithFormat:@"stream send failed: %@", error.localizedDescription]);
         finish();
     }];
 }

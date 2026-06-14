@@ -122,6 +122,29 @@ func main() {
 			})
 		case "stream_open":
 			id, _ := msg["id"].(string)
+			streamURL, _ := msg["stream_url"].(string)
+			if streamURL != "" {
+				streamHeader := http.Header{}
+				streamHeader.Set("Authorization", "Bearer "+token)
+				streamWS, _, err := websocket.Dial(ctx, streamURL, &websocket.DialOptions{HTTPHeader: streamHeader})
+				if err != nil {
+					panic(err)
+				}
+				writeJSON(ctx, streamWS, map[string]any{
+					"type":         "stream_start",
+					"id":           id,
+					"status":       200,
+					"content_type": "text/plain; charset=utf-8",
+				})
+				for _, chunk := range []string{"one\n", "two\n", "three\n"} {
+					if err := streamWS.Write(ctx, websocket.MessageBinary, []byte(chunk)); err != nil {
+						panic(err)
+					}
+				}
+				writeJSON(ctx, streamWS, map[string]any{"type": "stream_end", "id": id})
+				streamWS.Close(websocket.StatusNormalClosure, "")
+				continue
+			}
 			writeJSON(ctx, ws, map[string]any{
 				"type":         "stream_start",
 				"id":           id,
@@ -136,7 +159,11 @@ func main() {
 				})
 			}
 			writeJSON(ctx, ws, map[string]any{"type": "stream_end", "id": id})
-		case "stream_cancel", "approved", "hello_ack":
+		case "approved":
+			if secret, _ := msg["device_secret"].(string); secret != "" {
+				token = secret
+			}
+		case "stream_cancel", "hello_ack":
 		default:
 			fmt.Fprintf(os.Stderr, "ignored message type %v\n", msg["type"])
 		}

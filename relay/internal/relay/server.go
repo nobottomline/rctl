@@ -115,6 +115,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
 	mux.HandleFunc("GET /stream/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelStream)))
 	mux.HandleFunc("GET /device", s.withRateLimit("device", s.cfg.DeviceLimit, s.handleDeviceWS))
+	mux.HandleFunc("GET /device-streams/{streamID}", s.withRateLimit("device", s.cfg.DeviceLimit, s.handleDeviceStreamWS))
 	mux.HandleFunc("GET /client/devices/{id}", s.withAdmin(s.handleClientWS))
 	mux.HandleFunc("GET /control/devices/{id}", s.withAdmin(s.handleControlPage))
 }

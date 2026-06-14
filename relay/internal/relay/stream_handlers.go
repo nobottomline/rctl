@@ -9,9 +9,10 @@ import (
 )
 
 type streamOpenRequest struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
-	Path string `json:"path"`
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	StreamURL string `json:"stream_url,omitempty"`
 }
 
 type streamTunnelEvent struct {
@@ -20,6 +21,7 @@ type streamTunnelEvent struct {
 	Status      int    `json:"status,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
 	Body        string `json:"body,omitempty"`
+	BodyBytes   []byte `json:"-"`
 	Error       string `json:"error,omitempty"`
 }
 
@@ -51,7 +53,7 @@ func (s *server) handleTunnelStream(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.WriteTimeout)
-	err := dc.writeJSON(ctx, streamOpenRequest{Type: "stream_open", ID: streamID, Path: path})
+	err := dc.writeJSON(ctx, streamOpenRequest{Type: "stream_open", ID: streamID, Path: path, StreamURL: s.deviceStreamWebSocketURL(streamID)})
 	cancel()
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "device_write_failed")
@@ -98,9 +100,13 @@ func (s *server) handleTunnelStream(w http.ResponseWriter, r *http.Request) {
 				if !started {
 					continue
 				}
-				payload, err := base64.StdEncoding.DecodeString(event.Body)
-				if err != nil {
-					return
+				payload := event.BodyBytes
+				if payload == nil {
+					var err error
+					payload, err = base64.StdEncoding.DecodeString(event.Body)
+					if err != nil {
+						return
+					}
 				}
 				if _, err := w.Write(payload); err != nil {
 					return
