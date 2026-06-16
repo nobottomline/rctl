@@ -34,6 +34,8 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 @property(nonatomic, assign) BOOL running;
 @property(nonatomic, assign) BOOL reconnectScheduled;
 @property(nonatomic, assign) NSInteger reconnectDelay;
+@property(nonatomic, assign) NSInteger connGen;
+@property(nonatomic, assign) NSTimeInterval lastPongAt;
 @end
 
 @implementation RCTLRelayClient
@@ -138,6 +140,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         relay_log(@"connecting");
         [self sendHello];
         [self receiveLoop];
+        [self startHeartbeat];
     } else {
         relay_log(@"disabled: NSURLSessionWebSocketTask requires iOS 13+");
         self.running = NO;
@@ -145,6 +148,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 }
 
 - (void)resetTransport {
+    self.connGen++;
     if (@available(iOS 13.0, *)) {
         [self.task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
     } else {
@@ -668,6 +672,43 @@ didReceiveResponse:(NSURLResponse *)response
         if (error) relay_log([NSString stringWithFormat:@"stream send failed: %@", error.localizedDescription]);
         finish();
     }];
+}
+
+- (void)startHeartbeat API_AVAILABLE(ios(13.0)) {
+    self.lastPongAt = [NSDate timeIntervalSinceReferenceDate];
+    NSInteger gen = ++self.connGen;
+    [self heartbeatTickForGen:gen];
+}
+
+// Ping the relay periodically and reconnect if pongs stop arriving. This is the
+// device side of the keep-alive: it detects a half-open WebSocket (where the OS
+// never surfaces a read error) and self-heals instead of sitting "connected"
+// while the relay has already dropped us.
+- (void)heartbeatTickForGen:(NSInteger)gen API_AVAILABLE(ios(13.0)) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(18.0 * NSEC_PER_SEC)), self.queue, ^{
+        if (gen != self.connGen || !self.task) return;          // superseded or closed
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if (now - self.lastPongAt > 45.0) {                     // ~2+ missed pongs: dead/half-open
+            relay_log(@"heartbeat: no pong, reconnecting");
+            [self scheduleReconnect];
+            return;
+        }
+        id task = self.task;
+        if ([task respondsToSelector:@selector(sendPingWithPongReceiveHandler:)]) {
+            [task sendPingWithPongReceiveHandler:^(NSError *error) {
+                dispatch_async(self.queue, ^{
+                    if (gen != self.connGen) return;
+                    if (error) {
+                        relay_log([NSString stringWithFormat:@"heartbeat ping failed: %@", error.localizedDescription]);
+                        [self scheduleReconnect];
+                    } else {
+                        self.lastPongAt = [NSDate timeIntervalSinceReferenceDate];
+                    }
+                });
+            }];
+        }
+        [self heartbeatTickForGen:gen];
+    });
 }
 
 - (void)scheduleReconnect {
