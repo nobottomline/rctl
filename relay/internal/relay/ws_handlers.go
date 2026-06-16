@@ -77,6 +77,9 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 	_ = wsjsonWrite(r.Context(), ws, map[string]any{"type": "hello_ack", "device_id": deviceID, "status": status})
 	s.audit(r, "device_connected", "device_id", deviceID, "status", status)
 	s.log.Info("device connected", "device_id", deviceID, "status", status)
+	hbCtx, hbCancel := context.WithCancel(r.Context())
+	defer hbCancel()
+	go s.deviceHeartbeat(hbCtx, dc)
 	s.deviceReadLoop(r.Context(), dc)
 	s.audit(r, "device_disconnected", "device_id", deviceID)
 }
@@ -212,6 +215,33 @@ func (s *server) authenticateDeviceSecret(ctx context.Context, token string) (st
 		return "", err
 	}
 	return deviceID, nil
+}
+
+// deviceHeartbeat pings the device connection on the configured interval. Pings
+// keep the relay->device path non-idle so a NAT/firewall does not silently drop
+// an idle WebSocket (the cause of devices going stale-online), and detect a dead
+// peer: a ping with no pong within the write timeout closes the connection so the
+// read loop exits, the device is marked offline, and the device reconnects.
+func (s *server) deviceHeartbeat(ctx context.Context, dc *deviceConn) {
+	if s.cfg.HeartbeatEvery <= 0 {
+		return
+	}
+	ticker := time.NewTicker(s.cfg.HeartbeatEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, s.cfg.WriteTimeout)
+			err := dc.ws.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				_ = dc.ws.Close(websocket.StatusPolicyViolation, "heartbeat failed")
+				return
+			}
+		}
+	}
 }
 
 func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
