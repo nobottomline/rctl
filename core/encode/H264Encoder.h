@@ -25,6 +25,13 @@ rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
 void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us);
 void rctl_encoder_destroy(rctl_encoder *e);
 
+// Live, low-overhead controls (no session restart). Safe to call from a
+// different thread than the encode loop.
+//  - set_bitrate updates the average target and a hard short-window cap;
+//  - request_keyframe forces the next encoded frame to be an IDR.
+void rctl_encoder_set_bitrate(rctl_encoder *e, int bitrate_bps);
+void rctl_encoder_request_keyframe(rctl_encoder *e);
+
 #ifdef __cplusplus
 }
 #endif

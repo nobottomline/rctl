@@ -30,6 +30,7 @@ struct rctl_encoder {
     rctl_nal_cb cb;
     void *ctx;
     int srcW, srcH, dstW, dstH;
+    int force_keyframe; // set by rctl_encoder_request_keyframe; consumed in encode
 };
 
 static const uint8_t kStartCode[4] = { 0, 0, 0, 1 };
@@ -173,11 +174,41 @@ void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) 
 
     CMTime pts = CMTimeMake(pts_us, 1000000);
     VTEncodeInfoFlags flags = 0;
-    OSStatus s = VTCompressionSessionEncodeFrame(e->session, frame, pts, kCMTimeInvalid, NULL, NULL, &flags);
+    CFDictionaryRef frameProps = NULL;
+    if (__atomic_exchange_n(&e->force_keyframe, 0, __ATOMIC_SEQ_CST)) {
+        const void *k = kVTEncodeFrameOptionKey_ForceKeyFrame;
+        const void *v = kCFBooleanTrue;
+        frameProps = CFDictionaryCreate(NULL, &k, &v, 1,
+                                        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    }
+    OSStatus s = VTCompressionSessionEncodeFrame(e->session, frame, pts, kCMTimeInvalid, frameProps, NULL, &flags);
+    if (frameProps) CFRelease(frameProps);
     if (s != noErr) fprintf(stderr, "[enc] EncodeFrame err %d\n", (int)s);
 
     if (scaled) CVPixelBufferRelease(scaled);
     CVPixelBufferRelease(src);
+}
+
+void rctl_encoder_set_bitrate(rctl_encoder *e, int bitrate_bps) {
+    if (!e || !e->session || bitrate_bps < 100000) return;
+    set_int(e->session, kVTCompressionPropertyKey_AverageBitRate, bitrate_bps);
+    // Hard cap on short bursts (~1.5x average over 1s) so a single large IDR
+    // cannot blow the link budget. DataRateLimits is [bytes, seconds].
+    int capBytes = (int)((double)bitrate_bps / 8.0 * 1.5);
+    CFNumberRef bytesNum = CFNumberCreate(NULL, kCFNumberIntType, &capBytes);
+    double oneSec = 1.0;
+    CFNumberRef secNum = CFNumberCreate(NULL, kCFNumberDoubleType, &oneSec);
+    const void *vals[2] = { bytesNum, secNum };
+    CFArrayRef limits = CFArrayCreate(NULL, vals, 2, &kCFTypeArrayCallBacks);
+    VTSessionSetProperty(e->session, kVTCompressionPropertyKey_DataRateLimits, limits);
+    CFRelease(limits);
+    CFRelease(bytesNum);
+    CFRelease(secNum);
+}
+
+void rctl_encoder_request_keyframe(rctl_encoder *e) {
+    if (!e) return;
+    __atomic_store_n(&e->force_keyframe, 1, __ATOMIC_SEQ_CST);
 }
 
 void rctl_encoder_destroy(rctl_encoder *e) {
