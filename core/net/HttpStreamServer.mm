@@ -23,17 +23,39 @@
 #import <math.h>
 
 #define RCTL_MAX_CLIENTS 8
+#define RCTL_SUB_QUEUE_MAX 24      // per-subscriber queued frames before drop-to-latest
 #define RCTL_AUDIO_TEST_RATE 48000
 #define RCTL_AUDIO_TEST_FRAMES 960
 #define RCTL_AUDIO_MAX_CHANNELS 2
 #define RCTL_AUDIO_MAX_FRAMES 4096
+
+// One queued, already-framed message for a subscriber.
+typedef struct {
+    uint8_t *buf;   // HTTP-chunk-framed bytes ready to send (owned)
+    size_t   len;
+    bool     is_video;
+    bool     is_key;
+} rctl_frame;
+
+// A /stream subscriber. Sends are non-blocking: the producer enqueues frames
+// and opportunistically flushes, so a slow socket only backs up this
+// subscriber's bounded queue. On overflow we drop queued video and wait for
+// the next keyframe (drop-to-latest) instead of blocking the encoder.
+typedef struct {
+    int fd;                          // -1 = empty slot
+    rctl_frame q[RCTL_SUB_QUEUE_MAX];
+    int head, count;
+    size_t cur_off;                  // bytes of q[head] already sent
+    bool needs_keyframe;             // dropped video; skip deltas until a keyframe
+    bool lagging;                    // overflowed at least once (adaptation hint)
+} rctl_sub;
 
 struct rctl_http_server {
     int listen_fd;
     int port;
     pthread_t thread;
     pthread_mutex_t mtx;
-    int clients[RCTL_MAX_CLIENTS]; // stream subscriber fds (-1 = empty)
+    rctl_sub subs[RCTL_MAX_CLIENTS]; // stream subscribers (fd < 0 = empty)
     uint8_t *keyframe;
     size_t keyframe_len;
     uint64_t keyframe_pts_us;
@@ -61,7 +83,7 @@ struct rctl_http_server {
 // Number of live /stream subscribers (caller holds the mutex).
 static int count_clients_locked(rctl_http_server *s) {
     int n = 0;
-    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->clients[i] >= 0) n++;
+    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->subs[i].fd >= 0) n++;
     return n;
 }
 
@@ -219,13 +241,14 @@ static void put_le16(uint8_t *p, int16_t v) {
     p[1] = (uint8_t)(((uint16_t)v >> 8) & 0xff);
 }
 
-static bool send_frame_chunk(int fd, uint8_t type, const uint8_t *data, size_t len) {
+// Build one HTTP chunk ("<hex>\r\n" + appframe + "\r\n") into a malloc'd buffer.
+static uint8_t *build_frame_chunk(uint8_t type, const uint8_t *data, size_t len, size_t *out_total) {
     char hdr[32];
     size_t af_len = 5 + len;
     int hl = snprintf(hdr, sizeof(hdr), "%zx\r\n", af_len);
     size_t total = (size_t)hl + af_len + 2;
     uint8_t *b = (uint8_t *)malloc(total);
-    if (!b) return false;
+    if (!b) return NULL;
     memcpy(b, hdr, hl);
     uint8_t *af = b + hl;
     af[0] = type;
@@ -233,19 +256,18 @@ static bool send_frame_chunk(int fd, uint8_t type, const uint8_t *data, size_t l
     af[3] = (len >> 8) & 0xff;  af[4] = len & 0xff;
     if (len) memcpy(af + 5, data, len);
     b[total - 2] = '\r'; b[total - 1] = '\n';
-    bool ok = send_full(fd, b, total);
-    free(b);
-    return ok;
+    *out_total = total;
+    return b;
 }
 
-static bool send_video_chunk(int fd, uint8_t type, uint64_t pts_us, const uint8_t *data, size_t len) {
-    if (len > UINT32_MAX - 8 || len > SIZE_MAX - 13) return false;
+static uint8_t *build_video_chunk(uint8_t type, uint64_t pts_us, const uint8_t *data, size_t len, size_t *out_total) {
+    if (len > UINT32_MAX - 8 || len > SIZE_MAX - 13) return NULL;
     char hdr[32];
     size_t af_len = 5 + 8 + len;
     int hl = snprintf(hdr, sizeof(hdr), "%zx\r\n", af_len);
     size_t total = (size_t)hl + af_len + 2;
     uint8_t *b = (uint8_t *)malloc(total);
-    if (!b) return false;
+    if (!b) return NULL;
     memcpy(b, hdr, hl);
     uint8_t *af = b + hl;
     af[0] = type;
@@ -255,9 +277,92 @@ static bool send_video_chunk(int fd, uint8_t type, uint64_t pts_us, const uint8_
     put_be64(af + 5, pts_us);
     if (len) memcpy(af + 13, data, len);
     b[total - 2] = '\r'; b[total - 1] = '\n';
-    bool ok = send_full(fd, b, total);
-    free(b);
-    return ok;
+    *out_total = total;
+    return b;
+}
+
+static void sub_set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+// Free every queued frame and reset the queue (caller holds the server mutex).
+static void sub_clear(rctl_sub *sub) {
+    for (int i = 0; i < sub->count; i++) free(sub->q[(sub->head + i) % RCTL_SUB_QUEUE_MAX].buf);
+    sub->head = sub->count = 0;
+    sub->cur_off = 0;
+}
+
+// Drop queued video frames after backpressure, keeping control/audio so the
+// stream resyncs cleanly at the next keyframe instead of showing a gap.
+static void sub_drop_video(rctl_sub *sub) {
+    rctl_frame keep[RCTL_SUB_QUEUE_MAX];
+    int kn = 0;
+    bool head_kept = false;
+    for (int i = 0; i < sub->count; i++) {
+        rctl_frame f = sub->q[(sub->head + i) % RCTL_SUB_QUEUE_MAX];
+        if (f.is_video) { free(f.buf); continue; }
+        if (i == 0) head_kept = true;     // the partially-sent head survived
+        keep[kn++] = f;
+    }
+    if (!head_kept) sub->cur_off = 0;     // head dropped; restart at next frame
+    for (int i = 0; i < kn; i++) sub->q[i] = keep[i];
+    sub->head = 0;
+    sub->count = kn;
+}
+
+// Enqueue an owned, framed buffer, applying drop-to-latest on overflow.
+static void sub_enqueue(rctl_sub *sub, uint8_t *buf, size_t len, bool is_video, bool is_key) {
+    if (!buf) return;
+    if (is_video && !is_key && sub->needs_keyframe) { free(buf); return; } // awaiting resync
+    if (sub->count >= RCTL_SUB_QUEUE_MAX) {
+        sub_drop_video(sub);
+        sub->needs_keyframe = true;
+        sub->lagging = true;
+        if (is_video && !is_key) { free(buf); return; }   // don't queue the stale delta
+        if (sub->count >= RCTL_SUB_QUEUE_MAX) {            // still full (control only): drop oldest
+            free(sub->q[sub->head].buf);
+            sub->head = (sub->head + 1) % RCTL_SUB_QUEUE_MAX;
+            sub->count--;
+            sub->cur_off = 0;
+        }
+    }
+    rctl_frame *slot = &sub->q[(sub->head + sub->count) % RCTL_SUB_QUEUE_MAX];
+    slot->buf = buf; slot->len = len; slot->is_video = is_video; slot->is_key = is_key;
+    sub->count++;
+    if (is_video && is_key) sub->needs_keyframe = false;
+}
+
+// Flush as much of the queue as the socket accepts without blocking.
+// Returns false if the socket errored (subscriber is dead).
+static bool sub_flush(rctl_sub *sub) {
+    while (sub->count > 0) {
+        rctl_frame *f = &sub->q[sub->head];
+        ssize_t w = send(sub->fd, f->buf + sub->cur_off, f->len - sub->cur_off, MSG_NOSIGNAL);
+        if (w > 0) {
+            sub->cur_off += (size_t)w;
+            if (sub->cur_off >= f->len) {
+                free(f->buf);
+                sub->head = (sub->head + 1) % RCTL_SUB_QUEUE_MAX;
+                sub->count--;
+                sub->cur_off = 0;
+            }
+            continue;
+        }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return true; // socket full; later
+        if (w < 0 && errno == EINTR) continue;
+        return false; // EPIPE / ECONNRESET / etc — dead
+    }
+    return true;
+}
+
+// Close and reset a subscriber slot (caller holds the server mutex).
+static void sub_close(rctl_sub *sub) {
+    if (sub->fd >= 0) close(sub->fd);
+    sub_clear(sub);
+    sub->fd = -1;
+    sub->needs_keyframe = false;
+    sub->lagging = false;
 }
 
 static void broadcast_locked(rctl_http_server *s, uint8_t type, const uint8_t *data, size_t len);
@@ -330,16 +435,27 @@ static void handle_client(rctl_http_server *s, int fd) {
         if (!send_full(fd, h, strlen(h))) { close(fd); return; }
         struct timeval tv = { 1, 0 }; // drop a stalled (e.g. dropped-Wi-Fi) client fast
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        sub_set_nonblock(fd);
         pthread_mutex_lock(&s->mtx);
-        if (s->keyframe) send_video_chunk(fd, 1, s->keyframe_pts_us, s->keyframe, s->keyframe_len);
-        { uint8_t ob = (uint8_t)s->orientation; send_frame_chunk(fd, 2, &ob, 1); }
         int slot = -1;
-        for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->clients[i] < 0) { slot = i; break; }
+        for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->subs[i].fd < 0) { slot = i; break; }
         bool became_active = false;
         rctl_session_cb scb = s->session_cb; void *sctx = s->session_ctx;
         if (slot >= 0) {
-            s->clients[slot] = fd;
-            if (!s->was_active) { s->was_active = true; became_active = true; }  // 0 -> 1: wake
+            rctl_sub *sub = &s->subs[slot];
+            sub->fd = fd; sub->head = sub->count = 0; sub->cur_off = 0;
+            sub->needs_keyframe = false; sub->lagging = false;
+            // Prime the subscriber: cached keyframe (so it can decode immediately)
+            // then the current orientation.
+            if (s->keyframe) {
+                size_t kt = 0;
+                uint8_t *kb = build_video_chunk(1, s->keyframe_pts_us, s->keyframe, s->keyframe_len, &kt);
+                sub_enqueue(sub, kb, kt, true, true);
+            }
+            { uint8_t ob = (uint8_t)s->orientation; size_t ot = 0;
+              uint8_t *obf = build_frame_chunk(2, &ob, 1, &ot); sub_enqueue(sub, obf, ot, false, false); }
+            if (!sub_flush(sub)) sub_close(sub);
+            else if (!s->was_active) { s->was_active = true; became_active = true; }  // 0 -> 1: wake
         } else close(fd);
         pthread_mutex_unlock(&s->mtx);
         if (became_active && scb) scb(sctx, true);
@@ -520,7 +636,7 @@ rctl_http_server *rctl_http_start(int port) {
     rctl_http_server *s = (rctl_http_server *)calloc(1, sizeof(rctl_http_server));
     s->listen_fd = lfd; s->port = port; s->running = true; s->orientation = 1;
     s->audio_test_hz = 440;
-    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) s->clients[i] = -1;
+    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) s->subs[i].fd = -1;
     pthread_mutex_init(&s->mtx, NULL);
     s->audio_thread_started = pthread_create(&s->audio_thread, NULL, audio_test_loop, s) == 0;
     pthread_create(&s->thread, NULL, accept_loop, s);
@@ -528,22 +644,35 @@ rctl_http_server *rctl_http_start(int port) {
     return s;
 }
 
+// Enqueue a framed message to every subscriber (own copy each) and flush what
+// the sockets accept without blocking; reap subscribers whose socket errored.
+static void broadcast_frame_locked(rctl_http_server *s, const uint8_t *buf, size_t len,
+                                   bool is_video, bool is_key) {
+    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) {
+        rctl_sub *sub = &s->subs[i];
+        if (sub->fd < 0) continue;
+        uint8_t *copy = (uint8_t *)malloc(len);
+        if (copy) { memcpy(copy, buf, len); sub_enqueue(sub, copy, len, is_video, is_key); }
+        if (!sub_flush(sub)) sub_close(sub);
+    }
+}
+
 // Broadcast a typed control frame to all subscribers (caller holds the mutex).
 static void broadcast_locked(rctl_http_server *s, uint8_t type, const uint8_t *data, size_t len) {
-    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) {
-        int fd = s->clients[i];
-        if (fd < 0) continue;
-        if (!send_frame_chunk(fd, type, data, len)) { close(fd); s->clients[i] = -1; }
-    }
+    size_t total = 0;
+    uint8_t *buf = build_frame_chunk(type, data, len, &total);
+    if (!buf) return;
+    broadcast_frame_locked(s, buf, total, false, false);
+    free(buf);
 }
 
 static void broadcast_video_locked(rctl_http_server *s, uint8_t type, uint64_t pts_us,
                                    const uint8_t *data, size_t len) {
-    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) {
-        int fd = s->clients[i];
-        if (fd < 0) continue;
-        if (!send_video_chunk(fd, type, pts_us, data, len)) { close(fd); s->clients[i] = -1; }
-    }
+    size_t total = 0;
+    uint8_t *buf = build_video_chunk(type, pts_us, data, len, &total);
+    if (!buf) return;
+    broadcast_frame_locked(s, buf, total, true, type == 1);
+    free(buf);
 }
 
 void rctl_http_push_au(rctl_http_server *s, const uint8_t *data, size_t len,
@@ -667,7 +796,7 @@ void rctl_http_stop(rctl_http_server *s) {
     close(s->listen_fd);
     if (s->audio_thread_started) pthread_join(s->audio_thread, NULL);
     pthread_mutex_lock(&s->mtx);
-    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->clients[i] >= 0) close(s->clients[i]);
+    for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->subs[i].fd >= 0) sub_close(&s->subs[i]);
     free(s->keyframe);
     pthread_mutex_unlock(&s->mtx);
     free(s);
