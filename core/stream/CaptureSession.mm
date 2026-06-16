@@ -60,6 +60,14 @@ rctl_session *rctl_session_start(int fps, int bitrate, double scale, rctl_nal_cb
     return s;
 }
 
+void rctl_session_set_bitrate(rctl_session *s, int bitrate_bps) {
+    if (s && s->enc) rctl_encoder_set_bitrate(s->enc, bitrate_bps);
+}
+
+void rctl_session_request_keyframe(rctl_session *s) {
+    if (s && s->enc) rctl_encoder_request_keyframe(s->enc);
+}
+
 void rctl_session_stop(rctl_session *s) {
     if (!s) return;
     if (s->timer) {
