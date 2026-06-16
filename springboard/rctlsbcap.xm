@@ -465,6 +465,11 @@ static void *ipc_manager(void *unused) {
                                 : qtype == RCTL_Q_AUDIOOUT  ? rctl_audio_output_info() : @"";
                     send_reply(reqid, r);
                 });
+            } else if (type == RCTL_MSG_BITRATE && len >= 4) {
+                int32_t br; memcpy(&br, buf, sizeof br);
+                dispatch_async(dispatch_get_main_queue(), ^{ if (gSession) rctl_session_set_bitrate(gSession, br); });
+            } else if (type == RCTL_MSG_KEYFRAME) {
+                dispatch_async(dispatch_get_main_queue(), ^{ if (gSession) rctl_session_request_keyframe(gSession); });
             } else if (type == RCTL_MSG_ACTIVE && len >= 1) {
                 rctl_set_active(buf[0] != 0);     // viewer connected (1) / gone (0)
             } else if (type == RCTL_MSG_FX && len >= 1) {

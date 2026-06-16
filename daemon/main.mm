@@ -73,6 +73,12 @@ static int16_t read_le16s(const uint8_t *p) {
 }
 
 static rctl_http_server *gHttp = NULL;
+
+// --- Network-driven bitrate adaptation (AIMD over /stream egress backpressure) ---
+#define RCTL_BITRATE_FLOOR 600000
+static pthread_mutex_t gAdaptLock = PTHREAD_MUTEX_INITIALIZER;
+static int gBitrateCeiling = 20000000;   // ceiling from the last /config preset
+static int gBitrateCurrent = 20000000;   // live adapted bitrate sent to SB
 static rctl_ipc        *gSB    = NULL;                       // current SB connection
 static pthread_mutex_t  gSBLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t  gAudioCtlLock = PTHREAD_MUTEX_INITIALIZER;
@@ -151,6 +157,10 @@ static void on_key(void *ctx, int page, int usage, int down) {
 static void on_reconfigure(void *ctx, int fps, double scale, int bitrate) {
     rctl_ipc_config m = { (int32_t)fps, scale, (int32_t)bitrate };
     send_to_sb(RCTL_MSG_CONFIG, &m, sizeof m);
+    pthread_mutex_lock(&gAdaptLock);
+    gBitrateCeiling = bitrate;       // the preset is the ceiling the loop adapts under
+    gBitrateCurrent = bitrate;
+    pthread_mutex_unlock(&gAdaptLock);
     rctl_http_signal_reset(gHttp);   // stream resolution/SPS will change
 }
 
@@ -840,6 +850,46 @@ static void *audio_tcp_thread(void *unused) {
     }
 }
 
+// Network-driven bitrate adaptation. While a viewer is connected, sample egress
+// backpressure every 400ms and steer the encoder (AIMD): on a drop, cut bitrate
+// hard and force a keyframe so laggers resync fast; when the send queue fully
+// drains, probe the bitrate back up toward the preset ceiling.
+static void *adapt_thread(void *unused) {
+    int prev_clients = 0;
+    for (;;) {
+        usleep(400000);
+        int has = (gHttp && rctl_http_has_clients(gHttp)) ? 1 : 0;
+        if (has && !prev_clients) {   // new viewing session: probe from the ceiling
+            pthread_mutex_lock(&gAdaptLock);
+            gBitrateCurrent = gBitrateCeiling;
+            pthread_mutex_unlock(&gAdaptLock);
+        }
+        prev_clients = has;
+        if (!has) continue;
+
+        int maxq = 0, lagged = 0;
+        rctl_http_egress_sample(gHttp, &maxq, &lagged);
+
+        pthread_mutex_lock(&gAdaptLock);
+        int ceiling = gBitrateCeiling, cur = gBitrateCurrent, next = cur;
+        bool back_off = false;
+        if (lagged > 0) {                 // dropping frames -> back off hard
+            next = cur * 3 / 5;
+            if (next < RCTL_BITRATE_FLOOR) next = RCTL_BITRATE_FLOOR;
+            back_off = true;
+        } else if (maxq == 0) {           // queue fully drained -> probe up
+            next = cur + ceiling / 16;
+            if (next > ceiling) next = ceiling;
+        }
+        gBitrateCurrent = next;
+        pthread_mutex_unlock(&gAdaptLock);
+
+        if (next != cur) { int32_t br = next; send_to_sb(RCTL_MSG_BITRATE, &br, sizeof br); }
+        if (back_off) send_to_sb(RCTL_MSG_KEYFRAME, NULL, 0);
+    }
+    return NULL;
+}
+
 static void *ipc_thread(void *unused) {
     rctl_ipc_server *srv = rctl_ipc_listen(RCTL_IPC_SOCK_PATH);
     if (!srv) { dlog("ipc listen FAILED"); return NULL; }
@@ -914,6 +964,8 @@ int main(int argc, char **argv) {
         pthread_create(&at, NULL, audio_ipc_thread, NULL);
         pthread_t tt;
         pthread_create(&tt, NULL, audio_tcp_thread, NULL);
+        pthread_t adt;
+        pthread_create(&adt, NULL, adapt_thread, NULL);
 
         dispatch_main();
     }

@@ -31,6 +31,8 @@ enum {
     RCTL_MSG_REPLY  = 0x19,  // SB->daemon: [4B BE reqid][payload]
     RCTL_MSG_ACTIVE = 0x1A,  // daemon->SB: [1B active] run capture+keep-awake (1) or idle/sleep (0)
     RCTL_MSG_FX     = 0x1B,  // daemon->SB: [1B subtype][data] fun FX (1=say,2=sound,3=flash,4=banner)
+    RCTL_MSG_BITRATE= 0x1C,  // daemon->SB: int32 live encode bitrate (no session restart)
+    RCTL_MSG_KEYFRAME=0x1D,  // daemon->SB: force the next encoded frame to an IDR
 };
 
 // Query types carried in RCTL_MSG_QUERY (request/response over the socket).

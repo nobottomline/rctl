@@ -74,6 +74,12 @@ void rctl_http_set_session(rctl_http_server *s, rctl_session_cb cb, void *ctx);
 // True if at least one /stream client is currently subscribed.
 bool rctl_http_has_clients(rctl_http_server *s);
 
+// Sample egress backpressure for the bitrate-adaptation loop: *out_max_queue
+// is the deepest subscriber send queue; *out_lagged counts subscribers that
+// dropped video since the last sample (clearing their lagging flag). Either
+// pointer may be NULL.
+void rctl_http_egress_sample(rctl_http_server *s, int *out_max_queue, int *out_lagged);
+
 void rctl_http_stop(rctl_http_server *s);
 
 #ifdef __cplusplus

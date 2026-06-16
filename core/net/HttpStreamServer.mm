@@ -790,6 +790,22 @@ bool rctl_http_has_clients(rctl_http_server *s) {
     return any;
 }
 
+void rctl_http_egress_sample(rctl_http_server *s, int *out_max_queue, int *out_lagged) {
+    int maxq = 0, lagged = 0;
+    if (s) {
+        pthread_mutex_lock(&s->mtx);
+        for (int i = 0; i < RCTL_MAX_CLIENTS; i++) {
+            rctl_sub *sub = &s->subs[i];
+            if (sub->fd < 0) continue;
+            if (sub->count > maxq) maxq = sub->count;
+            if (sub->lagging) { lagged++; sub->lagging = false; }
+        }
+        pthread_mutex_unlock(&s->mtx);
+    }
+    if (out_max_queue) *out_max_queue = maxq;
+    if (out_lagged) *out_lagged = lagged;
+}
+
 void rctl_http_stop(rctl_http_server *s) {
     if (!s) return;
     s->running = false;
