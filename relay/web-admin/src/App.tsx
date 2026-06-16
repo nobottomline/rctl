@@ -9,12 +9,13 @@ import { SessionsPanel } from './components/SessionsPanel'
 import { Modal } from './components/ui/Modal'
 import { Button } from './components/ui/Button'
 import { api, ApiError } from './lib/api'
-import type { Device, Session } from './types'
+import type { Device, EnrollmentSummary, Session } from './types'
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null) // null = checking
   const [devices, setDevices] = useState<Device[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
+  const [enrollments, setEnrollments] = useState<EnrollmentSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [busyId, setBusyId] = useState('')
@@ -25,9 +26,14 @@ export default function App() {
   const loadAll = useCallback(async ({ silent }: { silent?: boolean } = {}) => {
     if (!silent) setRefreshing(true)
     try {
-      const [d, s] = await Promise.all([api.devices(), api.sessions()])
+      const [d, s, e] = await Promise.all([
+        api.devices(),
+        api.sessions(),
+        api.enrollments(),
+      ])
       setDevices(d.devices || [])
       setSessions(s.sessions || [])
+      setEnrollments(e.enrollments || [])
       setAuthed(true)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) setAuthed(false)
@@ -44,10 +50,15 @@ export default function App() {
     let cancelled = false
     ;(async () => {
       try {
-        const [d, s] = await Promise.all([api.devices(), api.sessions()])
+        const [d, s, e] = await Promise.all([
+          api.devices(),
+          api.sessions(),
+          api.enrollments(),
+        ])
         if (cancelled) return
         setDevices(d.devices || [])
         setSessions(s.sessions || [])
+        setEnrollments(e.enrollments || [])
         setAuthed(true)
       } catch {
         if (!cancelled) setAuthed(false)
@@ -168,7 +179,10 @@ export default function App() {
           onAction={handleAction}
         />
         <div className="flex flex-col gap-5">
-          <EnrollPanel />
+          <EnrollPanel
+            enrollments={enrollments}
+            onChanged={() => loadAll({ silent: true })}
+          />
           <SessionsPanel
             sessions={sessions}
             busyId={busyId}

@@ -1,6 +1,9 @@
 package relay
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 func (s *server) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -40,5 +43,19 @@ CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
 CREATE INDEX IF NOT EXISTS idx_enrollments_token_hash ON enrollments(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_secret_hash ON sessions(secret_hash);
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	// Additive column migrations (idempotent: ignore "duplicate column" so this
+	// runs cleanly on both fresh and existing databases).
+	for _, stmt := range []string{
+		`ALTER TABLE enrollments ADD COLUMN label TEXT`,
+		`ALTER TABLE enrollments ADD COLUMN revoked_at INTEGER`,
+	} {
+		if _, e := s.db.ExecContext(ctx, stmt); e != nil &&
+			!strings.Contains(e.Error(), "duplicate column") {
+			return e
+		}
+	}
+	return nil
 }

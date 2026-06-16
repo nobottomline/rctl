@@ -120,6 +120,19 @@ func TestAuthenticateDeviceRejectsClaimingExistingApprovedID(t *testing.T) {
 	}
 }
 
+func TestAuthenticateDeviceRejectsRevokedEnrollment(t *testing.T) {
+	s, token := newAuthTestServer(t)
+	if _, err := s.db.ExecContext(context.Background(),
+		`UPDATE enrollments SET revoked_at=? WHERE token_hash=?`,
+		time.Now().Unix(), hashToken(token)); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "/device", nil)
+	if _, _, err := s.authenticateDevice(r, token, "ipad", "iPad"); err == nil {
+		t.Fatal("authenticateDevice accepted a revoked enrollment token")
+	}
+}
+
 func newAuthTestServer(t *testing.T) (*server, string) {
 	t.Helper()
 

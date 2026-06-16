@@ -2,11 +2,17 @@
 // request is credentialed same-origin. A 401 means "not signed in".
 
 import type {
+  CreateEnrollmentOptions,
   DevicesResponse,
   Enrollment,
+  EnrollmentSummary,
   RevokeResult,
   SessionsResponse,
 } from '../types'
+
+interface EnrollmentsResponse {
+  enrollments: EnrollmentSummary[]
+}
 
 export class ApiError extends Error {
   status: number
@@ -46,8 +52,17 @@ export const api = {
   logout: () => request<Ok>('/api/admin/logout', { method: 'POST' }),
 
   devices: () => request<DevicesResponse>('/api/admin/devices'),
-  createEnrollment: () =>
-    request<Enrollment>('/api/admin/enrollments', { method: 'POST' }),
+
+  enrollments: () => request<EnrollmentsResponse>('/api/admin/enrollments'),
+  createEnrollment: (opts: CreateEnrollmentOptions = {}) =>
+    request<Enrollment>('/api/admin/enrollments', {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    }),
+  revokeEnrollment: (id: string) =>
+    request<{ ok: boolean }>(`/api/admin/enrollments/${encodeURIComponent(id)}/revoke`, {
+      method: 'POST',
+    }),
   approveDevice: (id: string) =>
     request<Ok>(`/api/admin/devices/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
   revokeDevice: (id: string) =>

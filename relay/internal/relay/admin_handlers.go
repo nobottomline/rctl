@@ -158,27 +158,124 @@ func (s *server) clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: "rctl_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
 }
 
+const maxEnrollmentTTL = 90 * 24 * time.Hour
+
 func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Label      string `json:"label"`
+		TTLSeconds int64  `json:"ttl_seconds"`
+	}
+	_ = readJSON(r, &req) // body is optional (curl-friendly)
+
+	ttl := s.cfg.TokenTTL
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+		if ttl < time.Minute {
+			ttl = time.Minute
+		}
+		if ttl > maxEnrollmentTTL {
+			ttl = maxEnrollmentTTL
+		}
+	}
+	label := strings.TrimSpace(req.Label)
+	if n := []rune(label); len(n) > 80 {
+		label = string(n[:80])
+	}
+
 	tokenID, tokenSecret, err := newTokenPair("enroll")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "token_generation_failed")
 		return
 	}
 	now := time.Now()
+	expiresAt := now.Add(ttl)
 	token := tokenID + "." + tokenSecret
 	_, err = s.db.ExecContext(r.Context(),
-		`INSERT INTO enrollments(id, token_hash, expires_at, created_at) VALUES(?,?,?,?)`,
-		tokenID, hashToken(token), now.Add(s.cfg.TokenTTL).Unix(), now.Unix())
+		`INSERT INTO enrollments(id, token_hash, expires_at, created_at, label) VALUES(?,?,?,?,?)`,
+		tokenID, hashToken(token), expiresAt.Unix(), now.Unix(), label)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "enrollment_create_failed")
 		return
 	}
-	s.audit(r, "admin_enrollment_created", "enrollment_id", tokenID, "expires_at", now.Add(s.cfg.TokenTTL).UTC().Format(time.RFC3339))
+	s.audit(r, "admin_enrollment_created", "enrollment_id", tokenID, "expires_at", expiresAt.UTC().Format(time.RFC3339))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token":      token,
-		"expires_at": now.Add(s.cfg.TokenTTL).UTC().Format(time.RFC3339),
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 		"relay_url":  s.deviceWebSocketURL(),
 	})
+}
+
+func enrollmentStatus(now int64, expiresAt int64, usedAt, revokedAt sql.NullInt64) string {
+	switch {
+	case revokedAt.Valid:
+		return "revoked"
+	case usedAt.Valid:
+		return "used"
+	case expiresAt < now:
+		return "expired"
+	default:
+		return "active"
+	}
+}
+
+func (s *server) handleListEnrollments(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().Unix()
+	rows, err := s.db.QueryContext(r.Context(), `
+SELECT id, label, expires_at, used_at, revoked_at, created_at
+FROM enrollments
+ORDER BY created_at DESC`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "enrollment_list_failed")
+		return
+	}
+	defer rows.Close()
+
+	type enrollment struct {
+		ID        string `json:"id"`
+		Label     string `json:"label"`
+		Status    string `json:"status"`
+		CreatedAt int64  `json:"created_at"`
+		ExpiresAt int64  `json:"expires_at"`
+		UsedAt    *int64 `json:"used_at,omitempty"`
+		RevokedAt *int64 `json:"revoked_at,omitempty"`
+	}
+	out := []enrollment{}
+	for rows.Next() {
+		var e enrollment
+		var label sql.NullString
+		var used, revoked sql.NullInt64
+		if err := rows.Scan(&e.ID, &label, &e.ExpiresAt, &used, &revoked, &e.CreatedAt); err != nil {
+			writeErr(w, http.StatusInternalServerError, "enrollment_scan_failed")
+			return
+		}
+		e.Label = label.String
+		e.Status = enrollmentStatus(now, e.ExpiresAt, used, revoked)
+		if used.Valid {
+			e.UsedAt = &used.Int64
+		}
+		if revoked.Valid {
+			e.RevokedAt = &revoked.Int64
+		}
+		out = append(out, e)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enrollments": out})
+}
+
+func (s *server) handleRevokeEnrollment(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	res, err := s.db.ExecContext(r.Context(),
+		`UPDATE enrollments SET revoked_at=? WHERE id=? AND revoked_at IS NULL`,
+		time.Now().Unix(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "enrollment_revoke_failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErr(w, http.StatusNotFound, "enrollment_not_found")
+		return
+	}
+	s.audit(r, "admin_enrollment_revoked", "enrollment_id", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *server) handleListDevices(w http.ResponseWriter, r *http.Request) {

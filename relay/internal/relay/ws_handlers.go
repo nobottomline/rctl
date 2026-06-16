@@ -168,10 +168,13 @@ func (s *server) authenticateDevice(r *http.Request, token, claimedID, name stri
 
 	var enrollmentID string
 	var expiresAt int64
-	var usedAt sql.NullInt64
-	err = tx.QueryRowContext(ctx, `SELECT id, expires_at, used_at FROM enrollments WHERE token_hash=?`, tokenHash).Scan(&enrollmentID, &expiresAt, &usedAt)
+	var usedAt, revokedAt sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT id, expires_at, used_at, revoked_at FROM enrollments WHERE token_hash=?`, tokenHash).Scan(&enrollmentID, &expiresAt, &usedAt, &revokedAt)
 	if err != nil {
 		return "", "", errors.New("invalid token")
+	}
+	if revokedAt.Valid {
+		return "", "", errors.New("enrollment revoked")
 	}
 	if usedAt.Valid {
 		return "", "", errors.New("enrollment already used")

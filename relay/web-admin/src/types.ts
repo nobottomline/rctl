@@ -28,6 +28,23 @@ export interface Enrollment {
   relay_url: string
 }
 
+export type EnrollmentStatus = 'active' | 'used' | 'expired' | 'revoked'
+
+export interface EnrollmentSummary {
+  id: string
+  label: string
+  status: EnrollmentStatus
+  created_at: number
+  expires_at: number
+  used_at?: number
+  revoked_at?: number
+}
+
+export interface CreateEnrollmentOptions {
+  label?: string
+  ttl_seconds?: number
+}
+
 export interface DevicesResponse {
   devices: Device[]
 }
