@@ -18,18 +18,6 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin", http.StatusFound)
 }
 
-func (s *server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
-	writeText(w, http.StatusOK, "text/html; charset=utf-8", adminHTML)
-}
-
-func (s *server) handleAdminCSS(w http.ResponseWriter, r *http.Request) {
-	writeText(w, http.StatusOK, "text/css; charset=utf-8", adminCSS)
-}
-
-func (s *server) handleAdminJS(w http.ResponseWriter, r *http.Request) {
-	writeText(w, http.StatusOK, "application/javascript; charset=utf-8", adminJS)
-}
-
 func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Secret string `json:"secret"`

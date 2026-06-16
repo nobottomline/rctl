@@ -92,9 +92,8 @@ func Run() {
 
 func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", s.handleRoot)
-	mux.HandleFunc("GET /admin", s.handleAdminPage)
-	mux.HandleFunc("GET /assets/admin.css", s.handleAdminCSS)
-	mux.HandleFunc("GET /assets/admin.js", s.handleAdminJS)
+	mux.HandleFunc("GET /admin", s.handleAdminRoot)
+	mux.Handle("GET /admin/{path...}", s.handleAdminAssets())
 	mux.HandleFunc("GET /vendor/{path...}", s.handleWebVendor)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /api/admin/login", s.withRateLimit("login", s.cfg.LoginLimit, s.handleAdminLogin))
