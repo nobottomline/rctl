@@ -145,10 +145,26 @@ func (s *server) authenticateDevice(r *http.Request, token, claimedID, name stri
 		return "", "", err
 	}
 
+	// Otherwise the token must be a one-time enrollment token. Claiming an
+	// enrollment may only CREATE a new pending device, never adopt an existing
+	// id: a leaked enrollment token must not be able to hijack the identity of
+	// an already-approved device. The check, insert, and single-use consumption
+	// run in one transaction so the token cannot be claimed twice concurrently.
+	claimedID, ok := normalizeDeviceID(claimedID)
+	if !ok {
+		return "", "", errors.New("invalid device id")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
+
 	var enrollmentID string
 	var expiresAt int64
 	var usedAt sql.NullInt64
-	err = s.db.QueryRowContext(ctx, `SELECT id, expires_at, used_at FROM enrollments WHERE token_hash=?`, tokenHash).Scan(&enrollmentID, &expiresAt, &usedAt)
+	err = tx.QueryRowContext(ctx, `SELECT id, expires_at, used_at FROM enrollments WHERE token_hash=?`, tokenHash).Scan(&enrollmentID, &expiresAt, &usedAt)
 	if err != nil {
 		return "", "", errors.New("invalid token")
 	}
@@ -159,19 +175,26 @@ func (s *server) authenticateDevice(r *http.Request, token, claimedID, name stri
 		return "", "", errors.New("enrollment expired")
 	}
 
-	claimedID, ok := normalizeDeviceID(claimedID)
-	if !ok {
-		return "", "", errors.New("invalid device id")
-	}
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO devices(id, name, status, enroll_token_hash, created_at, updated_at, last_seen_at)
-VALUES(?, ?, 'pending', ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at
-`, claimedID, name, tokenHash, now, now, now)
-	if err != nil {
+	var existing int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM devices WHERE id=?`, claimedID).Scan(&existing); err != nil {
 		return "", "", err
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE enrollments SET used_at=? WHERE id=?`, now, enrollmentID)
+	if existing != 0 {
+		return "", "", errors.New("device id already registered")
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO devices(id, name, status, enroll_token_hash, created_at, updated_at, last_seen_at)
+VALUES(?, ?, 'pending', ?, ?, ?, ?)`, claimedID, name, tokenHash, now, now, now); err != nil {
+		return "", "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE enrollments SET used_at=? WHERE id=?`, now, enrollmentID); err != nil {
+		return "", "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+
 	s.audit(r, "device_enrollment_claimed", "device_id", claimedID, "enrollment_id", enrollmentID)
 	return claimedID, "pending", nil
 }

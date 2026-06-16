@@ -84,6 +84,42 @@ func TestAuthenticateDeviceRejectsInvalidClaimedIDWithoutUsingEnrollment(t *test
 	}
 }
 
+func TestAuthenticateDeviceRejectsClaimingExistingApprovedID(t *testing.T) {
+	s, token := newAuthTestServer(t)
+	now := time.Now().Unix()
+	victimSecret := hashToken("dev_victim.secret")
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO devices(id, name, status, device_secret_hash, created_at, updated_at) VALUES(?,?,?,?,?,?)`,
+		"victim", "victim", "approved", victimSecret, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	r := httptest.NewRequest("GET", "/device", nil)
+	if _, _, err := s.authenticateDevice(r, token, "victim", "attacker"); err == nil {
+		t.Fatal("enrollment token was allowed to claim an existing approved device id")
+	}
+
+	// The victim row must be completely untouched.
+	var status, name, secret string
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT status, name, device_secret_hash FROM devices WHERE id=?`, "victim").Scan(&status, &name, &secret); err != nil {
+		t.Fatal(err)
+	}
+	if status != "approved" || name != "victim" || secret != victimSecret {
+		t.Fatalf("victim device mutated: status=%q name=%q secret_changed=%v", status, name, secret != victimSecret)
+	}
+
+	// A rejected claim must not consume the single-use enrollment token.
+	var usedAt sql.NullInt64
+	if err := s.db.QueryRowContext(context.Background(), `SELECT used_at FROM enrollments`).Scan(&usedAt); err != nil {
+		t.Fatal(err)
+	}
+	if usedAt.Valid {
+		t.Fatal("rejected claim consumed the enrollment token")
+	}
+}
+
 func newAuthTestServer(t *testing.T) (*server, string) {
 	t.Helper()
 
