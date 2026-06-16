@@ -24,6 +24,7 @@ type deviceConn struct {
 	pendingHTTP   map[string]chan httpTunnelResponse
 	pendingStream map[string]chan streamTunnelEvent
 	pendingTerm   map[string]chan termTunnelEvent
+	pendingSignal map[string]chan signalTunnelEvent
 }
 
 func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +68,7 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		pendingHTTP:   make(map[string]chan httpTunnelResponse),
 		pendingStream: make(map[string]chan streamTunnelEvent),
 		pendingTerm:   make(map[string]chan termTunnelEvent),
+		pendingSignal: make(map[string]chan signalTunnelEvent),
 	}
 	s.registerDevice(dc)
 	defer s.unregisterDevice(deviceID, dc)
@@ -347,6 +349,20 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 			default:
 				dc.closeTerm(envelope.ID, ch)
 			}
+		}
+	case "webrtc_signal":
+		var event signalTunnelEvent
+		if json.Unmarshal(payload, &event) != nil {
+			return true
+		}
+		dc.mu.Lock()
+		ch := dc.pendingSignal[envelope.ID]
+		if event.Kind == "close" && ch != nil {
+			delete(dc.pendingSignal, envelope.ID)
+		}
+		dc.mu.Unlock()
+		if ch != nil {
+			dc.sendSignalEvent(envelope.ID, ch, event)
 		}
 	default:
 		return false
