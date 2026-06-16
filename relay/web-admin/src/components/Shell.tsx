@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { LogOut, RadioTower, RefreshCw } from 'lucide-react'
 import { Button } from './ui/Button'
+import { ThemeToggle } from './ThemeToggle'
 import { cn } from '../lib/cn'
 
 export function Shell({
@@ -16,37 +17,39 @@ export function Shell({
   children: ReactNode
 }) {
   return (
-    <div className="mx-auto min-h-svh w-full max-w-[78rem] px-4 sm:px-6 lg:px-8">
-      <header className="sticky top-0 z-30 -mx-4 mb-2 flex items-center justify-between gap-3 border-b border-line/70 bg-bg/70 px-4 py-3.5 backdrop-blur-xl sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-        <div className="flex items-center gap-3">
-          <div className="grid size-9 place-items-center rounded-[10px] bg-signal/12 ring-1 ring-signal/25">
-            <RadioTower className="size-[18px] text-signal" />
-          </div>
-          <div className="leading-tight">
-            <div className="font-mono text-[14px] font-medium tracking-tight text-fg">
+    <div className="min-h-svh pb-12">
+      {/* floating pill navbar */}
+      <div className="sticky top-3.5 z-30 mx-auto w-full max-w-[78rem] px-4 sm:px-6 lg:px-8">
+        <header className="flex items-center justify-between gap-3 rounded-full border border-line/70 bg-surface/65 py-2 pl-4 pr-2 shadow-[0_14px_38px_-16px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+          <div className="flex items-center gap-2.5">
+            <div className="grid size-8 place-items-center rounded-full bg-signal/12 ring-1 ring-signal/25">
+              <RadioTower className="size-4 text-signal" />
+            </div>
+            <div className="font-mono text-[13.5px] font-medium tracking-tight text-fg">
               rctl<span className="text-signal">·</span>relay
             </div>
-            <div className="hidden text-[11px] text-muted sm:block">operator console</div>
           </div>
-        </div>
 
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={onRefresh} disabled={refreshing}>
-            <RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onSignOut}>
-            <LogOut className="size-4" />
-            <span className="hidden sm:inline">Sign out</span>
-          </Button>
-        </div>
-      </header>
+          <div className="flex items-center gap-1">
+            <ThemeToggle />
+            <span className="mx-1 h-5 w-px bg-line" />
+            <Button variant="ghost" size="sm" onClick={onRefresh} disabled={refreshing}>
+              <RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onSignOut}>
+              <LogOut className="size-4" />
+              <span className="hidden sm:inline">Sign out</span>
+            </Button>
+          </div>
+        </header>
+      </div>
 
       <motion.main
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-        className="grid grid-cols-1 gap-5 py-5 lg:grid-cols-[minmax(0,1fr)_22rem]"
+        className="mx-auto grid w-full max-w-[78rem] grid-cols-1 gap-5 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:px-8"
       >
         {children}
       </motion.main>

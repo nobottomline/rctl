@@ -26,6 +26,10 @@
   --color-danger: #fb6f7d;
   --color-danger-lo: #1f1013;
 
+  /* text that sits on top of a filled accent (theme-aware) */
+  --color-on-signal: #1a1206;
+  --color-on-danger: #1a0a0c;
+
   --font-sans: 'Hanken Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', monospace;
 
@@ -206,4 +210,66 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .aurora-blob { animation: none; }
+}
+
+/* ── Warm theme: terracotta on cream / sand ────────────────────────────────── */
+.warm {
+  --color-bg: #f3ead7;
+  --color-bg-2: #eee3cd;
+  --color-surface: #fbf5e8;
+  --color-surface-2: #f1e7d3;
+  --color-elevated: #fefaf0;
+  --color-line: #e6d9bf;
+  --color-line-2: #d9c7a7;
+
+  --color-fg: #2d2417;
+  --color-fg-dim: #574a37;
+  --color-muted: #8c7b62;
+  --color-faint: #ad9b7f;
+
+  --color-signal: #c25e3a; /* terracotta */
+  --color-signal-hi: #d4734c;
+  --color-signal-lo: #f1ddca;
+
+  --color-online: #4f9a68; /* sage */
+  --color-pending: #c25e3a;
+  --color-danger: #be4438;
+  --color-danger-lo: #f4d8d2;
+
+  --color-on-signal: #fdf6ea;
+  --color-on-danger: #fff4f1;
+}
+
+.warm body::before {
+  background:
+    radial-gradient(58rem 40rem at 80% -10%, rgba(194, 94, 58, 0.14), transparent 60%),
+    radial-gradient(48rem 38rem at 6% 2%, rgba(79, 154, 104, 0.08), transparent 55%),
+    linear-gradient(180deg, var(--color-bg-2), var(--color-bg));
+}
+.warm body::after {
+  opacity: 0.07;
+}
+.warm ::selection {
+  background: rgba(194, 94, 58, 0.24);
+  color: #2d2417;
+}
+.warm ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-faint);
+  background-clip: content-box;
+}
+
+/* aurora reads on a light ground via multiply + warm pigments */
+.warm .aurora-blob {
+  mix-blend-mode: multiply;
+  opacity: 0.5;
+  filter: blur(100px);
+}
+.warm .aurora-a {
+  background: radial-gradient(circle, rgba(194, 94, 58, 0.42), transparent 62%);
+}
+.warm .aurora-b {
+  background: radial-gradient(circle, rgba(79, 154, 104, 0.3), transparent 62%);
+}
+.warm .aurora-c {
+  background: radial-gradient(circle, rgba(212, 142, 84, 0.4), transparent 62%);
 }

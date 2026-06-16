@@ -27,7 +27,7 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
             'h-11 w-full rounded-xl border border-line bg-bg/55 px-3.5 text-[15px] text-fg outline-none transition-[border-color,box-shadow,background-color] duration-200 placeholder:text-faint',
             'hover:border-line-2',
             'focus:border-signal/55 focus:bg-bg/80 focus:outline-none focus-visible:outline-none',
-            'focus:shadow-[0_0_0_3px_rgba(246,169,59,0.12),0_2px_14px_-4px_rgba(246,169,59,0.3)]',
+            'focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-signal)_15%,transparent),0_2px_14px_-4px_color-mix(in_oklab,var(--color-signal)_35%,transparent)]',
             Icon && 'pl-10',
             className,
           )}

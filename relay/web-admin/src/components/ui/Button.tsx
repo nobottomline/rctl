@@ -8,11 +8,11 @@ type Size = 'sm' | 'md' | 'lg' | 'icon'
 
 const variants: Record<Variant, string> = {
   primary:
-    'bg-signal text-[#1a1206] font-semibold hover:bg-signal-hi shadow-[0_1px_0_0_rgba(255,255,255,0.25)_inset,0_8px_24px_-8px_rgba(246,169,59,0.55)]',
+    'bg-signal text-on-signal font-semibold hover:bg-signal-hi shadow-[0_1px_0_0_rgba(255,255,255,0.22)_inset,0_8px_24px_-8px_color-mix(in_oklab,var(--color-signal)_55%,transparent)]',
   secondary: 'bg-surface-2 text-fg ring-line hover:bg-elevated hover:ring-line-2',
   ghost: 'text-fg-dim hover:bg-surface-2 hover:text-fg',
   danger: 'bg-danger/12 text-danger ring-1 ring-danger/25 hover:bg-danger/20',
-  'danger-solid': 'bg-danger text-[#1a0a0c] font-semibold hover:brightness-110',
+  'danger-solid': 'bg-danger text-on-danger font-semibold hover:brightness-110',
 }
 
 const sizes: Record<Size, string> = {
