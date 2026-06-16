@@ -175,7 +175,7 @@ func newControlPageTestServer(t *testing.T) controlPageTestServer {
 	sessionSecret := "test-secret"
 	if _, err := db.ExecContext(context.Background(),
 		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at) VALUES(?, ?, ?, ?, ?)`,
-		sessionID, hashToken(sessionSecret), now+3600, now, now,
+		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now+3600, now, now,
 	); err != nil {
 		t.Fatal(err)
 	}

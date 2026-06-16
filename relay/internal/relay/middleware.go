@@ -40,15 +40,17 @@ func parseSessionCookie(r *http.Request) (string, string, bool) {
 func (s *server) validSessionToken(r *http.Request, sessionID, secret string) bool {
 	now := time.Now().Unix()
 	var secretHash string
-	var expiresAt int64
-	err := s.db.QueryRowContext(r.Context(), `SELECT secret_hash, expires_at FROM sessions WHERE id=?`, sessionID).Scan(&secretHash, &expiresAt)
+	var expiresAt, lastSeen int64
+	err := s.db.QueryRowContext(r.Context(), `SELECT secret_hash, expires_at, last_seen_at FROM sessions WHERE id=?`, sessionID).Scan(&secretHash, &expiresAt, &lastSeen)
 	if err != nil || expiresAt < now {
 		return false
 	}
-	if subtle.ConstantTimeCompare([]byte(secretHash), []byte(hashToken(secret))) != 1 {
+	if subtle.ConstantTimeCompare([]byte(secretHash), []byte(hmacToken(s.cfg.SessionSecret, secret))) != 1 {
 		return false
 	}
-	_, _ = s.db.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=? WHERE id=?`, now, sessionID)
+	if now-lastSeen >= 60 { // refresh last_seen at most once a minute, not on every request
+		_, _ = s.db.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=? WHERE id=?`, now, sessionID)
+	}
 	return true
 }
 

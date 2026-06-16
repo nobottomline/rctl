@@ -52,7 +52,7 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	_, err = s.db.ExecContext(r.Context(),
 		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at) VALUES(?,?,?,?,?)`,
-		sessionID, hashToken(sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix())
+		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "session_create_failed")
 		return
