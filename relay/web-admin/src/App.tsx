@@ -7,10 +7,11 @@ import { DevicesPanel, type ActionKey } from './components/DevicesPanel'
 import { EnrollPanel } from './components/EnrollPanel'
 import { SessionsPanel } from './components/SessionsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
+import { StatusPanel } from './components/StatusPanel'
 import { Modal } from './components/ui/Modal'
 import { Button } from './components/ui/Button'
 import { api, ApiError } from './lib/api'
-import type { AuditEntry, Device, EnrollmentSummary, Session } from './types'
+import type { AuditEntry, Device, EnrollmentSummary, RelayStatus, Session } from './types'
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null) // null = checking
@@ -18,6 +19,7 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [enrollments, setEnrollments] = useState<EnrollmentSummary[]>([])
   const [audit, setAudit] = useState<AuditEntry[]>([])
+  const [status, setStatus] = useState<RelayStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [busyId, setBusyId] = useState('')
@@ -31,16 +33,18 @@ export default function App() {
   const loadAll = useCallback(async ({ silent }: { silent?: boolean } = {}) => {
     if (!silent) setRefreshing(true)
     try {
-      const [d, s, e, a] = await Promise.all([
+      const [d, s, e, a, st] = await Promise.all([
         api.devices(),
         api.sessions(),
         api.enrollments(),
         api.audit(),
+        api.status(),
       ])
       setDevices(d.devices || [])
       setSessions(s.sessions || [])
       setEnrollments(e.enrollments || [])
       setAudit(a.audit || [])
+      setStatus(st)
       setAuthed(true)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) setAuthed(false)
@@ -57,17 +61,19 @@ export default function App() {
     let cancelled = false
     ;(async () => {
       try {
-        const [d, s, e, a] = await Promise.all([
+        const [d, s, e, a, st] = await Promise.all([
           api.devices(),
           api.sessions(),
           api.enrollments(),
           api.audit(),
+          api.status(),
         ])
         if (cancelled) return
         setDevices(d.devices || [])
         setSessions(s.sessions || [])
         setEnrollments(e.enrollments || [])
         setAudit(a.audit || [])
+        setStatus(st)
         setAuthed(true)
       } catch {
         if (!cancelled) setAuthed(false)
@@ -190,6 +196,7 @@ export default function App() {
             devices={devices}
             loading={loading}
             busyId={busyId}
+            audit={audit}
             onAction={handleAction}
           />
           <ActivityPanel entries={audit} />
@@ -205,6 +212,7 @@ export default function App() {
             onRevoke={revokeSession}
             onRevokeOthers={revokeOthers}
           />
+          <StatusPanel status={status} />
         </div>
       </Shell>
 

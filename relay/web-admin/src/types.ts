@@ -83,3 +83,17 @@ export interface AuditEntry {
 export interface AuditResponse {
   audit: AuditEntry[]
 }
+
+export interface RelayStatus {
+  version: string
+  go_version: string
+  started_at: number
+  uptime_seconds: number
+  devices_total: number
+  devices_online: number
+  devices_pending: number
+  sessions: number
+  goroutines: number
+  mem_alloc_bytes: number
+  mem_sys_bytes: number
+}

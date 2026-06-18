@@ -65,6 +65,29 @@ export function describeUserAgent(ua?: string): string {
   return ua.length > 28 ? ua.slice(0, 28) + '…' : ua
 }
 
+export function fmtUptime(sec?: number): string {
+  if (!sec || sec < 0) return '—'
+  const d = Math.floor(sec / 86400)
+  const h = Math.floor((sec % 86400) / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m`
+  return `${Math.floor(sec)}s`
+}
+
+export function fmtBytes(n?: number): string {
+  if (!n) return '—'
+  const u = ['B', 'KB', 'MB', 'GB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${u[i]}`
+}
+
 // expires_at comes back as an RFC3339 string from the relay.
 export function rfc3339ToSec(value?: string): number {
   if (!value) return 0

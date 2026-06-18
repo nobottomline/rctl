@@ -18,10 +18,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Version is the build version, overridable via -ldflags "-X ...relay.Version=...".
+var Version = "dev"
+
 type server struct {
 	cfg config
 	db  *sql.DB
 	log *slog.Logger
+
+	startedAt time.Time
 
 	mu      sync.RWMutex
 	devices map[string]*deviceConn
@@ -49,11 +54,12 @@ func Run() {
 	db.SetMaxOpenConns(1)
 
 	s := &server{
-		cfg:     cfg,
-		db:      db,
-		log:     logger,
-		devices: make(map[string]*deviceConn),
-		limiter: newRateLimiter(5 * time.Minute),
+		cfg:       cfg,
+		db:        db,
+		log:       logger,
+		startedAt: time.Now(),
+		devices:   make(map[string]*deviceConn),
+		limiter:   newRateLimiter(5 * time.Minute),
 	}
 	if err := s.migrate(context.Background()); err != nil {
 		logger.Error("migrate database", "error", err)
@@ -98,6 +104,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /api/admin/login", s.withRateLimit("login", s.cfg.LoginLimit, s.handleAdminLogin))
 	mux.HandleFunc("POST /api/admin/logout", s.withAdmin(s.handleAdminLogout))
+	mux.HandleFunc("GET /api/admin/status", s.withAdmin(s.handleStatus))
 	mux.HandleFunc("GET /api/admin/sessions", s.withAdmin(s.handleListSessions))
 	mux.HandleFunc("GET /api/admin/audit", s.withAdmin(s.handleListAudit))
 	mux.HandleFunc("POST /api/admin/sessions/revoke-others", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeOtherSessions)))

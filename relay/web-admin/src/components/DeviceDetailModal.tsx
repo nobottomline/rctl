@@ -6,7 +6,10 @@ import {
   Cpu,
   ExternalLink,
   Hash,
+  PlugZap,
+  Power,
   RefreshCw,
+  RotateCw,
   Smartphone,
   Sun,
 } from 'lucide-react'
@@ -17,21 +20,38 @@ import { OnlineDot, StatusBadge } from './ui/Status'
 import { DetailSection, DetailField } from './ui/Detail'
 import { api, controlURL } from '../lib/api'
 import { fmtAbs, fmtRel } from '../lib/format'
-import type { Device, DeviceInfo } from '../types'
+import type { AuditEntry, Device, DeviceInfo } from '../types'
 
 export function DeviceDetailModal({
   device,
+  audit = [],
   onOpenChange,
 }: {
   device: Device | null
+  audit?: AuditEntry[]
   onOpenChange: (open: boolean) => void
 }) {
   const [info, setInfo] = useState<DeviceInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [copied, setCopied] = useState(false)
+  const [respringing, setRespringing] = useState(false)
+  const [confirmRespring, setConfirmRespring] = useState(false)
 
   const reachable = !!device && device.online && device.status === 'approved'
+
+  const history = device
+    ? audit
+        .filter((e) => {
+          if (e.event !== 'device_connected' && e.event !== 'device_disconnected') return false
+          try {
+            return (JSON.parse(e.detail || '{}') as { device_id?: string }).device_id === device.id
+          } catch {
+            return false
+          }
+        })
+        .slice(0, 6)
+    : []
 
   const load = useCallback(
     (d: Device) => {
@@ -48,6 +68,7 @@ export function DeviceDetailModal({
   )
 
   useEffect(() => {
+    setConfirmRespring(false)
     if (device) load(device)
   }, [device, load])
 
@@ -58,6 +79,20 @@ export function DeviceDetailModal({
       toast.success('Device ID copied')
       setTimeout(() => setCopied(false), 1600)
     })
+  }
+
+  async function respring() {
+    if (!device) return
+    setRespringing(true)
+    try {
+      await api.respringDevice(device.id)
+      toast.success('Respring sent')
+      setConfirmRespring(false)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Respring failed')
+    } finally {
+      setRespringing(false)
+    }
   }
 
   return (
@@ -141,6 +176,27 @@ export function DeviceDetailModal({
             ) : null}
           </DetailSection>
 
+          {reachable && (
+            <DetailSection title="Controls">
+              {!confirmRespring ? (
+                <Button variant="secondary" size="sm" onClick={() => setConfirmRespring(true)}>
+                  <RotateCw className="size-3.5" />
+                  Respring
+                </Button>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <span className="text-[12.5px] text-muted">Restart SpringBoard?</span>
+                  <Button variant="ghost" size="sm" onClick={() => setConfirmRespring(false)}>
+                    Cancel
+                  </Button>
+                  <Button variant="danger-solid" size="sm" loading={respringing} onClick={respring}>
+                    Confirm
+                  </Button>
+                </div>
+              )}
+            </DetailSection>
+          )}
+
           {/* Relay-side record */}
           <DetailSection title="Relay record">
             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -150,6 +206,26 @@ export function DeviceDetailModal({
               <DetailField label="Updated" value={fmtRel(device.updated_at)} />
             </div>
           </DetailSection>
+
+          {history.length > 0 && (
+            <DetailSection title="Connection history">
+              <ul className="space-y-1.5">
+                {history.map((e) => (
+                  <li key={e.id} className="flex items-center gap-2 text-[12.5px]">
+                    {e.event === 'device_connected' ? (
+                      <PlugZap className="size-3.5 shrink-0 text-online" />
+                    ) : (
+                      <Power className="size-3.5 shrink-0 text-muted" />
+                    )}
+                    <span className="text-fg-dim">
+                      {e.event === 'device_connected' ? 'Connected' : 'Disconnected'}
+                    </span>
+                    <span className="ml-auto text-muted tnum">{fmtRel(e.ts)}</span>
+                  </li>
+                ))}
+              </ul>
+            </DetailSection>
+          )}
 
           <div className="flex justify-end gap-2.5 pt-1">
             <Button variant="secondary" onClick={() => onOpenChange(false)}>

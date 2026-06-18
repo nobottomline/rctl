@@ -8,6 +8,7 @@ import type {
   DevicesResponse,
   Enrollment,
   EnrollmentSummary,
+  RelayStatus,
   RevokeResult,
   SessionsResponse,
 } from '../types'
@@ -56,7 +57,10 @@ export const api = {
   devices: () => request<DevicesResponse>('/api/admin/devices'),
   deviceInfo: (id: string) =>
     request<DeviceInfo>(`/proxy/devices/${encodeURIComponent(id)}/v1/deviceinfo`),
+  respringDevice: (id: string) =>
+    request<unknown>(`/proxy/devices/${encodeURIComponent(id)}/v1/respring`, { method: 'POST' }),
 
+  status: () => request<RelayStatus>('/api/admin/status'),
   audit: (limit = 100) => request<AuditResponse>(`/api/admin/audit?limit=${limit}`),
 
   enrollments: () => request<EnrollmentsResponse>('/api/admin/enrollments'),

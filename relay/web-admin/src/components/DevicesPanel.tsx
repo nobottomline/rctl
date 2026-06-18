@@ -9,6 +9,7 @@ import {
   Info,
   MonitorSmartphone,
   MoreHorizontal,
+  ShieldQuestion,
   Trash2,
   type LucideProps,
 } from 'lucide-react'
@@ -21,7 +22,7 @@ import { DeviceDetailModal } from './DeviceDetailModal'
 import { controlURL } from '../lib/api'
 import { fmtRel, shortId } from '../lib/format'
 import { cn } from '../lib/cn'
-import type { Device } from '../types'
+import type { AuditEntry, Device } from '../types'
 
 export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete' | 'details'
 
@@ -49,11 +50,13 @@ export type DevicesPanelProps = {
   devices: Device[]
   loading: boolean
   busyId: string
+  audit?: AuditEntry[]
   onAction: (key: ActionKey, device: Device) => void
 }
 
-export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPanelProps) {
+export function DevicesPanel({ devices, loading, busyId, audit, onAction }: DevicesPanelProps) {
   const online = devices.filter((d) => d.online).length
+  const pending = devices.filter((d) => d.status === 'pending').length
   const [detail, setDetail] = useState<Device | null>(null)
 
   function run(key: ActionKey, device: Device) {
@@ -77,6 +80,12 @@ export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPane
   return (
     <>
     <Panel title="Devices" subtitle={`${devices.length} total · ${online} online`}>
+      {pending > 0 && (
+        <div className="flex items-center gap-2.5 border-b border-line/70 bg-signal/8 px-5 py-2.5 text-[13px] font-medium text-signal">
+          <ShieldQuestion className="size-4 shrink-0" />
+          {pending} device{pending === 1 ? '' : 's'} awaiting approval
+        </div>
+      )}
       {loading && devices.length === 0 ? (
         <Skeleton />
       ) : devices.length === 0 ? (
@@ -100,7 +109,7 @@ export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPane
         </ul>
       )}
     </Panel>
-    <DeviceDetailModal device={detailLive} onOpenChange={(o) => !o && setDetail(null)} />
+    <DeviceDetailModal device={detailLive} audit={audit} onOpenChange={(o) => !o && setDetail(null)} />
     </>
   )
 }
