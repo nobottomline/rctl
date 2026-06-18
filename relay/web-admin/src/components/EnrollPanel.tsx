@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   Ban,
   Check,
+  ChevronDown,
   Copy,
   KeyRound,
   MoreHorizontal,
@@ -134,12 +135,11 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
             {enrollments.map((e) => (
               <motion.li
                 key={e.id}
-                layout
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
-                className="flex items-center gap-3 px-5 py-3"
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="flex items-center gap-3 overflow-hidden px-5 py-3"
               >
                 <div className="grid size-7 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted ring-1 ring-line">
                   <Ticket className="size-3.5" />
@@ -223,23 +223,28 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
               />
               <div>
                 <span className="mb-2 block text-[13px] font-medium text-fg-dim">Expires after</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {TTLS.map((o) => (
+                <Menu
+                  align="start"
+                  trigger={
                     <button
-                      key={o.value}
                       type="button"
-                      onClick={() => setTtl(o)}
-                      className={cn(
-                        'rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium ring-1 transition-colors',
-                        ttl.value === o.value
-                          ? 'bg-signal text-on-signal ring-signal'
-                          : 'bg-surface-2 text-fg-dim ring-line hover:text-fg hover:ring-line-2',
-                      )}
+                      className="group flex w-full items-center justify-between rounded-xl bg-surface-2 px-3.5 py-2.5 text-[14px] text-fg ring-1 ring-line transition-colors hover:ring-line-2 focus:outline-none focus-visible:outline-none data-[state=open]:ring-signal/60"
+                    >
+                      {ttl.label}
+                      <ChevronDown className="size-4 text-muted transition-transform group-data-[state=open]:rotate-180" />
+                    </button>
+                  }
+                >
+                  {TTLS.map((o) => (
+                    <MenuItem
+                      key={o.value}
+                      icon={ttl.value === o.value ? Check : undefined}
+                      onSelect={() => setTtl(o)}
                     >
                       {o.label}
-                    </button>
+                    </MenuItem>
                   ))}
-                </div>
+                </Menu>
               </div>
               <div className="flex justify-end gap-2.5 pt-1">
                 <Button variant="secondary" onClick={() => setOpen(false)}>

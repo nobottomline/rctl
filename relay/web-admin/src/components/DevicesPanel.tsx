@@ -75,11 +75,11 @@ export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPane
             {devices.map((d, i) => (
               <motion.li
                 key={d.id}
-                layout
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.25, delay: Math.min(i * 0.025, 0.2) }}
+                className="overflow-hidden"
               >
                 <DeviceRow device={d} busy={busyId === d.id} run={run} />
               </motion.li>

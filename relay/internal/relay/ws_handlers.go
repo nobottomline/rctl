@@ -231,15 +231,25 @@ func (s *server) deviceHeartbeat(ctx context.Context, dc *deviceConn) {
 	}
 	ticker := time.NewTicker(s.cfg.HeartbeatEvery)
 	defer ticker.Stop()
+	missed := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pingCtx, cancel := context.WithTimeout(ctx, s.cfg.WriteTimeout)
+			// An idle iOS device throttles its background networking, so it can
+			// be slow to pong without the connection actually being dead. Tolerate
+			// a few consecutive misses (~3 intervals) before dropping it, rather
+			// than killing a recoverable connection on the first slow pong; the
+			// pings themselves also keep the link warm and nudge the device.
+			pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			err := dc.ws.Ping(pingCtx)
 			cancel()
-			if err != nil {
+			if err == nil {
+				missed = 0
+				continue
+			}
+			if missed++; missed >= 3 {
 				_ = dc.ws.Close(websocket.StatusPolicyViolation, "heartbeat failed")
 				return
 			}

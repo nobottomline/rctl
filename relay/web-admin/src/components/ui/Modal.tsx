@@ -13,6 +13,17 @@ export type ModalProps = {
   className?: string
 }
 
+// A nested Radix popper (a dropdown menu, select, etc.) portals its content
+// outside the dialog's DOM subtree, so clicking it reads as an "outside"
+// interaction that would otherwise dismiss the dialog. Keep the dialog open
+// when the interaction lands inside any popper.
+function isInsidePopper(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest('[data-radix-popper-content-wrapper]') !== null
+  )
+}
+
 export function Modal({
   open,
   onOpenChange,
@@ -40,6 +51,9 @@ export function Modal({
                 asChild
                 forceMount
                 onOpenAutoFocus={(e) => e.preventDefault()}
+                onInteractOutside={(e) => {
+                  if (isInsidePopper(e.detail.originalEvent.target)) e.preventDefault()
+                }}
               >
                 <motion.div
                   initial={{ opacity: 0, scale: 0.94, y: 12 }}

@@ -37,12 +37,11 @@ export function SessionsPanel({
           {sessions.map((s) => (
             <motion.li
               key={s.id}
-              layout
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, height: 0 }}
               transition={{ duration: 0.22 }}
-              className="flex items-center gap-3 px-5 py-3.5"
+              className="flex items-center gap-3 overflow-hidden px-5 py-3.5"
             >
               <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted ring-1 ring-line">
                 <Monitor className="size-4" />
