@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Build the native (libdatachannel) spike peer against the locally-built library.
+set -euo pipefail
+cd "$(dirname "$0")"
+L=.lib/libdatachannel
+[ -f "$L/build/libdatachannel.dylib" ] || { echo "build libdatachannel first (see README)"; exit 1; }
+RPATH="$(cd "$L/build" && pwd)"
+clang++ -std=c++17 -O2 native_peer.cpp \
+  -I"$L/include" -I"$L/deps/json/single_include" \
+  -L"$L/build" -ldatachannel \
+  -Wl,-rpath,"$RPATH" \
+  -o native_peer
+echo "built ./native_peer"
