@@ -4,6 +4,7 @@ import { KeyRound, ShieldCheck } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Field } from './ui/Field'
 import { AuroraBackground } from './AuroraBackground'
+import { ThemeToggle } from './ThemeToggle'
 import { api, ApiError } from '../lib/api'
 
 export function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
@@ -36,6 +37,9 @@ export function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
     <>
       <AuroraBackground />
       <div className="relative z-10 grid min-h-svh place-items-center p-5">
+        <div className="absolute right-5 top-5">
+          <ThemeToggle />
+        </div>
         <motion.div
           initial={{ opacity: 0, y: 16, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
