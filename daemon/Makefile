@@ -16,7 +16,7 @@ rctld_FILES = main.mm \
               ../core/net/Term.mm \
               ../core/ipc/Ipc.c
 rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
-rctld_FRAMEWORKS = Foundation
+rctld_FRAMEWORKS = Foundation IOKit
 rctld_INSTALL_PATH = /usr/local/bin
 
 include $(THEOS)/makefiles/tool.mk

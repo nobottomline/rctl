@@ -4,6 +4,15 @@
 #import <time.h>
 #import <pthread.h>
 
+// IOPMAssertion (IOKit power management) — declared locally with C linkage; the
+// header isn't in the iOS SDK. Used to keep the device awake ONLY while
+// reconnecting.
+extern "C" {
+typedef uint32_t RCTLPMAssertionID;
+int IOPMAssertionCreateWithName(CFStringRef type, uint32_t level, CFStringRef name, RCTLPMAssertionID *assertionID);
+int IOPMAssertionRelease(RCTLPMAssertionID assertionID);
+}
+
 #define RCTL_RELAY_CONFIG_PLIST @"/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist"
 
 static void relay_log(NSString *line) {
@@ -49,6 +58,8 @@ static void *relay_supervisor_main(void *arg);
 @property(nonatomic, assign) NSInteger connGen;
 @property(nonatomic, assign) NSTimeInterval lastActivityAt;
 @property(nonatomic, assign) NSTimeInterval reconnectAt;
+@property(nonatomic, assign) uint32_t wakeAssertion;
+@property(nonatomic, assign) NSTimeInterval wakeAssertionAt;
 @end
 
 @implementation RCTLRelayClient
@@ -271,6 +282,7 @@ static void *relay_supervisor_main(void *arg);
     if ([type isEqualToString:@"hello_ack"]) {
         NSString *status = [dict[@"status"] isKindOfClass:[NSString class]] ? dict[@"status"] : @"unknown";
         self.reconnectDelay = 2;
+        [self releaseWakeAssertion];
         relay_log([NSString stringWithFormat:@"connected status=%@", status]);
     } else if ([type isEqualToString:@"approved"]) {
         NSString *secret = [dict[@"device_secret"] isKindOfClass:[NSString class]] ? dict[@"device_secret"] : nil;
@@ -724,8 +736,14 @@ didReceiveResponse:(NSURLResponse *)response
 // pings while connected, reconnects a stale/half-open link, and fires a pending
 // reconnect once due.
 - (void)supervisorTick {
-    if (!self.running) return;
+    if (!self.running) {
+        [self releaseWakeAssertion];
+        return;
+    }
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (self.wakeAssertion != 0 && now - self.wakeAssertionAt > 90.0) {
+        [self releaseWakeAssertion];   // cap: don't stay awake through a long outage
+    }
     if (self.task) {
         if (now - self.lastActivityAt > 40.0) {          // ~3 missed pings: dead/half-open
             relay_log(@"supervisor: link stale, reconnecting");
@@ -756,10 +774,36 @@ didReceiveResponse:(NSURLResponse *)response
     }];
 }
 
+// Keep the device awake ONLY while reconnecting. The disconnect that triggers a
+// reconnect is itself an inbound network event, so the device is briefly awake
+// at that moment — grab the assertion before it re-sleeps and hold it until we
+// reconnect (capped in supervisorTick), so the reconnect isn't stuck waiting for
+// the next time something else happens to wake the device. Released the instant
+// we connect, so steady-state idle costs nothing.
+- (void)takeWakeAssertion {
+    if (self.wakeAssertion != 0) return;
+    RCTLPMAssertionID aid = 0;
+    int rc = IOPMAssertionCreateWithName(CFSTR("PreventUserIdleSystemSleep"), 255,
+                                         CFSTR("com.greatlove.rctl.relay.reconnect"), &aid);
+    if (rc == 0 && aid != 0) {
+        self.wakeAssertion = aid;
+        self.wakeAssertionAt = [NSDate timeIntervalSinceReferenceDate];
+        relay_log(@"wake assertion held for reconnect");
+    }
+}
+
+- (void)releaseWakeAssertion {
+    if (self.wakeAssertion == 0) return;
+    IOPMAssertionRelease(self.wakeAssertion);
+    self.wakeAssertion = 0;
+    relay_log(@"wake assertion released");
+}
+
 - (void)scheduleReconnect {
     if (!self.running) return;
     if (self.reconnectScheduled) return;
     self.reconnectScheduled = YES;
+    [self takeWakeAssertion];
     [self resetTransport];
     NSInteger delay = self.reconnectDelay;
     self.reconnectDelay = MIN(self.reconnectDelay * 2, 60);
