@@ -2,7 +2,9 @@
 // request is credentialed same-origin. A 401 means "not signed in".
 
 import type {
+  AuditResponse,
   CreateEnrollmentOptions,
+  DeviceInfo,
   DevicesResponse,
   Enrollment,
   EnrollmentSummary,
@@ -52,6 +54,10 @@ export const api = {
   logout: () => request<Ok>('/api/admin/logout', { method: 'POST' }),
 
   devices: () => request<DevicesResponse>('/api/admin/devices'),
+  deviceInfo: (id: string) =>
+    request<DeviceInfo>(`/proxy/devices/${encodeURIComponent(id)}/v1/deviceinfo`),
+
+  audit: (limit = 100) => request<AuditResponse>(`/api/admin/audit?limit=${limit}`),
 
   enrollments: () => request<EnrollmentsResponse>('/api/admin/enrollments'),
   createEnrollment: (opts: CreateEnrollmentOptions = {}) =>

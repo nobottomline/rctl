@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,6 +115,50 @@ ORDER BY last_seen_at DESC`, now)
 		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	rows, err := s.db.QueryContext(r.Context(), `
+SELECT id, ts, event, ip, method, path, detail
+FROM audit_log
+ORDER BY id DESC
+LIMIT ?`, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "audit_list_failed")
+		return
+	}
+	defer rows.Close()
+
+	type entry struct {
+		ID     int64  `json:"id"`
+		TS     int64  `json:"ts"`
+		Event  string `json:"event"`
+		IP     string `json:"ip"`
+		Method string `json:"method"`
+		Path   string `json:"path"`
+		Detail string `json:"detail,omitempty"`
+	}
+	out := []entry{}
+	for rows.Next() {
+		var item entry
+		var ip, method, path, detail sql.NullString
+		if err := rows.Scan(&item.ID, &item.TS, &item.Event, &ip, &method, &path, &detail); err != nil {
+			writeErr(w, http.StatusInternalServerError, "audit_scan_failed")
+			return
+		}
+		item.IP = ip.String
+		item.Method = method.String
+		item.Path = path.String
+		item.Detail = detail.String
+		out = append(out, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audit": out})
 }
 
 func (s *server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {

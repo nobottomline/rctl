@@ -60,3 +60,26 @@ export interface RevokeResult {
   revoked?: number
   current_revoked?: boolean
 }
+
+// Live device info, proxied from the device's own /v1/deviceinfo endpoint.
+export interface DeviceInfo {
+  name?: string
+  model?: string
+  ios?: string
+  battery?: string
+  brightness?: number
+}
+
+export interface AuditEntry {
+  id: number
+  ts: number
+  event: string
+  ip: string
+  method: string
+  path: string
+  detail?: string
+}
+
+export interface AuditResponse {
+  audit: AuditEntry[]
+}

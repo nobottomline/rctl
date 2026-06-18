@@ -39,9 +39,20 @@ CREATE TABLE IF NOT EXISTS sessions (
 	last_seen_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS audit_log (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts INTEGER NOT NULL,
+	event TEXT NOT NULL,
+	ip TEXT,
+	method TEXT,
+	path TEXT,
+	detail TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
 CREATE INDEX IF NOT EXISTS idx_enrollments_token_hash ON enrollments(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_secret_hash ON sessions(secret_hash);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 `)
 	if err != nil {
 		return err

@@ -25,7 +25,9 @@ export function fmtRel(sec?: number): string {
 
 export function shortId(id: string, head = 8, tail = 4): string {
   if (!id || id.length <= head + tail + 1) return id
-  return `${id.slice(0, head)}…${id.slice(-tail)}`
+  // slice(-0) returns the whole string, so guard the tail explicitly.
+  const end = tail > 0 ? id.slice(-tail) : ''
+  return `${id.slice(0, head)}…${end}`
 }
 
 // Best-effort "Browser · OS" label from a User-Agent string.

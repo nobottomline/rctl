@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+import { useState, type ComponentType } from 'react'
 import * as ContextMenu from '@radix-ui/react-context-menu'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -6,6 +6,7 @@ import {
   Check,
   Copy,
   ExternalLink,
+  Info,
   MonitorSmartphone,
   MoreHorizontal,
   Trash2,
@@ -16,12 +17,13 @@ import { Button } from './ui/Button'
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from './ui/Menu'
 import { OnlineDot, StatusBadge } from './ui/Status'
 import { Panel } from './Shell'
+import { DeviceDetailModal } from './DeviceDetailModal'
 import { controlURL } from '../lib/api'
 import { fmtRel, shortId } from '../lib/format'
 import { cn } from '../lib/cn'
 import type { Device } from '../types'
 
-export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete'
+export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete' | 'details'
 
 interface Action {
   key: ActionKey
@@ -33,6 +35,7 @@ interface Action {
 
 function actionsFor(device: Device): Action[] {
   const list: Action[] = []
+  list.push({ key: 'details', label: 'View details', icon: Info })
   if (device.status === 'pending')
     list.push({ key: 'approve', label: 'Approve device', icon: Check })
   if (device.status === 'approved')
@@ -51,6 +54,7 @@ export type DevicesPanelProps = {
 
 export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPanelProps) {
   const online = devices.filter((d) => d.online).length
+  const [detail, setDetail] = useState<Device | null>(null)
 
   function run(key: ActionKey, device: Device) {
     if (key === 'copy') {
@@ -60,11 +64,19 @@ export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPane
       )
       return
     }
+    if (key === 'details') {
+      setDetail(device)
+      return
+    }
     onAction(key, device)
   }
 
+  // Keep the open detail modal in sync with fresh poll data.
+  const detailLive = detail ? devices.find((d) => d.id === detail.id) ?? detail : null
+
   return (
-    <Panel title="Devices" subtitle={`${devices.length} total · ${online} online`} className="self-start">
+    <>
+    <Panel title="Devices" subtitle={`${devices.length} total · ${online} online`}>
       {loading && devices.length === 0 ? (
         <Skeleton />
       ) : devices.length === 0 ? (
@@ -88,6 +100,8 @@ export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPane
         </ul>
       )}
     </Panel>
+    <DeviceDetailModal device={detailLive} onOpenChange={(o) => !o && setDetail(null)} />
+    </>
   )
 }
 

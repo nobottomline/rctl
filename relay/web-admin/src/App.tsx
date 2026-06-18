@@ -1,39 +1,46 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { Ban, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { LoginScreen } from './components/LoginScreen'
 import { Shell } from './components/Shell'
 import { DevicesPanel, type ActionKey } from './components/DevicesPanel'
 import { EnrollPanel } from './components/EnrollPanel'
 import { SessionsPanel } from './components/SessionsPanel'
+import { ActivityPanel } from './components/ActivityPanel'
 import { Modal } from './components/ui/Modal'
 import { Button } from './components/ui/Button'
 import { api, ApiError } from './lib/api'
-import type { Device, EnrollmentSummary, Session } from './types'
+import type { AuditEntry, Device, EnrollmentSummary, Session } from './types'
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null) // null = checking
   const [devices, setDevices] = useState<Device[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [enrollments, setEnrollments] = useState<EnrollmentSummary[]>([])
+  const [audit, setAudit] = useState<AuditEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [busyId, setBusyId] = useState('')
-  const [confirm, setConfirm] = useState<Device | null>(null)
-  const [deleting, setDeleting] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<{
+    kind: 'revoke' | 'delete'
+    device: Device
+  } | null>(null)
+  const [actingConfirm, setActingConfirm] = useState(false)
   const pollRef = useRef<number | undefined>(undefined)
 
   const loadAll = useCallback(async ({ silent }: { silent?: boolean } = {}) => {
     if (!silent) setRefreshing(true)
     try {
-      const [d, s, e] = await Promise.all([
+      const [d, s, e, a] = await Promise.all([
         api.devices(),
         api.sessions(),
         api.enrollments(),
+        api.audit(),
       ])
       setDevices(d.devices || [])
       setSessions(s.sessions || [])
       setEnrollments(e.enrollments || [])
+      setAudit(a.audit || [])
       setAuthed(true)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) setAuthed(false)
@@ -50,15 +57,17 @@ export default function App() {
     let cancelled = false
     ;(async () => {
       try {
-        const [d, s, e] = await Promise.all([
+        const [d, s, e, a] = await Promise.all([
           api.devices(),
           api.sessions(),
           api.enrollments(),
+          api.audit(),
         ])
         if (cancelled) return
         setDevices(d.devices || [])
         setSessions(s.sessions || [])
         setEnrollments(e.enrollments || [])
+        setAudit(a.audit || [])
         setAuthed(true)
       } catch {
         if (!cancelled) setAuthed(false)
@@ -87,8 +96,9 @@ export default function App() {
   }
 
   async function handleAction(key: ActionKey, device: Device) {
-    if (key === 'delete') {
-      setConfirm(device)
+    // Destructive actions go through a confirmation step.
+    if (key === 'delete' || key === 'revoke') {
+      setConfirmAction({ kind: key, device })
       return
     }
     setBusyId(device.id)
@@ -96,9 +106,6 @@ export default function App() {
       if (key === 'approve') {
         await api.approveDevice(device.id)
         toast.success(`${device.name} approved`)
-      } else if (key === 'revoke') {
-        await api.revokeDevice(device.id)
-        toast.success(`${device.name} revoked`)
       }
       await loadAll({ silent: true })
     } catch (err) {
@@ -108,18 +115,24 @@ export default function App() {
     }
   }
 
-  async function doDelete() {
-    if (!confirm) return
-    setDeleting(true)
+  async function doConfirm() {
+    if (!confirmAction) return
+    const { kind, device } = confirmAction
+    setActingConfirm(true)
     try {
-      await api.deleteDevice(confirm.id)
-      toast.success(`${confirm.name} deleted`)
-      setConfirm(null)
+      if (kind === 'delete') {
+        await api.deleteDevice(device.id)
+        toast.success(`${device.name} deleted`)
+      } else {
+        await api.revokeDevice(device.id)
+        toast.success(`${device.name} access revoked`)
+      }
+      setConfirmAction(null)
       await loadAll({ silent: true })
     } catch (err) {
       handleErr(err)
     } finally {
-      setDeleting(false)
+      setActingConfirm(false)
     }
   }
 
@@ -172,12 +185,15 @@ export default function App() {
   return (
     <>
       <Shell onRefresh={() => loadAll()} refreshing={refreshing} onSignOut={signOut}>
-        <DevicesPanel
-          devices={devices}
-          loading={loading}
-          busyId={busyId}
-          onAction={handleAction}
-        />
+        <div className="flex flex-col gap-5">
+          <DevicesPanel
+            devices={devices}
+            loading={loading}
+            busyId={busyId}
+            onAction={handleAction}
+          />
+          <ActivityPanel entries={audit} />
+        </div>
         <div className="flex flex-col gap-5">
           <EnrollPanel
             enrollments={enrollments}
@@ -193,22 +209,33 @@ export default function App() {
       </Shell>
 
       <Modal
-        open={!!confirm}
-        onOpenChange={(o) => !o && setConfirm(null)}
-        title="Delete device?"
+        open={!!confirmAction}
+        onOpenChange={(o) => !o && setConfirmAction(null)}
+        title={confirmAction?.kind === 'delete' ? 'Delete device?' : 'Revoke device access?'}
         description={
-          confirm
-            ? `“${confirm.name}” will be removed from the relay. If it reconnects it will need a fresh enrollment.`
+          confirmAction
+            ? confirmAction.kind === 'delete'
+              ? `“${confirmAction.device.name}” will be removed from the relay. If it reconnects it will need a fresh enrollment.`
+              : `“${confirmAction.device.name}” will be disconnected and blocked from the relay. A revoked device can’t be re-approved — restoring it needs a fresh enrollment.`
             : ''
         }
       >
         <div className="flex justify-end gap-2.5">
-          <Button variant="secondary" onClick={() => setConfirm(null)}>
+          <Button variant="secondary" onClick={() => setConfirmAction(null)}>
             Cancel
           </Button>
-          <Button variant="danger-solid" loading={deleting} onClick={doDelete}>
-            <Trash2 className="size-4" />
-            Delete device
+          <Button variant="danger-solid" loading={actingConfirm} onClick={doConfirm}>
+            {confirmAction?.kind === 'delete' ? (
+              <>
+                <Trash2 className="size-4" />
+                Delete device
+              </>
+            ) : (
+              <>
+                <Ban className="size-4" />
+                Revoke access
+              </>
+            )}
           </Button>
         </div>
       </Modal>

@@ -16,7 +16,10 @@ export function Menu({
   align?: DropdownMenu.DropdownMenuContentProps['align']
 }) {
   return (
-    <DropdownMenu.Root>
+    // modal={false}: when nested inside a Dialog, a modal dropdown's own
+    // pointer-blocking layer makes any in-dialog click (even on a field) read as
+    // an outside dismissal and closes the dialog. Non-modal avoids that.
+    <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content align={align} sideOffset={6} className={contentCls}>
