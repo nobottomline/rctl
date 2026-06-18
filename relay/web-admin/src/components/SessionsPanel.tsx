@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { LogOut, Monitor } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Panel } from './Shell'
-import { fmtRel } from '../lib/format'
+import { describeUserAgent, fmtRel } from '../lib/format'
 import type { Session } from '../types'
 
 export type SessionsPanelProps = {
@@ -49,16 +49,20 @@ export function SessionsPanel({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[13.5px] font-medium text-fg">
-                    {s.current ? 'This browser' : 'Browser session'}
+                  <span className="truncate text-[13.5px] font-medium text-fg">
+                    {describeUserAgent(s.user_agent)}
                   </span>
                   {s.current && (
-                    <span className="rounded-full bg-online/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-online ring-1 ring-online/25">
-                      current
+                    <span className="shrink-0 rounded-full bg-online/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-online ring-1 ring-online/25">
+                      this device
                     </span>
                   )}
                 </div>
-                <div className="mt-0.5 text-[12px] text-muted">seen {fmtRel(s.last_seen_at)}</div>
+                <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-muted">
+                  <span className="font-mono text-fg-dim">{s.ip || 'unknown IP'}</span>
+                  <span className="text-faint">·</span>
+                  <span>seen {fmtRel(s.last_seen_at)}</span>
+                </div>
               </div>
               {!s.current && (
                 <Button

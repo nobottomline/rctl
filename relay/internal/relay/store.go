@@ -51,6 +51,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_secret_hash ON sessions(secret_hash);
 	for _, stmt := range []string{
 		`ALTER TABLE enrollments ADD COLUMN label TEXT`,
 		`ALTER TABLE enrollments ADD COLUMN revoked_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN ip TEXT`,
+		`ALTER TABLE sessions ADD COLUMN user_agent TEXT`,
 	} {
 		if _, e := s.db.ExecContext(ctx, stmt); e != nil &&
 			!strings.Contains(e.Error(), "duplicate column") {

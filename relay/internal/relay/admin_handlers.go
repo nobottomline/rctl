@@ -38,9 +38,13 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	ua := r.UserAgent()
+	if len(ua) > 200 {
+		ua = ua[:200]
+	}
 	_, err = s.db.ExecContext(r.Context(),
-		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at) VALUES(?,?,?,?,?)`,
-		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix())
+		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at, ip, user_agent) VALUES(?,?,?,?,?,?,?)`,
+		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix(), s.clientIP(r), ua)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "session_create_failed")
 		return
@@ -77,7 +81,7 @@ func (s *server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE expires_at<?`, now)
 	rows, err := s.db.QueryContext(r.Context(), `
-SELECT id, expires_at, created_at, last_seen_at
+SELECT id, expires_at, created_at, last_seen_at, ip, user_agent
 FROM sessions
 WHERE expires_at>=?
 ORDER BY last_seen_at DESC`, now)
@@ -93,14 +97,19 @@ ORDER BY last_seen_at DESC`, now)
 		ExpiresAt  int64  `json:"expires_at"`
 		CreatedAt  int64  `json:"created_at"`
 		LastSeenAt int64  `json:"last_seen_at"`
+		IP         string `json:"ip"`
+		UserAgent  string `json:"user_agent"`
 	}
 	out := []session{}
 	for rows.Next() {
 		var item session
-		if err := rows.Scan(&item.ID, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt); err != nil {
+		var ip, ua sql.NullString
+		if err := rows.Scan(&item.ID, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &ip, &ua); err != nil {
 			writeErr(w, http.StatusInternalServerError, "session_scan_failed")
 			return
 		}
+		item.IP = ip.String
+		item.UserAgent = ua.String
 		item.Current = item.ID == currentID
 		out = append(out, item)
 	}

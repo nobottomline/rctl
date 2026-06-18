@@ -20,6 +20,8 @@ export interface Session {
   expires_at: number
   created_at: number
   last_seen_at: number
+  ip: string
+  user_agent: string
 }
 
 export interface Enrollment {
