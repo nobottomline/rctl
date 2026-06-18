@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <stdlib.h>
 #import <time.h>
+#import <pthread.h>
 
 #define RCTL_RELAY_CONFIG_PLIST @"/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist"
 
@@ -21,6 +22,17 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     return out;
 }
 
+// The relay connection is supervised by a dedicated pthread rather than GCD
+// dispatch_after timers: iOS defers background GCD timers by minutes when the
+// device is idle, which is what left the relay link dead until the device was
+// poked. A plain pthread waking on a kernel timer escapes that deferral.
+static pthread_t g_supervisor_thread;
+static pthread_mutex_t g_supervisor_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_supervisor_cond = PTHREAD_COND_INITIALIZER;
+static BOOL g_supervisor_started = NO;
+static BOOL g_supervisor_stop = NO;
+static void *relay_supervisor_main(void *arg);
+
 @interface RCTLRelayClient : NSObject
 @property(nonatomic, strong) NSURLSession *session;
 @property(nonatomic, strong) id task;
@@ -35,7 +47,8 @@ static NSString *relay_random_hex(NSUInteger bytes) {
 @property(nonatomic, assign) BOOL reconnectScheduled;
 @property(nonatomic, assign) NSInteger reconnectDelay;
 @property(nonatomic, assign) NSInteger connGen;
-@property(nonatomic, assign) NSTimeInterval lastPongAt;
+@property(nonatomic, assign) NSTimeInterval lastActivityAt;
+@property(nonatomic, assign) NSTimeInterval reconnectAt;
 @end
 
 @implementation RCTLRelayClient
@@ -138,9 +151,10 @@ static NSString *relay_random_hex(NSUInteger bytes) {
         self.task = [self.session webSocketTaskWithRequest:request];
         [self.task resume];
         relay_log(@"connecting");
+        self.lastActivityAt = [NSDate timeIntervalSinceReferenceDate];
         [self sendHello];
         [self receiveLoop];
-        [self startHeartbeat];
+        [self ensureSupervisor];
     } else {
         relay_log(@"disabled: NSURLSessionWebSocketTask requires iOS 13+");
         self.running = NO;
@@ -252,6 +266,7 @@ static NSString *relay_random_hex(NSUInteger bytes) {
     NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     if (![dict isKindOfClass:[NSDictionary class]]) return;
     NSString *type = [dict[@"type"] isKindOfClass:[NSString class]] ? dict[@"type"] : @"";
+    self.lastActivityAt = [NSDate timeIntervalSinceReferenceDate];
 
     if ([type isEqualToString:@"hello_ack"]) {
         NSString *status = [dict[@"status"] isKindOfClass:[NSString class]] ? dict[@"status"] : @"unknown";
@@ -674,41 +689,71 @@ didReceiveResponse:(NSURLResponse *)response
     }];
 }
 
-- (void)startHeartbeat API_AVAILABLE(ios(13.0)) {
-    self.lastPongAt = [NSDate timeIntervalSinceReferenceDate];
-    NSInteger gen = ++self.connGen;
-    [self heartbeatTickForGen:gen];
+// Start the supervisor pthread once; it lives for the daemon's lifetime and
+// ticks the serial queue on a cadence iOS does not defer the way it defers
+// background GCD timers.
+- (void)ensureSupervisor {
+    pthread_mutex_lock(&g_supervisor_mutex);
+    BOOL needStart = !g_supervisor_started;
+    if (needStart) {
+        g_supervisor_started = YES;
+        g_supervisor_stop = NO;
+    }
+    pthread_mutex_unlock(&g_supervisor_mutex);
+    if (!needStart) return;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&g_supervisor_thread, &attr, relay_supervisor_main, (__bridge void *)self) != 0) {
+        pthread_mutex_lock(&g_supervisor_mutex);
+        g_supervisor_started = NO;
+        pthread_mutex_unlock(&g_supervisor_mutex);
+        relay_log(@"supervisor: thread failed to start");
+    }
+    pthread_attr_destroy(&attr);
 }
 
-// Ping the relay periodically and reconnect if pongs stop arriving. This is the
-// device side of the keep-alive: it detects a half-open WebSocket (where the OS
-// never surfaces a read error) and self-heals instead of sitting "connected"
-// while the relay has already dropped us.
-- (void)heartbeatTickForGen:(NSInteger)gen API_AVAILABLE(ios(13.0)) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(18.0 * NSEC_PER_SEC)), self.queue, ^{
-        if (gen != self.connGen || !self.task) return;          // superseded or closed
-        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-        if (now - self.lastPongAt > 45.0) {                     // ~2+ missed pongs: dead/half-open
-            relay_log(@"heartbeat: no pong, reconnecting");
+- (void)supervisorWake {
+    dispatch_async(self.queue, ^{
+        [self supervisorTick];
+    });
+}
+
+// Runs on the serial queue, ticked by the un-throttled supervisor thread. Owns
+// the liveness check and reconnect timing that used to live on GCD timers: it
+// pings while connected, reconnects a stale/half-open link, and fires a pending
+// reconnect once due.
+- (void)supervisorTick {
+    if (!self.running) return;
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (self.task) {
+        if (now - self.lastActivityAt > 40.0) {          // ~3 missed pings: dead/half-open
+            relay_log(@"supervisor: link stale, reconnecting");
             [self scheduleReconnect];
             return;
         }
-        id task = self.task;
-        if ([task respondsToSelector:@selector(sendPingWithPongReceiveHandler:)]) {
-            [task sendPingWithPongReceiveHandler:^(NSError *error) {
-                dispatch_async(self.queue, ^{
-                    if (gen != self.connGen) return;
-                    if (error) {
-                        relay_log([NSString stringWithFormat:@"heartbeat ping failed: %@", error.localizedDescription]);
-                        [self scheduleReconnect];
-                    } else {
-                        self.lastPongAt = [NSDate timeIntervalSinceReferenceDate];
-                    }
-                });
-            }];
-        }
-        [self heartbeatTickForGen:gen];
-    });
+        [self sendKeepAlivePing];
+    } else if (self.reconnectAt > 0.0 && now >= self.reconnectAt) {
+        self.reconnectAt = 0.0;
+        [self connect];
+    }
+}
+
+- (void)sendKeepAlivePing {
+    id task = self.task;
+    if (![task respondsToSelector:@selector(sendPingWithPongReceiveHandler:)]) return;
+    NSInteger gen = self.connGen;
+    [task sendPingWithPongReceiveHandler:^(NSError *error) {
+        dispatch_async(self.queue, ^{
+            if (gen != self.connGen) return;
+            if (error) {
+                relay_log([NSString stringWithFormat:@"keepalive ping failed: %@", error.localizedDescription]);
+                [self scheduleReconnect];
+            } else {
+                self.lastActivityAt = [NSDate timeIntervalSinceReferenceDate];
+            }
+        });
+    }];
 }
 
 - (void)scheduleReconnect {
@@ -719,14 +764,29 @@ didReceiveResponse:(NSURLResponse *)response
     NSInteger delay = self.reconnectDelay;
     self.reconnectDelay = MIN(self.reconnectDelay * 2, 60);
     uint32_t jitterMs = arc4random_uniform(1000);
+    self.reconnectAt = [NSDate timeIntervalSinceReferenceDate] + (NSTimeInterval)delay + (NSTimeInterval)jitterMs / 1000.0;
     relay_log([NSString stringWithFormat:@"reconnect in %lds + %ums jitter", (long)delay, jitterMs]);
-    int64_t delayNs = (int64_t)(delay * NSEC_PER_SEC) + (int64_t)jitterMs * (int64_t)NSEC_PER_MSEC;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delayNs), self.queue, ^{
-        [self connect];
-    });
+    [self ensureSupervisor];
 }
 
 @end
+
+static void *relay_supervisor_main(void *arg) {
+    RCTLRelayClient *client = (__bridge RCTLRelayClient *)arg;
+    pthread_setname_np("com.greatlove.rctl.relay.supervisor");
+    while (1) {
+        struct timespec rel = { .tv_sec = 12, .tv_nsec = 0 };
+        pthread_mutex_lock(&g_supervisor_mutex);
+        pthread_cond_timedwait_relative_np(&g_supervisor_cond, &g_supervisor_mutex, &rel);
+        BOOL stop = g_supervisor_stop;
+        pthread_mutex_unlock(&g_supervisor_mutex);
+        if (stop) break;
+        @autoreleasepool {
+            [client supervisorWake];
+        }
+    }
+    return NULL;
+}
 
 void rctl_relay_start(void) {
     [[RCTLRelayClient shared] start];
