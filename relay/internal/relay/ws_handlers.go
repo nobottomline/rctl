@@ -229,7 +229,17 @@ func (s *server) deviceHeartbeat(ctx context.Context, dc *deviceConn) {
 	if s.cfg.HeartbeatEvery <= 0 {
 		return
 	}
-	ticker := time.NewTicker(s.cfg.HeartbeatEvery)
+	// An idle iOS device refreshes its own activity timer from INBOUND traffic
+	// (an arriving packet wakes its network stack) but throttles its OUTBOUND
+	// keepalive timers — so it would otherwise declare its own healthy link dead
+	// and reconnect. Send a frequent app-level ping the device can observe; cap
+	// the interval well below the device's stale window so its throttled timing
+	// can't false-trigger a drop.
+	interval := s.cfg.HeartbeatEvery
+	if interval > 15*time.Second {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	missed := 0
 	for {
@@ -237,19 +247,21 @@ func (s *server) deviceHeartbeat(ctx context.Context, dc *deviceConn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// An idle iOS device throttles its background networking, so it can
-			// be slow to pong without the connection actually being dead. Tolerate
-			// a few consecutive misses (~3 intervals) before dropping it, rather
-			// than killing a recoverable connection on the first slow pong; the
-			// pings themselves also keep the link warm and nudge the device.
-			pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			err := dc.ws.Ping(pingCtx)
+			reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			// App-level ping: an inbound message wakes the idle device and refreshes
+			// its activity timer (it replies with a pong we don't need to track).
+			// This is what keeps an idle device from dropping its own healthy link.
+			_ = dc.writeJSON(reqCtx, map[string]any{"type": "ping"})
+			// Protocol ping: the relay's own liveness probe. An idle device can be
+			// slow to pong without being dead, so tolerate a few consecutive misses
+			// before closing rather than killing a recoverable connection.
+			err := dc.ws.Ping(reqCtx)
 			cancel()
 			if err == nil {
 				missed = 0
 				continue
 			}
-			if missed++; missed >= 3 {
+			if missed++; missed >= 4 {
 				_ = dc.ws.Close(websocket.StatusPolicyViolation, "heartbeat failed")
 				return
 			}
@@ -342,6 +354,12 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 	}
 	if json.Unmarshal(payload, &envelope) != nil {
 		return false
+	}
+	// Heartbeat chatter from the device (its reply to our keep-alive ping); it
+	// carries no id and routes nowhere, so swallow it instead of forwarding it
+	// to a viewer.
+	if envelope.Type == "pong" || envelope.Type == "ping" {
+		return true
 	}
 	if envelope.ID == "" {
 		return false
