@@ -18,9 +18,10 @@ import { OnlineDot, StatusBadge } from './ui/Status'
 import { Panel } from './Shell'
 import { controlURL } from '../lib/api'
 import { fmtRel, shortId } from '../lib/format'
+import { cn } from '../lib/cn'
 import type { Device } from '../types'
 
-export type ActionKey = 'open' | 'approve' | 'revoke' | 'copy' | 'delete'
+export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete'
 
 interface Action {
   key: ActionKey
@@ -32,8 +33,6 @@ interface Action {
 
 function actionsFor(device: Device): Action[] {
   const list: Action[] = []
-  if (device.status !== 'revoked' && device.online)
-    list.push({ key: 'open', label: 'Open control', icon: ExternalLink, accent: true })
   if (device.status === 'pending')
     list.push({ key: 'approve', label: 'Approve device', icon: Check })
   if (device.status === 'approved')
@@ -54,10 +53,6 @@ export function DevicesPanel({ devices, loading, busyId, onAction }: DevicesPane
   const online = devices.filter((d) => d.online).length
 
   function run(key: ActionKey, device: Device) {
-    if (key === 'open') {
-      window.open(controlURL(device.id), '_blank', 'noopener')
-      return
-    }
     if (key === 'copy') {
       navigator.clipboard?.writeText(device.id).then(
         () => toast.success('Device ID copied'),
@@ -106,10 +101,20 @@ function DeviceRow({
   run: (key: ActionKey, device: Device) => void
 }) {
   const acts = actionsFor(device)
+  const canOpen = device.online && device.status === 'approved'
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
-        <div className="group flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-3.5 transition-colors hover:bg-surface-2/50">
+        <div
+          onClick={() => {
+            if (canOpen) window.open(controlURL(device.id), '_blank', 'noopener')
+          }}
+          title={canOpen ? 'Open control' : undefined}
+          className={cn(
+            'group flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-3.5 transition-colors hover:bg-surface-2/50',
+            canOpen && 'cursor-pointer',
+          )}
+        >
           <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted ring-1 ring-line transition-colors group-hover:text-fg-dim">
             <MonitorSmartphone className="size-[18px]" />
           </div>
@@ -117,7 +122,10 @@ function DeviceRow({
           <div className="min-w-0 flex-1">
             <div className="truncate text-[14.5px] font-medium text-fg">{device.name}</div>
             <button
-              onClick={() => run('copy', device)}
+              onClick={(ev) => {
+                ev.stopPropagation()
+                run('copy', device)
+              }}
               title={device.id}
               className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-[11.5px] text-muted transition-colors hover:text-fg-dim"
             >
@@ -135,14 +143,18 @@ function DeviceRow({
             <div className="text-[11px] text-faint">updated</div>
           </div>
 
-          <Menu
-            trigger={
-              <Button variant="ghost" size="icon" loading={busy} aria-label="Device actions">
-                {!busy && <MoreHorizontal className="size-[18px]" />}
-              </Button>
-            }
-          >
-            <MenuLabel>{device.name}</MenuLabel>
+          {canOpen && (
+            <ExternalLink className="hidden size-4 text-muted opacity-0 transition-opacity group-hover:opacity-70 lg:block" />
+          )}
+          <div onClick={(ev) => ev.stopPropagation()}>
+            <Menu
+              trigger={
+                <Button variant="ghost" size="icon" loading={busy} aria-label="Device actions">
+                  {!busy && <MoreHorizontal className="size-[18px]" />}
+                </Button>
+              }
+            >
+              <MenuLabel>{device.name}</MenuLabel>
             {acts.map((a, idx) => (
               <div key={a.key}>
                 {a.danger && idx > 0 && <MenuSeparator />}
@@ -156,7 +168,8 @@ function DeviceRow({
                 </MenuItem>
               </div>
             ))}
-          </Menu>
+            </Menu>
+          </div>
         </div>
       </ContextMenu.Trigger>
 

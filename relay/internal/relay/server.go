@@ -106,6 +106,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/enrollments", s.withAdmin(s.handleListEnrollments))
 	mux.HandleFunc("POST /api/admin/enrollments", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleCreateEnrollment)))
 	mux.HandleFunc("POST /api/admin/enrollments/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeEnrollment)))
+	mux.HandleFunc("POST /api/admin/enrollments/{id}/delete", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleDeleteEnrollment)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/approve", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleApproveDevice)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeDevice)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/delete", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleDeleteDevice)))

@@ -3,18 +3,18 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   Ban,
   Check,
-  ChevronDown,
-  Clock,
   Copy,
   KeyRound,
+  MoreHorizontal,
   Plus,
   ShieldAlert,
   Ticket,
+  Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from './ui/Button'
 import { Field } from './ui/Field'
-import { Menu, MenuItem } from './ui/Menu'
+import { Menu, MenuItem, MenuSeparator } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { Panel } from './Shell'
 import { api } from '../lib/api'
@@ -23,13 +23,16 @@ import { cn } from '../lib/cn'
 import type { Enrollment, EnrollmentStatus, EnrollmentSummary } from '../types'
 
 const TTLS = [
-  { label: '30 minutes', value: 1800 },
+  { label: '30 min', value: 1800 },
   { label: '1 hour', value: 3600 },
   { label: '6 hours', value: 21600 },
   { label: '1 day', value: 86400 },
   { label: '7 days', value: 604800 },
   { label: '30 days', value: 2592000 },
+  { label: 'Never', value: -1 },
 ]
+
+const NEVER_THRESHOLD = 4_000_000_000 // ~year 2096
 
 const statusStyle: Record<EnrollmentStatus, string> = {
   active: 'text-online ring-online/25 bg-online/8',
@@ -50,7 +53,7 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<Enrollment | null>(null)
   const [copied, setCopied] = useState(false)
-  const [revoking, setRevoking] = useState('')
+  const [busy, setBusy] = useState('')
 
   const active = enrollments.filter((e) => e.status === 'active').length
 
@@ -88,17 +91,23 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
     })
   }
 
-  async function revoke(id: string) {
-    setRevoking(id)
+  async function act(id: string, kind: 'revoke' | 'delete') {
+    setBusy(id)
     try {
-      await api.revokeEnrollment(id)
-      toast.success('Token revoked')
+      if (kind === 'revoke') await api.revokeEnrollment(id)
+      else await api.deleteEnrollment(id)
+      toast.success(kind === 'revoke' ? 'Token revoked' : 'Token deleted')
       onChanged()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Revoke failed')
+      toast.error(err instanceof Error ? err.message : `${kind} failed`)
     } finally {
-      setRevoking('')
+      setBusy('')
     }
+  }
+
+  function expiryText(e: EnrollmentSummary): string {
+    if (e.status !== 'active') return fmtRel(e.created_at)
+    return e.expires_at >= NEVER_THRESHOLD ? 'never expires' : `expires ${fmtRel(e.expires_at)}`
   }
 
   return (
@@ -117,9 +126,7 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
           <div className="mx-auto grid size-10 place-items-center rounded-xl bg-surface-2 text-faint ring-1 ring-line">
             <Ticket className="size-5" />
           </div>
-          <p className="mt-3 text-[13px] text-muted">
-            No tokens yet. Create one to pair a device.
-          </p>
+          <p className="mt-3 text-[13px] text-muted">No tokens yet. Create one to pair a device.</p>
         </div>
       ) : (
         <ul className="divide-y divide-line/60">
@@ -152,24 +159,34 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
                     </span>
                   </div>
                   <div className="mt-0.5 font-mono text-[10.5px] text-faint">
-                    {shortId(e.id, 12, 0)} ·{' '}
-                    {e.status === 'active'
-                      ? `expires ${fmtRel(e.expires_at)}`
-                      : fmtRel(e.created_at)}
+                    {shortId(e.id, 12, 0)} · {expiryText(e)}
                   </div>
                 </div>
-                {e.status === 'active' && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    loading={revoking === e.id}
-                    onClick={() => revoke(e.id)}
-                    aria-label="Revoke token"
-                    className="size-7 text-muted hover:text-danger"
-                  >
-                    {revoking !== e.id && <Ban className="size-3.5" />}
-                  </Button>
-                )}
+                <Menu
+                  trigger={
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7"
+                      loading={busy === e.id}
+                      aria-label="Token actions"
+                    >
+                      {busy !== e.id && <MoreHorizontal className="size-4" />}
+                    </Button>
+                  }
+                >
+                  {e.status === 'active' && (
+                    <>
+                      <MenuItem icon={Ban} onSelect={() => act(e.id, 'revoke')}>
+                        Revoke token
+                      </MenuItem>
+                      <MenuSeparator />
+                    </>
+                  )}
+                  <MenuItem icon={Trash2} danger onSelect={() => act(e.id, 'delete')}>
+                    Delete from history
+                  </MenuItem>
+                </Menu>
               </motion.li>
             ))}
           </AnimatePresence>
@@ -183,7 +200,7 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
         description={
           created
             ? undefined
-            : 'A one-time token to pair a device. Drop it into make-device-deb to build a personalized package — no compiler required.'
+            : 'A one-time token to pair a device. Drop it into make-device-deb to build a personalized package.'
         }
         className="max-w-lg"
       >
@@ -194,7 +211,7 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="space-y-4"
+              className="space-y-5"
             >
               <Field
                 label="Label"
@@ -205,27 +222,24 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
                 onChange={(e) => setLabel(e.target.value)}
               />
               <div>
-                <span className="mb-2 block text-[13px] font-medium text-fg-dim">
-                  Expires after
-                </span>
-                <Menu
-                  align="start"
-                  trigger={
-                    <Button variant="secondary" size="md" className="w-full justify-between">
-                      <span className="flex items-center gap-2">
-                        <Clock className="size-4 text-muted" />
-                        {ttl.label}
-                      </span>
-                      <ChevronDown className="size-4 text-muted" />
-                    </Button>
-                  }
-                >
+                <span className="mb-2 block text-[13px] font-medium text-fg-dim">Expires after</span>
+                <div className="flex flex-wrap gap-1.5">
                   {TTLS.map((o) => (
-                    <MenuItem key={o.value} icon={Clock} onSelect={() => setTtl(o)}>
+                    <button
+                      key={o.value}
+                      type="button"
+                      onClick={() => setTtl(o)}
+                      className={cn(
+                        'rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium ring-1 transition-colors',
+                        ttl.value === o.value
+                          ? 'bg-signal text-on-signal ring-signal'
+                          : 'bg-surface-2 text-fg-dim ring-line hover:text-fg hover:ring-line-2',
+                      )}
+                    >
                       {o.label}
-                    </MenuItem>
+                    </button>
                   ))}
-                </Menu>
+                </div>
               </div>
               <div className="flex justify-end gap-2.5 pt-1">
                 <Button variant="secondary" onClick={() => setOpen(false)}>
@@ -269,9 +283,13 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
               <div className="flex items-start gap-2 text-[12px] leading-relaxed text-muted">
                 <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-signal/80" />
                 <span>
-                  Shown once — copy it now. It embeds in the package; keep it private.
-                  Expires{' '}
-                  <span className="text-fg-dim">{fmtAbs(rfc3339ToSec(created.expires_at))}</span>.
+                  Shown once — copy it now. It embeds in the package; keep it private. Expires{' '}
+                  <span className="text-fg-dim">
+                    {rfc3339ToSec(created.expires_at) >= NEVER_THRESHOLD
+                      ? 'never'
+                      : fmtAbs(rfc3339ToSec(created.expires_at))}
+                  </span>
+                  .
                 </span>
               </div>
               <div className="flex justify-end pt-1">

@@ -169,6 +169,10 @@ func (s *server) clearSessionCookie(w http.ResponseWriter) {
 
 const maxEnrollmentTTL = 90 * 24 * time.Hour
 
+// neverExpiresUnix (2100-01-01 UTC) is the expiry stored for "never" tokens —
+// far enough out to be effectively permanent while staying a real timestamp.
+const neverExpiresUnix = 4102444800
+
 func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Label      string `json:"label"`
@@ -176,15 +180,22 @@ func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = readJSON(r, &req) // body is optional (curl-friendly)
 
-	ttl := s.cfg.TokenTTL
-	if req.TTLSeconds > 0 {
-		ttl = time.Duration(req.TTLSeconds) * time.Second
-		if ttl < time.Minute {
-			ttl = time.Minute
+	now := time.Now()
+	var expiresAt time.Time
+	if req.TTLSeconds < 0 {
+		expiresAt = time.Unix(neverExpiresUnix, 0) // never
+	} else {
+		ttl := s.cfg.TokenTTL
+		if req.TTLSeconds > 0 {
+			ttl = time.Duration(req.TTLSeconds) * time.Second
+			if ttl < time.Minute {
+				ttl = time.Minute
+			}
+			if ttl > maxEnrollmentTTL {
+				ttl = maxEnrollmentTTL
+			}
 		}
-		if ttl > maxEnrollmentTTL {
-			ttl = maxEnrollmentTTL
-		}
+		expiresAt = now.Add(ttl)
 	}
 	label := strings.TrimSpace(req.Label)
 	if n := []rune(label); len(n) > 80 {
@@ -196,8 +207,6 @@ func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "token_generation_failed")
 		return
 	}
-	now := time.Now()
-	expiresAt := now.Add(ttl)
 	token := tokenID + "." + tokenSecret
 	_, err = s.db.ExecContext(r.Context(),
 		`INSERT INTO enrollments(id, token_hash, expires_at, created_at, label) VALUES(?,?,?,?,?)`,
@@ -284,6 +293,21 @@ func (s *server) handleRevokeEnrollment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.audit(r, "admin_enrollment_revoked", "enrollment_id", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleDeleteEnrollment(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM enrollments WHERE id=?`, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "enrollment_delete_failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErr(w, http.StatusNotFound, "enrollment_not_found")
+		return
+	}
+	s.audit(r, "admin_enrollment_deleted", "enrollment_id", id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

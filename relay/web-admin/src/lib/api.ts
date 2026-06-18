@@ -63,6 +63,10 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/enrollments/${encodeURIComponent(id)}/revoke`, {
       method: 'POST',
     }),
+  deleteEnrollment: (id: string) =>
+    request<{ ok: boolean }>(`/api/admin/enrollments/${encodeURIComponent(id)}/delete`, {
+      method: 'POST',
+    }),
   approveDevice: (id: string) =>
     request<Ok>(`/api/admin/devices/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
   revokeDevice: (id: string) =>
