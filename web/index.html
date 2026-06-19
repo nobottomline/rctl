@@ -201,13 +201,15 @@ const RCTL_PROXY_BASE=(window.RCTL_PROXY_BASE||'').replace(/\/$/,'');
 const RCTL_STREAM_BASE=(window.RCTL_STREAM_BASE||'').replace(/\/$/,'');
 const RCTL_TERM_WS_BASE=(window.RCTL_TERM_WS_BASE||'').replace(/\/$/,'');
 const RCTL_RELAY_MODE=!!(RCTL_PROXY_BASE||RCTL_STREAM_BASE);
+const RCTL_WEBRTC_MODE=RCTL_RELAY_MODE&&!!window.RCTL_WEBRTC&&'RTCPeerConnection' in window;
+let rtcControl=null; // WebRTC control DataChannel; when open, input rides it instead of HTTP
 function rctlPath(path){
   if(!RCTL_RELAY_MODE||typeof path!=='string'||path[0]!=='/')return path;
   if(path==='/stream'||path.startsWith('/stream?')){
     if(!RCTL_STREAM_BASE)return path;
     return RCTL_STREAM_BASE+'/stream'+path.slice('/stream'.length);
   }
-  if(path.startsWith('/v1/')||path.startsWith('/input')||path.startsWith('/key')||path.startsWith('/config')){
+  if(path.startsWith('/v1/')||path.startsWith('/input')||path.startsWith('/key')||path.startsWith('/config')||path.startsWith('/orient')){
     return RCTL_PROXY_BASE+path;
   }
   return path;
@@ -217,6 +219,7 @@ window.fetch=(input,init)=>rctlNativeFetch(typeof input==='string'?rctlPath(inpu
 const rctlNativeBeacon=navigator.sendBeacon?navigator.sendBeacon.bind(navigator):null;
 if(rctlNativeBeacon)navigator.sendBeacon=(url,data)=>rctlNativeBeacon(typeof url==='string'?rctlPath(url):url,data);
 const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+let dispEl=canvas; // the visible element the orientation transform is applied to
 let dec=null,frames=0,started=false,orient=1,codec='avc1.640033';
 // Manual orientation override (null = follow the device). Applies to BOTH the
 // displayed rotation and the input coordinate mapping, so they stay consistent.
@@ -229,7 +232,7 @@ function applyOrient(){
   const r90=(deg===90||deg===-90);
   const bbW=r90?ch:cw,bbH=r90?cw:ch;
   const sc=Math.min(innerWidth/bbW,innerHeight/bbH);
-  canvas.style.transform=`rotate(${deg}deg) scale(${sc})`;
+  dispEl.style.transform=`rotate(${deg}deg) scale(${sc})`;
 }
 addEventListener('resize',applyOrient);
 // Derive the WebCodecs codec string from an Annex-B SPS NAL (type 7).
@@ -430,6 +433,10 @@ function pumpInput(){
   });
 }
 function send(p,nx,ny,f){ recPush({k:'t',p,x:+nx.toFixed(4),y:+ny.toFixed(4),f});
+  if(rtcControl&&rtcControl.readyState==='open'){
+    try{rtcControl.send(JSON.stringify({t:'t',p,i:f,x:+nx.toFixed(4),y:+ny.toFixed(4)}));}catch(e){}
+    return;
+  }
   queueInput({p,f,x:nx.toFixed(4),y:ny.toFixed(4)});
   pumpInput(); }
 const stage=document.getElementById('stage');
@@ -463,7 +470,9 @@ function codeToUsage(c){
     ControlLeft:0xE0,ShiftLeft:0xE1,AltLeft:0xE2,MetaLeft:0xE3,
     ControlRight:0xE4,ShiftRight:0xE5,AltRight:0xE6,MetaRight:0xE7})[c]||0;
 }
-function key(u,d){ recPush({k:'k',u,d}); fetch(`/key?p=7&u=${u}&d=${d}`).catch(()=>{}); }
+function key(u,d){ recPush({k:'k',u,d});
+  if(rtcControl&&rtcControl.readyState==='open'){ try{rtcControl.send(JSON.stringify({t:'k',pg:7,u,d}));}catch(e){} return; }
+  fetch(`/key?p=7&u=${u}&d=${d}`).catch(()=>{}); }
 // Modifiers held (press/release); regular keys as one atomic tap (d=2) so a
 // lost/late release can't make iOS auto-repeat ("ls -la" -> "ls -laa").
 const MODS=new Set([0xE0,0xE1,0xE2,0xE3,0xE4,0xE5,0xE6,0xE7]);
@@ -476,11 +485,14 @@ addEventListener('keyup',e=>{if(inField(e))return;const u=codeToUsage(e.code);if
 // ---- hardware buttons (HID Consumer page 0x0C) + SpringBoard actions ----
 const SYS={home:0x40,lock:0x30,volup:0xE9,voldn:0xEA};
 function sysPress(name){const u=SYS[name];if(!u)return;
+  if(rtcControl&&rtcControl.readyState==='open'){
+    try{rtcControl.send(JSON.stringify({t:'k',pg:12,u,d:1}));setTimeout(()=>{try{rtcControl.send(JSON.stringify({t:'k',pg:12,u,d:0}))}catch(e){}},70);}catch(e){} return; }
   fetch(`/key?p=12&u=${u}&d=1`).then(()=>setTimeout(()=>fetch(`/key?p=12&u=${u}&d=0`),70));}
 document.querySelectorAll('#panel button[data-b]').forEach(b=>b.onclick=()=>sysPress(b.dataset.b));
 // page 0xF0=240: 1=Control Center, 2=Cover Sheet.
 document.querySelectorAll('#panel button[data-sb]').forEach(b=>b.onclick=()=>
-  fetch(`/key?p=240&u=${b.dataset.sb}&d=1`).catch(()=>{}));
+  { if(rtcControl&&rtcControl.readyState==='open'){ try{rtcControl.send(JSON.stringify({t:'k',pg:240,u:+b.dataset.sb,d:1}))}catch(e){} }
+    else fetch(`/key?p=240&u=${b.dataset.sb}&d=1`).catch(()=>{}); });
 // ---- Console (playground): spawn alerts/toasts, launch apps, type, run macros ----
 const pg=document.getElementById('pg'),$=id=>document.getElementById(id),enc=encodeURIComponent;
 
@@ -666,7 +678,7 @@ $('recBtn').onclick=()=>{
 };
 $('playBtn').onclick=()=>{ if(!macro||!macro.length)return;
   macro.forEach(e=>setTimeout(()=>{ if(e.k==='t')send(e.p,e.x,e.y,e.f); else if(e.k==='k')key(e.u,e.d); }, e.t)); };
-(async()=>{
+async function startStream(){
   let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
   const reader=resp.body.getReader();let buf=new Uint8Array(0);
   for(;;){
@@ -691,5 +703,49 @@ $('playBtn').onclick=()=>{ if(!macro||!macro.length)return;
       }catch(e){hud.textContent='decode err: '+e.message;}
     }
   }
-})();
+}
+
+// WebRTC path (relay mode): one PeerConnection carries the H.264 video (RTP, into
+// the existing canvas) and input (control DataChannel). No /stream TCP tunnel and
+// no per-event /input round-trip, so it stays smooth and responsive over the net.
+function startWebRTC(){
+  const did=window.RCTL_RELAY_DEVICE_ID;
+  const vid=document.createElement('video'); vid.autoplay=true; vid.playsInline=true; vid.muted=true;
+  vid.style.cssText='transform-origin:center center;pointer-events:none;background:#000';
+  const pc=new RTCPeerConnection({}); window.__rtcpc=pc;
+  let remoteReady=false; const pend=[]; let fellBack=false;
+  function fallback(why){ if(fellBack)return; fellBack=true; try{pc.close()}catch(e){} try{ws.close()}catch(e){}
+    rtcControl=null; try{vid.remove()}catch(e){} canvas.style.display=''; dispEl=canvas;
+    hud.textContent='webrtc '+why+' -> /stream'; startStream(); }
+  pc.ontrack=e=>{ vid.srcObject=e.streams[0]||new MediaStream([e.track]); try{e.receiver.playoutDelayHint=0}catch(_){}
+    canvas.style.display='none'; document.getElementById('stage').appendChild(vid); dispEl=vid;
+    vid.play().catch(()=>{});
+    // Size the <video> to the stream's pixel size; applyOrient scales/rotates it
+    // to fit (canvas keeps the same width/height as the input-mapping reference).
+    const fit=()=>{ if(vid.videoWidth){ canvas.width=vid.videoWidth; canvas.height=vid.videoHeight;
+        vid.style.width=vid.videoWidth+'px'; vid.style.height=vid.videoHeight+'px'; applyOrient(); frames++; } };
+    vid.addEventListener('loadedmetadata',fit); vid.addEventListener('resize',fit); fit(); };
+  pc.ondatachannel=e=>{ if(e.channel.label==='control') rtcControl=e.channel; };
+  pc.onconnectionstatechange=()=>{ if(pc.connectionState==='failed') fallback('failed'); };
+  const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/signal/devices/${did}`);
+  pc.onicecandidate=e=>{ if(e.candidate&&ws.readyState===1) ws.send(JSON.stringify({kind:'candidate',payload:{candidate:e.candidate.candidate,mid:e.candidate.sdpMid}})); };
+  ws.onmessage=async ev=>{ let m; try{m=JSON.parse(ev.data)}catch(e){return;}
+    if(m.kind==='ready'){ if(Array.isArray(m.payload)&&m.payload.length){ try{pc.setConfiguration({iceServers:m.payload})}catch(_){} } }
+    else if(m.kind==='offer'){ try{
+        await pc.setRemoteDescription({type:'offer',sdp:m.payload.sdp}); remoteReady=true;
+        for(const c of pend.splice(0)){try{await pc.addIceCandidate(c)}catch(_){}}
+        const a=await pc.createAnswer(); await pc.setLocalDescription(a);
+        ws.send(JSON.stringify({kind:'answer',payload:{sdp:pc.localDescription.sdp}}));
+      }catch(e){ fallback('negotiate err'); } }
+    else if(m.kind==='candidate'){ const ic={candidate:(m.payload.candidate||'').replace(/^a=/,''),sdpMid:m.payload.mid||'0'};
+      if(remoteReady){try{await pc.addIceCandidate(ic)}catch(_){}}else pend.push(ic); } };
+  ws.onerror=()=>fallback('signal err');
+  // if nothing renders within 6s, fall back to the /stream path
+  setTimeout(()=>{ if(!frames) fallback('timeout'); }, 6000);
+  // orientation: /stream type-2 isn't used here, so poll /orient (through the proxy)
+  setInterval(async()=>{ if(fellBack)return; try{ const o=parseInt(await(await fetch('/orient')).text(),10);
+    if(o>=1&&o<=4&&o!==orient){orient=o;applyOrient();} }catch(_){} }, 1500);
+}
+
+if(RCTL_WEBRTC_MODE) startWebRTC(); else startStream();
 </script></body></html>
