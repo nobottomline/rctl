@@ -1,19 +1,18 @@
 // Device-side WebRTC bridge for rctld (ported from
-// relay/experiments/webrtc-spike/relay_device.cpp, proven on macOS).
+// relay/experiments/webrtc-spike/relay_device.cpp, proven on macOS, then on
+// device with synthetic video). Now streams the real Annex-B H.264 the capture
+// pipeline produces.
 //
-// RelayClient.mm calls rctl_webrtc_handle_signal() for every `webrtc_signal`
-// envelope the relay forwards over the /device connection, and registers a
-// sender via rctl_webrtc_set_sender() so outbound signaling (answer / ICE) goes
-// back over that same connection. One libdatachannel PeerConnection per
-// signaling session; the browser is the offerer and creates the channels.
-//
-// Video is synthetic for now -- Phase 4 next step feeds real H.264 Access Units
-// from the local capture pipeline onto the unreliable "video" channel.
+// RelayClient.mm feeds inbound `webrtc_signal` envelopes to handle_signal() and
+// registers a sender for outbound answer/ICE; main.mm calls push_au() for every
+// encoded access unit. One libdatachannel PeerConnection per signaling session;
+// the browser is the offerer and creates the channels.
 
+#include "net/WebRTCBridge.h"
 #include "rtc/rtc.hpp"
 #include "nlohmann/json.hpp"
 
-#include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -21,26 +20,27 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 #include <unistd.h>
 
 using nlohmann::json;
-using namespace std::chrono;
 
 static void (*g_send)(const char *) = nullptr;
+static void (*g_viewer_cb)(bool) = nullptr;
 static std::mutex g_mtx;
 static std::map<std::string, std::shared_ptr<rtc::PeerConnection>> g_sessions;
+
+struct VideoChan {
+    std::shared_ptr<rtc::DataChannel> dc;
+    bool sawKey;
+};
+static std::vector<std::shared_ptr<VideoChan>> g_video;  // open video channels
 
 static void wlog(const std::string &m) {
     FILE *f = fopen("/tmp/rctld.log", "a");
     if (!f) return;
     fprintf(f, "[%ld pid=%d] [webrtc] %s\n", (long)time(NULL), getpid(), m.c_str());
     fclose(f);
-}
-
-static long long now_ms() {
-    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
 static void send_signal(const std::string &id, const std::string &kind, const json &payload) {
@@ -66,23 +66,34 @@ static void start_session(const std::string &id) {
     pc->onDataChannel([id](std::shared_ptr<rtc::DataChannel> dc) {
         if (dc->label() == "control") {
             dc->onMessage([](rtc::message_variant) {});
-        } else if (dc->label() == "video") {
-            wlog("session " + id + " video open -- streaming");
-            std::thread([dc]() {
-                uint32_t seq = 0;
-                while (dc->isOpen()) {
-                    std::vector<std::byte> buf(13 + 1500);
-                    uint32_t s = seq++;
-                    long long t = now_ms();
-                    uint8_t type = (s % 60 == 0) ? 1 : 0;
-                    std::memcpy(buf.data(), &s, 4);
-                    std::memcpy(buf.data() + 4, &t, 8);
-                    std::memcpy(buf.data() + 12, &type, 1);
-                    try { dc->send(buf); } catch (...) { break; }
-                    std::this_thread::sleep_for(milliseconds(16));
-                }
-            }).detach();
+            return;
         }
+        if (dc->label() != "video") return;
+        wlog("session " + id + " video channel open");
+        auto vc = std::make_shared<VideoChan>();
+        vc->dc = dc;
+        vc->sawKey = false;
+        rtc::DataChannel *dcptr = dc.get();
+        dc->onClosed([dcptr]() {
+            bool lastGone = false;
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_video.erase(std::remove_if(g_video.begin(), g_video.end(),
+                                  [dcptr](const std::shared_ptr<VideoChan> &v) {
+                                      return v->dc.get() == dcptr;
+                                  }),
+                              g_video.end());
+                lastGone = g_video.empty();
+            }
+            if (lastGone && g_viewer_cb) g_viewer_cb(false);
+        });
+        bool firstViewer = false;
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            firstViewer = g_video.empty();
+            g_video.push_back(vc);
+        }
+        if (firstViewer && g_viewer_cb) g_viewer_cb(true);
     });
 
     std::lock_guard<std::mutex> lk(g_mtx);
@@ -92,6 +103,10 @@ static void start_session(const std::string &id) {
 extern "C" void rctl_webrtc_set_sender(void (*send)(const char *)) {
     g_send = send;
     wlog("bridge ready");
+}
+
+extern "C" void rctl_webrtc_set_viewer_cb(void (*cb)(bool)) {
+    g_viewer_cb = cb;
 }
 
 extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
@@ -131,5 +146,26 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
         }
     } catch (const std::exception &e) {
         wlog(std::string("signal error: ") + e.what());
+    }
+}
+
+// Each video channel gets: [1B keyframe][8B pts_us big-endian][Annex-B AU].
+// A channel only starts receiving once a keyframe has passed (so WebCodecs can
+// configure and decode); the channel is unreliable, so a dropped AU just waits
+// for the next keyframe.
+extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us) {
+    if (!data || len == 0) return;
+    std::vector<std::byte> msg(9 + len);
+    uint8_t *b = reinterpret_cast<uint8_t *>(msg.data());
+    b[0] = keyframe ? 1 : 0;
+    for (int i = 0; i < 8; i++) b[1 + i] = (uint8_t)(pts_us >> (56 - 8 * i));
+    std::memcpy(b + 9, data, len);
+
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto &vc : g_video) {
+        if (!vc->dc->isOpen()) continue;
+        if (keyframe) vc->sawKey = true;
+        if (!vc->sawKey) continue;
+        try { vc->dc->send(msg); } catch (...) {}
     }
 }

@@ -29,6 +29,7 @@
 #import "net/HttpStreamServer.h"
 #import "net/RelayClient.h"
 #import "ipc/Ipc.h"
+#import "net/WebRTCBridge.h"
 
 extern char **environ;
 
@@ -188,24 +189,30 @@ static bool audio_capture_set(bool on, char *err, size_t errsz);
 // while a browser is actually watching: tell SB to wake when the first /stream
 // client connects, and to idle (let the device sleep) when the last one leaves.
 static int gSessionGen = 0;                     // bumped per transition (serialized on gAuto)
+static bool gStreamViewers = false;             // any /stream client
+static bool gWebrtcViewers = false;             // any WebRTC video channel
 static void send_active(bool on) {
     uint8_t b = on ? 1 : 0;
     send_to_sb(RCTL_MSG_ACTIVE, &b, 1);
     dlog(on ? "session ACTIVE -> SB" : "session IDLE -> SB");
 }
-static void on_session(void *ctx, bool active) {
-    // Serialize on gAuto; debounce idle by a few seconds so a page refresh or a
-    // brief Wi-Fi blip doesn't thrash the capture session off and back on.
-    dispatch_async(gAuto, ^{
-        int gen = ++gSessionGen;
-        if (active) send_active(true);
-        else AFTER(4.0, ^{
-            if (gen == gSessionGen) {
-                send_active(false);
-                audio_capture_set(false, NULL, 0);
-            }
-        });
+// Capture runs while ANY viewer watches -- /stream or WebRTC. Call on gAuto.
+static void apply_active(void) {
+    int gen = ++gSessionGen;
+    if (gStreamViewers || gWebrtcViewers) send_active(true);
+    else AFTER(4.0, ^{
+        if (gen == gSessionGen) {
+            send_active(false);
+            audio_capture_set(false, NULL, 0);
+        }
     });
+}
+static void on_session(void *ctx, bool active) {
+    // Debounce idle so a page refresh or brief Wi-Fi blip doesn't thrash capture.
+    dispatch_async(gAuto, ^{ gStreamViewers = active; apply_active(); });
+}
+static void on_webrtc_viewers(bool any) {
+    dispatch_async(gAuto, ^{ gWebrtcViewers = any; apply_active(); });
 }
 
 static bool file_exists(const char *path) {
@@ -907,6 +914,7 @@ static void *ipc_thread(void *unused) {
         while (rctl_ipc_recv(peer, &type, &buf, &len)) {
             if (type == RCTL_MSG_VIDEO && len >= 9) {
                 rctl_http_push_au(gHttp, buf + 9, len - 9, buf[0] != 0, read_be64(buf + 1));
+                rctl_webrtc_push_au(buf + 9, len - 9, buf[0] != 0, read_be64(buf + 1));
             } else if (type == RCTL_MSG_ORIENT && len >= 1) {
                 rctl_http_set_orientation(gHttp, buf[0]);
             } else if (type == RCTL_MSG_REPLY && len >= 4) {
@@ -955,6 +963,7 @@ int main(int argc, char **argv) {
         gAuto = dispatch_queue_create("com.greatlove.rctl.auto", DISPATCH_QUEUE_SERIAL);
         rctl_http_set_rest(gHttp, rest_handler, NULL);
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
+        rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too
         dlog("http listening on :8080");
         audio_capture_set(false, NULL, 0);
 

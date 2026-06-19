@@ -1,4 +1,5 @@
 #import "net/RelayClient.h"
+#import "net/WebRTCBridge.h"
 #import <Foundation/Foundation.h>
 #import <stdlib.h>
 #import <time.h>
@@ -41,10 +42,6 @@ static pthread_cond_t g_supervisor_cond = PTHREAD_COND_INITIALIZER;
 static BOOL g_supervisor_started = NO;
 static BOOL g_supervisor_stop = NO;
 static void *relay_supervisor_main(void *arg);
-
-// Device WebRTC bridge (WebRTCBridge.cpp).
-extern "C" void rctl_webrtc_set_sender(void (*send)(const char *));
-extern "C" void rctl_webrtc_handle_signal(const char *json);
 
 @interface RCTLRelayClient : NSObject
 @property(nonatomic, strong) NSURLSession *session;
