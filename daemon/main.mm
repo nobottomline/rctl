@@ -219,17 +219,19 @@ static void on_webrtc_viewers(bool any) {
     dispatch_async(gAuto, ^{
         gWebrtcViewers = any;
         apply_active();
-        if (any) {
-            // A WebRTC viewer streams over an RTP media track: the packetizer
-            // fragments each access unit into MTU-sized packets and loss is
-            // repaired by NACK, so it absorbs keyframes far better than the old
-            // DataChannel path. But the egress-adaptation loop only samples
-            // /stream, so with no LAN viewer it can't probe the link -- pin a
-            // fixed ceiling the iPad's uplink comfortably sustains.
-            int32_t br = 5000000;
-            gBitrateCeiling = br;
-            gBitrateCurrent = br;
-            send_to_sb(RCTL_MSG_BITRATE, &br, sizeof br);
+        if (any && !gStreamViewers) {
+            // The only consumer is a remote WebRTC browser (no LAN viewer). Full
+            // Retina is wasted -- the viewer sees it in a small element, and every
+            // extra pixel just adds encode/transmit/decode latency and keeps the
+            // pipeline from holding 30fps. Encode a remote profile: half scale
+            // (~834x1112) at a fixed 5 Mbps the uplink sustains. RTP fragments the
+            // frames and NACK repairs loss, so this stays robust. RCTL_MSG_CONFIG
+            // recreates the encoder; gate on !gStreamViewers so a LAN viewer (which
+            // sends its own /config) always keeps full resolution.
+            rctl_ipc_config m = { 30, 0.5, 5000000 };
+            gBitrateCeiling = 5000000;
+            gBitrateCurrent = 5000000;
+            send_to_sb(RCTL_MSG_CONFIG, &m, sizeof m);
             send_to_sb(RCTL_MSG_KEYFRAME, NULL, 0);
         }
     });
