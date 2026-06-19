@@ -29,6 +29,7 @@ rctld_FILES = main.mm \
 rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctld_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP) -I$(DC)/include -I$(DC)/deps/json/single_include
 rctld_LDFLAGS = $(DC)/build-ios/libdatachannel.a \
+                $(DC)/build-ios/deps/libsrtp/libsrtp2.a \
                 $(DC)/build-ios/deps/libjuice/libjuice.a \
                 $(DC)/build-ios/deps/usrsctp/usrsctplib/libusrsctp.a \
                 $(MBED)/lib/libmbedtls.a $(MBED)/lib/libmbedx509.a $(MBED)/lib/libmbedcrypto.a \
