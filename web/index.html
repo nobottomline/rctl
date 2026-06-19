@@ -203,6 +203,32 @@ const RCTL_TERM_WS_BASE=(window.RCTL_TERM_WS_BASE||'').replace(/\/$/,'');
 const RCTL_RELAY_MODE=!!(RCTL_PROXY_BASE||RCTL_STREAM_BASE);
 const RCTL_WEBRTC_MODE=RCTL_RELAY_MODE&&!!window.RCTL_WEBRTC&&'RTCPeerConnection' in window;
 let rtcControl=null; // WebRTC control DataChannel; when open, input rides it instead of HTTP
+let rtcAudioDec=null, rtcAudioPlayTime=0, rtcAudioTs=0; // WebRTC audio: Opus DataChannel -> WebCodecs -> Web Audio
+function setupAudioChannel(ch){
+  ch.binaryType='arraybuffer';
+  ch.onmessage=ev=>{
+    if(!audioEnabled||!audioCtx) return;                 // only play when the user enabled audio
+    const u=new Uint8Array(ev.data), chn=u[0]||1, opus=u.subarray(1);
+    if(!rtcAudioDec){
+      try{ rtcAudioDec=new AudioDecoder({ output:playRtcAudio, error:()=>{ try{rtcAudioDec.close()}catch(e){} rtcAudioDec=null; } });
+        rtcAudioDec.configure({codec:'opus', sampleRate:48000, numberOfChannels:chn}); rtcAudioTs=0; rtcAudioPlayTime=0;
+      }catch(e){ rtcAudioDec=null; return; }
+    }
+    try{ rtcAudioDec.decode(new EncodedAudioChunk({type:'key', timestamp:rtcAudioTs, data:opus})); rtcAudioTs+=20000; }catch(e){}
+  };
+  ch.onclose=()=>{ try{rtcAudioDec&&rtcAudioDec.close()}catch(e){} rtcAudioDec=null; };
+}
+function playRtcAudio(ad){
+  if(!audioCtx){ ad.close(); return; }
+  const n=ad.numberOfFrames, chn=ad.numberOfChannels;
+  const ab=audioCtx.createBuffer(chn, n, ad.sampleRate);
+  for(let c=0;c<chn;c++){ const f=new Float32Array(n); try{ad.copyTo(f,{planeIndex:c,format:'f32-planar'})}catch(e){} ab.getChannelData(c).set(f); }
+  ad.close();
+  const sbuf=audioCtx.createBufferSource(); sbuf.buffer=ab; sbuf.connect(audioGain||audioCtx.destination);
+  const now=audioCtx.currentTime;
+  if(rtcAudioPlayTime < now+0.02) rtcAudioPlayTime = now+0.18;   // ~180ms jitter buffer (re)prime on underrun
+  sbuf.start(rtcAudioPlayTime); rtcAudioPlayTime += ab.duration;
+}
 function rctlPath(path){
   if(!RCTL_RELAY_MODE||typeof path!=='string'||path[0]!=='/')return path;
   if(path==='/stream'||path.startsWith('/stream?')){
@@ -389,6 +415,17 @@ function playAudioPayload(data){
   const src=audioCtx.createBufferSource();src.buffer=buf;src.connect(audioGain||audioCtx.destination);src.start(when);
 }
 audBtn.onclick=async()=>{
+  if(RCTL_WEBRTC_MODE){
+    if(!audioEnabled){
+      if(!(await ensureAudio()))return;   // creates+resumes audioCtx+audioGain on this gesture
+      audioEnabled=true; audBtn.classList.add('on');
+      await setAudioCapture(true);        // device starts capturing -> Opus over the audio DataChannel
+    }else{
+      audioEnabled=false; audBtn.classList.remove('on');
+      audioCaptureOn=false; setAudioCapture(false);
+    }
+    return;
+  }
   if(!audioEnabled){
     if(!(await ensureAudio()))return;
     setAudioEnabled(true);
@@ -736,7 +773,8 @@ function startWebRTC(){
     // to fit (canvas keeps the same width/height as the input-mapping reference).
     const fit=()=>{ if(vid.videoWidth){ canvas.width=vid.videoWidth; canvas.height=vid.videoHeight; applyOrient(); frames++; } };
     vid.addEventListener('loadedmetadata',fit); vid.addEventListener('resize',fit); fit(); };
-  pc.ondatachannel=e=>{ if(e.channel.label==='control') rtcControl=e.channel; };
+  pc.ondatachannel=e=>{ if(e.channel.label==='control') rtcControl=e.channel;
+    else if(e.channel.label==='audio') setupAudioChannel(e.channel); };
   pc.onconnectionstatechange=()=>{ if(pc.connectionState==='failed') fallback('failed'); };
   const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/signal/devices/${did}`);
   pc.onicecandidate=e=>{ if(e.candidate&&ws.readyState===1) ws.send(JSON.stringify({kind:'candidate',payload:{candidate:e.candidate.candidate,mid:e.candidate.sdpMid}})); };

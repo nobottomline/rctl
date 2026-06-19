@@ -15,6 +15,7 @@
 #include "net/WebRTCBridge.h"
 #include "rtc/rtc.hpp"
 #include "nlohmann/json.hpp"
+#include <opus/opus.h>
 
 #include <algorithm>
 #include <chrono>
@@ -40,12 +41,21 @@ static std::mutex g_mtx;
 struct Session {
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::DataChannel> audioDc;
     std::shared_ptr<rtc::DataChannel> control;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
 static std::vector<std::shared_ptr<rtc::Track>> g_tracks;
+static std::vector<std::shared_ptr<rtc::DataChannel>> g_audio_dcs;
 static std::chrono::steady_clock::time_point g_lastPli{};
+
+// Opus encoder for the captured 48kHz PCM. Single-threaded (only push_audio
+// touches it), so it needs no lock; only g_audio_dcs (the open audio channels)
+// is shared and guarded by g_mtx.
+static OpusEncoder *g_opus = nullptr;
+static int g_opus_channels = 0;
+static std::vector<int16_t> g_pcm;     // interleaved s16 accumulator
 
 static void wlog(const std::string &m) {
     FILE *f = fopen("/tmp/rctld.log", "a");
@@ -232,6 +242,29 @@ static void start_session(const std::string &id, const json &ice) {
         wlog("session " + id + " video track closed");
     });
 
+    // Audio: Opus over a dedicated DataChannel (NOT a media track). The iOS
+    // libsrtp/mbedtls backend drops ALL media RTP the moment a 2nd SRTP stream
+    // (an audio SSRC) is added -- works on the macOS OpenSSL build, fails on iOS.
+    // So audio rides SCTP (the DataChannel) instead: no 2nd media SSRC, no SRTP,
+    // no risk to the video transport. The browser decodes the Opus frames with
+    // WebCodecs and plays them. Reliable+ordered (default) -- audio needs order.
+    auto audioDc = pc->createDataChannel("audio");
+    sess->audioDc = audioDc;
+    rtc::DataChannel *adptr = audioDc.get();
+    audioDc->onOpen([id, adptr]() {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        auto it = g_sessions.find(id);
+        if (it == g_sessions.end() || !it->second->audioDc || it->second->audioDc.get() != adptr) return;
+        g_audio_dcs.push_back(it->second->audioDc);
+        wlog("session " + id + " audio channel open");
+    });
+    audioDc->onClosed([adptr]() {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_audio_dcs.erase(std::remove_if(g_audio_dcs.begin(), g_audio_dcs.end(),
+                              [adptr](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == adptr; }),
+                          g_audio_dcs.end());
+    });
+
     // Control channel: the browser sends input (touch/keys) over this reliable,
     // ordered DataChannel instead of an HTTP round-trip per event -- low-latency
     // remote control on the same PeerConnection as the video. The device, as the
@@ -350,4 +383,48 @@ extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyfra
 
     if (keyframe)
         wlog("keyframe " + std::to_string(len) + "B -> " + std::to_string(tracks.size()) + " track(s)");
+}
+
+// Encode captured 48kHz PCM to Opus and send every open audio DataChannel. Opus
+// needs fixed 20ms frames (960 samples/channel @ 48kHz), so accumulate and drain.
+// Wire format per message: [1B channels][Opus frame] -- the browser configures a
+// WebCodecs Opus decoder from the channel count, then decodes each frame.
+extern "C" void rctl_webrtc_push_audio(const int16_t *pcm, int frames, int channels,
+                                       int rate, uint64_t pts_us) {
+    (void)pts_us;
+    if (!pcm || frames <= 0 || channels < 1 || channels > 2 || rate != 48000) return;
+
+    std::vector<std::shared_ptr<rtc::DataChannel>> dcs;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (g_audio_dcs.empty()) return;  // nobody listening
+        dcs = g_audio_dcs;
+    }
+
+    // The encoder state is only touched here (single IPC thread) -> no lock needed.
+    if (!g_opus || g_opus_channels != channels) {
+        if (g_opus) opus_encoder_destroy(g_opus);
+        int err = 0;
+        g_opus = opus_encoder_create(48000, channels, OPUS_APPLICATION_AUDIO, &err);
+        g_opus_channels = channels;
+        g_pcm.clear();
+        if (err != 0 || !g_opus) { g_opus = nullptr; return; }
+    }
+
+    g_pcm.insert(g_pcm.end(), pcm, pcm + (size_t)frames * channels);
+    const int FRAME = 960;  // 20ms @ 48kHz, per channel
+    const size_t MAX_BUFFERED = 512u * 1024;  // drop if a channel falls behind
+    unsigned char out[4000];
+    while ((int)g_pcm.size() >= FRAME * channels) {
+        int n = opus_encode(g_opus, g_pcm.data(), FRAME, out, (opus_int32)sizeof out);
+        g_pcm.erase(g_pcm.begin(), g_pcm.begin() + (size_t)FRAME * channels);
+        if (n <= 0) continue;
+        std::vector<std::byte> msg(1 + (size_t)n);
+        msg[0] = static_cast<std::byte>(channels);
+        std::memcpy(msg.data() + 1, out, (size_t)n);
+        for (auto &d : dcs) {
+            if (!d->isOpen() || d->bufferedAmount() > MAX_BUFFERED) continue;
+            try { d->send(msg); } catch (...) {}
+        }
+    }
 }

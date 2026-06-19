@@ -409,6 +409,7 @@ static void handle_audio_packet(const uint8_t *buf, uint32_t len) {
     const uint8_t *pcm = buf + 16;
     for (size_t i = 0; i < sample_count; i++) samples[i] = read_le16s(pcm + i * 2);
     rctl_http_push_pcm_s16le(gHttp, samples, frames, channels, sample_rate, pts_us);
+    rctl_webrtc_push_audio(samples, frames, channels, sample_rate, pts_us);
     free(samples);
 }
 
