@@ -42,6 +42,10 @@ static BOOL g_supervisor_started = NO;
 static BOOL g_supervisor_stop = NO;
 static void *relay_supervisor_main(void *arg);
 
+// Device WebRTC bridge (WebRTCBridge.cpp).
+extern "C" void rctl_webrtc_set_sender(void (*send)(const char *));
+extern "C" void rctl_webrtc_handle_signal(const char *json);
+
 @interface RCTLRelayClient : NSObject
 @property(nonatomic, strong) NSURLSession *session;
 @property(nonatomic, strong) id task;
@@ -60,6 +64,7 @@ static void *relay_supervisor_main(void *arg);
 @property(nonatomic, assign) NSTimeInterval reconnectAt;
 @property(nonatomic, assign) uint32_t wakeAssertion;
 @property(nonatomic, assign) NSTimeInterval wakeAssertionAt;
+- (void)sendRawJSON:(NSString *)json;
 @end
 
 @implementation RCTLRelayClient
@@ -296,6 +301,9 @@ static void *relay_supervisor_main(void *arg);
         }
     } else if ([type isEqualToString:@"ping"]) {
         [self sendJSON:@{@"type": @"pong"}];
+    } else if ([type isEqualToString:@"webrtc_signal"]) {
+        NSString *raw = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        if (raw) rctl_webrtc_handle_signal([raw UTF8String]);
     } else if ([type isEqualToString:@"http_request"]) {
         [self handleHTTPRequest:dict];
     } else if ([type isEqualToString:@"stream_open"]) {
@@ -647,6 +655,19 @@ didReceiveResponse:(NSURLResponse *)response
     [self sendJSON:dict completion:nil];
 }
 
+- (void)sendRawJSON:(NSString *)json API_AVAILABLE(ios(13.0)) {
+    if (!json.length) return;
+    dispatch_async(self.queue, ^{
+        id task = self.task;
+        if (!task) return;
+        id message = [self webSocketMessageWithString:json];
+        if (!message) return;
+        [task sendMessage:message completionHandler:^(NSError *error) {
+            if (error) relay_log([NSString stringWithFormat:@"webrtc send failed: %@", error.localizedDescription]);
+        }];
+    });
+}
+
 - (void)sendJSON:(NSDictionary *)dict completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
     [self sendJSON:dict toWebSocketTask:self.task completion:completion];
 }
@@ -832,9 +853,13 @@ static void *relay_supervisor_main(void *arg) {
     return NULL;
 }
 
-extern "C" void rctl_webrtc_probe(void);
+// libdatachannel produces a signaling envelope; ship it over the device socket.
+static void relay_webrtc_send(const char *json) {
+    if (!json) return;
+    [[RCTLRelayClient shared] sendRawJSON:[NSString stringWithUTF8String:json]];
+}
 
 void rctl_relay_start(void) {
-    rctl_webrtc_probe();
+    rctl_webrtc_set_sender(relay_webrtc_send);
     [[RCTLRelayClient shared] start];
 }

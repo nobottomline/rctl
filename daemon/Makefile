@@ -24,7 +24,7 @@ rctld_FILES = main.mm \
               ../core/net/RelayClient.mm \
               ../core/net/HttpStreamServer.mm \
               ../core/net/Term.mm \
-              ../core/net/WebRTCProbe.cpp \
+              ../core/net/WebRTCBridge.cpp \
               ../core/ipc/Ipc.c
 rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctld_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP) -I$(DC)/include -I$(DC)/deps/json/single_include
