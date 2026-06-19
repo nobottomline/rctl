@@ -30,7 +30,9 @@ struct rctl_encoder {
     rctl_nal_cb cb;
     void *ctx;
     int srcW, srcH, dstW, dstH;
+    int fps, bitrate;   // kept so the session can be rebuilt after a loss
     int force_keyframe; // set by rctl_encoder_request_keyframe; consumed in encode
+    uint64_t frames_in, frames_out; // stall watchdog (a mediaserverd restart kills the session silently)
 };
 
 static const uint8_t kStartCode[4] = { 0, 0, 0, 1 };
@@ -89,6 +91,7 @@ static void output_cb(void *refcon, void *src, OSStatus status,
         return;
     }
     rctl_encoder *e = (rctl_encoder *)refcon;
+    __atomic_add_fetch(&e->frames_out, 1, __ATOMIC_RELAXED);
     bool keyframe = true;
     CFArrayRef att = CMSampleBufferGetSampleAttachmentsArray(sb, false);
     if (att && CFArrayGetCount(att)) {
@@ -108,30 +111,33 @@ static void set_int(VTCompressionSessionRef s, CFStringRef key, int v) {
     CFRelease(n);
 }
 
-rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
-                                  int fps, int bitrate, rctl_nal_cb cb, void *ctx) {
-    rctl_encoder *e = (rctl_encoder *)calloc(1, sizeof(rctl_encoder));
-    e->cb = cb; e->ctx = ctx;
-    e->srcW = srcW; e->srcH = srcH; e->dstW = dstW; e->dstH = dstH;
+static void free_sessions(rctl_encoder *e) {
+    if (e->session) { VTCompressionSessionInvalidate(e->session); CFRelease(e->session); e->session = NULL; }
+    if (e->transfer) { VTPixelTransferSessionInvalidate(e->transfer); CFRelease(e->transfer); e->transfer = NULL; }
+    if (e->pool) { CFRelease(e->pool); e->pool = NULL; }
+}
 
-    OSStatus s = VTCompressionSessionCreate(NULL, dstW, dstH, kCMVideoCodecType_H264,
+// (Re)build the VideoToolbox session + GPU scaler from the stored params. Used on
+// create AND to self-heal after the session dies: enabling system-audio capture
+// restarts mediaserverd, and the H.264 hardware encoder lives in mediaserverd too,
+// so its session is invalidated and every EncodeFrame then fails. Silent on failure
+// (the caller decides whether to log / retry next frame). Returns noErr on success.
+static OSStatus configure_session(rctl_encoder *e) {
+    free_sessions(e); // start clean (also covers a rebuild)
+    OSStatus s = VTCompressionSessionCreate(NULL, e->dstW, e->dstH, kCMVideoCodecType_H264,
                                             NULL, NULL, NULL, output_cb, e, &e->session);
-    if (s != noErr || !e->session) {
-        fprintf(stderr, "[enc] VTCompressionSessionCreate failed %d\n", (int)s);
-        free(e);
-        return NULL;
-    }
+    if (s != noErr || !e->session) { e->session = NULL; return s != noErr ? s : -1; }
 
     // GPU scaler + dest pool, only when downscaling.
-    if (dstW != srcW || dstH != srcH) {
+    if (e->dstW != e->srcW || e->dstH != e->srcH) {
         if (VTPixelTransferSessionCreate(NULL, &e->transfer) == noErr) {
             VTSessionSetProperty((VTSessionRef)e->transfer, kVTPixelTransferPropertyKey_ScalingMode,
                                  kVTScalingMode_Normal);
         }
         NSDictionary *attrs = @{
             (__bridge id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
-            (__bridge id)kCVPixelBufferWidthKey:           @(dstW),
-            (__bridge id)kCVPixelBufferHeightKey:          @(dstH),
+            (__bridge id)kCVPixelBufferWidthKey:           @(e->dstW),
+            (__bridge id)kCVPixelBufferHeightKey:          @(e->dstH),
             (__bridge id)kCVPixelBufferIOSurfacePropertiesKey: @{},
         };
         CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &e->pool);
@@ -150,19 +156,42 @@ rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
     // freeze every GOP -- so stretching it from 2s to ~10s removes most of them
     // (PLI still gives instant recovery when actually needed). Full-res = the LAN
     // path, which keeps the short GOP to bound new-subscriber join corruption.
-    int keyint = (dstW != srcW || dstH != srcH) ? fps * 10 : fps * 2;
+    int keyint = (e->dstW != e->srcW || e->dstH != e->srcH) ? e->fps * 10 : e->fps * 2;
     set_int(e->session, kVTCompressionPropertyKey_MaxKeyFrameInterval, keyint);
-    set_int(e->session, kVTCompressionPropertyKey_AverageBitRate, bitrate);
-    set_int(e->session, kVTCompressionPropertyKey_ExpectedFrameRate, fps);
+    set_int(e->session, kVTCompressionPropertyKey_AverageBitRate, e->bitrate);
+    set_int(e->session, kVTCompressionPropertyKey_ExpectedFrameRate, e->fps);
     VTCompressionSessionPrepareToEncodeFrames(e->session);
+    return noErr;
+}
 
+rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
+                                  int fps, int bitrate, rctl_nal_cb cb, void *ctx) {
+    rctl_encoder *e = (rctl_encoder *)calloc(1, sizeof(rctl_encoder));
+    e->cb = cb; e->ctx = ctx;
+    e->srcW = srcW; e->srcH = srcH; e->dstW = dstW; e->dstH = dstH;
+    e->fps = fps; e->bitrate = bitrate;
+
+    OSStatus s = configure_session(e);
+    if (s != noErr || !e->session) {
+        fprintf(stderr, "[enc] VTCompressionSessionCreate failed %d\n", (int)s);
+        free(e);
+        return NULL;
+    }
     fprintf(stderr, "[enc] H.264 %dx%d -> %dx%d @%dfps %dbps ready\n",
             srcW, srcH, dstW, dstH, fps, bitrate);
     return e;
 }
 
 void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) {
-    if (!e || !e->session || !surface) return;
+    if (!e || !surface) return;
+    // Self-heal a lost session (mediaserverd restarted/crashed -- e.g. enabling the
+    // system-audio tweak). Silent retry each frame until the service is back; the
+    // fresh session emits an IDR, so the video self-recovers within a few frames.
+    if (!e->session) {
+        if (configure_session(e) != noErr || !e->session) return;
+        e->frames_in = 0; __atomic_store_n(&e->frames_out, 0, __ATOMIC_RELAXED);
+        fprintf(stderr, "[enc] H.264 session rebuilt after loss\n");
+    }
 
     CVPixelBufferRef src = NULL;
     if (CVPixelBufferCreateWithIOSurface(NULL, surface, NULL, &src) != kCVReturnSuccess || !src) {
@@ -190,7 +219,15 @@ void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) 
     }
     OSStatus s = VTCompressionSessionEncodeFrame(e->session, frame, pts, kCMTimeInvalid, frameProps, NULL, &flags);
     if (frameProps) CFRelease(frameProps);
-    if (s != noErr) fprintf(stderr, "[enc] EncodeFrame err %d\n", (int)s);
+    // EncodeFrame is async: a session killed by a mediaserverd restart often keeps
+    // returning noErr while output_cb silently stops firing. So detect the stall by
+    // tracking queued-vs-emitted frames, not just the return code, then rebuild.
+    __atomic_add_fetch(&e->frames_in, 1, __ATOMIC_RELAXED);
+    int64_t pending = (int64_t)e->frames_in - (int64_t)__atomic_load_n(&e->frames_out, __ATOMIC_RELAXED);
+    if (s != noErr || pending > 30) {
+        fprintf(stderr, "[enc] EncodeFrame err=%d pending=%lld -> session lost, rebuilding\n", (int)s, (long long)pending);
+        free_sessions(e); // next frame rebuilds; the fresh session emits an IDR so video self-recovers
+    }
 
     if (scaled) CVPixelBufferRelease(scaled);
     CVPixelBufferRelease(src);
