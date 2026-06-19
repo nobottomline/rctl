@@ -59,12 +59,17 @@ must be queued until the answer is applied (see `index.html`).
 
 ## Phase 3 — iOS cross-compile (proven)
 
-`build-ios.sh` cross-compiles the whole stack to **iOS arm64, deployment target
-14.0** (built against the Xcode iPhoneOS SDK; minos 14.0 ⇒ runs on the iPad's
-iOS 14.4). The high-risk step is de-risked — all static libs rctld needs build:
+`build-ios.sh` cross-compiles the whole stack to **fat arm64 + arm64e, deployment
+target iOS 13.0** (built against the Xcode iPhoneOS SDK; minos 13.0 ⇒ runs on the
+iPad's iOS 14.4 and future iOS 15/17 devices, arm64 or arm64e). The high-risk
+step is de-risked — all static libs rctld needs build:
 
-- `libdatachannel.a`, `libjuice.a` (ICE), `libusrsctp.a` (SCTP) — arm64
-- `libmbedtls.a` + `libmbedcrypto.a` + `libmbedx509.a` (DTLS) — arm64
+- `libdatachannel.a`, `libjuice.a` (ICE), `libusrsctp.a` (SCTP) — arm64 + arm64e
+- `libmbedtls.a` + `libmbedcrypto.a` + `libmbedx509.a` (DTLS) — arm64 + arm64e
+
+(The daemon itself is arm64-only today — arm64 runs on arm64e devices in
+compatibility — so the arm64e slice is insurance for a future native arm64e
+daemon, not a requirement.)
 
 Gotchas (baked into `build-ios.sh`): iOS has no system OpenSSL → use **mbedtls**;
 mbedtls codegen needs Python `jsonschema`+`jinja2`; **enable `MBEDTLS_SSL_DTLS_SRTP`**

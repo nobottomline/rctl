@@ -15,7 +15,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 SPIKE="$PWD"
 ROOT="$SPIKE/.lib/ios"
-MIN_IOS=14.0
+# Low floor + both arches: 13.0 covers iOS 13/14/15/17 from the libs' side, and a
+# fat arm64+arm64e slice covers the current arm64 iPad and future arm64e phones.
+MIN_IOS=13.0
+ARCHS="arm64;arm64e"
 mkdir -p "$ROOT"
 
 # ── mbedtls 3.6 (DTLS). DTLS-SRTP must be enabled: libdatachannel's mbedtls path
@@ -28,7 +31,7 @@ if [ ! -f "$ROOT/mbedtls-install/lib/libmbedtls.a" ]; then
   python3 -m pip install --break-system-packages -q jsonschema jinja2 || true
   python3 scripts/config.py set MBEDTLS_SSL_DTLS_SRTP
   cmake -B build-ios -G Ninja \
-    -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$MIN_IOS" \
     -DCMAKE_INSTALL_PREFIX="$ROOT/mbedtls-install" \
     -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
@@ -42,7 +45,7 @@ MB="$ROOT/mbedtls-install"
 cd "$SPIKE/.lib/libdatachannel"
 [ -d include/rtc ] || { echo "clone libdatachannel into .lib first (see README)"; exit 1; }
 cmake -B build-ios -G Ninja \
-  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET="$MIN_IOS" \
   -DBUILD_SHARED_LIBS=OFF \
   -DUSE_MBEDTLS=1 -DUSE_GNUTLS=0 -DUSE_NICE=0 -DNO_MEDIA=1 \
