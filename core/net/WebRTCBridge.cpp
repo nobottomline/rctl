@@ -93,14 +93,25 @@ static void start_session(const std::string &id) {
     // Offer one send-only H.264 track (device -> browser). The browser answers
     // with a recvonly video m-line and attaches the track to a <video> element.
     const rtc::SSRC ssrc = 42;
+    const int kPlayoutDelayExtId = 1;
     rtc::Description::Video media("video", rtc::Description::Direction::SendOnly);
     media.addH264Codec(96);
     media.addSSRC(ssrc, "rctl-video");
+    // Ask the receiver to play out with zero added delay (min = max = 0). For
+    // remote control we want the freshest frame, not a smoothing buffer; this is
+    // the standard playout-delay RTP header extension, which the packetizer
+    // stamps on every packet -- far more reliable than the browser-side
+    // jitterBufferTarget hint (Safari ignores it, leaving ~110ms of buffer).
+    media.addExtMap(rtc::Description::Media::ExtMap(
+        kPlayoutDelayExtId, "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay"));
     auto track = pc->addTrack(media);
     sess->track = track;
 
     auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
         ssrc, "rctl-video", 96, rtc::H264RtpPacketizer::ClockRate);
+    rtpConfig->playoutDelayId = kPlayoutDelayExtId;
+    rtpConfig->playoutDelayMin = 0;
+    rtpConfig->playoutDelayMax = 0;
     // StartSequence auto-detects 3- and 4-byte Annex-B start codes; the encoder
     // mixes them (SPS/PPS vs SEI/IDR), and LongStartSequence would mis-parse the
     // keyframe's NALs so the browser could never assemble a frame.
