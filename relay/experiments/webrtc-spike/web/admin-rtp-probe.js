@@ -52,7 +52,14 @@
   ws.onclose = () => console.log('[rtp] signal ws closed');
   ws.onmessage = async ev => {
     const m = JSON.parse(ev.data);
-    if (m.kind === 'offer') {
+    if (m.kind === 'ready') {
+      // The relay mints the ICE servers (STUN + short-lived TURN creds) and sends
+      // them here; apply them before the offer so ICE can traverse NAT/CGNAT.
+      // (ICE still prefers a direct path; TURN is the relay fallback.)
+      if (Array.isArray(m.payload) && m.payload.length) {
+        try { pc.setConfiguration({ iceServers: m.payload }); } catch {}
+      }
+    } else if (m.kind === 'offer') {
       await pc.setRemoteDescription({ type: 'offer', sdp: m.payload.sdp });
       remoteReady = true;
       for (const c of pend.splice(0)) { try { await pc.addIceCandidate(c); } catch {} }

@@ -96,9 +96,53 @@ static void retire_track(const std::string &id) {
     if (lastGone && g_viewer_cb) g_viewer_cb(false);
 }
 
-static void start_session(const std::string &id) {
+// Build the libdatachannel ICE config from the RTCIceServer list the relay mints
+// (STUN + short-lived TURN creds). STUN URLs go through the url parser; TURN URLs
+// can't (our username is "<expiry>:<session>", and the colon breaks the
+// user:pass@host url form), so parse host/port/transport and pass the credential
+// explicitly. Without this the device only has host candidates (same-LAN reach).
+static void add_ice_servers(rtc::Configuration &config, const json &arr) {
+    if (!arr.is_array()) return;
+    for (const auto &entry : arr) {
+        if (!entry.contains("urls") || !entry["urls"].is_array()) continue;
+        std::string user = entry.value("username", "");
+        std::string cred = entry.value("credential", "");
+        for (const auto &u : entry["urls"]) {
+            std::string url = u.get<std::string>();
+            try {
+                if (url.rfind("stun:", 0) == 0) {
+                    config.iceServers.emplace_back(url);
+                } else if (url.rfind("turn:", 0) == 0 || url.rfind("turns:", 0) == 0) {
+                    bool tls = url.rfind("turns:", 0) == 0;
+                    std::string rest = url.substr(url.find(':') + 1);  // host:port[?transport=x]
+                    std::string transport = "udp";
+                    auto q = rest.find('?');
+                    if (q != std::string::npos) {
+                        std::string query = rest.substr(q + 1);
+                        rest = rest.substr(0, q);
+                        auto tp = query.find("transport=");
+                        if (tp != std::string::npos) transport = query.substr(tp + 10);
+                    }
+                    auto colon = rest.rfind(':');
+                    if (colon == std::string::npos) continue;
+                    std::string host = rest.substr(0, colon);
+                    uint16_t port = (uint16_t)std::stoi(rest.substr(colon + 1));
+                    auto rt = tls ? rtc::IceServer::RelayType::TurnTls
+                            : (transport == "tcp" ? rtc::IceServer::RelayType::TurnTcp
+                                                  : rtc::IceServer::RelayType::TurnUdp);
+                    config.iceServers.emplace_back(host, port, user, cred, rt);
+                }
+            } catch (...) {}
+        }
+    }
+    wlog("ice servers configured: " + std::to_string(config.iceServers.size()));
+}
+
+static void start_session(const std::string &id, const json &ice) {
     auto sess = std::make_shared<Session>();
-    auto pc = std::make_shared<rtc::PeerConnection>(rtc::Configuration{});
+    rtc::Configuration config;
+    add_ice_servers(config, ice);
+    auto pc = std::make_shared<rtc::PeerConnection>(config);
     sess->pc = pc;
 
     pc->onLocalDescription([id](rtc::Description d) {
@@ -215,7 +259,7 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
 
     if (kind == "open") {
         wlog("session open " + id);
-        start_session(id);
+        start_session(id, m.contains("payload") ? m["payload"] : json::array());
         return;
     }
     if (kind == "close") {

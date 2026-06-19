@@ -61,14 +61,19 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}()
 
+	// Mint the ICE servers once per session (STUN + short-lived TURN creds) and
+	// hand the same list to both ends: the device gets it in the "open" payload,
+	// the browser in "ready". Nil when TURN/STUN isn't configured (host-only ICE).
+	ice := s.iceServersJSON(sessionID)
+
 	openCtx, cancel := context.WithTimeout(r.Context(), s.cfg.WriteTimeout)
-	err = dc.writeJSON(openCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "open"})
+	err = dc.writeJSON(openCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "open", Payload: ice})
 	cancel()
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "device_write_failed")
 		return
 	}
-	_ = wsjsonWrite(r.Context(), ws, signalClientMessage{Kind: "ready"})
+	_ = wsjsonWrite(r.Context(), ws, signalClientMessage{Kind: "ready", Payload: ice})
 	s.audit(r, "webrtc_signal_open", "device_id", deviceID, "session_id", sessionID)
 
 	readDone := make(chan struct{})

@@ -19,6 +19,10 @@ type config struct {
 	CookieSecure       bool
 	TrustProxyHeaders  bool
 	EnableWebRTC       bool
+	TurnSecret         string
+	TurnURLs           []string
+	StunURLs           []string
+	TurnTTL            time.Duration
 	TokenTTL           time.Duration
 	ReadLimitBytes     int64
 	HeartbeatEvery     time.Duration
@@ -44,6 +48,10 @@ func loadConfig() (config, error) {
 		AllowInsecure:      getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),
 		TrustProxyHeaders:  getenvBool("RCTL_RELAY_TRUST_PROXY_HEADERS", false),
 		EnableWebRTC:       getenvBool("RCTL_RELAY_ENABLE_WEBRTC", false),
+		TurnSecret:         os.Getenv("RCTL_RELAY_TURN_SECRET"),
+		TurnURLs:           getenvList("RCTL_RELAY_TURN_URLS"),
+		StunURLs:           getenvList("RCTL_RELAY_STUN_URLS"),
+		TurnTTL:            getenvDuration("RCTL_RELAY_TURN_TTL", time.Hour),
 		TokenTTL:           getenvDuration("RCTL_RELAY_ENROLL_TTL", 30*time.Minute),
 		ReadLimitBytes:     getenvInt64("RCTL_RELAY_READ_LIMIT", 8<<20),
 		HeartbeatEvery:     getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
@@ -81,6 +89,20 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getenvList(key string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func getenvBool(key string, fallback bool) bool {
