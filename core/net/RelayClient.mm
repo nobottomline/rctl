@@ -832,6 +832,9 @@ static void *relay_supervisor_main(void *arg) {
     return NULL;
 }
 
+extern "C" void rctl_webrtc_probe(void);
+
 void rctl_relay_start(void) {
+    rctl_webrtc_probe();
     [[RCTLRelayClient shared] start];
 }
