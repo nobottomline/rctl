@@ -212,7 +212,22 @@ static void on_session(void *ctx, bool active) {
     dispatch_async(gAuto, ^{ gStreamViewers = active; apply_active(); });
 }
 static void on_webrtc_viewers(bool any) {
-    dispatch_async(gAuto, ^{ gWebrtcViewers = any; apply_active(); });
+    dispatch_async(gAuto, ^{
+        gWebrtcViewers = any;
+        apply_active();
+        if (any) {
+            // The WebRTC DataChannel path can't absorb large keyframes/bursts the
+            // way the local WebSocket stream can, and the egress-adaptation loop
+            // only samples /stream, so it would otherwise ramp the encoder to the
+            // full ceiling and produce ~700KB keyframes that overwhelm the channel.
+            // Cap the ceiling low while a WebRTC viewer is watching.
+            int32_t br = 2500000;
+            gBitrateCeiling = br;
+            gBitrateCurrent = br;
+            send_to_sb(RCTL_MSG_BITRATE, &br, sizeof br);
+            send_to_sb(RCTL_MSG_KEYFRAME, NULL, 0);
+        }
+    });
 }
 
 static bool file_exists(const char *path) {

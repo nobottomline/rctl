@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include <mach/mach.h>
 
 using nlohmann::json;
 
@@ -190,5 +191,16 @@ extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyfra
                 vc->dc->send(msg);
             }
         } catch (...) {}
+    }
+
+    if (keyframe) {
+        size_t maxBuf = 0;
+        for (auto &vc : g_video)
+            if (vc->dc->bufferedAmount() > maxBuf) maxBuf = vc->dc->bufferedAmount();
+        struct mach_task_basic_info info;
+        mach_msg_type_number_t cnt = MACH_TASK_BASIC_INFO_COUNT;
+        if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &cnt) == KERN_SUCCESS)
+            wlog("kf " + std::to_string(len) + "B rss=" + std::to_string(info.resident_size / (1024 * 1024)) +
+                 "MB buffered=" + std::to_string(maxBuf / 1024) + "KB chans=" + std::to_string(g_video.size()));
     }
 }
