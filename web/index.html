@@ -230,6 +230,18 @@ const DEG={1:0,2:180,3:-90,4:90};
 function applyOrient(){
   const deg=DEG[effOrient()]||0,cw=canvas.width||1,ch=canvas.height||1;
   const r90=(deg===90||deg===-90);
+  if(dispEl!==canvas){
+    // WebRTC <video>: size with object-fit (layout) so the browser keeps it on the
+    // hardware video overlay (zero-copy, low latency). A CSS scale/rotate transform
+    // would drop it onto the slow compositor -> lag. Rotate only when needed.
+    dispEl.style.objectFit='contain';
+    if(!deg){ dispEl.style.position=''; dispEl.style.left=''; dispEl.style.top='';
+      dispEl.style.width=innerWidth+'px'; dispEl.style.height=innerHeight+'px'; dispEl.style.transform=''; }
+    else { dispEl.style.position='absolute'; dispEl.style.left='50%'; dispEl.style.top='50%';
+      dispEl.style.width=(r90?innerHeight:innerWidth)+'px'; dispEl.style.height=(r90?innerWidth:innerHeight)+'px';
+      dispEl.style.transform=`translate(-50%,-50%) rotate(${deg}deg)`; }
+    return;
+  }
   const bbW=r90?ch:cw,bbH=r90?cw:ch;
   const sc=Math.min(innerWidth/bbW,innerHeight/bbH);
   dispEl.style.transform=`rotate(${deg}deg) scale(${sc})`;
@@ -722,8 +734,7 @@ function startWebRTC(){
     vid.play().catch(()=>{});
     // Size the <video> to the stream's pixel size; applyOrient scales/rotates it
     // to fit (canvas keeps the same width/height as the input-mapping reference).
-    const fit=()=>{ if(vid.videoWidth){ canvas.width=vid.videoWidth; canvas.height=vid.videoHeight;
-        vid.style.width=vid.videoWidth+'px'; vid.style.height=vid.videoHeight+'px'; applyOrient(); frames++; } };
+    const fit=()=>{ if(vid.videoWidth){ canvas.width=vid.videoWidth; canvas.height=vid.videoHeight; applyOrient(); frames++; } };
     vid.addEventListener('loadedmetadata',fit); vid.addEventListener('resize',fit); fit(); };
   pc.ondatachannel=e=>{ if(e.channel.label==='control') rtcControl=e.channel; };
   pc.onconnectionstatechange=()=>{ if(pc.connectionState==='failed') fallback('failed'); };
