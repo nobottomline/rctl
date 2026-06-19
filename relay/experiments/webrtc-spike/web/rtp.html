@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>rctl · WebRTC RTP video spike</title>
+<style>
+  body { margin:0; background:#0e0f13; color:#d6d8de; font:14px ui-monospace,Menlo,monospace; padding:24px; }
+  video { width:480px; border-radius:10px; border:2px solid #c25e3a; background:#000; display:block; margin-top:14px; }
+  #hud { margin-top:8px; color:#8a8f9a; }
+  .ok{color:#5fd08a}.bad{color:#e2685f}
+</style>
+</head>
+<body>
+  <h3>rctl · RTP video over a WebRTC media track <span id="state">idle</span></h3>
+  <p style="color:#8a8f9a">Native libdatachannel sends H.264 on an RTP track; the browser decodes it natively in &lt;video&gt; (jitter buffer + NACK).</p>
+  <video id="v" autoplay playsinline muted></video>
+  <div id="hud">—</div>
+  <script type="module">
+  const v = document.getElementById('v'), hud = document.getElementById('hud'), stateEl = document.getElementById('state');
+  const ws = new WebSocket(`ws://${location.host}/ws?role=browser`);
+  const pc = new RTCPeerConnection({});
+  window.pc = pc;
+  let remoteReady = false; const pend = [];
+
+  pc.onicecandidate = e => { if (e.candidate) ws.send(JSON.stringify({ type:'candidate', candidate:e.candidate.candidate, mid:e.candidate.sdpMid })); };
+  pc.ontrack = e => { v.srcObject = e.streams[0] || new MediaStream([e.track]); };
+  pc.onconnectionstatechange = () => { stateEl.textContent = pc.connectionState; stateEl.className = pc.connectionState==='connected'?'ok':pc.connectionState==='failed'?'bad':''; };
+
+  ws.onopen = () => ws.send(JSON.stringify({ type:'start' }));
+  ws.onmessage = async ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'offer') {
+      await pc.setRemoteDescription({ type:'offer', sdp:m.sdp });
+      remoteReady = true;
+      for (const c of pend.splice(0)) { try { await pc.addIceCandidate(c) } catch {} }
+      const a = await pc.createAnswer(); await pc.setLocalDescription(a);
+      ws.send(JSON.stringify({ type:'answer', sdp:pc.localDescription.sdp }));
+    } else if (m.type === 'candidate') {
+      const ic = { candidate:(m.candidate||'').replace(/^a=/,''), sdpMid:m.mid||'0' };
+      if (remoteReady) { try { await pc.addIceCandidate(ic) } catch {} } else pend.push(ic);
+    }
+  };
+
+  setInterval(() => {
+    let frames = 0;
+    try { frames = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : (v.webkitDecodedFrameCount||0); } catch {}
+    hud.textContent = `${pc.connectionState} | decoded=${frames} | ${v.videoWidth}x${v.videoHeight}`;
+  }, 500);
+  </script>
+</body>
+</html>
