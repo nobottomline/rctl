@@ -228,7 +228,7 @@ static void on_webrtc_viewers(bool any) {
             // frames and NACK repairs loss, so this stays robust. RCTL_MSG_CONFIG
             // recreates the encoder; gate on !gStreamViewers so a LAN viewer (which
             // sends its own /config) always keeps full resolution.
-            rctl_ipc_config m = { 30, 0.5, 5000000 };
+            rctl_ipc_config m = { 60, 0.5, 5000000 };
             gBitrateCeiling = 5000000;
             gBitrateCurrent = 5000000;
             send_to_sb(RCTL_MSG_CONFIG, &m, sizeof m);
