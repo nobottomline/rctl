@@ -958,6 +958,21 @@ static void *ipc_thread(void *unused) {
     }
 }
 
+// Renew the audio-capture lease: the in-mediaserverd tap self-disables if its marker
+// goes stale (see rctlaudio capture_watchdog), so keep touching it while the user
+// wants audio. If rctld dies or audio is turned off, the marker stops refreshing and
+// the tap shuts itself down within the lease window -- it never lingers unattended.
+static void *audio_lease_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        sleep(60);
+        pthread_mutex_lock(&gAudioCtlLock);
+        if (gAudioCaptureDesired) touch_file(RCTL_AUDIO_CAPTURE_MARKER);
+        pthread_mutex_unlock(&gAudioCtlLock);
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     // Safe signature validator: dlopen a dylib in THIS process (not SpringBoard).
     // If the code signature is rejected by AMFI, __TEXT stays non-executable and
@@ -1003,6 +1018,8 @@ int main(int argc, char **argv) {
         pthread_create(&tt, NULL, audio_tcp_thread, NULL);
         pthread_t adt;
         pthread_create(&adt, NULL, adapt_thread, NULL);
+        pthread_t alt;
+        pthread_create(&alt, NULL, audio_lease_thread, NULL);
 
         dispatch_main();
     }

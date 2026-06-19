@@ -224,8 +224,13 @@ void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) 
     // tracking queued-vs-emitted frames, not just the return code, then rebuild.
     __atomic_add_fetch(&e->frames_in, 1, __ATOMIC_RELAXED);
     int64_t pending = (int64_t)e->frames_in - (int64_t)__atomic_load_n(&e->frames_out, __ATOMIC_RELAXED);
-    if (s != noErr || pending > 30) {
+    // Only rebuild on a real death -- a long output stall (~1.5s @60fps) or the explicit
+    // invalid-session codes. A lower bar also fires on the brief encode hiccups the
+    // in-mediaserverd audio tap causes, and each rebuild is itself a visible hitch.
+    if (s != noErr || pending > 90) {
         fprintf(stderr, "[enc] EncodeFrame err=%d pending=%lld -> session lost, rebuilding\n", (int)s, (long long)pending);
+        FILE *lf = fopen("/tmp/rctl-enc.log", "a");
+        if (lf) { fprintf(lf, "[%ld] rebuild err=%d pending=%lld\n", (long)time(NULL), (int)s, (long long)pending); fclose(lf); }
         free_sessions(e); // next frame rebuilds; the fresh session emits an IDR so video self-recovers
     }
 

@@ -16,6 +16,7 @@
 #import <arpa/inet.h>
 #import <unistd.h>
 #import <time.h>
+#import <sys/stat.h>
 #import <errno.h>
 #import <string.h>
 #import <math.h>
@@ -29,6 +30,7 @@
 #define RCTL_AUDIO_SOURCE_FRAMES 960
 #define RCTL_CAPTURE_MAX_QUEUE 64
 #define RCTL_CAPTURE_TTL_SEC 180
+#define RCTL_CAPTURE_LEASE_SEC 150  // self-disable if the marker isn't re-touched within this window
 
 static FILE *as_log_open(void) {
     return fopen(RCTL_AUDIO_SOURCE_LOG, "a");
@@ -272,14 +274,28 @@ static void *capture_worker(void *arg) {
 }
 
 static void *capture_watchdog(void *arg) {
-    sleep(RCTL_CAPTURE_TTL_SEC);
-    pthread_mutex_lock(&gCaptureLock);
-    if (gCaptureEnabled) {
-        gCaptureEnabled = false;
-        pthread_cond_signal(&gCaptureCond);
+    // Lease, not a one-shot TTL: rctld re-touches RCTL_AUDIO_CAPTURE_MARKER every ~60s
+    // while a viewer is listening, so the deadline keeps sliding forward and audio
+    // stays up. If rctld stops (viewer gone / daemon died), the marker goes stale and
+    // capture self-disables -- the mediaserverd tap never lingers unattended.
+    for (;;) {
+        sleep(20);
+        pthread_mutex_lock(&gCaptureLock);
+        if (!gCaptureEnabled) { pthread_mutex_unlock(&gCaptureLock); break; }
+        struct stat stbuf;
+        bool fresh = (stat(RCTL_AUDIO_CAPTURE_MARKER, &stbuf) == 0) &&
+                     ((time(NULL) - stbuf.st_mtime) <= RCTL_CAPTURE_LEASE_SEC);
+        if (fresh) {
+            gCaptureDeadline = time(NULL) + RCTL_CAPTURE_LEASE_SEC; // renew
+            pthread_mutex_unlock(&gCaptureLock);
+        } else {
+            gCaptureEnabled = false;
+            pthread_cond_signal(&gCaptureCond);
+            pthread_mutex_unlock(&gCaptureLock);
+            as_log("capture lease expired (marker stale); disabled capture");
+            break;
+        }
     }
-    pthread_mutex_unlock(&gCaptureLock);
-    as_log("capture watchdog expired; disabled capture");
     return NULL;
 }
 
@@ -460,7 +476,7 @@ static OSStatus hook_AudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlag
 static void start_capture_hook(void) {
     if (gCaptureWorkerStarted) return;
     gCaptureEnabled = true;
-    gCaptureDeadline = time(NULL) + RCTL_CAPTURE_TTL_SEC;
+    gCaptureDeadline = time(NULL) + RCTL_CAPTURE_LEASE_SEC;
     pthread_t t;
     if (pthread_create(&t, NULL, capture_worker, NULL) == 0) {
         pthread_detach(t);
@@ -474,7 +490,7 @@ static void start_capture_hook(void) {
     if (pthread_create(&wt, NULL, capture_watchdog, NULL) == 0) pthread_detach(wt);
 
     char line[96];
-    snprintf(line, sizeof(line), "capture enabled ttl=%ds", RCTL_CAPTURE_TTL_SEC);
+    snprintf(line, sizeof(line), "capture enabled lease=%ds", RCTL_CAPTURE_LEASE_SEC);
     as_log(line);
 
     void *sym = dlsym(RTLD_DEFAULT, "AudioQueueEnqueueBuffer");
