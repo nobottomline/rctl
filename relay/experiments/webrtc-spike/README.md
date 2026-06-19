@@ -57,10 +57,26 @@ browser session. On localhost, Chrome mDNS-obfuscates its own host candidates,
 but the native's real host candidates let the browser connect; ICE candidates
 must be queued until the answer is applied (see `index.html`).
 
+## Phase 3 — iOS cross-compile (proven)
+
+`build-ios.sh` cross-compiles the whole stack to **iOS arm64, deployment target
+14.0** (built against the Xcode iPhoneOS SDK; minos 14.0 ⇒ runs on the iPad's
+iOS 14.4). The high-risk step is de-risked — all static libs rctld needs build:
+
+- `libdatachannel.a`, `libjuice.a` (ICE), `libusrsctp.a` (SCTP) — arm64
+- `libmbedtls.a` + `libmbedcrypto.a` + `libmbedx509.a` (DTLS) — arm64
+
+Gotchas (baked into `build-ios.sh`): iOS has no system OpenSSL → use **mbedtls**;
+mbedtls codegen needs Python `jsonschema`+`jinja2`; **enable `MBEDTLS_SSL_DTLS_SRTP`**
+(libdatachannel's mbedtls path references the SRTP profile symbols even with
+`NO_MEDIA`); when cross-compiling set `CMAKE_FIND_ROOT_PATH` to the mbedtls
+install or `find_library` won't see it.
+
 ## Next
 
-- Phase 2 (loss): add Network Link Conditioner loss/jitter and show unreliable
-  video stays low-latency where a reliable channel stalls.
+- Phase 2 (loss): Network Link Conditioner loss/jitter — show unreliable video
+  stays low-latency where a reliable channel stalls.
 - Phase 2.5: swap this signaling for the relay's `/signal/devices/{id}`.
-- Phase 3: cross-compile libdatachannel for iOS arm64 (the high-risk step).
-- Phase 4: real H.264 AUs on the video channel + browser keyframe/drop rules.
+- Phase 4: link the iOS libs into `rctld`; handle `webrtc_signal`; send real
+  H.264 AUs on the video channel; browser keyframe/drop rules.
+- Phase 5: TURN (coturn) + connection-type display in admin.
