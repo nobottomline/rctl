@@ -75,6 +75,27 @@ static void request_keyframe() {
     g_keyframe_cb();
 }
 
+// Drop a session's track from the active send list when its connection dies (ICE
+// disconnected/failed/closed). Otherwise a viewer that vanishes without a clean
+// "close" leaves a zombie track that push_au keeps feeding, and -- worse -- the
+// track list never empties, so a fresh viewer isn't seen as the "first" and the
+// daemon never re-applies the remote encode profile. Idempotent with onClosed.
+static void retire_track(const std::string &id) {
+    bool lastGone = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        auto it = g_sessions.find(id);
+        if (it == g_sessions.end() || !it->second->track) return;
+        rtc::Track *tptr = it->second->track.get();
+        size_t before = g_tracks.size();
+        g_tracks.erase(std::remove_if(g_tracks.begin(), g_tracks.end(),
+                          [tptr](const std::shared_ptr<rtc::Track> &t) { return t.get() == tptr; }),
+                       g_tracks.end());
+        lastGone = (before > 0 && g_tracks.empty());
+    }
+    if (lastGone && g_viewer_cb) g_viewer_cb(false);
+}
+
 static void start_session(const std::string &id) {
     auto sess = std::make_shared<Session>();
     auto pc = std::make_shared<rtc::PeerConnection>(rtc::Configuration{});
@@ -88,6 +109,10 @@ static void start_session(const std::string &id) {
     });
     pc->onStateChange([id](rtc::PeerConnection::State s) {
         wlog("session " + id + " state " + std::to_string((int)s));
+        if (s == rtc::PeerConnection::State::Disconnected ||
+            s == rtc::PeerConnection::State::Failed ||
+            s == rtc::PeerConnection::State::Closed)
+            retire_track(id);
     });
 
     // Offer one send-only H.264 track (device -> browser). The browser answers
@@ -109,9 +134,13 @@ static void start_session(const std::string &id) {
 
     auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
         ssrc, "rctl-video", 96, rtc::H264RtpPacketizer::ClockRate);
+    // min = 0 keeps latency at the floor when the link is clean; max = 6 (60ms)
+    // lets the receiver's jitter buffer grow just enough to ride out an occasional
+    // Wi-Fi loss/jitter burst (giving NACK retransmits time to arrive) instead of
+    // freezing -- the buffer shrinks back toward 0 once the link settles.
     rtpConfig->playoutDelayId = kPlayoutDelayExtId;
     rtpConfig->playoutDelayMin = 0;
-    rtpConfig->playoutDelayMax = 0;
+    rtpConfig->playoutDelayMax = 6;
     // StartSequence auto-detects 3- and 4-byte Annex-B start codes; the encoder
     // mixes them (SPS/PPS vs SEI/IDR), and LongStartSequence would mis-parse the
     // keyframe's NALs so the browser could never assemble a frame.
@@ -126,15 +155,20 @@ static void start_session(const std::string &id) {
     track->setMediaHandler(packetizer);
 
     rtc::Track *tptr = track.get();
-    track->onOpen([id, track]() {
-        wlog("session " + id + " video track open");
+    // Capture the raw pointer, not the shared_ptr: a track that owns a callback
+    // which owns the track is a reference cycle that never frees. Re-fetch the
+    // shared_ptr from the session when the track opens.
+    track->onOpen([id, tptr]() {
         bool firstViewer = false;
         {
             std::lock_guard<std::mutex> lk(g_mtx);
+            auto it = g_sessions.find(id);
+            if (it == g_sessions.end() || !it->second->track || it->second->track.get() != tptr) return;
             firstViewer = g_tracks.empty();
-            g_tracks.push_back(track);
+            g_tracks.push_back(it->second->track);
         }
         if (firstViewer && g_viewer_cb) g_viewer_cb(true);
+        wlog("session " + id + " video track open");
     });
     track->onClosed([id, tptr]() {
         bool lastGone = false;

@@ -144,7 +144,14 @@ rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
                          kVTProfileLevel_H264_High_AutoLevel);
     VTSessionSetProperty(e->session, kVTCompressionPropertyKey_H264EntropyMode,
                          kVTH264EntropyMode_CABAC);
-    set_int(e->session, kVTCompressionPropertyKey_MaxKeyFrameInterval, fps * 2);
+    // Downscaling = the remote (WebRTC) profile: NACK + PLI recover from loss and
+    // the browser pulls a keyframe on join, so use a long GOP. A periodic
+    // full-intra frame is large and briefly saturates the uplink -- a visible
+    // freeze every GOP -- so stretching it from 2s to ~10s removes most of them
+    // (PLI still gives instant recovery when actually needed). Full-res = the LAN
+    // path, which keeps the short GOP to bound new-subscriber join corruption.
+    int keyint = (dstW != srcW || dstH != srcH) ? fps * 10 : fps * 2;
+    set_int(e->session, kVTCompressionPropertyKey_MaxKeyFrameInterval, keyint);
     set_int(e->session, kVTCompressionPropertyKey_AverageBitRate, bitrate);
     set_int(e->session, kVTCompressionPropertyKey_ExpectedFrameRate, fps);
     VTCompressionSessionPrepareToEncodeFrames(e->session);
