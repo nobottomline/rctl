@@ -32,6 +32,7 @@ using std::chrono::duration;
 
 static void (*g_send)(const char *) = nullptr;
 static void (*g_viewer_cb)(bool) = nullptr;
+static void (*g_keyframe_cb)(void) = nullptr;
 static std::mutex g_mtx;
 
 struct Session {
@@ -41,6 +42,7 @@ struct Session {
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
 static std::vector<std::shared_ptr<rtc::Track>> g_tracks;
+static std::chrono::steady_clock::time_point g_lastPli{};
 
 static void wlog(const std::string &m) {
     FILE *f = fopen("/tmp/rctld.log", "a");
@@ -55,6 +57,22 @@ static void send_signal(const std::string &id, const std::string &kind, const js
     if (!payload.is_null()) m["payload"] = payload;
     std::string s = m.dump();
     g_send(s.c_str());
+}
+
+// A PLI/FIR from the browser asks for an intra frame (it lost reference frames
+// it can't recover via NACK). Force the encoder to emit a keyframe via the
+// daemon. Debounced: browsers send PLI in bursts until a keyframe arrives, and
+// the encoder needs a few frames to produce one.
+static void request_keyframe() {
+    if (!g_keyframe_cb) return;
+    auto now = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (now - g_lastPli < std::chrono::milliseconds(250)) return;
+        g_lastPli = now;
+    }
+    wlog("PLI -> force keyframe");
+    g_keyframe_cb();
 }
 
 static void start_session(const std::string &id) {
@@ -90,6 +108,10 @@ static void start_session(const std::string &id) {
         rtc::NalUnit::Separator::StartSequence, rtpConfig);
     packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
     packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
+    // Let the browser pull a fresh intra frame on demand (PLI): a late-joining
+    // second viewer, or loss that NACK can't repair, gets a keyframe right away
+    // instead of waiting up to the encoder's GOP for the next periodic IDR.
+    packetizer->addToChain(std::make_shared<rtc::PliHandler>([]() { request_keyframe(); }));
     track->setMediaHandler(packetizer);
 
     rtc::Track *tptr = track.get();
@@ -132,6 +154,10 @@ extern "C" void rctl_webrtc_set_sender(void (*send)(const char *)) {
 
 extern "C" void rctl_webrtc_set_viewer_cb(void (*cb)(bool)) {
     g_viewer_cb = cb;
+}
+
+extern "C" void rctl_webrtc_set_keyframe_cb(void (*cb)(void)) {
+    g_keyframe_cb = cb;
 }
 
 extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {

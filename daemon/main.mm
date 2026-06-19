@@ -211,17 +211,22 @@ static void on_session(void *ctx, bool active) {
     // Debounce idle so a page refresh or brief Wi-Fi blip doesn't thrash capture.
     dispatch_async(gAuto, ^{ gStreamViewers = active; apply_active(); });
 }
+static void on_webrtc_keyframe_request(void) {
+    // The browser asked for an intra frame (RTCP PLI). Drive the SB encoder.
+    dispatch_async(gAuto, ^{ send_to_sb(RCTL_MSG_KEYFRAME, NULL, 0); });
+}
 static void on_webrtc_viewers(bool any) {
     dispatch_async(gAuto, ^{
         gWebrtcViewers = any;
         apply_active();
         if (any) {
-            // The WebRTC DataChannel path can't absorb large keyframes/bursts the
-            // way the local WebSocket stream can, and the egress-adaptation loop
-            // only samples /stream, so it would otherwise ramp the encoder to the
-            // full ceiling and produce ~700KB keyframes that overwhelm the channel.
-            // Cap the ceiling low while a WebRTC viewer is watching.
-            int32_t br = 2500000;
+            // A WebRTC viewer streams over an RTP media track: the packetizer
+            // fragments each access unit into MTU-sized packets and loss is
+            // repaired by NACK, so it absorbs keyframes far better than the old
+            // DataChannel path. But the egress-adaptation loop only samples
+            // /stream, so with no LAN viewer it can't probe the link -- pin a
+            // fixed ceiling the iPad's uplink comfortably sustains.
+            int32_t br = 5000000;
             gBitrateCeiling = br;
             gBitrateCurrent = br;
             send_to_sb(RCTL_MSG_BITRATE, &br, sizeof br);
@@ -979,6 +984,7 @@ int main(int argc, char **argv) {
         rctl_http_set_rest(gHttp, rest_handler, NULL);
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too
+        rctl_webrtc_set_keyframe_cb(on_webrtc_keyframe_request); // browser PLI -> force a keyframe
         dlog("http listening on :8080");
         audio_capture_set(false, NULL, 0);
 

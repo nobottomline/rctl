@@ -32,7 +32,14 @@
     'font:12px ui-monospace,Menlo,monospace;background:#0e0f13cc;padding:4px 8px;border-radius:6px';
   hud.textContent = 'connecting…'; document.body.appendChild(hud);
 
-  pc.ontrack = e => { v.srcObject = e.streams[0] || new MediaStream([e.track]); };
+  pc.ontrack = e => {
+    v.srcObject = e.streams[0] || new MediaStream([e.track]);
+    // Remote control wants the freshest frame, not smooth-but-late playback:
+    // shrink the receiver jitter buffer toward zero (both the modern and the
+    // legacy Chrome knobs). Trades a little jitter-resilience for low latency.
+    try { e.receiver.jitterBufferTarget = 0; } catch {}   // ms (newer)
+    try { e.receiver.playoutDelayHint = 0; } catch {}     // s (Chrome legacy)
+  };
   pc.oniceconnectionstatechange = () => console.log('[rtp] ice', pc.iceConnectionState);
   pc.onconnectionstatechange = () => { hud.textContent = pc.connectionState; console.log('[rtp] pc', pc.connectionState); };
 

@@ -23,6 +23,10 @@ void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyframe, uint64_
 // capture pipeline awake while a WebRTC viewer is watching (OR-ed with /stream).
 void rctl_webrtc_set_viewer_cb(void (*cb)(bool any));
 
+// The browser can ask (via RTCP PLI) for an intra frame; the bridge invokes this
+// so the daemon forces the encoder to emit a keyframe.
+void rctl_webrtc_set_keyframe_cb(void (*cb)(void));
+
 #ifdef __cplusplus
 }
 #endif
