@@ -77,11 +77,31 @@ mbedtls codegen needs Python `jsonschema`+`jinja2`; **enable `MBEDTLS_SSL_DTLS_S
 `NO_MEDIA`); when cross-compiling set `CMAKE_FIND_ROOT_PATH` to the mbedtls
 install or `find_library` won't see it.
 
+## Phase 2.5 — through the real relay signaling (proven)
+
+`relay_device.cpp` is the DEVICE side (the future rctld logic, developed on
+macOS): it connects to the relay's `/device` websocket as a device and handles
+the multiplexed `webrtc_signal` envelopes (`open`/`offer`/`candidate`/`close`),
+one libdatachannel PeerConnection per session. Verified end-to-end:
+
+```
+browser  ──/signal/devices/{id}──▶  relay  ──webrtc_signal──▶  relay_device (libdatachannel)
+```
+
+A browser (offerer) connecting to the relay's `/signal/devices/{id}` established
+the unreliable video channel through the **real relay signaling code** and
+streamed at **~0–3 ms latency, 0 loss**. So the relay's signaling design is
+validated, and `relay_device.cpp` is the blueprint for the rctld integration.
+
+Test recipe: run relay with `RCTL_RELAY_ENABLE_WEBRTC=1 RCTL_RELAY_ALLOW_INSECURE=1`,
+enroll+approve a device, start `relay_device ws://host/device <token> <id> <name>`,
+then from the relay origin open `/signal/devices/<id>` and offer.
+
 ## Next
 
-- Phase 2 (loss): Network Link Conditioner loss/jitter — show unreliable video
-  stays low-latency where a reliable channel stalls.
-- Phase 2.5: swap this signaling for the relay's `/signal/devices/{id}`.
-- Phase 4: link the iOS libs into `rctld`; handle `webrtc_signal`; send real
-  H.264 AUs on the video channel; browser keyframe/drop rules.
-- Phase 5: TURN (coturn) + connection-type display in admin.
+- Phase 4: port `relay_device.cpp` into `rctld` (via git-patch); link the iOS
+  libs; feed real H.264 AUs (from the local capture pipeline) onto the video
+  channel; browser keyframe/drop rules + WebCodecs decode.
+- Phase 5: TURN (coturn) for hard NATs + connection-type display in admin.
+- Optional: loss/jitter test (Network Link Conditioner) to visually confirm
+  unreliable beats reliable.
