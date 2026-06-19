@@ -155,17 +155,31 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
 // for the next keyframe.
 extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us) {
     if (!data || len == 0) return;
-    std::vector<std::byte> msg(9 + len);
-    uint8_t *b = reinterpret_cast<uint8_t *>(msg.data());
-    b[0] = keyframe ? 1 : 0;
-    for (int i = 0; i < 8; i++) b[1 + i] = (uint8_t)(pts_us >> (56 - 8 * i));
-    std::memcpy(b + 9, data, len);
+    // Fragment: a DataChannel message can\'t exceed the negotiated SCTP limit
+    // (~256KB in Chrome), and keyframes blow past it. Chunk frame layout:
+    //   [1B keyframe][8B pts_us BE][4B totalLen BE][4B offset BE][chunk]
+    const size_t MAX_CHUNK = 60000;
 
     std::lock_guard<std::mutex> lk(g_mtx);
-    for (auto &vc : g_video) {
-        if (!vc->dc->isOpen()) continue;
-        if (keyframe) vc->sawKey = true;
-        if (!vc->sawKey) continue;
-        try { vc->dc->send(msg); } catch (...) {}
+    if (keyframe)
+        for (auto &vc : g_video) vc->sawKey = true;
+
+    for (size_t off = 0; off < len; off += MAX_CHUNK) {
+        size_t clen = (len - off < MAX_CHUNK) ? (len - off) : MAX_CHUNK;
+        std::vector<std::byte> msg(17 + clen);
+        uint8_t *b = reinterpret_cast<uint8_t *>(msg.data());
+        b[0] = keyframe ? 1 : 0;
+        for (int i = 0; i < 8; i++) b[1 + i] = (uint8_t)(pts_us >> (56 - 8 * i));
+        uint32_t tl = (uint32_t)len, o32 = (uint32_t)off;
+        for (int i = 0; i < 4; i++) b[9 + i] = (uint8_t)(tl >> (24 - 8 * i));
+        for (int i = 0; i < 4; i++) b[13 + i] = (uint8_t)(o32 >> (24 - 8 * i));
+        std::memcpy(b + 17, data + off, clen);
+        for (auto &vc : g_video) {
+            if (!vc->dc->isOpen() || !vc->sawKey) continue;
+            try { vc->dc->send(msg); } catch (...) {}
+        }
     }
+    if (keyframe)
+        wlog("keyframe " + std::to_string(len) + "B in " +
+             std::to_string((len + MAX_CHUNK - 1) / MAX_CHUNK) + " chunks");
 }
