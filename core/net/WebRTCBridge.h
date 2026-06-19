@@ -27,6 +27,11 @@ void rctl_webrtc_set_viewer_cb(void (*cb)(bool any));
 // so the daemon forces the encoder to emit a keyframe.
 void rctl_webrtc_set_keyframe_cb(void (*cb)(void));
 
+// The browser sends input (touch/keys) over the WebRTC control DataChannel; the
+// bridge decodes it and invokes these so the daemon injects it just like /input.
+void rctl_webrtc_set_input_cb(void (*touch)(int phase, int finger, double x, double y),
+                              void (*key)(int page, int usage, int down));
+
 #ifdef __cplusplus
 }
 #endif

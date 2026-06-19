@@ -154,6 +154,9 @@ static void on_key(void *ctx, int page, int usage, int down) {
     rctl_ipc_key m = { (int32_t)page, (int32_t)usage, (int32_t)down };
     send_to_sb(RCTL_MSG_KEY, &m, sizeof m);
 }
+// Adapters so the WebRTC control channel injects through the same path as /input.
+static void on_webrtc_touch(int phase, int finger, double x, double y) { on_input(NULL, phase, finger, x, y); }
+static void on_webrtc_key(int page, int usage, int down) { on_key(NULL, page, usage, down); }
 
 static void on_reconfigure(void *ctx, int fps, double scale, int bitrate) {
     rctl_ipc_config m = { (int32_t)fps, scale, (int32_t)bitrate };
@@ -987,6 +990,7 @@ int main(int argc, char **argv) {
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too
         rctl_webrtc_set_keyframe_cb(on_webrtc_keyframe_request); // browser PLI -> force a keyframe
+        rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
         dlog("http listening on :8080");
         audio_capture_set(false, NULL, 0);
 

@@ -33,11 +33,14 @@ using std::chrono::duration;
 static void (*g_send)(const char *) = nullptr;
 static void (*g_viewer_cb)(bool) = nullptr;
 static void (*g_keyframe_cb)(void) = nullptr;
+static void (*g_touch_cb)(int phase, int finger, double x, double y) = nullptr;
+static void (*g_key_cb)(int page, int usage, int down) = nullptr;
 static std::mutex g_mtx;
 
 struct Session {
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::DataChannel> control;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
@@ -229,6 +232,24 @@ static void start_session(const std::string &id, const json &ice) {
         wlog("session " + id + " video track closed");
     });
 
+    // Control channel: the browser sends input (touch/keys) over this reliable,
+    // ordered DataChannel instead of an HTTP round-trip per event -- low-latency
+    // remote control on the same PeerConnection as the video. The device, as the
+    // offerer, creates it so the data m-line is in the offer.
+    auto control = pc->createDataChannel("control");
+    sess->control = control;
+    control->onMessage([](rtc::message_variant msg) {
+        if (!std::holds_alternative<std::string>(msg)) return;
+        try {
+            json e = json::parse(std::get<std::string>(msg));
+            const std::string t = e.value("t", "");
+            if (t == "t" && g_touch_cb)
+                g_touch_cb(e.value("p", 0), e.value("i", 0), e.value("x", 0.0), e.value("y", 0.0));
+            else if (t == "k" && g_key_cb)
+                g_key_cb(e.value("pg", 0), e.value("u", 0), e.value("d", 0));
+        } catch (...) {}
+    });
+
     {
         std::lock_guard<std::mutex> lk(g_mtx);
         g_sessions[id] = sess;
@@ -247,6 +268,12 @@ extern "C" void rctl_webrtc_set_viewer_cb(void (*cb)(bool)) {
 
 extern "C" void rctl_webrtc_set_keyframe_cb(void (*cb)(void)) {
     g_keyframe_cb = cb;
+}
+
+extern "C" void rctl_webrtc_set_input_cb(void (*touch)(int, int, double, double),
+                                         void (*key)(int, int, int)) {
+    g_touch_cb = touch;
+    g_key_cb = key;
 }
 
 extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
