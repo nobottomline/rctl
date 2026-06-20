@@ -19,7 +19,7 @@ import { OnlineDot, StatusBadge } from './ui/Status'
 import { DetailSection, DetailField } from './ui/Detail'
 import { api, controlURL } from '../lib/api'
 import { fmtAbs, fmtRel } from '../lib/format'
-import type { AuditEntry, Device, DeviceInfo } from '../types'
+import type { AuditEntry, Device, DeviceInfo, DiagnosticsResponse } from '../types'
 
 export function DeviceDetailModal({
   device,
@@ -194,6 +194,23 @@ function DiagnosticsModal({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const [diag, setDiag] = useState<DiagnosticsResponse | null>(null)
+  const [diagLoading, setDiagLoading] = useState(false)
+  const reachable = !!device && device.online && device.status === 'approved'
+  useEffect(() => {
+    if (!open || !device || !reachable) {
+      setDiag(null)
+      return
+    }
+    setDiagLoading(true)
+    api
+      .diagnostics(device.id)
+      .then(setDiag, () => setDiag(null))
+      .finally(() => setDiagLoading(false))
+    // fetch the heavy diagnostics lazily, only while this modal is open
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, device?.id])
+
   const ident = [
     { label: 'UDID', value: info?.udid },
     { label: 'Serial', value: info?.serial },
@@ -258,6 +275,27 @@ function DiagnosticsModal({
                 </div>
               </DetailSection>
             )}
+
+            {/* Daemon-gathered diagnostics -- rendered generically from whatever the
+                device reports (jailbreak, performance, storage, network, …). */}
+            {diagLoading && !diag && (
+              <DetailSection title="Diagnostics">
+                <div className="space-y-2 py-1">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="h-4 w-2/3 animate-pulse rounded bg-surface-2" />
+                  ))}
+                </div>
+              </DetailSection>
+            )}
+            {diag?.categories?.map((cat) => (
+              <DetailSection key={cat.title} title={cat.title}>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                  {cat.fields.map((f) => (
+                    <DetailField key={f.label} label={f.label} value={f.value} />
+                  ))}
+                </div>
+              </DetailSection>
+            ))}
           </div>
         </div>
       )}

@@ -81,6 +81,21 @@ export interface DeviceInfo {
   imei?: string
 }
 
+// Generic grouped diagnostics from the device's /v1/diagnostics (daemon-gathered).
+// The UI renders whatever categories/fields the device reports, so new data needs
+// no frontend change.
+export interface DiagField {
+  label: string
+  value: string
+}
+export interface DiagCategory {
+  title: string
+  fields: DiagField[]
+}
+export interface DiagnosticsResponse {
+  categories: DiagCategory[]
+}
+
 export interface AuditEntry {
   id: number
   ts: number

@@ -6,6 +6,7 @@ import type {
   CreateEnrollmentOptions,
   DeviceInfo,
   DevicesResponse,
+  DiagnosticsResponse,
   Enrollment,
   EnrollmentSummary,
   RelayStatus,
@@ -57,6 +58,8 @@ export const api = {
   devices: () => request<DevicesResponse>('/api/admin/devices'),
   deviceInfo: (id: string) =>
     request<DeviceInfo>(`/proxy/devices/${encodeURIComponent(id)}/v1/deviceinfo`),
+  diagnostics: (id: string) =>
+    request<DiagnosticsResponse>(`/proxy/devices/${encodeURIComponent(id)}/v1/diagnostics`),
   respringDevice: (id: string) =>
     request<unknown>(`/proxy/devices/${encodeURIComponent(id)}/v1/respring`, { method: 'POST' }),
 
