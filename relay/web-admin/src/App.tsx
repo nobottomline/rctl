@@ -37,7 +37,7 @@ export default function App() {
         api.devices(),
         api.sessions(),
         api.enrollments(),
-        api.audit(),
+        api.audit(500),
         api.status(),
       ])
       setDevices(d.devices || [])
@@ -65,7 +65,7 @@ export default function App() {
           api.devices(),
           api.sessions(),
           api.enrollments(),
-          api.audit(),
+          api.audit(500),
           api.status(),
         ])
         if (cancelled) return
@@ -199,7 +199,7 @@ export default function App() {
             audit={audit}
             onAction={handleAction}
           />
-          <ActivityPanel entries={audit} />
+          <ActivityPanel entries={audit} sessions={sessions} />
         </div>
         <div className="flex flex-col gap-5">
           <EnrollPanel

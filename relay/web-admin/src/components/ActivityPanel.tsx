@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+import { useMemo, useState, type ComponentType } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertTriangle,
@@ -11,14 +11,15 @@ import {
   Power,
   PlugZap,
   Radio,
+  Search,
   ShieldCheck,
   Trash2,
   type LucideProps,
 } from 'lucide-react'
 import { Panel } from './Shell'
-import { fmtRel, shortId } from '../lib/format'
+import { describeClient, fmtRel, shortId } from '../lib/format'
 import { cn } from '../lib/cn'
-import type { AuditEntry } from '../types'
+import type { AuditEntry, Session } from '../types'
 
 type Tone = 'online' | 'danger' | 'signal' | 'muted'
 
@@ -55,6 +56,20 @@ const toneText: Record<Tone, string> = {
   muted: 'text-muted',
 }
 
+const FILTERS: { key: string; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'admin', label: 'Admin' },
+  { key: 'device', label: 'Devices' },
+  { key: 'live', label: 'Live' },
+]
+
+function categoryOf(event: string): string {
+  if (event.startsWith('admin_')) return 'admin'
+  if (event.startsWith('device_')) return 'device'
+  if (event === 'webrtc_signal_open') return 'live'
+  return 'other'
+}
+
 function summarizeDetail(detail?: string): string {
   if (!detail) return ''
   try {
@@ -70,27 +85,88 @@ function summarizeDetail(detail?: string): string {
   }
 }
 
-export function ActivityPanel({ entries }: { entries: AuditEntry[] }) {
+export function ActivityPanel({
+  entries,
+  sessions = [],
+}: {
+  entries: AuditEntry[]
+  sessions?: Session[]
+}) {
+  const [cat, setCat] = useState('all')
+  const [query, setQuery] = useState('')
+
+  // Resolve the acting admin for each event from its session id (browser brand);
+  // falls back to "admin" once that session is gone, "" for device/system events.
+  const sessMap = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions])
+  const actorOf = (e: AuditEntry): string => {
+    if (!e.session_id) return ''
+    const s = sessMap.get(e.session_id)
+    return s ? describeClient(s.user_agent, s.client_hints).split(' · ')[0] : 'admin'
+  }
+
+  const q = query.trim().toLowerCase()
+  const filtered = useMemo(
+    () =>
+      entries.filter((e) => {
+        if (cat !== 'all' && categoryOf(e.event) !== cat) return false
+        if (!q) return true
+        const hay = `${auditLabel(e.event)} ${e.ip} ${e.detail ?? ''} ${actorOf(e)}`.toLowerCase()
+        return hay.includes(q)
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entries, cat, q, sessMap],
+  )
+
   return (
-    <Panel title="Activity" subtitle={`${entries.length} recent event${entries.length === 1 ? '' : 's'}`}>
-      {entries.length === 0 ? (
+    <Panel
+      title="Activity"
+      subtitle={`${filtered.length} of ${entries.length} event${entries.length === 1 ? '' : 's'}`}
+    >
+      <div className="flex flex-wrap items-center gap-2 border-b border-line/60 px-5 py-3">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search activity…"
+            className="w-full rounded-lg bg-surface-2/60 py-1.5 pl-8 pr-2.5 text-[12.5px] text-fg ring-1 ring-line/70 placeholder:text-faint focus:outline-none focus:ring-signal/40"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setCat(f.key)}
+              className={cn(
+                'rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+                cat === f.key
+                  ? 'bg-signal/15 text-signal ring-1 ring-signal/30'
+                  : 'text-muted hover:text-fg-dim',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
         <div className="px-5 py-10 text-center">
           <div className="mx-auto grid size-10 place-items-center rounded-xl bg-surface-2 text-faint ring-1 ring-line">
             <History className="size-5" />
           </div>
-          <p className="mt-3 text-[13px] text-muted">No activity recorded yet.</p>
+          <p className="mt-3 text-[13px] text-muted">
+            {entries.length ? 'No matching activity.' : 'No activity recorded yet.'}
+          </p>
         </div>
       ) : (
         <ul className="max-h-[28rem] divide-y divide-line/60 overflow-y-auto">
           <AnimatePresence initial={false}>
-            {entries.map((e) => {
-              const meta = META[e.event] ?? {
-                label: e.event,
-                tone: 'muted' as Tone,
-                icon: History,
-              }
+            {filtered.map((e) => {
+              const meta = META[e.event] ?? { label: e.event, tone: 'muted' as Tone, icon: History }
               const Icon = meta.icon
               const summary = summarizeDetail(e.detail)
+              const actor = actorOf(e)
               return (
                 <motion.li
                   key={e.id}
@@ -108,7 +184,14 @@ export function ActivityPanel({ entries }: { entries: AuditEntry[] }) {
                     <Icon className="size-3.5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[13px] font-medium text-fg-dim">{meta.label}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[13px] font-medium text-fg-dim">{meta.label}</span>
+                      {actor && (
+                        <span className="shrink-0 rounded bg-surface-2 px-1.5 py-px text-[10px] font-medium text-muted ring-1 ring-line/70">
+                          {actor}
+                        </span>
+                      )}
+                    </div>
                     <div className="mt-0.5 truncate font-mono text-[10.5px] text-faint">
                       {[summary, e.ip].filter(Boolean).join(' · ') || '—'}
                     </div>

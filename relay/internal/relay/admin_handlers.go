@@ -128,7 +128,7 @@ ORDER BY last_seen_at DESC`, now)
 func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
 			limit = n
 		}
 	}

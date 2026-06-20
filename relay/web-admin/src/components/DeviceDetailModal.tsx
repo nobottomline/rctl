@@ -218,29 +218,9 @@ function DiagnosticsModal({
   ].filter((x) => x.value) as { label: string; value: string }[]
 
   return (
-    <Modal open={open} onOpenChange={onOpenChange} title="Diagnostics" className="max-w-2xl">
+    <Modal open={open} onOpenChange={onOpenChange} title="Diagnostics" className="max-w-3xl">
       {device && (
-        <div className="flex flex-col gap-6 sm:flex-row">
-          {/* device illustration */}
-          <div className="flex shrink-0 flex-col items-center gap-2.5 sm:w-40">
-            <div className="grid aspect-[3/4] w-28 place-items-center rounded-[1.25rem] bg-gradient-to-b from-surface-2 to-surface shadow-inner ring-1 ring-line-2">
-              <Tablet className="size-12 text-muted" strokeWidth={1.5} />
-            </div>
-            <div className="text-center">
-              <div className="text-[13.5px] font-medium text-fg">{device.name}</div>
-              <div className="font-mono text-[11px] text-muted">{info?.model_id || info?.model || '—'}</div>
-              {info?.battery && (
-                <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted">
-                  <BatteryMedium className="size-3" />
-                  {info.battery}
-                  {info.battery_state ? ` · ${info.battery_state}` : ''}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* grouped data */}
-          <div className="min-w-0 flex-1 space-y-4">
+        <div className="columns-1 gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid sm:columns-2">
             <DetailSection title="Hardware">
               <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                 <DetailField label="Model" value={info?.model_id || info?.model} />
@@ -296,7 +276,6 @@ function DiagnosticsModal({
                 </div>
               </DetailSection>
             ))}
-          </div>
         </div>
       )}
     </Modal>
