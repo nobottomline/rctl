@@ -86,6 +86,7 @@ export interface AuditEntry {
   ts: number
   event: string
   ip: string
+  session_id?: string
   method: string
   path: string
   detail?: string

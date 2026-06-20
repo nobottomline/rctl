@@ -131,9 +131,9 @@ function SessionDetailModal({
   onOpenChange: (open: boolean) => void
   onRevoke: (id: string) => void
 }) {
-  // Recent audit events from the same IP -- a best-effort view of what this admin
-  // has been doing (sessions don't tag every action, but the client IP lines up).
-  const acts = session ? audit.filter((e) => e.ip && e.ip === session.ip).slice(0, 6) : []
+  // Recent audit events performed by *this* session (each admin action records the
+  // acting session id), so it's precise per-session, not just same-IP.
+  const acts = session ? audit.filter((e) => e.session_id && e.session_id === session.id).slice(0, 8) : []
   return (
     <Modal open={!!session} onOpenChange={onOpenChange} title="Session" className="max-w-lg">
       {session && (
@@ -165,7 +165,7 @@ function SessionDetailModal({
           </DetailSection>
 
           {acts.length > 0 && (
-            <DetailSection title="Recent activity · this IP">
+            <DetailSection title="Recent activity · this session">
               <ul className="space-y-1.5">
                 {acts.map((e) => (
                   <li key={e.id} className="flex items-center gap-2 text-[12.5px]">

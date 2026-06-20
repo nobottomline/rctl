@@ -133,7 +133,7 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rows, err := s.db.QueryContext(r.Context(), `
-SELECT id, ts, event, ip, method, path, detail
+SELECT id, ts, event, ip, session_id, method, path, detail
 FROM audit_log
 ORDER BY id DESC
 LIMIT ?`, limit)
@@ -144,23 +144,25 @@ LIMIT ?`, limit)
 	defer rows.Close()
 
 	type entry struct {
-		ID     int64  `json:"id"`
-		TS     int64  `json:"ts"`
-		Event  string `json:"event"`
-		IP     string `json:"ip"`
-		Method string `json:"method"`
-		Path   string `json:"path"`
-		Detail string `json:"detail,omitempty"`
+		ID        int64  `json:"id"`
+		TS        int64  `json:"ts"`
+		Event     string `json:"event"`
+		IP        string `json:"ip"`
+		SessionID string `json:"session_id,omitempty"`
+		Method    string `json:"method"`
+		Path      string `json:"path"`
+		Detail    string `json:"detail,omitempty"`
 	}
 	out := []entry{}
 	for rows.Next() {
 		var item entry
-		var ip, method, path, detail sql.NullString
-		if err := rows.Scan(&item.ID, &item.TS, &item.Event, &ip, &method, &path, &detail); err != nil {
+		var ip, sid, method, path, detail sql.NullString
+		if err := rows.Scan(&item.ID, &item.TS, &item.Event, &ip, &sid, &method, &path, &detail); err != nil {
 			writeErr(w, http.StatusInternalServerError, "audit_scan_failed")
 			return
 		}
 		item.IP = ip.String
+		item.SessionID = sid.String
 		item.Method = method.String
 		item.Path = path.String
 		item.Detail = detail.String

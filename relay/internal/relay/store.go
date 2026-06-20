@@ -65,6 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 		`ALTER TABLE sessions ADD COLUMN ip TEXT`,
 		`ALTER TABLE sessions ADD COLUMN user_agent TEXT`,
 		`ALTER TABLE sessions ADD COLUMN client_hints TEXT`,
+		`ALTER TABLE audit_log ADD COLUMN session_id TEXT`,
 	} {
 		if _, e := s.db.ExecContext(ctx, stmt); e != nil &&
 			!strings.Contains(e.Error(), "duplicate column") {

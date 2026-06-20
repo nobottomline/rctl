@@ -12,6 +12,7 @@ const auditLogCap = 2000
 
 func (s *server) audit(r *http.Request, event string, args ...any) {
 	ip := s.clientIP(r)
+	sessionID, _, _ := parseSessionCookie(r) // empty for device/system events (no admin cookie)
 	if s.log != nil {
 		fields := []any{
 			"event", event,
@@ -22,12 +23,12 @@ func (s *server) audit(r *http.Request, event string, args ...any) {
 		fields = append(fields, args...)
 		s.log.Info("audit", fields...)
 	}
-	s.persistAudit(event, ip, r.Method, r.URL.Path, args...)
+	s.persistAudit(event, ip, sessionID, r.Method, r.URL.Path, args...)
 }
 
 // persistAudit records the event in the audit_log table so the admin UI can show
 // an activity history. Best-effort: a failure here must never break a handler.
-func (s *server) persistAudit(event, ip, method, path string, args ...any) {
+func (s *server) persistAudit(event, ip, sessionID, method, path string, args ...any) {
 	if s.db == nil {
 		return
 	}
@@ -48,8 +49,8 @@ func (s *server) persistAudit(event, ip, method, path string, args ...any) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO audit_log (ts, event, ip, method, path, detail) VALUES (?, ?, ?, ?, ?, ?)`,
-		time.Now().Unix(), event, ip, method, path, detail); err != nil {
+		`INSERT INTO audit_log (ts, event, ip, session_id, method, path, detail) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().Unix(), event, ip, sessionID, method, path, detail); err != nil {
 		if s.log != nil {
 			s.log.Warn("audit persist failed", "error", err)
 		}
