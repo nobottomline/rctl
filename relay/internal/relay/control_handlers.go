@@ -48,6 +48,42 @@ window.RCTL_WEBRTC=` + webrtc + `;
 	writeText(w, http.StatusOK, "text/html; charset=utf-8", page)
 }
 
+// handleControlBeta serves the in-progress Vite/React rewrite (web-control, built
+// to control-beta.html) so it can be tested against a live device without touching
+// the live /control page. Same globals, injected right after <head> -- the React
+// build's entry is a module, so the live page's first-"<script>" replace can't apply.
+func (s *server) handleControlBeta(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("id")
+	if !s.deviceApproved(r.Context(), deviceID) {
+		writeErr(w, http.StatusForbidden, "device_not_approved")
+		return
+	}
+	if s.getDevice(deviceID) == nil {
+		writeErr(w, http.StatusNotFound, "device_offline")
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(s.cfg.WebDir, "control-beta.html"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "web_client_missing")
+		return
+	}
+	id := html.EscapeString(deviceID)
+	webrtc := "0"
+	if s.cfg.EnableWebRTC {
+		webrtc = "1"
+	}
+	inject := `<script>
+window.RCTL_PROXY_BASE="/proxy/devices/` + id + `";
+window.RCTL_STREAM_BASE="/stream/devices/` + id + `";
+window.RCTL_TERM_WS_BASE="/term/devices/` + id + `";
+window.RCTL_RELAY_DEVICE_ID="` + id + `";
+window.RCTL_WEBRTC=` + webrtc + `;
+</script>`
+	page := strings.Replace(string(raw), "<head>", "<head>"+inject, 1)
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+	writeText(w, http.StatusOK, "text/html; charset=utf-8", page)
+}
+
 func (s *server) handleWebVendor(w http.ResponseWriter, r *http.Request) {
 	name := filepath.Clean(r.PathValue("path"))
 	if name == "." || strings.HasPrefix(name, "..") || filepath.IsAbs(name) {

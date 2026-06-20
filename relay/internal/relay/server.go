@@ -130,4 +130,5 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /device-streams/{streamID}", s.withRateLimit("device", s.cfg.DeviceLimit, s.handleDeviceStreamWS))
 	mux.HandleFunc("GET /client/devices/{id}", s.withAdmin(s.handleClientWS))
 	mux.HandleFunc("GET /control/devices/{id}", s.withAdmin(s.handleControlPage))
+	mux.HandleFunc("GET /control-beta/devices/{id}", s.withAdmin(s.handleControlBeta))
 }
