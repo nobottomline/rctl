@@ -27,6 +27,11 @@
 #import <errno.h>
 #import <notify.h>
 #import <fcntl.h>
+#import <sys/mount.h>
+#import <ifaddrs.h>
+#import <net/if.h>
+#import <mach/mach.h>
+#import <stdlib.h>
 #import "net/HttpStreamServer.h"
 #import "net/RelayClient.h"
 #import "ipc/Ipc.h"
@@ -324,6 +329,117 @@ static void on_webrtc_viewers(bool any) {
 
 static bool file_exists(const char *path) {
     return access(path, F_OK) == 0;
+}
+
+// --- /v1/diagnostics: richer device state gathered daemon-side (root) ---------
+// Returns a generic {categories:[{title,fields:[{label,value}]}]} so the admin UI
+// renders it without knowing the fields. Grows by adding categories below.
+static NSString *diag_popen(const char *cmd) {
+    FILE *p = popen(cmd, "r");
+    if (!p) return nil;
+    char buf[512]; NSString *out = nil;
+    if (fgets(buf, sizeof buf, p))
+        out = [[NSString stringWithUTF8String:buf]
+                  stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    pclose(p);
+    return out.length ? out : nil;
+}
+
+static bool diag_port_open(int port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    bool ok = connect(fd, (struct sockaddr *)&a, sizeof a) == 0;
+    close(fd);
+    return ok;
+}
+
+static NSDictionary *diag_f(NSString *label, NSString *value) {
+    return @{@"label": label, @"value": value ?: @"-"};
+}
+
+static NSString *diag_gb(double bytes) {
+    return [NSString stringWithFormat:@"%.1f GB", bytes / 1e9];
+}
+
+static char *rctl_diagnostics_json(void) {
+    NSMutableArray *cats = [NSMutableArray array];
+
+    {   // Jailbreak / system
+        NSMutableArray *f = [NSMutableArray array];
+        [f addObject:diag_f(@"Type", file_exists("/var/jb") ? @"rootless" : @"rootful")];
+        NSString *mgr = file_exists("/Applications/Sileo.app") ? @"Sileo"
+                      : file_exists("/Applications/Zebra.app") ? @"Zebra"
+                      : file_exists("/Applications/Cydia.app") ? @"Cydia" : nil;
+        if (mgr) [f addObject:diag_f(@"Manager", mgr)];
+        NSString *inj = file_exists("/usr/lib/libhooker.dylib") ? @"libhooker"
+                      : (file_exists("/usr/lib/libellekit.dylib") || file_exists("/var/jb/usr/lib/libellekit.dylib")) ? @"ElleKit"
+                      : file_exists("/usr/lib/libsubstitute.dylib") ? @"Substitute"
+                      : file_exists("/Library/MobileSubstrate/MobileSubstrate.dylib") ? @"Substrate" : nil;
+        if (inj) [f addObject:diag_f(@"Injection", inj)];
+        NSString *pk = diag_popen("dpkg-query -f '.\n' -W 2>/dev/null | wc -l | tr -d ' '");
+        if (pk) [f addObject:diag_f(@"Packages", pk)];
+        NSString *tw = diag_popen("ls -1 /Library/MobileSubstrate/DynamicLibraries/ 2>/dev/null | grep -c '[.]dylib$' | tr -d ' '");
+        if (tw) [f addObject:diag_f(@"Tweaks", tw)];
+        [f addObject:diag_f(@"SSH", diag_port_open(22) ? @"running" : @"off")];
+        [cats addObject:@{@"title": @"Jailbreak", @"fields": f}];
+    }
+
+    {   // Performance
+        NSMutableArray *f = [NSMutableArray array];
+        double la[3];
+        if (getloadavg(la, 3) == 3)
+            [f addObject:diag_f(@"Load avg", [NSString stringWithFormat:@"%.2f · %.2f · %.2f", la[0], la[1], la[2]])];
+        unsigned long long total = [NSProcessInfo processInfo].physicalMemory;
+        vm_size_t page = 0; host_page_size(mach_host_self(), &page);
+        vm_statistics64_data_t vm; mach_msg_type_number_t cnt = HOST_VM_INFO64_COUNT;
+        if (page && host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vm, &cnt) == KERN_SUCCESS) {
+            double freeb = (double)(vm.free_count + vm.inactive_count) * page;
+            double used = (double)total - freeb; if (used < 0) used = 0;
+            [f addObject:diag_f(@"Memory", [NSString stringWithFormat:@"%@ used of %@", diag_gb(used), diag_gb((double)total)])];
+            [f addObject:diag_f(@"Wired", diag_gb((double)vm.wire_count * page))];
+            [f addObject:diag_f(@"Compressed", diag_gb((double)vm.compressor_page_count * page))];
+        }
+        NSString *top = diag_popen("ps -A -o comm -r 2>/dev/null | sed -n '2p'");
+        if (top) [f addObject:diag_f(@"Top process", top.lastPathComponent)];
+        [cats addObject:@{@"title": @"Performance", @"fields": f}];
+    }
+
+    {   // Storage
+        NSMutableArray *f = [NSMutableArray array];
+        struct statfs st;
+        if (statfs("/var", &st) == 0) {
+            double tot = (double)st.f_blocks * st.f_bsize, fr = (double)st.f_bavail * st.f_bsize;
+            [f addObject:diag_f(@"Data", [NSString stringWithFormat:@"%@ free of %@", diag_gb(fr), diag_gb(tot)])];
+        }
+        if (statfs("/", &st) == 0)
+            [f addObject:diag_f(@"System volume", diag_gb((double)st.f_blocks * st.f_bsize))];
+        if (f.count) [cats addObject:@{@"title": @"Storage", @"fields": f}];
+    }
+
+    {   // Network (up, non-loopback IPv4 interface addresses)
+        NSMutableArray *f = [NSMutableArray array];
+        struct ifaddrs *ifa = NULL;
+        if (getifaddrs(&ifa) == 0) {
+            for (struct ifaddrs *p = ifa; p; p = p->ifa_next) {
+                if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+                if (!(p->ifa_flags & IFF_UP) || (p->ifa_flags & IFF_LOOPBACK)) continue;
+                char ip[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &((struct sockaddr_in *)p->ifa_addr)->sin_addr, ip, sizeof ip);
+                [f addObject:diag_f([NSString stringWithUTF8String:p->ifa_name], [NSString stringWithUTF8String:ip])];
+            }
+            freeifaddrs(ifa);
+        }
+        if (f.count) [cats addObject:@{@"title": @"Network", @"fields": f}];
+    }
+
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{@"categories": cats} options:0 error:nil];
+    if (!jd) return strdup("{\"categories\":[]}");
+    char *out = (char *)malloc(jd.length + 1);
+    memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+    return out;
 }
 
 static bool copy_file(const char *src, const char *dst, mode_t mode) {
@@ -799,6 +915,10 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         char *info = sb_query(RCTL_Q_DEVINFO, NULL, 0, 1.5);
         if (info) return info;            // SB already returns JSON
         *status = 504; return strdup("{\"error\":\"no reply from device\"}");
+    } else if (!strcmp(path, "/v1/diagnostics")) {
+        char *d = rctl_diagnostics_json();
+        if (d) return d;
+        *status = 500; return strdup("{\"error\":\"diagnostics failed\"}");
     } else if (!strcmp(path, "/v1/apps")) {
         char *apps = sb_query(RCTL_Q_APPLIST, NULL, 0, 3.0);   // enumeration can be slower
         if (apps) return apps;            // JSON array [{id,name}]
