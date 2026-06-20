@@ -43,11 +43,17 @@ struct Session {
     std::shared_ptr<rtc::Track> track;
     std::shared_ptr<rtc::DataChannel> audioDc;
     std::shared_ptr<rtc::DataChannel> control;
+    std::shared_ptr<rtc::DataChannel> filesDc;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
 static std::vector<std::shared_ptr<rtc::Track>> g_tracks;
 static std::vector<std::shared_ptr<rtc::DataChannel>> g_audio_dcs;
+// File transfer rides its own reliable+ordered "files" DataChannel (P2P, so it
+// bypasses the relay's body cap and streams any size). One transfer at a time, so
+// a single active channel is enough for the daemon to send replies/chunks back.
+static std::shared_ptr<rtc::DataChannel> g_files_dc;
+static void (*g_files_cb)(const uint8_t *data, size_t len, int is_binary) = nullptr;
 static std::chrono::steady_clock::time_point g_lastPli{};
 
 // Opus encoder for the captured 48kHz PCM. Single-threaded (only push_audio
@@ -283,6 +289,34 @@ static void start_session(const std::string &id, const json &ice) {
         } catch (...) {}
     });
 
+    // File transfer channel: the browser sends JSON control (get/put) + raw binary
+    // chunks; we reply with JSON + raw binary chunks, all P2P. Reliable+ordered
+    // (default) so bytes cannot drop or reorder.
+    auto filesDc = pc->createDataChannel("files");
+    sess->filesDc = filesDc;
+    rtc::DataChannel *fptr = filesDc.get();
+    filesDc->onOpen([id, fptr]() {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        auto it = g_sessions.find(id);
+        if (it == g_sessions.end() || !it->second->filesDc || it->second->filesDc.get() != fptr) return;
+        g_files_dc = it->second->filesDc;
+        wlog("session " + id + " files channel open");
+    });
+    filesDc->onMessage([](rtc::message_variant msg) {
+        if (!g_files_cb) return;
+        if (std::holds_alternative<std::string>(msg)) {
+            const std::string &s = std::get<std::string>(msg);
+            g_files_cb(reinterpret_cast<const uint8_t *>(s.data()), s.size(), 0);
+        } else {
+            const auto &b = std::get<rtc::binary>(msg);
+            g_files_cb(reinterpret_cast<const uint8_t *>(b.data()), b.size(), 1);
+        }
+    });
+    filesDc->onClosed([fptr]() {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (g_files_dc && g_files_dc.get() == fptr) g_files_dc.reset();
+    });
+
     {
         std::lock_guard<std::mutex> lk(g_mtx);
         g_sessions[id] = sess;
@@ -307,6 +341,34 @@ extern "C" void rctl_webrtc_set_input_cb(void (*touch)(int, int, double, double)
                                          void (*key)(int, int, int)) {
     g_touch_cb = touch;
     g_key_cb = key;
+}
+
+extern "C" void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *, size_t, int)) {
+    g_files_cb = cb;
+}
+
+extern "C" void rctl_webrtc_files_send_text(const char *s) {
+    if (!s) return;
+    std::shared_ptr<rtc::DataChannel> dc;
+    { std::lock_guard<std::mutex> lk(g_mtx); dc = g_files_dc; }
+    if (dc && dc->isOpen()) { try { dc->send(std::string(s)); } catch (...) {} }
+}
+
+extern "C" void rctl_webrtc_files_send_binary(const uint8_t *data, size_t len) {
+    if (!data || !len) return;
+    std::shared_ptr<rtc::DataChannel> dc;
+    { std::lock_guard<std::mutex> lk(g_mtx); dc = g_files_dc; }
+    if (dc && dc->isOpen()) {
+        rtc::binary b(reinterpret_cast<const std::byte *>(data),
+                      reinterpret_cast<const std::byte *>(data + len));
+        try { dc->send(std::move(b)); } catch (...) {}
+    }
+}
+
+extern "C" uint64_t rctl_webrtc_files_buffered(void) {
+    std::shared_ptr<rtc::DataChannel> dc;
+    { std::lock_guard<std::mutex> lk(g_mtx); dc = g_files_dc; }
+    return dc ? (uint64_t)dc->bufferedAmount() : 0;
 }
 
 extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {

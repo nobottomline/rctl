@@ -33,6 +33,16 @@ void rctl_webrtc_set_keyframe_cb(void (*cb)(void));
 void rctl_webrtc_set_input_cb(void (*touch)(int phase, int finger, double x, double y),
                               void (*key)(int page, int usage, int down));
 
+// File transfer over a dedicated reliable+ordered "files" DataChannel (P2P, so it
+// bypasses the relay body cap and streams any size). The browser sends JSON control
+// (get/put) + raw binary chunks; the bridge hands each message to this callback
+// (is_binary distinguishes a raw chunk from a JSON string). The daemon replies with
+// these; rctl_webrtc_files_buffered() exposes the send queue depth for backpressure.
+void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *data, size_t len, int is_binary));
+void rctl_webrtc_files_send_text(const char *json);
+void rctl_webrtc_files_send_binary(const uint8_t *data, size_t len);
+uint64_t rctl_webrtc_files_buffered(void);
+
 #ifdef __cplusplus
 }
 #endif

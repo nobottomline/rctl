@@ -659,7 +659,50 @@ async function fLoad(p){
     if(!fList.children.length) fList.innerHTML='<div class="frow">(empty)</div>';
   }catch(err){ fList.innerHTML='<div class="frow">error</div>'; }
 }
+// --- File transfer over the P2P "files" DataChannel (bypasses the relay; any size) ---
+let filesCh=null, fileDL=null, fileUL=null, fStatusEl=null;
+function fStatus(msg){
+  if(!fStatusEl){ fStatusEl=document.createElement('div'); fStatusEl.className='frow'; if(fList.parentNode) fList.parentNode.insertBefore(fStatusEl,fList); }
+  fStatusEl.textContent=msg||''; fStatusEl.style.display=msg?'':'none';
+}
+function setupFilesChannel(ch){
+  filesCh=ch; ch.binaryType='arraybuffer';
+  ch.onmessage=ev=>{
+    if(typeof ev.data==='string'){ try{fileCtrl(JSON.parse(ev.data))}catch(e){} return; }
+    if(fileDL){ fileDL.parts.push(ev.data); fileDL.got+=ev.data.byteLength;
+      fStatus('\u2b07 '+fileDL.name+' '+(fileDL.size?Math.floor(fileDL.got/fileDL.size*100)+'%':fSize(fileDL.got))); }
+  };
+  ch.onclose=()=>{ if(filesCh===ch) filesCh=null; fileDL=null; fileUL=null; fStatus(''); };
+}
+function fileCtrl(m){
+  if(m.op==='get_meta'){ fileDL={name:m.name||'file',size:m.size||0,got:0,parts:[]}; fStatus('\u2b07 '+fileDL.name+' 0%'); }
+  else if(m.op==='get_eof'){ if(fileDL){ const blob=new Blob(fileDL.parts), u=URL.createObjectURL(blob), a=document.createElement('a');
+      a.href=u; a.download=fileDL.name; a.click(); setTimeout(()=>URL.revokeObjectURL(u),1500); fileDL=null; fStatus(''); } }
+  else if(m.op==='put_ok'){ fileUL=null; fStatus(''); fLoad(); }
+  else if(m.op==='err'){ fileDL=null; fileUL=null; fStatus('\u26a0 '+(m.msg||'error')); setTimeout(()=>{ if(fStatusEl&&(fStatusEl.textContent||'')[0]==='\u26a0') fStatus(''); },3000); }
+}
+function dcFilesReady(){ return filesCh && filesCh.readyState==='open'; }
+function fDownloadDC(path,name){
+  if(!dcFilesReady()||fileDL) return false;
+  fileDL={name:name||'file',size:0,got:0,parts:[]};      // provisional until get_meta arrives
+  filesCh.send(JSON.stringify({op:'get',path})); return true;
+}
+async function fUploadDC(file,destPath){
+  if(!dcFilesReady()||fileUL) return false;
+  fileUL={name:file.name,size:file.size};
+  filesCh.send(JSON.stringify({op:'put',path:destPath,size:file.size}));
+  const CHUNK=64*1024; let off=0;
+  while(off<file.size){
+    while(filesCh.bufferedAmount>(512<<10)) await new Promise(r=>setTimeout(r,2)); // backpressure (paced, avoids SCTP bufferbloat)
+    const buf=await file.slice(off,off+CHUNK).arrayBuffer();
+    filesCh.send(buf); off+=buf.byteLength;
+    fStatus('\u2b06 '+file.name+' '+Math.floor(off/file.size*100)+'%');
+  }
+  filesCh.send(JSON.stringify({op:'put_eof'}));
+  return true;
+}
 async function fDownload(path,name){
+  if(fDownloadDC(path,name)) return;                      // P2P over the files channel (any size, no relay cap)
   try{ const b=await(await fetch('/v1/pull?path='+enc(path))).blob();
     const u=URL.createObjectURL(b), a=document.createElement('a'); a.href=u; a.download=name; a.click(); URL.revokeObjectURL(u);
   }catch(e){} }
@@ -668,6 +711,7 @@ $('fUp').onclick=()=>fLoad(fParent(fPath.value));
 fPath.addEventListener('keydown',e=>{ if(e.key==='Enter')fLoad(); });
 $('fUpBtn').onclick=()=>$('fUpload').click();
 $('fUpload').onchange=async()=>{ const f=$('fUpload').files[0]; if(!f)return;
+  if(await fUploadDC(f,fJoin(fPath.value,f.name))){ $('fUpload').value=''; return; } // P2P; fLoad() runs on put_ok
   try{ await fetch('/v1/push?path='+enc(fJoin(fPath.value,f.name)),{method:'POST',body:await f.arrayBuffer()}); }catch(e){}
   $('fUpload').value=''; fLoad(); };
 
@@ -776,7 +820,8 @@ function startWebRTC(){
     const fit=()=>{ if(vid.videoWidth){ canvas.width=vid.videoWidth; canvas.height=vid.videoHeight; applyOrient(); frames++; } };
     vid.addEventListener('loadedmetadata',fit); vid.addEventListener('resize',fit); fit(); };
   pc.ondatachannel=e=>{ if(e.channel.label==='control') rtcControl=e.channel;
-    else if(e.channel.label==='audio') setupAudioChannel(e.channel); };
+    else if(e.channel.label==='audio') setupAudioChannel(e.channel);
+    else if(e.channel.label==='files') setupFilesChannel(e.channel); };
   pc.onconnectionstatechange=()=>{ if(pc.connectionState==='failed') fallback('failed'); };
   const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/signal/devices/${did}`);
   pc.onicecandidate=e=>{ if(e.candidate&&ws.readyState===1) ws.send(JSON.stringify({kind:'candidate',payload:{candidate:e.candidate.candidate,mid:e.candidate.sdpMid}})); };

@@ -159,6 +159,87 @@ static void on_key(void *ctx, int page, int usage, int down) {
 static void on_webrtc_touch(int phase, int finger, double x, double y) { on_input(NULL, phase, finger, x, y); }
 static void on_webrtc_key(int page, int usage, int down) { on_key(NULL, page, usage, down); }
 
+// ---- File transfer over the WebRTC "files" DataChannel (P2P, bypasses the relay) ----
+// Wire format: JSON control strings + raw binary chunks. One transfer at a time.
+//   browser -> {op:get,path}          ; we reply {op:get_meta,name,size} + chunks + {op:get_eof}
+//   browser -> {op:put,path,size} + chunks + {op:put_eof}  ; we reply {op:put_ok,bytes}
+static FILE *gFilesUpload = NULL;
+static long gFilesUploadBytes = 0;
+static pthread_mutex_t gFilesLock = PTHREAD_MUTEX_INITIALIZER;
+static volatile int gFilesCancel = 0;
+
+typedef struct { char path[1024]; } files_get_arg;
+static void *files_get_worker(void *a) {
+    files_get_arg *arg = (files_get_arg *)a;
+    struct stat st;
+    if (stat(arg->path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        rctl_webrtc_files_send_text("{\"op\":\"err\",\"msg\":\"not found\"}"); free(arg); return NULL;
+    }
+    FILE *f = fopen(arg->path, "rb");
+    if (!f) { rctl_webrtc_files_send_text("{\"op\":\"err\",\"msg\":\"cannot open\"}"); free(arg); return NULL; }
+    const char *base = strrchr(arg->path, '/'); base = base ? base + 1 : arg->path;
+    NSString *nm = [NSString stringWithUTF8String:base] ?: @"file";
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{@"op":@"get_meta", @"name":nm, @"size":@((long long)st.st_size)}
+                                                 options:0 error:nil];
+    char *meta = (char *)malloc(jd.length + 1); memcpy(meta, jd.bytes, jd.length); meta[jd.length] = 0;
+    rctl_webrtc_files_send_text(meta); free(meta);
+    const size_t CHUNK = 64 * 1024;
+    uint8_t *buf = (uint8_t *)malloc(CHUNK);
+    gFilesCancel = 0;
+    size_t n;
+    while (buf && (n = fread(buf, 1, CHUNK, f)) > 0) {
+        // Backpressure: don't let the SCTP send buffer balloon in memory.
+        while (rctl_webrtc_files_buffered() > (512u << 10) && !gFilesCancel) usleep(2000);
+        if (gFilesCancel) break;
+        rctl_webrtc_files_send_binary(buf, n);
+    }
+    free(buf); fclose(f);
+    rctl_webrtc_files_send_text(gFilesCancel ? "{\"op\":\"get_eof\",\"cancelled\":true}" : "{\"op\":\"get_eof\"}");
+    free(arg);
+    return NULL;
+}
+
+static void on_files_message(const uint8_t *data, size_t len, int is_binary) {
+    if (is_binary) {                       // upload chunk -> append to the open file
+        pthread_mutex_lock(&gFilesLock);
+        if (gFilesUpload) { fwrite(data, 1, len, gFilesUpload); gFilesUploadBytes += (long)len; }
+        pthread_mutex_unlock(&gFilesLock);
+        return;
+    }
+    NSData *nd = [NSData dataWithBytes:data length:len];
+    NSDictionary *e = [NSJSONSerialization JSONObjectWithData:nd options:0 error:nil];
+    if (![e isKindOfClass:[NSDictionary class]]) return;
+    NSString *op = e[@"op"];
+    if ([op isEqualToString:@"get"]) {
+        NSString *p = e[@"path"]; if (![p isKindOfClass:[NSString class]]) return;
+        files_get_arg *arg = (files_get_arg *)calloc(1, sizeof(*arg));
+        if (!arg) return;
+        strncpy(arg->path, p.UTF8String, sizeof(arg->path) - 1);
+        pthread_t t; if (pthread_create(&t, NULL, files_get_worker, arg) == 0) pthread_detach(t); else free(arg);
+    } else if ([op isEqualToString:@"put"]) {
+        NSString *p = e[@"path"]; if (![p isKindOfClass:[NSString class]]) return;
+        pthread_mutex_lock(&gFilesLock);
+        if (gFilesUpload) fclose(gFilesUpload);
+        gFilesUpload = fopen(p.UTF8String, "wb");
+        gFilesUploadBytes = 0;
+        int ok = gFilesUpload != NULL;
+        pthread_mutex_unlock(&gFilesLock);
+        if (!ok) rctl_webrtc_files_send_text("{\"op\":\"err\",\"msg\":\"cannot write\"}");
+    } else if ([op isEqualToString:@"put_eof"]) {
+        pthread_mutex_lock(&gFilesLock);
+        long bytes = gFilesUploadBytes;
+        if (gFilesUpload) { fclose(gFilesUpload); gFilesUpload = NULL; }
+        pthread_mutex_unlock(&gFilesLock);
+        char out[96]; snprintf(out, sizeof out, "{\"op\":\"put_ok\",\"bytes\":%ld}", bytes);
+        rctl_webrtc_files_send_text(out);
+    } else if ([op isEqualToString:@"cancel"]) {
+        gFilesCancel = 1;
+        pthread_mutex_lock(&gFilesLock);
+        if (gFilesUpload) { fclose(gFilesUpload); gFilesUpload = NULL; }
+        pthread_mutex_unlock(&gFilesLock);
+    }
+}
+
 static void on_reconfigure(void *ctx, int fps, double scale, int bitrate) {
     rctl_ipc_config m = { (int32_t)fps, scale, (int32_t)bitrate };
     send_to_sb(RCTL_MSG_CONFIG, &m, sizeof m);
@@ -1011,6 +1092,7 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too
         rctl_webrtc_set_keyframe_cb(on_webrtc_keyframe_request); // browser PLI -> force a keyframe
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
+        rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog("http listening on :8080");
         audio_capture_set(false, NULL, 0);
 
