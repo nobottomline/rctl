@@ -150,6 +150,7 @@ static void rctl_launch_app(NSString *bid) {
 typedef struct __CFUserNotification *CFUserNotificationRef;
 extern CFUserNotificationRef CFUserNotificationCreate(CFAllocatorRef, CFTimeInterval, CFOptionFlags, SInt32 *, CFDictionaryRef);
 extern SInt32 CFUserNotificationReceiveResponse(CFUserNotificationRef, CFTimeInterval, CFOptionFlags *);
+static int current_orientation(void);              // defined below; for upright overlays
 
 static void rctl_show_alert(NSString *title, NSString *message) {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -167,20 +168,40 @@ static void rctl_show_alert(NSString *title, NSString *message) {
 static void rctl_show_toast(NSString *text, double seconds) {
     if (!text.length) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+        CGRect fb = [UIScreen mainScreen].fixedCoordinateSpace.bounds;
+        int o = current_orientation();
+        if (o < 1 || o > 4) o = 1;
+        BOOL land = (o == 3 || o == 4);
+        CGFloat uiW = land ? fb.size.height : fb.size.width;
+        CGFloat uiH = land ? fb.size.width  : fb.size.height;
+
         UIFont *font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
         CGSize ts = [text sizeWithAttributes:@{NSFontAttributeName: font}];
-        CGFloat h = ts.height + 22, w = MIN(ts.width + 44, sw - 40);
-        UIWindow *win = [[UIWindow alloc] initWithFrame:CGRectMake((sw - w) / 2, 58, w, h)];
+        CGFloat h = ts.height + 22, w = MIN(ts.width + 44, uiW - 40);
+
+        UIWindow *win = [[UIWindow alloc] initWithFrame:fb];
         win.windowLevel = UIWindowLevelAlert + 1;
-        win.backgroundColor = [UIColor colorWithWhite:0 alpha:0.82];
-        win.layer.cornerRadius = h / 2;
-        win.clipsToBounds = YES;
+        win.backgroundColor = [UIColor clearColor];
         win.userInteractionEnabled = NO;
-        UILabel *lbl = [[UILabel alloc] initWithFrame:win.bounds];
+
+        UIView *plane = [[UIView alloc] initWithFrame:CGRectMake(0, 0, uiW, uiH)];
+        plane.userInteractionEnabled = NO;
+        CGFloat ang = (o == 2) ? M_PI : (o == 3) ? M_PI_2 : (o == 4) ? -M_PI_2 : 0;
+        plane.transform = CGAffineTransformMakeRotation(ang);
+        plane.center = CGPointMake(fb.size.width / 2, fb.size.height / 2);
+
+        UIView *pill = [[UIView alloc] initWithFrame:CGRectMake((uiW - w) / 2, 58, w, h)];
+        pill.backgroundColor = [UIColor colorWithWhite:0 alpha:0.82];
+        pill.layer.cornerRadius = h / 2;
+        pill.clipsToBounds = YES;
+
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectInset(pill.bounds, 18, 0)];
         lbl.text = text; lbl.font = font; lbl.textColor = [UIColor whiteColor];
         lbl.textAlignment = NSTextAlignmentCenter;
-        [win addSubview:lbl];
+        lbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        [pill addSubview:lbl];
+        [plane addSubview:pill];
+        [win addSubview:plane];
         win.hidden = NO;
         double dur = seconds > 0 ? seconds : 2.0;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(dur * NSEC_PER_SEC)),
@@ -189,7 +210,6 @@ static void rctl_show_toast(NSString *text, double seconds) {
 }
 
 // ---- Fun FX / pranks: speak aloud, play a sound, strobe, fullscreen banner ----
-static int current_orientation(void);              // defined below; for upright overlays
 static void send_reply(uint32_t reqid, NSString *result);   // defined below; used by the QUERY handler
 // We drive AVSpeechSynthesizer/AVAudioSession via the Objective-C runtime and
 // declare AudioServicesPlaySystemSound by prototype, to AVOID importing the
