@@ -3,6 +3,9 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertTriangle,
   Ban,
+  Check,
+  ChevronDown,
+  Clock,
   History,
   KeyRound,
   LogIn,
@@ -14,8 +17,12 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  User,
+  X,
+  Zap,
   type LucideProps,
 } from 'lucide-react'
+import { Menu, MenuItem } from './ui/Menu'
 import { Panel } from './Shell'
 import { describeClient, fmtRel, shortId } from '../lib/format'
 import { cn } from '../lib/cn'
@@ -56,19 +63,14 @@ const toneText: Record<Tone, string> = {
   muted: 'text-muted',
 }
 
-const FILTERS: { key: string; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'admin', label: 'Admin' },
-  { key: 'device', label: 'Devices' },
-  { key: 'live', label: 'Live' },
+const RANGES: Record<string, number> = { '1h': 3600, '24h': 86400, '7d': 604800, '30d': 2592000 }
+const TIME_OPTS = [
+  { key: 'all', label: 'All time' },
+  { key: '1h', label: 'Last hour' },
+  { key: '24h', label: 'Last 24 hours' },
+  { key: '7d', label: 'Last 7 days' },
+  { key: '30d', label: 'Last 30 days' },
 ]
-
-function categoryOf(event: string): string {
-  if (event.startsWith('admin_')) return 'admin'
-  if (event.startsWith('device_')) return 'device'
-  if (event === 'webrtc_signal_open') return 'live'
-  return 'other'
-}
 
 function summarizeDetail(detail?: string): string {
   if (!detail) return ''
@@ -85,6 +87,52 @@ function summarizeDetail(detail?: string): string {
   }
 }
 
+type Opt = { key: string; label: string }
+
+// A compact filter dropdown built on the shared Radix Menu.
+function FilterMenu({
+  icon: Icon,
+  value,
+  options,
+  onChange,
+}: {
+  icon: ComponentType<LucideProps>
+  value: string
+  options: Opt[]
+  onChange: (key: string) => void
+}) {
+  const current = options.find((o) => o.key === value) ?? options[0]
+  const active = value !== options[0]?.key
+  return (
+    <Menu
+      align="start"
+      trigger={
+        <button
+          className={cn(
+            'inline-flex max-w-[12rem] items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] ring-1 transition-colors',
+            active
+              ? 'bg-signal/12 text-signal ring-signal/30'
+              : 'bg-surface-2/60 text-fg-dim ring-line/70 hover:text-fg',
+          )}
+        >
+          <Icon className="size-3.5 shrink-0 opacity-80" />
+          <span className="truncate">{current?.label}</span>
+          <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+        </button>
+      }
+    >
+      <div className="max-h-72 overflow-y-auto">
+        {options.map((o) => (
+          <MenuItem key={o.key} className="justify-between gap-6" onSelect={() => onChange(o.key)}>
+            <span className="truncate">{o.label}</span>
+            {o.key === value && <Check className="size-3.5 shrink-0 text-signal" />}
+          </MenuItem>
+        ))}
+      </div>
+    </Menu>
+  )
+}
+
 export function ActivityPanel({
   entries,
   sessions = [],
@@ -92,11 +140,11 @@ export function ActivityPanel({
   entries: AuditEntry[]
   sessions?: Session[]
 }) {
-  const [cat, setCat] = useState('all')
   const [query, setQuery] = useState('')
+  const [eventKey, setEventKey] = useState('all')
+  const [adminKey, setAdminKey] = useState('all')
+  const [timeKey, setTimeKey] = useState('all')
 
-  // Resolve the acting admin for each event from its session id (browser brand);
-  // falls back to "admin" once that session is gone, "" for device/system events.
   const sessMap = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions])
   const actorOf = (e: AuditEntry): string => {
     if (!e.session_id) return ''
@@ -104,26 +152,62 @@ export function ActivityPanel({
     return s ? describeClient(s.user_agent, s.client_hints).split(' · ')[0] : 'admin'
   }
 
+  // Build the option lists from the events actually present.
+  const eventOpts = useMemo<Opt[]>(() => {
+    const seen = new Map<string, string>()
+    for (const e of entries) if (!seen.has(e.event)) seen.set(e.event, auditLabel(e.event))
+    const opts = [...seen.entries()]
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+    return [{ key: 'all', label: 'All events' }, ...opts]
+  }, [entries])
+
+  const adminOpts = useMemo<Opt[]>(() => {
+    const seen = new Set<string>()
+    const opts: Opt[] = []
+    for (const e of entries) {
+      if (!e.session_id || seen.has(e.session_id)) continue
+      seen.add(e.session_id)
+      const s = sessMap.get(e.session_id)
+      opts.push({
+        key: e.session_id,
+        label: s ? `${describeClient(s.user_agent, s.client_hints)} · ${s.ip}` : `Session ${shortId(e.session_id, 6, 4)}`,
+      })
+    }
+    return [{ key: 'all', label: 'All admins' }, ...opts]
+  }, [entries, sessMap])
+
   const q = query.trim().toLowerCase()
+  const cutoff = timeKey === 'all' ? 0 : Date.now() / 1000 - (RANGES[timeKey] ?? 0)
   const filtered = useMemo(
     () =>
       entries.filter((e) => {
-        if (cat !== 'all' && categoryOf(e.event) !== cat) return false
-        if (!q) return true
-        const hay = `${auditLabel(e.event)} ${e.ip} ${e.detail ?? ''} ${actorOf(e)}`.toLowerCase()
-        return hay.includes(q)
+        if (eventKey !== 'all' && e.event !== eventKey) return false
+        if (adminKey !== 'all' && e.session_id !== adminKey) return false
+        if (cutoff && e.ts < cutoff) return false
+        if (q && !`${auditLabel(e.event)} ${e.ip} ${e.detail ?? ''} ${actorOf(e)}`.toLowerCase().includes(q))
+          return false
+        return true
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [entries, cat, q, sessMap],
+    [entries, eventKey, adminKey, cutoff, q, sessMap],
   )
+
+  const filtersOn = !!q || eventKey !== 'all' || adminKey !== 'all' || timeKey !== 'all'
+  const clear = () => {
+    setQuery('')
+    setEventKey('all')
+    setAdminKey('all')
+    setTimeKey('all')
+  }
 
   return (
     <Panel
       title="Activity"
       subtitle={`${filtered.length} of ${entries.length} event${entries.length === 1 ? '' : 's'}`}
     >
-      <div className="flex flex-wrap items-center gap-2 border-b border-line/60 px-5 py-3">
-        <div className="relative min-w-0 flex-1">
+      <div className="space-y-2.5 border-b border-line/60 px-5 py-3">
+        <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" />
           <input
             value={query}
@@ -132,21 +216,19 @@ export function ActivityPanel({
             className="w-full rounded-lg bg-surface-2/60 py-1.5 pl-8 pr-2.5 text-[12.5px] text-fg ring-1 ring-line/70 placeholder:text-faint focus:outline-none focus:ring-signal/40"
           />
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {FILTERS.map((f) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterMenu icon={Zap} value={eventKey} options={eventOpts} onChange={setEventKey} />
+          <FilterMenu icon={User} value={adminKey} options={adminOpts} onChange={setAdminKey} />
+          <FilterMenu icon={Clock} value={timeKey} options={TIME_OPTS} onChange={setTimeKey} />
+          {filtersOn && (
             <button
-              key={f.key}
-              onClick={() => setCat(f.key)}
-              className={cn(
-                'rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors',
-                cat === f.key
-                  ? 'bg-signal/15 text-signal ring-1 ring-signal/30'
-                  : 'text-muted hover:text-fg-dim',
-              )}
+              onClick={clear}
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[12px] text-muted transition-colors hover:text-fg"
             >
-              {f.label}
+              <X className="size-3.5" />
+              Clear
             </button>
-          ))}
+          )}
         </div>
       </div>
 
@@ -156,7 +238,7 @@ export function ActivityPanel({
             <History className="size-5" />
           </div>
           <p className="mt-3 text-[13px] text-muted">
-            {entries.length ? 'No matching activity.' : 'No activity recorded yet.'}
+            {entries.length ? 'No activity matches these filters.' : 'No activity recorded yet.'}
           </p>
         </div>
       ) : (
