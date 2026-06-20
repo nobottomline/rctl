@@ -43,9 +43,15 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	if len(ua) > 200 {
 		ua = ua[:200]
 	}
+	// Sec-CH-UA client hints distinguish Brave/Edge/Opera, which all share Chrome's
+	// User-Agent string. Sent by Chromium browsers on secure origins; empty otherwise.
+	hints := r.Header.Get("Sec-Ch-Ua")
+	if len(hints) > 256 {
+		hints = hints[:256]
+	}
 	_, err = s.db.ExecContext(r.Context(),
-		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at, ip, user_agent) VALUES(?,?,?,?,?,?,?)`,
-		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix(), s.clientIP(r), ua)
+		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at, ip, user_agent, client_hints) VALUES(?,?,?,?,?,?,?,?)`,
+		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix(), s.clientIP(r), ua, hints)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "session_create_failed")
 		return
@@ -82,7 +88,7 @@ func (s *server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE expires_at<?`, now)
 	rows, err := s.db.QueryContext(r.Context(), `
-SELECT id, expires_at, created_at, last_seen_at, ip, user_agent
+SELECT id, expires_at, created_at, last_seen_at, ip, user_agent, client_hints
 FROM sessions
 WHERE expires_at>=?
 ORDER BY last_seen_at DESC`, now)
@@ -93,24 +99,26 @@ ORDER BY last_seen_at DESC`, now)
 	defer rows.Close()
 
 	type session struct {
-		ID         string `json:"id"`
-		Current    bool   `json:"current"`
-		ExpiresAt  int64  `json:"expires_at"`
-		CreatedAt  int64  `json:"created_at"`
-		LastSeenAt int64  `json:"last_seen_at"`
-		IP         string `json:"ip"`
-		UserAgent  string `json:"user_agent"`
+		ID          string `json:"id"`
+		Current     bool   `json:"current"`
+		ExpiresAt   int64  `json:"expires_at"`
+		CreatedAt   int64  `json:"created_at"`
+		LastSeenAt  int64  `json:"last_seen_at"`
+		IP          string `json:"ip"`
+		UserAgent   string `json:"user_agent"`
+		ClientHints string `json:"client_hints"`
 	}
 	out := []session{}
 	for rows.Next() {
 		var item session
-		var ip, ua sql.NullString
-		if err := rows.Scan(&item.ID, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &ip, &ua); err != nil {
+		var ip, ua, ch sql.NullString
+		if err := rows.Scan(&item.ID, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &ip, &ua, &ch); err != nil {
 			writeErr(w, http.StatusInternalServerError, "session_scan_failed")
 			return
 		}
 		item.IP = ip.String
 		item.UserAgent = ua.String
+		item.ClientHints = ch.String
 		item.Current = item.ID == currentID
 		out = append(out, item)
 	}

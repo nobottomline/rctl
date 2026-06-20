@@ -209,6 +209,7 @@ export default function App() {
           <SessionsPanel
             sessions={sessions}
             busyId={busyId}
+            audit={audit}
             onRevoke={revokeSession}
             onRevokeOthers={revokeOthers}
           />

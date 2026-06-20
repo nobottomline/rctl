@@ -1,17 +1,19 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Globe, Info, LogOut, Monitor, MoreHorizontal } from 'lucide-react'
+import { Activity, Globe, Info, LogOut, Monitor, MoreHorizontal } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Menu, MenuItem, MenuSeparator } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { DetailField, DetailSection } from './ui/Detail'
 import { Panel } from './Shell'
-import { describeUserAgent, fmtAbs, fmtRel } from '../lib/format'
-import type { Session } from '../types'
+import { auditLabel } from './ActivityPanel'
+import { describeClient, fmtAbs, fmtRel, fmtUntil } from '../lib/format'
+import type { AuditEntry, Session } from '../types'
 
 export type SessionsPanelProps = {
   sessions: Session[]
   busyId: string
+  audit?: AuditEntry[]
   onRevoke: (id: string) => void
   onRevokeOthers: () => void
 }
@@ -19,6 +21,7 @@ export type SessionsPanelProps = {
 export function SessionsPanel({
   sessions,
   busyId,
+  audit,
   onRevoke,
   onRevokeOthers,
 }: SessionsPanelProps) {
@@ -60,7 +63,7 @@ export function SessionsPanel({
                 >
                   <div className="flex items-center gap-2">
                     <span className="truncate text-[13.5px] font-medium text-fg">
-                      {describeUserAgent(s.user_agent)}
+                      {describeClient(s.user_agent, s.client_hints)}
                     </span>
                     {s.current && (
                       <span className="shrink-0 rounded-full bg-online/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-online ring-1 ring-online/25">
@@ -106,6 +109,7 @@ export function SessionsPanel({
 
       <SessionDetailModal
         session={detailLive}
+        audit={audit}
         onOpenChange={(o) => !o && setDetail(null)}
         onRevoke={(id) => {
           setDetail(null)
@@ -118,13 +122,18 @@ export function SessionsPanel({
 
 function SessionDetailModal({
   session,
+  audit = [],
   onOpenChange,
   onRevoke,
 }: {
   session: Session | null
+  audit?: AuditEntry[]
   onOpenChange: (open: boolean) => void
   onRevoke: (id: string) => void
 }) {
+  // Recent audit events from the same IP -- a best-effort view of what this admin
+  // has been doing (sessions don't tag every action, but the client IP lines up).
+  const acts = session ? audit.filter((e) => e.ip && e.ip === session.ip).slice(0, 6) : []
   return (
     <Modal open={!!session} onOpenChange={onOpenChange} title="Session" className="max-w-lg">
       {session && (
@@ -135,7 +144,7 @@ function SessionDetailModal({
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-[14.5px] font-medium text-fg">
-                {describeUserAgent(session.user_agent)}
+                {describeClient(session.user_agent, session.client_hints)}
               </div>
               <div className="font-mono text-[12px] text-muted">{session.ip || 'unknown IP'}</div>
             </div>
@@ -151,9 +160,23 @@ function SessionDetailModal({
               <DetailField icon={Globe} label="IP address" value={session.ip || 'unknown'} />
               <DetailField label="Signed in" value={fmtAbs(session.created_at)} />
               <DetailField label="Last seen" value={fmtRel(session.last_seen_at)} />
-              <DetailField label="Expires" value={fmtAbs(session.expires_at)} />
+              <DetailField label="Auto sign-out" value={fmtUntil(session.expires_at)} />
             </div>
           </DetailSection>
+
+          {acts.length > 0 && (
+            <DetailSection title="Recent activity · this IP">
+              <ul className="space-y-1.5">
+                {acts.map((e) => (
+                  <li key={e.id} className="flex items-center gap-2 text-[12.5px]">
+                    <Activity className="size-3.5 shrink-0 text-muted" />
+                    <span className="truncate text-fg-dim">{auditLabel(e.event)}</span>
+                    <span className="ml-auto shrink-0 text-muted tnum">{fmtRel(e.ts)}</span>
+                  </li>
+                ))}
+              </ul>
+            </DetailSection>
+          )}
 
           <DetailSection title="User agent">
             <p className="break-all font-mono text-[11.5px] leading-relaxed text-fg-dim">

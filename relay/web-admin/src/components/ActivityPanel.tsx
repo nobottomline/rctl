@@ -43,6 +43,11 @@ const META: Record<string, { label: string; tone: Tone; icon: ComponentType<Luci
   webrtc_signal_open: { label: 'Live control session', tone: 'signal', icon: Radio },
 }
 
+// Human label for an audit event, reused by the session detail's activity list.
+export function auditLabel(event: string): string {
+  return META[event]?.label ?? event
+}
+
 const toneText: Record<Tone, string> = {
   online: 'text-online',
   danger: 'text-danger',

@@ -49,7 +49,15 @@ func (s *server) validSessionToken(r *http.Request, sessionID, secret string) bo
 		return false
 	}
 	if now-lastSeen >= 60 { // refresh last_seen at most once a minute, not on every request
-		_, _ = s.db.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=? WHERE id=?`, now, sessionID)
+		// Backfill Sec-CH-UA client hints for sessions created before that column
+		// existed, so browser detection works without forcing a re-login.
+		hints := r.Header.Get("Sec-Ch-Ua")
+		if len(hints) > 256 {
+			hints = hints[:256]
+		}
+		_, _ = s.db.ExecContext(r.Context(),
+			`UPDATE sessions SET last_seen_at=?, client_hints=COALESCE(NULLIF(client_hints,''), ?) WHERE id=?`,
+			now, hints, sessionID)
 	}
 	return true
 }

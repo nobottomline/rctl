@@ -61,12 +61,12 @@ export function Modal({
                   exit={{ opacity: 0, scale: 0.96, y: 8 }}
                   transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
                   className={cn(
-                    'glass relative w-full max-w-md overflow-hidden rounded-2xl ring-1 ring-line-2 shadow-2xl shadow-black/60',
+                    'glass relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl ring-1 ring-line-2 shadow-2xl shadow-black/60',
                     className,
                   )}
                 >
                   <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-signal/50 to-transparent" />
-                  <div className="p-6">
+                  <div className="overflow-y-auto overscroll-contain p-6">
                     {title && (
                       <Dialog.Title className="text-lg font-semibold tracking-tight text-fg">
                         {title}

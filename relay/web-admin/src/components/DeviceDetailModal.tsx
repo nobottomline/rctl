@@ -2,14 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   BatteryMedium,
   Check,
+  Clock,
   Copy,
   Cpu,
   ExternalLink,
+  HardDrive,
   Hash,
-  PlugZap,
-  Power,
+  MemoryStick,
   RefreshCw,
-  RotateCw,
   Smartphone,
   Sun,
 } from 'lucide-react'
@@ -24,7 +24,6 @@ import type { AuditEntry, Device, DeviceInfo } from '../types'
 
 export function DeviceDetailModal({
   device,
-  audit = [],
   onOpenChange,
 }: {
   device: Device | null
@@ -35,23 +34,8 @@ export function DeviceDetailModal({
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [copied, setCopied] = useState(false)
-  const [respringing, setRespringing] = useState(false)
-  const [confirmRespring, setConfirmRespring] = useState(false)
 
   const reachable = !!device && device.online && device.status === 'approved'
-
-  const history = device
-    ? audit
-        .filter((e) => {
-          if (e.event !== 'device_connected' && e.event !== 'device_disconnected') return false
-          try {
-            return (JSON.parse(e.detail || '{}') as { device_id?: string }).device_id === device.id
-          } catch {
-            return false
-          }
-        })
-        .slice(0, 6)
-    : []
 
   const load = useCallback(
     (d: Device) => {
@@ -68,9 +52,10 @@ export function DeviceDetailModal({
   )
 
   useEffect(() => {
-    setConfirmRespring(false)
     if (device) load(device)
-  }, [device, load])
+    // refetch only when a different device opens -- not on every device-list poll
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [device?.id, load])
 
   function copyId() {
     if (!device) return
@@ -79,20 +64,6 @@ export function DeviceDetailModal({
       toast.success('Device ID copied')
       setTimeout(() => setCopied(false), 1600)
     })
-  }
-
-  async function respring() {
-    if (!device) return
-    setRespringing(true)
-    try {
-      await api.respringDevice(device.id)
-      toast.success('Respring sent')
-      setConfirmRespring(false)
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Respring failed')
-    } finally {
-      setRespringing(false)
-    }
   }
 
   return (
@@ -160,9 +131,23 @@ export function DeviceDetailModal({
               </div>
             ) : info ? (
               <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                <DetailField icon={Cpu} label="Model" value={info.model} />
-                <DetailField icon={Hash} label="iOS" value={info.ios} />
-                <DetailField icon={BatteryMedium} label="Battery" value={info.battery} />
+                <DetailField icon={Smartphone} label="Model" value={info.model_id || info.model} />
+                <DetailField
+                  icon={Hash}
+                  label="iOS"
+                  value={info.ios ? info.ios + (info.build ? ` (${info.build})` : '') : undefined}
+                />
+                <DetailField icon={Cpu} label="CPU" value={info.cpu} />
+                <DetailField icon={MemoryStick} label="Memory" value={info.memory} />
+                <DetailField
+                  icon={BatteryMedium}
+                  label="Battery"
+                  value={
+                    info.battery
+                      ? info.battery + (info.battery_state ? ` · ${info.battery_state}` : '')
+                      : undefined
+                  }
+                />
                 <DetailField
                   icon={Sun}
                   label="Brightness"
@@ -172,28 +157,19 @@ export function DeviceDetailModal({
                       : undefined
                   }
                 />
+                <DetailField icon={HardDrive} label="Storage" value={info.storage} />
+                <DetailField icon={Clock} label="Uptime" value={info.uptime} />
               </div>
             ) : null}
           </DetailSection>
 
-          {reachable && (
-            <DetailSection title="Controls">
-              {!confirmRespring ? (
-                <Button variant="secondary" size="sm" onClick={() => setConfirmRespring(true)}>
-                  <RotateCw className="size-3.5" />
-                  Respring
-                </Button>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <span className="text-[12.5px] text-muted">Restart SpringBoard?</span>
-                  <Button variant="ghost" size="sm" onClick={() => setConfirmRespring(false)}>
-                    Cancel
-                  </Button>
-                  <Button variant="danger-solid" size="sm" loading={respringing} onClick={respring}>
-                    Confirm
-                  </Button>
-                </div>
-              )}
+          {info && (info.udid || info.serial || info.imei) && (
+            <DetailSection title="Identity">
+              <div className="space-y-2.5">
+                {info.udid && <CopyField label="UDID" value={info.udid} />}
+                {info.serial && <CopyField label="Serial" value={info.serial} />}
+                {info.imei && <CopyField label="IMEI" value={info.imei} />}
+              </div>
             </DetailSection>
           )}
 
@@ -206,26 +182,6 @@ export function DeviceDetailModal({
               <DetailField label="Updated" value={fmtRel(device.updated_at)} />
             </div>
           </DetailSection>
-
-          {history.length > 0 && (
-            <DetailSection title="Connection history">
-              <ul className="space-y-1.5">
-                {history.map((e) => (
-                  <li key={e.id} className="flex items-center gap-2 text-[12.5px]">
-                    {e.event === 'device_connected' ? (
-                      <PlugZap className="size-3.5 shrink-0 text-online" />
-                    ) : (
-                      <Power className="size-3.5 shrink-0 text-muted" />
-                    )}
-                    <span className="text-fg-dim">
-                      {e.event === 'device_connected' ? 'Connected' : 'Disconnected'}
-                    </span>
-                    <span className="ml-auto text-muted tnum">{fmtRel(e.ts)}</span>
-                  </li>
-                ))}
-              </ul>
-            </DetailSection>
-          )}
 
           <div className="flex justify-end gap-2.5 pt-1">
             <Button variant="secondary" onClick={() => onOpenChange(false)}>
@@ -244,5 +200,34 @@ export function DeviceDetailModal({
         </div>
       )}
     </Modal>
+  )
+}
+
+// Copyable identity row (UDID / serial / IMEI) -- long, mono, one-tap copy.
+function CopyField({ label, value }: { label: string; value: string }) {
+  const [done, setDone] = useState(false)
+  return (
+    <button
+      onClick={() =>
+        navigator.clipboard?.writeText(value).then(() => {
+          setDone(true)
+          toast.success(`${label} copied`)
+          setTimeout(() => setDone(false), 1400)
+        })
+      }
+      className="group flex w-full items-center justify-between gap-2 text-left"
+    >
+      <span className="shrink-0 text-[11px] text-muted">{label}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate font-mono text-[12.5px] text-fg" title={value}>
+          {value}
+        </span>
+        {done ? (
+          <Check className="size-3 shrink-0 text-online" />
+        ) : (
+          <Copy className="size-3 shrink-0 opacity-40 transition-opacity group-hover:opacity-70" />
+        )}
+      </span>
+    </button>
   )
 }

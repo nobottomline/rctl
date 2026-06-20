@@ -65,6 +65,41 @@ export function describeUserAgent(ua?: string): string {
   return ua.length > 28 ? ua.slice(0, 28) + '…' : ua
 }
 
+// Browser brand from Sec-CH-UA client hints. Brave/Edge/Opera all ship Chrome's
+// User-Agent string, so the UA alone can't tell them apart -- but their client
+// hints carry the real brand. Empty for non-Chromium browsers (Firefox/Safari).
+function brandFromHints(hints?: string): string {
+  if (!hints) return ''
+  const brands = [...hints.matchAll(/"([^"]+)"/g)].map((m) => m[1])
+  if (brands.some((b) => /Brave/i.test(b))) return 'Brave'
+  if (brands.some((b) => /Edge/i.test(b))) return 'Edge'
+  if (brands.some((b) => /OPR|Opera/i.test(b))) return 'Opera'
+  if (brands.some((b) => /Google Chrome/i.test(b))) return 'Chrome'
+  return ''
+}
+
+// "Browser · OS", preferring the client-hint brand so e.g. Brave isn't mislabeled
+// as Chrome. Falls back to the User-Agent for the browser and always for the OS.
+export function describeClient(ua?: string, hints?: string): string {
+  const brand = brandFromHints(hints)
+  if (!brand) return describeUserAgent(ua)
+  const full = describeUserAgent(ua)
+  const os = full.includes(' · ') ? full.split(' · ')[1] : ''
+  return os ? `${brand} · ${os}` : brand
+}
+
+// "in 29d" / "in 5h" — for a future timestamp (e.g. when a session auto-expires).
+export function fmtUntil(sec?: number): string {
+  if (!sec) return '—'
+  const diff = sec - Date.now() / 1000
+  if (diff <= 0) return 'expired'
+  const mins = Math.round(diff / 60)
+  if (mins < 60) return `in ${mins}m`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 48) return `in ${hrs}h`
+  return `in ${Math.round(hrs / 24)}d`
+}
+
 export function fmtUptime(sec?: number): string {
   if (!sec || sec < 0) return '—'
   const d = Math.floor(sec / 86400)

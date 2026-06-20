@@ -22,6 +22,7 @@ export interface Session {
   last_seen_at: number
   ip: string
   user_agent: string
+  client_hints?: string
 }
 
 export interface Enrollment {
@@ -65,9 +66,19 @@ export interface RevokeResult {
 export interface DeviceInfo {
   name?: string
   model?: string
+  model_id?: string
   ios?: string
+  build?: string
   battery?: string
+  battery_state?: string
   brightness?: number
+  cpu?: string
+  memory?: string
+  storage?: string
+  uptime?: string
+  udid?: string
+  serial?: string
+  imei?: string
 }
 
 export interface AuditEntry {
