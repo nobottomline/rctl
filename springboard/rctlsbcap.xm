@@ -15,6 +15,7 @@
 #import "capture/ScreenCapture.h"
 #import "input/TouchInjector.h"
 #import "ipc/Ipc.h"
+#import <sys/sysctl.h>
 
 // Edge system gestures (Control Center, Cover Sheet) can't be synthesized into
 // the right window via HID, so trigger them directly through SpringBoard's
@@ -350,14 +351,97 @@ static NSString *rctl_get_clipboard(void) {  // call on the main thread
     return [UIPasteboard generalPasteboard].string ?: @"";
 }
 
+// MobileGestalt for identity fields (UDID, serial, IMEI, model id, CPU arch).
+// Private, but SpringBoard has the access and this is the user's own jailbroken
+// device. Returns nil for missing/non-string keys (e.g. no IMEI on a Wi-Fi iPad).
+static NSString *rctl_mg(const char *key) {
+    static CFTypeRef (*MGCopyAnswer)(CFStringRef) = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *h = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_NOW);
+        if (h) MGCopyAnswer = (CFTypeRef (*)(CFStringRef))dlsym(h, "MGCopyAnswer");
+    });
+    if (!MGCopyAnswer) return nil;
+    CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+    if (!k) return nil;
+    CFTypeRef v = MGCopyAnswer(k);
+    CFRelease(k);
+    NSString *s = nil;
+    if (v) {
+        if (CFGetTypeID(v) == CFStringGetTypeID()) s = [(__bridge NSString *)v copy];
+        CFRelease(v);
+    }
+    return s.length ? s : nil;
+}
+
+static NSString *rctl_sysctl_str(const char *name) {
+    size_t len = 0;
+    if (sysctlbyname(name, NULL, &len, NULL, 0) != 0 || len == 0) return nil;
+    char *buf = (char *)malloc(len);
+    if (!buf) return nil;
+    NSString *s = nil;
+    if (sysctlbyname(name, buf, &len, NULL, 0) == 0) s = [NSString stringWithUTF8String:buf];
+    free(buf);
+    return s;
+}
+
 static NSString *rctl_device_info(void) {  // call on the main thread
     UIDevice *d = [UIDevice currentDevice];
     d.batteryMonitoringEnabled = YES;
+    NSMutableDictionary *o = [NSMutableDictionary dictionary];
+
+    o[@"name"]  = d.name ?: @"";
+    o[@"model"] = d.model ?: @"";
+    NSString *modelId = rctl_mg("ProductType") ?: rctl_sysctl_str("hw.machine");
+    if (modelId) o[@"model_id"] = modelId;
+    o[@"ios"] = d.systemVersion ?: @"";
+    NSString *build = rctl_sysctl_str("kern.osversion");
+    if (build) o[@"build"] = build;
+
     int pct = (int)(d.batteryLevel * 100 + 0.5);
-    NSString *batt = pct >= 0 ? [NSString stringWithFormat:@"%d%%", pct] : @"?";
-    double bright = (double)rctl_get_brightness();
-    return [NSString stringWithFormat:@"{\"name\":\"%@\",\"model\":\"%@\",\"ios\":\"%@\",\"battery\":\"%@\",\"brightness\":%.3f}",
-            d.name, d.model, d.systemVersion, batt, bright];
+    o[@"battery"] = pct >= 0 ? [NSString stringWithFormat:@"%d%%", pct] : @"?";
+    const char *bs = "";
+    switch (d.batteryState) {
+        case UIDeviceBatteryStateCharging: bs = "charging"; break;
+        case UIDeviceBatteryStateFull:     bs = "full"; break;
+        case UIDeviceBatteryStateUnplugged: bs = "on battery"; break;
+        default: break;
+    }
+    if (bs[0]) o[@"battery_state"] = [NSString stringWithUTF8String:bs];
+    o[@"brightness"] = @((double)rctl_get_brightness());
+
+    NSString *arch = rctl_mg("CPUArchitecture");
+    int ncpu = 0; size_t ns = sizeof ncpu;
+    sysctlbyname("hw.ncpu", &ncpu, &ns, NULL, 0);
+    NSMutableArray *cpu = [NSMutableArray array];
+    if (arch) [cpu addObject:arch];
+    if (ncpu > 0) [cpu addObject:[NSString stringWithFormat:@"%d cores", ncpu]];
+    if (cpu.count) o[@"cpu"] = [cpu componentsJoinedByString:@" \u00b7 "];
+
+    unsigned long long mem = [NSProcessInfo processInfo].physicalMemory;
+    if (mem) o[@"memory"] = [NSString stringWithFormat:@"%.0f GB", mem / 1073741824.0];
+    NSDictionary *fs = [[NSFileManager defaultManager] attributesOfFileSystemForPath:@"/var" error:nil];
+    if (fs) {
+        double total = [fs[NSFileSystemSize] doubleValue] / 1e9;
+        double freeb = [fs[NSFileSystemFreeSize] doubleValue] / 1e9;
+        if (total > 0) o[@"storage"] = [NSString stringWithFormat:@"%.0f GB free of %.0f GB", freeb, total];
+    }
+
+    double up = [NSProcessInfo processInfo].systemUptime;
+    if (up > 0) {
+        int days = (int)(up / 86400), hrs = ((int)(up / 3600)) % 24, mins = ((int)(up / 60)) % 60;
+        o[@"uptime"] = days > 0 ? [NSString stringWithFormat:@"%dd %dh", days, hrs]
+                     : hrs > 0  ? [NSString stringWithFormat:@"%dh %dm", hrs, mins]
+                                : [NSString stringWithFormat:@"%dm", mins];
+    }
+
+    NSString *udid = rctl_mg("UniqueDeviceID");                         if (udid)   o[@"udid"]   = udid;
+    NSString *serial = rctl_mg("SerialNumber");                        if (serial) o[@"serial"] = serial;
+    NSString *imei = rctl_mg("InternationalMobileEquipmentIdentity");  if (imei)   o[@"imei"]   = imei;
+
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:o options:0 error:nil];
+    NSString *s = jd ? [[NSString alloc] initWithData:jd encoding:NSUTF8StringEncoding] : nil;
+    return s ?: @"{}";
 }
 
 static NSString *rctl_audio_output_info(void) {
