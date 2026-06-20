@@ -203,13 +203,15 @@ const RCTL_TERM_WS_BASE=(window.RCTL_TERM_WS_BASE||'').replace(/\/$/,'');
 const RCTL_RELAY_MODE=!!(RCTL_PROXY_BASE||RCTL_STREAM_BASE);
 const RCTL_WEBRTC_MODE=RCTL_RELAY_MODE&&!!window.RCTL_WEBRTC&&'RTCPeerConnection' in window;
 let rtcControl=null; // WebRTC control DataChannel; when open, input rides it instead of HTTP
-let rtcAudioDec=null, rtcAudioPlayTime=0, rtcAudioTs=0; // WebRTC audio: Opus DataChannel -> WebCodecs -> Web Audio
+let rtcAudioDec=null, rtcAudioPlayTime=0, rtcAudioTs=0, rtcAudioChannels=0; // WebRTC audio: Opus DataChannel -> WebCodecs -> Web Audio
 function setupAudioChannel(ch){
   ch.binaryType='arraybuffer';
   ch.onmessage=ev=>{
     if(!audioEnabled||!audioCtx) return;                 // only play when the user enabled audio
     const u=new Uint8Array(ev.data), chn=u[0]||1, opus=u.subarray(1);
+    if(rtcAudioDec && rtcAudioChannels!==chn){ try{rtcAudioDec.close()}catch(e){} rtcAudioDec=null; } // source switched mono<->stereo: rebuild
     if(!rtcAudioDec){
+      rtcAudioChannels=chn;
       try{ rtcAudioDec=new AudioDecoder({ output:playRtcAudio, error:()=>{ try{rtcAudioDec.close()}catch(e){} rtcAudioDec=null; } });
         rtcAudioDec.configure({codec:'opus', sampleRate:48000, numberOfChannels:chn}); rtcAudioTs=0; rtcAudioPlayTime=0;
       }catch(e){ rtcAudioDec=null; return; }
@@ -341,7 +343,7 @@ const audBtn=document.getElementById('audListen'),devAudBtn=document.getElementB
 async function ensureAudio(){
   const AC=window.AudioContext||window.webkitAudioContext;
   if(!AC)return false;
-  if(!audioCtx)audioCtx=new AC();
+  if(!audioCtx){ try{audioCtx=new AC({sampleRate:48000});}catch(e){audioCtx=new AC();} } // match Opus 48kHz so buffers aren't per-frame resampled (hiss)
   if(!audioGain){audioGain=audioCtx.createGain();audioGain.gain.value=0.75;audioGain.connect(audioCtx.destination);}
   try{await audioCtx.resume();}catch(e){}
   return audioCtx.state==='running'||audioCtx.state==='interrupted';

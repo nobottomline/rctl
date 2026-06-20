@@ -19,6 +19,7 @@
 #import <spawn.h>
 #import <dirent.h>
 #import <sys/stat.h>
+#import <sys/time.h>
 #import <sys/socket.h>
 #import <sys/wait.h>
 #import <netinet/in.h>
@@ -967,7 +968,10 @@ static void *audio_lease_thread(void *arg) {
     for (;;) {
         sleep(60);
         pthread_mutex_lock(&gAudioCtlLock);
-        if (gAudioCaptureDesired) touch_file(RCTL_AUDIO_CAPTURE_MARKER);
+        // utimes() bumps mtime even on an existing file (open(O_CREAT) does NOT), so
+        // the rctlaudio lease watchdog sees a fresh marker and keeps capture alive.
+        if (gAudioCaptureDesired && utimes(RCTL_AUDIO_CAPTURE_MARKER, NULL) != 0)
+            touch_file(RCTL_AUDIO_CAPTURE_MARKER);
         pthread_mutex_unlock(&gAudioCtlLock);
     }
     return NULL;
