@@ -1,5 +1,5 @@
-import { useMemo, useState, type ComponentType } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { useMemo, useRef, useState, type ComponentType } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   AlertTriangle,
   Ban,
@@ -201,6 +201,16 @@ export function ActivityPanel({
     setTimeKey('all')
   }
 
+  // Virtualize: render only the visible rows so the list stays smooth at any size
+  // (10k+ events). The DOM holds ~20 nodes regardless of how many events there are.
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virt = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 52,
+    overscan: 12,
+  })
+
   return (
     <Panel
       title="Activity"
@@ -242,20 +252,21 @@ export function ActivityPanel({
           </p>
         </div>
       ) : (
-        <ul className="max-h-[28rem] divide-y divide-line/60 overflow-y-auto">
-          <AnimatePresence initial={false}>
-            {filtered.map((e) => {
+        <div ref={parentRef} className="max-h-[28rem] overflow-y-auto">
+          <div className="relative w-full" style={{ height: `${virt.getTotalSize()}px` }}>
+            {virt.getVirtualItems().map((vi) => {
+              const e = filtered[vi.index]
               const meta = META[e.event] ?? { label: e.event, tone: 'muted' as Tone, icon: History }
               const Icon = meta.icon
               const summary = summarizeDetail(e.detail)
               const actor = actorOf(e)
               return (
-                <motion.li
+                <div
                   key={e.id}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.18 }}
-                  className="flex items-center gap-3 px-5 py-2.5"
+                  ref={virt.measureElement}
+                  data-index={vi.index}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
+                  className="flex items-center gap-3 border-b border-line/60 px-5 py-2.5"
                 >
                   <div
                     className={cn(
@@ -279,11 +290,11 @@ export function ActivityPanel({
                     </div>
                   </div>
                   <span className="shrink-0 text-[11px] text-muted tnum">{fmtRel(e.ts)}</span>
-                </motion.li>
+                </div>
               )
             })}
-          </AnimatePresence>
-        </ul>
+          </div>
+        </div>
       )}
     </Panel>
   )

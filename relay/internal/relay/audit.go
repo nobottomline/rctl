@@ -7,8 +7,10 @@ import (
 	"time"
 )
 
-// auditLogCap bounds the audit_log table; older rows are pruned past this.
-const auditLogCap = 2000
+// auditLogCap bounds the audit_log table; older rows are pruned past this. Kept
+// generous so history survives — 20k rows is months of events yet still a few MB
+// of SQLite, and the UI virtualizes the list so render cost is independent of it.
+const auditLogCap = 20000
 
 func (s *server) audit(r *http.Request, event string, args ...any) {
 	ip := s.clientIP(r)

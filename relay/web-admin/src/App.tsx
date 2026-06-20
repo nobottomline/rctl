@@ -33,17 +33,15 @@ export default function App() {
   const loadAll = useCallback(async ({ silent }: { silent?: boolean } = {}) => {
     if (!silent) setRefreshing(true)
     try {
-      const [d, s, e, a, st] = await Promise.all([
+      const [d, s, e, st] = await Promise.all([
         api.devices(),
         api.sessions(),
         api.enrollments(),
-        api.audit(500),
         api.status(),
       ])
       setDevices(d.devices || [])
       setSessions(s.sessions || [])
       setEnrollments(e.enrollments || [])
-      setAudit(a.audit || [])
       setStatus(st)
       setAuthed(true)
     } catch (err) {
@@ -55,24 +53,33 @@ export default function App() {
     }
   }, [])
 
+  const loadAudit = useCallback(() => {
+    // The activity feed is heavier and less time-critical than live status, so it
+    // refreshes on its own slower cadence (not the 10s status poll). A high limit is
+    // fine -- the response is bounded by the real row count, and the list is
+    // virtualized, so a big history is cheap to hold and render.
+    api
+      .audit(10000)
+      .then((r) => setAudit(r.audit || []))
+      .catch(() => {})
+  }, [])
+
   // Initial auth probe: any failure (401 OR relay unreachable) drops to the
   // login screen rather than spinning on the splash forever.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
-        const [d, s, e, a, st] = await Promise.all([
+        const [d, s, e, st] = await Promise.all([
           api.devices(),
           api.sessions(),
           api.enrollments(),
-          api.audit(500),
           api.status(),
         ])
         if (cancelled) return
         setDevices(d.devices || [])
         setSessions(s.sessions || [])
         setEnrollments(e.enrollments || [])
-        setAudit(a.audit || [])
         setStatus(st)
         setAuthed(true)
       } catch {
@@ -92,6 +99,14 @@ export default function App() {
     pollRef.current = window.setInterval(() => loadAll({ silent: true }), 10000)
     return () => window.clearInterval(pollRef.current)
   }, [authed, loadAll])
+
+  // Activity feed refreshes on its own slower cadence, decoupled from status.
+  useEffect(() => {
+    if (authed !== true) return
+    loadAudit()
+    const id = window.setInterval(loadAudit, 30000)
+    return () => window.clearInterval(id)
+  }, [authed, loadAudit])
 
   function handleErr(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
@@ -190,7 +205,14 @@ export default function App() {
 
   return (
     <>
-      <Shell onRefresh={() => loadAll()} refreshing={refreshing} onSignOut={signOut}>
+      <Shell
+        onRefresh={() => {
+          loadAll()
+          loadAudit()
+        }}
+        refreshing={refreshing}
+        onSignOut={signOut}
+      >
         <div className="flex flex-col gap-5">
           <DevicesPanel
             devices={devices}
