@@ -2,6 +2,7 @@ import { useRef, useState, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   ChevronDown,
+  FolderOpen,
   Gauge,
   Headphones,
   House,
@@ -19,6 +20,7 @@ import {
 import { useControl } from './hooks/useControl'
 import { cn } from './lib/cn'
 import TerminalPanel from './components/TerminalPanel'
+import FilesPanel from './components/FilesPanel'
 
 // Encode presets the viewer can pick. The device runs ONE shared encoder, so a
 // weak client (iPhone in Safari / a relayed path) dials the whole stream DOWN.
@@ -38,6 +40,7 @@ export default function App() {
   const ctl = useControl(stageRef, canvasRef)
   const [panelOpen, setPanelOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
 
   return (
     <div className="fixed inset-0 select-none overflow-hidden bg-black text-white">
@@ -80,10 +83,15 @@ export default function App() {
             setPanelOpen(false)
             setTerminalOpen(true)
           }}
+          onFiles={() => {
+            setPanelOpen(false)
+            setFilesOpen(true)
+          }}
         />
       )}
 
       {terminalOpen && <TerminalPanel onClose={() => setTerminalOpen(false)} />}
+      {filesOpen && <FilesPanel transfer={ctl.filesTransfer} onClose={() => setFilesOpen(false)} />}
     </div>
   )
 }
@@ -111,7 +119,15 @@ function StatsOverlay({ s }: { s: ReturnType<typeof useControl>['stats'] }) {
   )
 }
 
-function Panel({ ctl, onTerminal }: { ctl: ReturnType<typeof useControl>; onTerminal: () => void }) {
+function Panel({
+  ctl,
+  onTerminal,
+  onFiles,
+}: {
+  ctl: ReturnType<typeof useControl>
+  onTerminal: () => void
+  onFiles: () => void
+}) {
   const [quality, setQuality] = useState<string | null>(null)
   return (
     <div className="fixed bottom-16 right-3 z-30 w-60 rounded-2xl bg-elevated/80 p-2.5 shadow-2xl shadow-black/50 ring-1 ring-line-2 backdrop-blur-2xl">
@@ -171,6 +187,7 @@ function Panel({ ctl, onTerminal }: { ctl: ReturnType<typeof useControl>; onTerm
       <Section title="Tools">
         <div className="grid grid-cols-2 gap-1.5">
           <Key icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
+          <Key icon={FolderOpen} label="Files" onClick={onFiles} />
         </div>
       </Section>
     </div>

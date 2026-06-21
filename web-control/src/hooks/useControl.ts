@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats } from '../lib/engine'
 import { AudioPlayer } from '../lib/audio'
+import { FileTransfer } from '../lib/files'
 import { api } from '../lib/rctl'
 
 // Wires the imperative ControlEngine to React: creates it against the stage +
@@ -17,6 +18,7 @@ export function useControl(
   const [statsOn, setStatsOn] = useState(false)
   const engineRef = useRef<ControlEngine | null>(null)
   const audioRef = useRef(new AudioPlayer())
+  const filesRef = useRef(new FileTransfer())
   const [listening, setListening] = useState(false)
   const [audioBusy, setAudioBusy] = useState(false)
   const [deviceSpeaker, setDeviceSpeaker] = useState(true)
@@ -31,6 +33,7 @@ export function useControl(
       onStatus: setStatus,
       onOrient: (o, manual) => setOrient({ o, manual }),
       onAudioChannel: (ch) => audioRef.current.attach(ch),
+      onFilesChannel: (ch) => filesRef.current.attach(ch),
     })
     engineRef.current = engine
     engine.start()
@@ -184,6 +187,7 @@ export function useControl(
     stats,
     statsOn,
     audio: { listening, busy: audioBusy, deviceSpeaker, toggleListen, toggleSpeaker },
+    filesTransfer: filesRef.current,
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),
