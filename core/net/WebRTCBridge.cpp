@@ -80,14 +80,18 @@ static void send_signal(const std::string &id, const std::string &kind, const js
 
 // A PLI/FIR from the browser asks for an intra frame (it lost reference frames
 // it can't recover via NACK). Force the encoder to emit a keyframe via the
-// daemon. Debounced: browsers send PLI in bursts until a keyframe arrives, and
-// the encoder needs a few frames to produce one.
+// daemon. Debounced hard (1s): browsers send PLI in bursts until a keyframe
+// arrives, and -- critically -- the single shared encoder broadcasts every
+// keyframe to ALL tracks, so a lossy viewer (e.g. a relayed iPhone) requesting
+// keyframes would otherwise storm huge intra frames onto every other viewer
+// (collapsing the healthy LAN Mac too). NACK still repairs ordinary loss fast;
+// PLI is only the unrecoverable-loss fallback, so a long window is cheap.
 static void request_keyframe() {
     if (!g_keyframe_cb) return;
     auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lk(g_mtx);
-        if (now - g_lastPli < std::chrono::milliseconds(250)) return;
+        if (now - g_lastPli < std::chrono::milliseconds(1000)) return;
         g_lastPli = now;
     }
     wlog("PLI -> force keyframe");
@@ -155,6 +159,49 @@ static void add_ice_servers(rtc::Configuration &config, const json &arr) {
         }
     }
     wlog("ice servers configured: " + std::to_string(config.iceServers.size()));
+}
+
+// Tear a WebRTC session down WITHOUT racing its own callbacks. libdatachannel
+// fires track/channel/PC onClosed handlers from its worker threads; if we drop
+// the last shared_ptr (destroying the Track) while such a handler is mid-flight,
+// the handler's captured state (e.g. the std::string `id`) is freed under it ->
+// use-after-free. That SIGSEGV crash-looped rctld and wedged the whole device on
+// viewer disconnect. resetCallbacks() blocks until any in-flight handler returns
+// and detaches all of them, so the destruction that follows can't race a handler
+// (and the Track destructor's own triggerClosed() then invokes an empty callback).
+// MUST be called WITHOUT g_mtx held: an in-flight onClosed takes g_mtx, so holding
+// it here would deadlock resetCallbacks().
+static void destroy_session(std::shared_ptr<Session> dead) {
+    if (!dead) return;
+    if (dead->control) dead->control->resetCallbacks();
+    if (dead->filesDc) dead->filesDc->resetCallbacks();
+    if (dead->audioDc) dead->audioDc->resetCallbacks();
+    if (dead->track)   dead->track->resetCallbacks();
+    if (dead->pc)      dead->pc->resetCallbacks();
+    // Purge from the global send lists; the onClosed that normally does this is
+    // now detached. Recompute the viewer count so capture stops only if this was
+    // the last viewer.
+    bool lastGone = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (dead->track) {
+            rtc::Track *tp = dead->track.get();
+            size_t before = g_tracks.size();
+            g_tracks.erase(std::remove_if(g_tracks.begin(), g_tracks.end(),
+                              [tp](const std::shared_ptr<rtc::Track> &t) { return t.get() == tp; }),
+                           g_tracks.end());
+            lastGone = (before > 0 && g_tracks.empty());
+        }
+        if (dead->audioDc) {
+            rtc::DataChannel *ap = dead->audioDc.get();
+            g_audio_dcs.erase(std::remove_if(g_audio_dcs.begin(), g_audio_dcs.end(),
+                                  [ap](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == ap; }),
+                              g_audio_dcs.end());
+        }
+        if (dead->filesDc && g_files_dc && g_files_dc.get() == dead->filesDc.get()) g_files_dc.reset();
+    }
+    if (lastGone && g_viewer_cb) g_viewer_cb(false);
+    // `dead` drops at the caller: callbacks detached + none in flight -> safe.
 }
 
 static void start_session(const std::string &id, const json &ice) {
@@ -317,10 +364,14 @@ static void start_session(const std::string &id, const json &ice) {
         if (g_files_dc && g_files_dc.get() == fptr) g_files_dc.reset();
     });
 
+    std::shared_ptr<Session> prior;
     {
         std::lock_guard<std::mutex> lk(g_mtx);
+        auto it = g_sessions.find(id);
+        if (it != g_sessions.end()) prior = it->second;
         g_sessions[id] = sess;
     }
+    destroy_session(prior);     // safe teardown if a stale session reused this id
     pc->setLocalDescription();  // device offers
 }
 
@@ -385,15 +436,16 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
         return;
     }
     if (kind == "close") {
-        // Move the session out under the lock, then let it destruct WITHOUT the
-        // lock held -- the PeerConnection's teardown fires track onClosed, which
-        // also takes g_mtx (holding it here would deadlock).
+        // Move the session out under the lock, then tear it down OUTSIDE the lock
+        // via destroy_session() (which detaches callbacks before the last ref
+        // drops -- see its note; doing this under g_mtx would deadlock).
         std::shared_ptr<Session> dead;
         {
             std::lock_guard<std::mutex> lk(g_mtx);
             auto it = g_sessions.find(id);
             if (it != g_sessions.end()) { dead = it->second; g_sessions.erase(it); }
         }
+        destroy_session(dead);
         return;
     }
 
