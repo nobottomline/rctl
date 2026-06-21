@@ -10,6 +10,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Smartphone,
+  SquareTerminal,
   Volume1,
   Volume2,
   VolumeX,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useControl } from './hooks/useControl'
 import { cn } from './lib/cn'
+import TerminalPanel from './components/TerminalPanel'
 
 // Encode presets the viewer can pick. The device runs ONE shared encoder, so a
 // weak client (iPhone in Safari / a relayed path) dials the whole stream DOWN.
@@ -35,6 +37,7 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const ctl = useControl(stageRef, canvasRef)
   const [panelOpen, setPanelOpen] = useState(false)
+  const [terminalOpen, setTerminalOpen] = useState(false)
 
   return (
     <div className="fixed inset-0 select-none overflow-hidden bg-black text-white">
@@ -70,7 +73,17 @@ export default function App() {
         <Settings2 className="size-5" />
       </button>
 
-      {panelOpen && <Panel ctl={ctl} />}
+      {panelOpen && (
+        <Panel
+          ctl={ctl}
+          onTerminal={() => {
+            setPanelOpen(false)
+            setTerminalOpen(true)
+          }}
+        />
+      )}
+
+      {terminalOpen && <TerminalPanel onClose={() => setTerminalOpen(false)} />}
     </div>
   )
 }
@@ -98,7 +111,7 @@ function StatsOverlay({ s }: { s: ReturnType<typeof useControl>['stats'] }) {
   )
 }
 
-function Panel({ ctl }: { ctl: ReturnType<typeof useControl> }) {
+function Panel({ ctl, onTerminal }: { ctl: ReturnType<typeof useControl>; onTerminal: () => void }) {
   const [quality, setQuality] = useState<string | null>(null)
   return (
     <div className="fixed bottom-16 right-3 z-30 w-60 rounded-2xl bg-elevated/80 p-2.5 shadow-2xl shadow-black/50 ring-1 ring-line-2 backdrop-blur-2xl">
@@ -153,6 +166,11 @@ function Panel({ ctl }: { ctl: ReturnType<typeof useControl> }) {
           <Key icon={Smartphone} label="Auto" active={!ctl.orient.manual} onClick={() => ctl.setAuto()} />
           <Key icon={RotateCw} label="Rotate" onClick={() => ctl.rotate()} />
           <Key icon={Activity} label="Stats" active={ctl.statsOn} onClick={() => ctl.toggleStats()} />
+        </div>
+      </Section>
+      <Section title="Tools">
+        <div className="grid grid-cols-2 gap-1.5">
+          <Key icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
         </div>
       </Section>
     </div>

@@ -50,3 +50,11 @@ export function signalWS(): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${proto}://${location.host}/signal/devices/${DEVICE_ID}`
 }
+
+// WebSocket URL for the PTY bridge. RCTL_TERM_WS_BASE is a path: in relay mode
+// the injected /term/devices/{id}; locally empty -> rctld's own /ws/term.
+export function termWS(cols: number, rows: number): string {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  const path = TERM_WS_BASE || '/ws/term'
+  return `${proto}://${location.host}${path}?cols=${cols}&rows=${rows}`
+}
