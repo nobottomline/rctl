@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { ControlEngine, codeToUsage, MOD_USAGES } from '../lib/engine'
+import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats } from '../lib/engine'
 
 // Wires the imperative ControlEngine to React: creates it against the stage +
 // canvas elements, attaches pointer/keyboard input + window resize, and surfaces
@@ -11,6 +11,8 @@ export function useControl(
 ) {
   const [status, setStatus] = useState('connecting…')
   const [orient, setOrient] = useState<{ o: number; manual: boolean }>({ o: 1, manual: false })
+  const [stats, setStats] = useState<DiagStats | null>(null)
+  const [statsOn, setStatsOn] = useState(false)
   const engineRef = useRef<ControlEngine | null>(null)
 
   useEffect(() => {
@@ -114,9 +116,34 @@ export function useControl(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Diagnostics poll: only while the overlay is open, so there's zero cost in
+  // normal use. getStats is cheap; 1s cadence keeps the numbers readable.
+  useEffect(() => {
+    if (!statsOn) {
+      setStats(null)
+      return
+    }
+    let alive = true
+    const tick = async () => {
+      const s = await engineRef.current?.sampleStats()
+      if (alive && s) setStats(s)
+    }
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [statsOn])
+
   return {
     status,
     orient,
+    stats,
+    statsOn,
+    toggleStats: () => setStatsOn((v) => !v),
+    setQuality: (scale: number, fps: number, bitrate: number) =>
+      engineRef.current?.setQuality(scale, fps, bitrate),
     sysPress: (n: string) => engineRef.current?.sysPress(n),
     springboard: (u: number) => engineRef.current?.springboard(u),
     rotate: () => engineRef.current?.rotate(),

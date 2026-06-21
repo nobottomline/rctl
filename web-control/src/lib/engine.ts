@@ -38,6 +38,19 @@ export function codeToUsage(c: string): number {
 // HID modifier usages — held (press/release) rather than tapped.
 export const MOD_USAGES = new Set([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
 
+export type DiagStats = {
+  fps: number
+  res: string
+  decodeMs: number
+  jitterMs: number
+  dropped: number
+  freezes: number
+  freezeS: number
+  pli: number
+  rttMs: number | string
+  path: string
+}
+
 export type EngineCallbacks = {
   onStatus?: (text: string) => void
   onFrame?: () => void
@@ -67,6 +80,7 @@ export class ControlEngine {
   private ws: WebSocket | null = null
   private orientTimer: number | undefined
   private stopped = false
+  private statsPrev: { decoded: number; t: number } | null = null
 
   constructor(
     stage: HTMLElement,
@@ -263,6 +277,75 @@ export class ControlEngine {
       return
     }
     api(`/key?p=240&u=${u}&d=1`).catch(() => {})
+  }
+
+  // ---- diagnostics --------------------------------------------------------
+  // Pull live receive-side WebRTC stats so we can see *why* a viewer (e.g. an
+  // iPhone vs a Mac) struggles: decode cost/frame, jitter-buffer depth, drops,
+  // freezes, the negotiated ICE path. fps is derived from the framesDecoded
+  // delta because Safari often omits the framesPerSecond field.
+  async sampleStats(): Promise<DiagStats | null> {
+    if (!this.pc) return null
+    let report: RTCStatsReport
+    try {
+      report = await this.pc.getStats()
+    } catch {
+      return null
+    }
+    type Any = Record<string, unknown>
+    let v: Any | null = null
+    let transport: Any | null = null
+    let pair: Any | null = null
+    report.forEach((r) => {
+      const x = r as unknown as Any
+      if (x.type === 'inbound-rtp' && x.kind === 'video') v = x
+      else if (x.type === 'transport') transport = x
+    })
+    if (!v) return null
+    const get = (id: unknown) => (typeof id === 'string' ? (report.get(id) as unknown as Any | undefined) : undefined)
+    if (transport) pair = get((transport as Any).selectedCandidatePairId) ?? null
+    if (!pair) report.forEach((r) => {
+      const x = r as unknown as Any
+      if (x.type === 'candidate-pair' && (x.nominated || x.selected)) pair = x
+    })
+    let local = '?'
+    let remote = '?'
+    if (pair) {
+      local = (get((pair as Any).localCandidateId)?.candidateType as string) || '?'
+      remote = (get((pair as Any).remoteCandidateId)?.candidateType as string) || '?'
+    }
+    const vv = v as Any
+    const decoded = (vv.framesDecoded as number) || 0
+    const now = performance.now()
+    let fps = (vv.framesPerSecond as number) ?? 0
+    if (this.statsPrev) {
+      const dt = (now - this.statsPrev.t) / 1000
+      if (dt > 0.2) fps = Math.max(0, Math.round((decoded - this.statsPrev.decoded) / dt))
+    }
+    this.statsPrev = { decoded, t: now }
+    const emitted = (vv.jitterBufferEmittedCount as number) || 0
+    const jitterMs = emitted ? Math.round((1000 * (vv.jitterBufferDelay as number)) / emitted) : 0
+    const decodeMs = decoded ? +((1000 * (vv.totalDecodeTime as number)) / decoded).toFixed(1) : 0
+    const rtt = pair ? (pair as Any).currentRoundTripTime : undefined
+    return {
+      fps,
+      res: `${(vv.frameWidth as number) || 0}×${(vv.frameHeight as number) || 0}`,
+      decodeMs,
+      jitterMs,
+      dropped: (vv.framesDropped as number) || 0,
+      freezes: (vv.freezeCount as number) || 0,
+      freezeS: +(((vv.totalFreezesDuration as number) || 0)).toFixed(1),
+      pli: (vv.pliCount as number) || 0,
+      rttMs: typeof rtt === 'number' ? Math.round(rtt * 1000) : '?',
+      path: `${local}/${remote}`,
+    }
+  }
+
+  // Change the device's shared encode profile (scale 0..1, fps, bitrate bps).
+  // Lets a weak viewer dial the stream down without touching other viewers'
+  // clients — the device re-applies it to the single VTCompressionSession.
+  setQuality(scale: number, fps: number, bitrate: number) {
+    api(`/config?scale=${scale}&fps=${fps}&bitrate=${bitrate}`).catch(() => {})
   }
 
   // ---- WebRTC -------------------------------------------------------------
