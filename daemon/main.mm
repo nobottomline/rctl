@@ -1016,9 +1016,17 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         if (get_param(query, "pos", posp, sizeof posp) && (!strcmp(posp, "front") || !strcmp(posp, "2"))) pos = 2;
         const char *out = "/tmp/rctl_cam.jpg";
         unlink(out);
+        // A snap spins up the foreground app's camera (AVFoundation + mediaserverd) --
+        // the same service the screen H.264 encoder uses. Running both at once starves
+        // the encoder and spikes CPU/memory, which on this device cascades into a frozen
+        // stream + a dropped relay link. So pause the screen capture/encode for the snap,
+        // then resume (a fresh session emits a keyframe, so the viewer recovers fast).
+        uint8_t cam_act = 0; send_to_sb(RCTL_MSG_ACTIVE, &cam_act, 1);
+        usleep(200000);                               // let the encoder + capture surface tear down
         notify_post(pos == 2 ? "com.greatlove.rctl.cam.front" : "com.greatlove.rctl.cam.back");
         struct stat st; int ready = 0;                // wait for the active app to produce the JPEG
         for (int i = 0; i < 70; i++) { usleep(50000); if (stat(out, &st) == 0 && st.st_size > 0) { ready = 1; break; } }
+        cam_act = 1; send_to_sb(RCTL_MSG_ACTIVE, &cam_act, 1);  // resume the stream regardless of outcome
         if (!ready) { *status = 500; return strdup("{\"error\":\"no foreground app captured (open an app, grant camera)\"}"); }
         usleep(120000);                               // let the write settle
         FILE *f = fopen(out, "rb");
