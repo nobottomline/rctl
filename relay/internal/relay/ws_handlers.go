@@ -260,6 +260,7 @@ func (s *server) deviceHeartbeat(ctx context.Context, dc *deviceConn) {
 			cancel()
 			if writeErr != nil {
 				// Can't even send -> the link really is broken.
+				s.log.Info("heartbeat closing device", "device_id", dc.id, "reason", "write_failed", "error", writeErr.Error())
 				_ = dc.ws.Close(websocket.StatusPolicyViolation, "heartbeat write failed")
 				return
 			}
@@ -270,6 +271,7 @@ func (s *server) deviceHeartbeat(ctx context.Context, dc *deviceConn) {
 			silent := time.Since(dc.lastRecvAt)
 			dc.mu.Unlock()
 			if silent > 3*interval {
+				s.log.Info("heartbeat closing device", "device_id", dc.id, "reason", "silent", "silent_ms", silent.Milliseconds())
 				_ = dc.ws.Close(websocket.StatusPolicyViolation, "device silent")
 				return
 			}
@@ -281,6 +283,7 @@ func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
 	for {
 		msgType, payload, err := dc.ws.Read(ctx)
 		if err != nil {
+			s.log.Info("device read loop ended", "device_id", dc.id, "error", err.Error())
 			return
 		}
 		dc.mu.Lock()
