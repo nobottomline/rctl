@@ -35,7 +35,7 @@ export default function ConsolePanel({
   record,
 }: {
   onClose: () => void
-  onScreenshot: () => void
+  onScreenshot: () => void | Promise<void>
   record: RecordApi
 }) {
   return (
@@ -471,12 +471,25 @@ function RecordCard({ record }: { record: RecordApi }) {
   )
 }
 
-function ScreenshotCard({ onScreenshot }: { onScreenshot: () => void }) {
+function ScreenshotCard({ onScreenshot }: { onScreenshot: () => void | Promise<void> }) {
+  const [busy, setBusy] = useState(false)
   return (
     <Card title="Screenshot">
-      <div className="mb-2 text-[12px] text-muted">Saves the current frame to your browser — invisible on the iPad.</div>
-      <Btn primary onClick={onScreenshot}>
-        Save frame
+      <div className="mb-2 text-[12px] text-muted">
+        Full-resolution lossless PNG from the device — invisible on the iPad.
+      </div>
+      <Btn
+        primary
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await onScreenshot()
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        {busy ? 'Saving…' : 'Save frame'}
       </Btn>
     </Card>
   )

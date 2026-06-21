@@ -217,6 +217,28 @@ export function useControl(
   }
   const stopPlay = () => engineRef.current?.stopPlay()
 
+  // Best-quality screenshot: a full-res lossless PNG straight from the device's
+  // capture surface (/v1/screenshot). Falls back to the local <video> frame
+  // (downscaled + H.264, the stream's quality) only if the device can't oblige.
+  const captureScreenshot = async () => {
+    try {
+      const r = await api('/v1/screenshot')
+      if (r.ok) {
+        const b = await r.blob()
+        const u = URL.createObjectURL(b)
+        const a = document.createElement('a')
+        a.href = u
+        a.download = `rctl-${Date.now()}.png`
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(u), 1500)
+        return
+      }
+    } catch {
+      /* fall through to the local capture */
+    }
+    engineRef.current?.screenshot()
+  }
+
   // Listen toggle: start browser playback (needs this user gesture to unblock
   // autoplay) AND tell the device to begin capturing + sending Opus. Either part
   // failing reverts the whole toggle so the UI never lies about being live.
@@ -264,7 +286,7 @@ export function useControl(
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),
-    screenshot: () => engineRef.current?.screenshot(),
+    screenshot: captureScreenshot,
     record: {
       mode: recMode,
       count: macroLen,
