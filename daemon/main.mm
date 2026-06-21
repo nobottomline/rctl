@@ -1028,12 +1028,22 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         for (int i = 0; i < 70; i++) { usleep(50000); if (stat(out, &st) == 0 && st.st_size > 0) { ready = 1; break; } }
         cam_act = 1; send_to_sb(RCTL_MSG_ACTIVE, &cam_act, 1);  // resume the stream regardless of outcome
         if (!ready) { *status = 500; return strdup("{\"error\":\"no foreground app captured (open an app, grant camera)\"}"); }
-        usleep(120000);                               // let the write settle before the DataChannel reads it
-        // Return only a small "ready" status over the relay tunnel; the browser pulls
-        // the actual JPEG over the P2P files DataChannel. The relay WebSocket can't
-        // carry a multi-MB body -- a large frame tears down the device's connection,
-        // so large media bypasses the relay entirely via the (P2P) data channel.
-        return strdup("{\"ready\":true,\"path\":\"/tmp/rctl_cam.jpg\"}");
+        usleep(120000);                               // let the write settle before it's read
+        char ndp[8];
+        if (get_param(query, "nodata", ndp, sizeof ndp) && ndp[0] == '1') {
+            // Relay path: a multi-MB body tears down the device's relay WebSocket, so
+            // return only a small "ready" status; the browser pulls the JPEG over the
+            // P2P files DataChannel instead.
+            return strdup("{\"ready\":true,\"path\":\"/tmp/rctl_cam.jpg\"}");
+        }
+        // Local/direct path (no relay WS in the way): return the JPEG inline.
+        FILE *f = fopen(out, "rb");
+        if (!f) { *status = 500; return strdup("{\"error\":\"no image file\"}"); }
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        if (sz <= 0 || sz > (32 << 20)) { fclose(f); *status = 500; return strdup("{\"error\":\"bad image\"}"); }
+        char *buf = (char *)malloc(sz); size_t rd = fread(buf, 1, sz, f); fclose(f);
+        *out_len = (int)rd; *out_ctype = "image/jpeg";
+        return buf;
     } else if (!strcmp(path, "/v1/screenshot")) {   // full-res lossless PNG (no stream downscale/H.264)
         const char *shot = "/tmp/rctl-shot.png";
         unlink(shot);

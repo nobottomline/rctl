@@ -365,7 +365,7 @@ function CameraCard({ transfer }: { transfer: FileTransfer }) {
       // /v1/camera only triggers the snap and returns a tiny status; the JPEG is
       // pulled over the P2P files channel (the relay tunnel can't carry a multi-MB
       // body without dropping the device link).
-      const r = await api(`/v1/camera?pos=${pos}`)
+      const r = await api(`/v1/camera?pos=${pos}&nodata=1`)
       if (!r.ok) {
         let m = 'failed'
         try {
