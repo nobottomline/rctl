@@ -21,10 +21,12 @@ type deviceConn struct {
 	mu            sync.Mutex
 	writeMu       sync.Mutex
 	viewer        *websocket.Conn
-	pendingHTTP   map[string]chan httpTunnelResponse
-	pendingStream map[string]chan streamTunnelEvent
-	pendingTerm   map[string]chan termTunnelEvent
-	pendingSignal map[string]chan signalTunnelEvent
+	lastRecvAt    time.Time // last time any frame arrived from the device (liveness)
+	pendingHTTP    map[string]chan httpTunnelResponse
+	pendingHTTPBuf map[string]*strings.Builder // accumulates a chunked http response body (base64) by request id
+	pendingStream  map[string]chan streamTunnelEvent
+	pendingTerm    map[string]chan termTunnelEvent
+	pendingSignal  map[string]chan signalTunnelEvent
 }
 
 func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
@@ -65,10 +67,12 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		id:            deviceID,
 		name:          hello.DeviceName,
 		ws:            ws,
-		pendingHTTP:   make(map[string]chan httpTunnelResponse),
-		pendingStream: make(map[string]chan streamTunnelEvent),
-		pendingTerm:   make(map[string]chan termTunnelEvent),
-		pendingSignal: make(map[string]chan signalTunnelEvent),
+		lastRecvAt:     time.Now(),
+		pendingHTTP:    make(map[string]chan httpTunnelResponse),
+		pendingHTTPBuf: make(map[string]*strings.Builder),
+		pendingStream:  make(map[string]chan streamTunnelEvent),
+		pendingTerm:    make(map[string]chan termTunnelEvent),
+		pendingSignal:  make(map[string]chan signalTunnelEvent),
 	}
 	s.registerDevice(dc)
 	defer s.unregisterDevice(deviceID, dc)
@@ -241,28 +245,32 @@ func (s *server) deviceHeartbeat(ctx context.Context, dc *deviceConn) {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	missed := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			// App-level ping: an inbound message wakes the idle device and refreshes
-			// its activity timer (it replies with a pong we don't need to track).
-			// This is what keeps an idle device from dropping its own healthy link.
-			_ = dc.writeJSON(reqCtx, map[string]any{"type": "ping"})
-			// Protocol ping: the relay's own liveness probe. An idle device can be
-			// slow to pong without being dead, so tolerate a few consecutive misses
-			// before closing rather than killing a recoverable connection.
-			err := dc.ws.Ping(reqCtx)
+			reqCtx, cancel := context.WithTimeout(ctx, s.cfg.WriteTimeout)
+			// App-level ping keeps the NAT path warm and prompts the device's pong.
+			// We deliberately do NOT use a protocol ping/pong for liveness: a device
+			// that's busy (mid large-response, or streaming) can be slow to pong
+			// without being dead, and closing it there drops the relay link
+			// mid-transfer -- exactly what broke camera/large responses.
+			writeErr := dc.writeJSON(reqCtx, map[string]any{"type": "ping"})
 			cancel()
-			if err == nil {
-				missed = 0
-				continue
+			if writeErr != nil {
+				// Can't even send -> the link really is broken.
+				_ = dc.ws.Close(websocket.StatusPolicyViolation, "heartbeat write failed")
+				return
 			}
-			if missed++; missed >= 4 {
-				_ = dc.ws.Close(websocket.StatusPolicyViolation, "heartbeat failed")
+			// Liveness = RECEIVED activity: the device pongs every tick and streams
+			// signaling/response frames, so genuine silence (nothing at all for a few
+			// intervals) is the only true-dead signal. A busy device stays connected.
+			dc.mu.Lock()
+			silent := time.Since(dc.lastRecvAt)
+			dc.mu.Unlock()
+			if silent > 3*interval {
+				_ = dc.ws.Close(websocket.StatusPolicyViolation, "device silent")
 				return
 			}
 		}
@@ -275,6 +283,9 @@ func (s *server) deviceReadLoop(ctx context.Context, dc *deviceConn) {
 		if err != nil {
 			return
 		}
+		dc.mu.Lock()
+		dc.lastRecvAt = time.Now() // any frame proves the device is alive
+		dc.mu.Unlock()
 		if msgType == websocket.MessageText && dc.handleControlMessage(payload) {
 			continue
 		}
@@ -379,6 +390,44 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 		if ch != nil {
 			ch <- response
 		}
+	case "http_response_chunk":
+		// A large response body is split across messages -- a single multi-MB WS
+		// message drops the device's connection on iOS. Accumulate the base64 parts.
+		var c struct {
+			Data string `json:"data"`
+		}
+		if json.Unmarshal(payload, &c) != nil {
+			return true
+		}
+		dc.mu.Lock()
+		if dc.pendingHTTPBuf == nil {
+			dc.pendingHTTPBuf = make(map[string]*strings.Builder)
+		}
+		b := dc.pendingHTTPBuf[envelope.ID]
+		if b == nil {
+			b = &strings.Builder{}
+			dc.pendingHTTPBuf[envelope.ID] = b
+		}
+		b.WriteString(c.Data)
+		dc.mu.Unlock()
+	case "http_response_end":
+		var response httpTunnelResponse
+		if json.Unmarshal(payload, &response) != nil {
+			return true
+		}
+		dc.mu.Lock()
+		if b := dc.pendingHTTPBuf[envelope.ID]; b != nil {
+			response.Body = b.String()
+			delete(dc.pendingHTTPBuf, envelope.ID)
+		}
+		ch := dc.pendingHTTP[envelope.ID]
+		if ch != nil {
+			delete(dc.pendingHTTP, envelope.ID)
+		}
+		dc.mu.Unlock()
+		if ch != nil {
+			ch <- response
+		}
 	case "stream_start", "stream_chunk", "stream_end":
 		var event streamTunnelEvent
 		if json.Unmarshal(payload, &event) != nil {
@@ -440,6 +489,7 @@ func (dc *deviceConn) registerHTTP(id string, ch chan httpTunnelResponse) {
 func (dc *deviceConn) unregisterHTTP(id string) {
 	dc.mu.Lock()
 	delete(dc.pendingHTTP, id)
+	delete(dc.pendingHTTPBuf, id)
 	dc.mu.Unlock()
 }
 
