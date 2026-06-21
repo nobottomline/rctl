@@ -12,12 +12,14 @@ export function Sheet({
   toolbar,
   children,
   dim = true,
+  wide = false,
 }: {
   title: ReactNode
   onClose: () => void
   toolbar?: ReactNode
   children: ReactNode
   dim?: boolean // focused tasks dim the video; the control center keeps it visible
+  wide?: boolean // content-dense panels (Console) get a wider desktop card
 }) {
   return (
     <div className="fixed inset-0 z-40 flex flex-col sm:items-center sm:justify-center sm:p-4">
@@ -30,7 +32,8 @@ export function Sheet({
         className={cn(
           'relative z-10 mt-auto flex h-[88dvh] w-full flex-col overflow-hidden rounded-t-2xl',
           'bg-elevated text-fg shadow-2xl shadow-black/40 ring-1 ring-line-2',
-          'sm:mt-0 sm:h-auto sm:max-h-[min(82dvh,660px)] sm:w-[28rem] sm:rounded-2xl',
+          'sm:mt-0 sm:h-auto sm:max-h-[min(85dvh,720px)] sm:rounded-2xl',
+          wide ? 'sm:w-[46rem]' : 'sm:w-[28rem]',
         )}
       >
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3.5">
