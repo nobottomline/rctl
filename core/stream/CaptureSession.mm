@@ -22,6 +22,13 @@ static int64_t now_us(void) {
     return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
+// One PTS base for the whole process, set on the first session and never reset.
+// Each (re)started session continues this timeline instead of restarting at 0, so
+// the encode/RTP timestamps stay monotonic across a stop/start (e.g. the camera
+// pause). A reset PTS makes a live WebRTC RTP track see time run backwards and
+// freezes the video until the page is reloaded.
+static int64_t gPtsBaseUs = 0;
+
 rctl_session *rctl_session_start(int fps, int bitrate, double scale, rctl_nal_cb cb, void *ctx) {
     if (fps <= 0) fps = 30;
     if (scale <= 0 || scale > 1.0) scale = 1.0;
@@ -41,7 +48,8 @@ rctl_session *rctl_session_start(int fps, int bitrate, double scale, rctl_nal_cb
     rctl_session *s = (rctl_session *)calloc(1, sizeof(rctl_session));
     s->surface = surf;
     s->enc = enc;
-    s->startUs = now_us();
+    if (gPtsBaseUs == 0) gPtsBaseUs = now_us();
+    s->startUs = gPtsBaseUs;   // continue the PTS timeline, don't reset it (RTP continuity)
     s->queue = dispatch_queue_create("com.greatlove.rctl.capture", DISPATCH_QUEUE_SERIAL);
     s->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, s->queue);
 
