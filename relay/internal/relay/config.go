@@ -57,7 +57,7 @@ func loadConfig() (config, error) {
 		HeartbeatEvery:     getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
 		WriteTimeout:       getenvDuration("RCTL_RELAY_WRITE_TIMEOUT", 10*time.Second),
 		SessionLifetime:    getenvDuration("RCTL_RELAY_SESSION_LIFETIME", 30*24*time.Hour),
-		TunnelTimeout:      getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 20*time.Second),
+		TunnelTimeout:      getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 45*time.Second),
 		TunnelMaxBody:      getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
 		StreamStartTimeout: getenvDuration("RCTL_RELAY_STREAM_START_TIMEOUT", 20*time.Second),
 		LoginLimit:         loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
