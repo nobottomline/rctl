@@ -22,11 +22,11 @@ import type { useControl } from '../hooks/useControl'
 import type { Theme } from '../lib/theme'
 import { cn } from '../lib/cn'
 
-// The control center: the compact quick-action popover (small, anchored above the
-// FAB, never dims the video) -- but organized. Frequent actions are grouped
-// (Device / Sound / Screen) with a segmented Quality control; the rich, occasional
-// tooling is offloaded behind Tools (Terminal, Files, Console) so this stays
-// scannable as features grow. Dismissed by the FAB toggle or a tap on the video.
+// The control center: a compact quick-action popover (small, anchored above the
+// FAB, never dims the video). Theme + Stats are view settings, not device actions,
+// so they sit as quiet icons in the header rather than a section. Concrete groups
+// (Device / Sound / Display + brightness / Quality) keep it scannable; the rich,
+// occasional tooling is offloaded behind Tools. Dismissed by the FAB or a video tap.
 type Ctl = ReturnType<typeof useControl>
 
 const QUALITY = [
@@ -51,7 +51,15 @@ export default function ControlCenter({
   onConsole: () => void
 }) {
   return (
-    <div className="fixed bottom-16 right-3 z-30 max-h-[calc(100dvh-5rem)] w-60 space-y-1.5 overflow-y-auto rounded-2xl bg-elevated/90 p-2.5 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2 backdrop-blur-2xl">
+    <div className="fixed bottom-16 right-3 z-30 max-h-[calc(100dvh-5rem)] w-60 space-y-2.5 overflow-y-auto rounded-2xl bg-elevated/90 p-2.5 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2 backdrop-blur-2xl">
+      <div className="flex items-center gap-1 px-1">
+        <span className="text-[12px] font-semibold text-fg-dim">Control</span>
+        <div className="ml-auto flex gap-1">
+          <IconToggle icon={theme === 'dark' ? Sun : Moon} onClick={onTheme} title="Theme" />
+          <IconToggle icon={Activity} active={ctl.statsOn} onClick={ctl.toggleStats} title="Stats" />
+        </div>
+      </div>
+
       <Group title="Device">
         <Key icon={House} label="Home" onClick={() => ctl.sysPress('home')} />
         <Key icon={Lock} label="Lock" onClick={() => ctl.sysPress('lock')} />
@@ -76,12 +84,25 @@ export default function ControlCenter({
         />
       </Group>
 
-      <Group title="Screen">
-        <Key icon={Smartphone} label="Auto" active={!ctl.orient.manual} onClick={ctl.setAuto} />
-        <Key icon={RotateCw} label="Rotate" onClick={ctl.rotate} />
-        <Key icon={theme === 'dark' ? Sun : Moon} label={theme === 'dark' ? 'Light' : 'Dark'} onClick={onTheme} />
-        <Key icon={Activity} label="Stats" active={ctl.statsOn} onClick={ctl.toggleStats} />
-      </Group>
+      <div>
+        <Label>Display</Label>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Key icon={Smartphone} label="Auto" active={!ctl.orient.manual} onClick={ctl.setAuto} />
+          <Key icon={RotateCw} label="Rotate" onClick={ctl.rotate} />
+        </div>
+        <div className="mt-2 flex items-center gap-2 px-0.5">
+          <Sun className="size-3.5 shrink-0 text-muted" />
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(ctl.brightness * 100)}
+            onChange={(e) => ctl.setBrightness(Number(e.target.value) / 100)}
+            className="h-1 flex-1 cursor-pointer accent-signal"
+            aria-label="Brightness"
+          />
+        </div>
+      </div>
 
       <Quality ctl={ctl} />
 
@@ -104,8 +125,32 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function Label({ children }: { children: ReactNode }) {
+  return <div className="px-1 pb-1 text-[9px] font-medium uppercase tracking-wider text-muted">{children}</div>
+}
+
+function IconToggle({
+  icon: Icon,
+  active,
+  onClick,
+  title,
+}: {
+  icon: ComponentType<LucideProps>
+  active?: boolean
+  onClick: () => void
+  title: string
+}) {
   return (
-    <div className="px-1 pb-1 pt-1.5 text-[9px] font-medium uppercase tracking-wider text-muted">{children}</div>
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className={cn(
+        'grid size-7 place-items-center rounded-lg transition-colors',
+        active ? 'bg-signal text-on-signal' : 'bg-fg/8 text-fg-dim active:bg-fg/15',
+      )}
+    >
+      <Icon className="size-3.5" />
+    </button>
   )
 }
 

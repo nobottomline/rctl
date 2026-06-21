@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats } from '../lib/engine'
 import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
-import { api } from '../lib/rctl'
+import { api, apiJSON } from '../lib/rctl'
 
 // Wires the imperative ControlEngine to React: creates it against the stage +
 // canvas elements, attaches pointer/keyboard input + window resize, and surfaces
@@ -22,6 +22,9 @@ export function useControl(
   const [listening, setListening] = useState(false)
   const [audioBusy, setAudioBusy] = useState(false)
   const [deviceSpeaker, setDeviceSpeaker] = useState(true)
+  const [brightness, setBrightness] = useState(0.5)
+  const brBusy = useRef(false)
+  const brPend = useRef<number | null>(null)
 
   useEffect(() => {
     const stage = stageRef.current
@@ -146,6 +149,35 @@ export function useControl(
     }
   }, [statsOn])
 
+  // Brightness: read the device's current backlight once, then set it (coalescing
+  // while a request is in flight so dragging the slider can't flood rctld).
+  useEffect(() => {
+    apiJSON<{ brightness?: number }>('/v1/deviceinfo').then((j) => {
+      if (j && typeof j.brightness === 'number') setBrightness(j.brightness)
+    })
+  }, [])
+  const sendBr = (v: number) => {
+    if (brBusy.current) {
+      brPend.current = v
+      return
+    }
+    brBusy.current = true
+    api(`/v1/brightness?v=${v.toFixed(3)}`)
+      .catch(() => {})
+      .finally(() => {
+        brBusy.current = false
+        if (brPend.current != null) {
+          const p = brPend.current
+          brPend.current = null
+          sendBr(p)
+        }
+      })
+  }
+  const changeBrightness = (v: number) => {
+    setBrightness(v)
+    sendBr(v)
+  }
+
   // Listen toggle: start browser playback (needs this user gesture to unblock
   // autoplay) AND tell the device to begin capturing + sending Opus. Either part
   // failing reverts the whole toggle so the UI never lies about being live.
@@ -187,6 +219,8 @@ export function useControl(
     stats,
     statsOn,
     audio: { listening, busy: audioBusy, deviceSpeaker, toggleListen, toggleSpeaker },
+    brightness,
+    setBrightness: changeBrightness,
     filesTransfer: filesRef.current,
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
