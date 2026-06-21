@@ -20,14 +20,13 @@ import {
 } from 'lucide-react'
 import type { useControl } from '../hooks/useControl'
 import type { Theme } from '../lib/theme'
-import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 
-// The control center: an iOS-Control-Center-style command surface that replaces
-// the cramped popover. Frequent device actions are grouped tiles (Device / Sound
-// / Screen); the rich, occasional tooling lives behind Tools (Terminal, Files,
-// Console) so this stays scannable as features grow. Presented as a non-dimming
-// Sheet so the video stays visible while you toggle.
+// The control center: the compact quick-action popover (small, anchored above the
+// FAB, never dims the video) -- but organized. Frequent actions are grouped
+// (Device / Sound / Screen) with a segmented Quality control; the rich, occasional
+// tooling is offloaded behind Tools (Terminal, Files, Console) so this stays
+// scannable as features grow. Dismissed by the FAB toggle or a tap on the video.
 type Ctl = ReturnType<typeof useControl>
 
 const QUALITY = [
@@ -43,7 +42,6 @@ export default function ControlCenter({
   onTerminal,
   onFiles,
   onConsole,
-  onClose,
 }: {
   ctl: Ctl
   theme: Theme
@@ -51,51 +49,48 @@ export default function ControlCenter({
   onTerminal: () => void
   onFiles: () => void
   onConsole: () => void
-  onClose: () => void
 }) {
   return (
-    <Sheet title="Control" onClose={onClose} dim={false}>
-      <div className="space-y-4 p-3.5">
-        <Group title="Device">
-          <Tile icon={House} label="Home" onClick={() => ctl.sysPress('home')} />
-          <Tile icon={Lock} label="Lock" onClick={() => ctl.sysPress('lock')} />
-          <Tile icon={SlidersHorizontal} label="Control" onClick={() => ctl.springboard(1)} />
-          <Tile icon={ChevronDown} label="Shade" onClick={() => ctl.springboard(2)} />
-        </Group>
+    <div className="fixed bottom-16 right-3 z-30 max-h-[calc(100dvh-5rem)] w-60 space-y-1.5 overflow-y-auto rounded-2xl bg-elevated/90 p-2.5 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2 backdrop-blur-2xl">
+      <Group title="Device">
+        <Key icon={House} label="Home" onClick={() => ctl.sysPress('home')} />
+        <Key icon={Lock} label="Lock" onClick={() => ctl.sysPress('lock')} />
+        <Key icon={SlidersHorizontal} label="Control" onClick={() => ctl.springboard(1)} />
+        <Key icon={ChevronDown} label="Shade" onClick={() => ctl.springboard(2)} />
+      </Group>
 
-        <Group title="Sound">
-          <Tile icon={Volume1} label="Vol −" onClick={() => ctl.sysPress('voldn')} />
-          <Tile icon={Volume2} label="Vol +" onClick={() => ctl.sysPress('volup')} />
-          <Tile
-            icon={Headphones}
-            label={ctl.audio.busy ? '…' : 'Listen'}
-            active={ctl.audio.listening}
-            onClick={ctl.audio.toggleListen}
-          />
-          <Tile
-            icon={ctl.audio.deviceSpeaker ? Volume2 : VolumeX}
-            label="iPad"
-            active={ctl.audio.deviceSpeaker}
-            onClick={ctl.audio.toggleSpeaker}
-          />
-        </Group>
+      <Group title="Sound">
+        <Key icon={Volume1} label="Vol −" onClick={() => ctl.sysPress('voldn')} />
+        <Key icon={Volume2} label="Vol +" onClick={() => ctl.sysPress('volup')} />
+        <Key
+          icon={Headphones}
+          label={ctl.audio.busy ? '…' : 'Listen'}
+          active={ctl.audio.listening}
+          onClick={ctl.audio.toggleListen}
+        />
+        <Key
+          icon={ctl.audio.deviceSpeaker ? Volume2 : VolumeX}
+          label="iPad"
+          active={ctl.audio.deviceSpeaker}
+          onClick={ctl.audio.toggleSpeaker}
+        />
+      </Group>
 
-        <Group title="Screen">
-          <Tile icon={Smartphone} label="Auto" active={!ctl.orient.manual} onClick={ctl.setAuto} />
-          <Tile icon={RotateCw} label="Rotate" onClick={ctl.rotate} />
-          <Tile icon={theme === 'dark' ? Sun : Moon} label={theme === 'dark' ? 'Light' : 'Dark'} onClick={onTheme} />
-          <Tile icon={Activity} label="Stats" active={ctl.statsOn} onClick={ctl.toggleStats} />
-        </Group>
+      <Group title="Screen">
+        <Key icon={Smartphone} label="Auto" active={!ctl.orient.manual} onClick={ctl.setAuto} />
+        <Key icon={RotateCw} label="Rotate" onClick={ctl.rotate} />
+        <Key icon={theme === 'dark' ? Sun : Moon} label={theme === 'dark' ? 'Light' : 'Dark'} onClick={onTheme} />
+        <Key icon={Activity} label="Stats" active={ctl.statsOn} onClick={ctl.toggleStats} />
+      </Group>
 
-        <Quality ctl={ctl} />
+      <Quality ctl={ctl} />
 
-        <Group title="Tools">
-          <Tile icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
-          <Tile icon={FolderOpen} label="Files" onClick={onFiles} />
-          <Tile icon={Wand2} label="Console" onClick={onConsole} />
-        </Group>
-      </div>
-    </Sheet>
+      <Group title="Tools">
+        <Key icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
+        <Key icon={FolderOpen} label="Files" onClick={onFiles} />
+        <Key icon={Wand2} label="Console" onClick={onConsole} />
+      </Group>
+    </div>
   )
 }
 
@@ -103,16 +98,18 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
       <Label>{title}</Label>
-      <div className="grid grid-cols-4 gap-2">{children}</div>
+      <div className="grid grid-cols-2 gap-1.5">{children}</div>
     </div>
   )
 }
 
 function Label({ children }: { children: ReactNode }) {
-  return <div className="mb-2 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">{children}</div>
+  return (
+    <div className="px-1 pb-1 pt-1.5 text-[9px] font-medium uppercase tracking-wider text-muted">{children}</div>
+  )
 }
 
-function Tile({
+function Key({
   icon: Icon,
   label,
   active,
@@ -127,12 +124,12 @@ function Tile({
     <button
       onClick={onClick}
       className={cn(
-        'flex aspect-square flex-col items-center justify-center gap-1.5 rounded-2xl text-[10.5px] font-medium transition-colors',
-        active ? 'bg-signal text-on-signal' : 'bg-fg/6 text-fg active:bg-fg/12',
+        'flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal',
+        active ? 'bg-signal text-on-signal' : 'bg-fg/8',
       )}
     >
-      <Icon className="size-5" />
-      <span className="leading-none">{label}</span>
+      <Icon className="size-3.5 shrink-0" />
+      {label}
     </button>
   )
 }
@@ -142,7 +139,7 @@ function Quality({ ctl }: { ctl: Ctl }) {
   return (
     <div>
       <Label>Quality</Label>
-      <div className="flex gap-1 rounded-xl bg-fg/6 p-1">
+      <div className="flex gap-1 rounded-lg bg-fg/6 p-1">
         {QUALITY.map((q) => (
           <button
             key={q.id}
@@ -151,7 +148,7 @@ function Quality({ ctl }: { ctl: Ctl }) {
               ctl.setQuality(q.scale, q.fps, q.bitrate)
             }}
             className={cn(
-              'flex-1 rounded-lg py-1.5 text-[12px] font-medium transition-colors',
+              'flex-1 rounded-md py-1 text-[11px] font-medium transition-colors',
               sel === q.id ? 'bg-signal text-on-signal' : 'text-fg-dim active:bg-fg/10',
             )}
           >

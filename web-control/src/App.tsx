@@ -45,11 +45,14 @@ export default function App() {
       </button>
       {ctl.statsOn && ctl.stats && <StatsOverlay s={ctl.stats} />}
 
-      {view === null && (
+      {(view === null || view === 'cc') && (
         <button
-          onClick={() => setView('cc')}
+          onClick={() => setView(view === 'cc' ? null : 'cc')}
           aria-label="controls"
-          className="fixed bottom-3 right-3 z-30 grid size-11 place-items-center rounded-full bg-white/10 text-white shadow-lg shadow-black/40 backdrop-blur-xl transition-colors active:bg-white/20"
+          className={cn(
+            'fixed bottom-3 right-3 z-40 grid size-11 place-items-center rounded-full shadow-lg shadow-black/40 backdrop-blur-xl transition-colors',
+            view === 'cc' ? 'bg-signal text-on-signal' : 'bg-white/10 text-white active:bg-white/20',
+          )}
         >
           <Settings2 className="size-5" />
         </button>
@@ -63,7 +66,6 @@ export default function App() {
           onTerminal={() => setView('terminal')}
           onFiles={() => setView('files')}
           onConsole={() => setView('console')}
-          onClose={() => setView(null)}
         />
       )}
       {view === 'terminal' && <TerminalPanel onClose={() => setView(null)} />}
