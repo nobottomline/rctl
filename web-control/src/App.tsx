@@ -7,11 +7,13 @@ import {
   Headphones,
   House,
   Lock,
+  Moon,
   RotateCw,
   Settings2,
   SlidersHorizontal,
   Smartphone,
   SquareTerminal,
+  Sun,
   Volume1,
   Volume2,
   VolumeX,
@@ -19,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useControl } from './hooks/useControl'
 import { cn } from './lib/cn'
+import { applyTheme, getStoredTheme, type Theme } from './lib/theme'
 import TerminalPanel from './components/TerminalPanel'
 import FilesPanel from './components/FilesPanel'
 
@@ -41,6 +44,12 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [theme, setTheme] = useState<Theme>(() => getStoredTheme())
+  const toggleTheme = () => {
+    const next: Theme = theme === 'dark' ? 'warm' : 'dark'
+    applyTheme(next)
+    setTheme(next)
+  }
 
   return (
     <div className="fixed inset-0 select-none overflow-hidden bg-black text-white">
@@ -87,6 +96,8 @@ export default function App() {
             setPanelOpen(false)
             setFilesOpen(true)
           }}
+          theme={theme}
+          onTheme={toggleTheme}
         />
       )}
 
@@ -123,10 +134,14 @@ function Panel({
   ctl,
   onTerminal,
   onFiles,
+  theme,
+  onTheme,
 }: {
   ctl: ReturnType<typeof useControl>
   onTerminal: () => void
   onFiles: () => void
+  theme: Theme
+  onTheme: () => void
 }) {
   const [quality, setQuality] = useState<string | null>(null)
   return (
@@ -182,6 +197,7 @@ function Panel({
           <Key icon={Smartphone} label="Auto" active={!ctl.orient.manual} onClick={() => ctl.setAuto()} />
           <Key icon={RotateCw} label="Rotate" onClick={() => ctl.rotate()} />
           <Key icon={Activity} label="Stats" active={ctl.statsOn} onClick={() => ctl.toggleStats()} />
+          <Key icon={theme === 'dark' ? Sun : Moon} label={theme === 'dark' ? 'Light' : 'Dark'} onClick={onTheme} />
         </div>
       </Section>
       <Section title="Tools">
@@ -220,8 +236,8 @@ function Key({
     <button
       onClick={onClick}
       className={cn(
-        'flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] font-medium text-white transition-colors active:bg-signal active:text-on-signal',
-        active ? 'bg-signal text-on-signal' : 'bg-white/8',
+        'flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal',
+        active ? 'bg-signal text-on-signal' : 'bg-fg/8',
       )}
     >
       <Icon className="size-3.5 shrink-0" />

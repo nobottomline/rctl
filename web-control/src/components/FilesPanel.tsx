@@ -1,26 +1,20 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, Download, File as FileIcon, Folder, RefreshCw, Trash2, Upload, X } from 'lucide-react'
+import { ChevronRight, Download, File as FileIcon, Folder, RefreshCw, Trash2, Upload } from 'lucide-react'
 import { api, apiJSON } from '../lib/rctl'
 import { fmtSize, type FileTransfer, type TransferStatus } from '../lib/files'
+import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 
 // Filesystem browser backed by rctld (root): /v1/ls to list, /v1/rm to delete,
-// and the P2P "files" DataChannel for transfers of any size (with /v1/pull and
-// /v1/push as small-file fallbacks when the channel isn't open). Mobile-adapted:
-// fullscreen, safe-area insets, touch-sized rows.
+// and the P2P "files" DataChannel for transfers of any size (/v1/pull & /v1/push
+// are small-file fallbacks). Presented as a Sheet (modal/bottom-sheet), themed.
 type Entry = { name: string; dir: boolean; size: number }
 
 const enc = encodeURIComponent
 const join = (d: string, n: string) => (d.endsWith('/') ? d : d + '/') + n
-const parent = (d: string) => {
-  const c = d.replace(/\/+$/, '')
-  const i = c.lastIndexOf('/')
-  return i <= 0 ? '/' : c.slice(0, i)
-}
 
 export default function FilesPanel({ transfer, onClose }: { transfer: FileTransfer; onClose: () => void }) {
   const [path, setPath] = useState('/')
-  const [draft, setDraft] = useState('/')
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<TransferStatus>({ text: '', kind: 'idle' })
@@ -38,7 +32,6 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
     const resolved = j.path || dir
     pathRef.current = resolved
     setPath(resolved)
-    setDraft(resolved)
     setEntries(j.entries || [])
   }
 
@@ -92,71 +85,50 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
     ? [...entries].sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name)))
     : null
 
-  return (
-    <div
-      className="fixed inset-x-0 top-0 z-40 flex flex-col bg-bg text-white"
-      style={{ height: '100dvh', paddingTop: 'env(safe-area-inset-top)' }}
-    >
-      <div className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line-2 px-2.5">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && load(draft)}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          className="mr-auto min-w-0 flex-1 rounded-lg bg-white/8 px-2.5 py-1.5 font-mono text-[12px] text-white outline-none ring-1 ring-line-2 focus:ring-signal"
-        />
-        <IconBtn onClick={() => load(parent(path))} title="Up">
-          <ArrowUp className="size-4" />
-        </IconBtn>
-        <IconBtn onClick={() => load(path)} title="Refresh" spin={busy}>
-          <RefreshCw className="size-4" />
-        </IconBtn>
-        <IconBtn onClick={() => fileInput.current?.click()} title="Upload">
-          <Upload className="size-4" />
-        </IconBtn>
-        <IconBtn onClick={onClose} title="Close">
-          <X className="size-4" />
-        </IconBtn>
-        <input ref={fileInput} type="file" hidden onChange={onPick} />
-      </div>
+  const toolbar = (
+    <div className="flex items-center gap-1.5">
+      <Breadcrumb path={path} onNav={load} />
+      <ToolBtn onClick={() => load(path)} title="Refresh" spin={busy}>
+        <RefreshCw className="size-4" />
+      </ToolBtn>
+      <ToolBtn onClick={() => fileInput.current?.click()} title="Upload">
+        <Upload className="size-4" />
+      </ToolBtn>
+      <input ref={fileInput} type="file" hidden onChange={onPick} />
+    </div>
+  )
 
+  return (
+    <Sheet title="Files" onClose={onClose} toolbar={toolbar}>
       {status.text && (
         <div
           className={cn(
-            'shrink-0 px-3.5 py-1.5 font-mono text-[12px]',
-            status.kind === 'err' ? 'text-red-400' : 'text-signal',
+            'border-b border-line px-3.5 py-1.5 font-mono text-[12px]',
+            status.kind === 'err' ? 'text-danger' : 'text-signal',
           )}
         >
           {status.text}
         </div>
       )}
-
-      <div
-        className="min-h-0 flex-1 overflow-y-auto"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
-      >
-        {sorted === null ? (
-          <Note>…</Note>
-        ) : sorted.length === 0 ? (
-          <Note>(empty)</Note>
-        ) : (
-          sorted.map((e) => (
-            <div
-              key={e.name}
-              className="flex items-center gap-2.5 border-b border-line/60 px-3.5 py-2.5"
-            >
+      {sorted === null ? (
+        <Note>…</Note>
+      ) : sorted.length === 0 ? (
+        <Note>empty</Note>
+      ) : (
+        <div className="divide-y divide-line/60">
+          {sorted.map((e) => (
+            <div key={e.name} className="flex items-center gap-2.5 px-3 py-2.5 transition-colors active:bg-fg/5">
               <button
                 onClick={() => e.dir && load(join(path, e.name))}
+                disabled={!e.dir}
                 className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
               >
                 {e.dir ? (
-                  <Folder className="size-4 shrink-0 text-signal" />
+                  <Folder className="size-[18px] shrink-0 text-signal" />
                 ) : (
-                  <FileIcon className="size-4 shrink-0 text-muted" />
+                  <FileIcon className="size-[18px] shrink-0 text-faint" />
                 )}
-                <span className={cn('truncate text-[13px]', e.dir && 'font-medium')}>{e.name}</span>
+                <span className={cn('truncate text-[13px] text-fg', e.dir && 'font-medium')}>{e.name}</span>
               </button>
               {!e.dir && <span className="shrink-0 font-mono text-[11px] text-muted">{fmtSize(e.size)}</span>}
               {!e.dir && (
@@ -168,18 +140,41 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
                 <Trash2 className="size-4" />
               </RowBtn>
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
+    </Sheet>
+  )
+}
+
+function Breadcrumb({ path, onNav }: { path: string; onNav: (p: string) => void }) {
+  const parts = path.split('/').filter(Boolean)
+  const crumbs = [{ name: '/', full: '/' }, ...parts.map((name, i) => ({ name, full: '/' + parts.slice(0, i + 1).join('/') }))]
+  return (
+    <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
+      {crumbs.map((c, i) => (
+        <div key={c.full} className="flex shrink-0 items-center">
+          {i > 0 && <ChevronRight className="size-3 shrink-0 text-faint" />}
+          <button
+            onClick={() => onNav(c.full)}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[12px] transition-colors',
+              i === crumbs.length - 1 ? 'font-semibold text-fg' : 'text-muted active:bg-fg/10',
+            )}
+          >
+            {c.name}
+          </button>
+        </div>
+      ))}
     </div>
   )
 }
 
-function Note({ children }: { children: React.ReactNode }) {
-  return <div className="px-3.5 py-6 text-center text-[12px] text-muted">{children}</div>
+function Note({ children }: { children: ReactNode }) {
+  return <div className="px-3.5 py-8 text-center font-mono text-[12px] text-muted">{children}</div>
 }
 
-function IconBtn({
+function ToolBtn({
   onClick,
   title,
   spin,
@@ -195,7 +190,7 @@ function IconBtn({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="grid size-9 shrink-0 place-items-center rounded-lg bg-white/10 text-white transition-colors active:bg-white/20"
+      className="grid size-8 shrink-0 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors active:bg-fg/15"
     >
       <span className={cn(spin && 'animate-spin')}>{children}</span>
     </button>
@@ -220,7 +215,7 @@ function RowBtn({
       aria-label={title}
       className={cn(
         'grid size-8 shrink-0 place-items-center rounded-lg transition-colors',
-        danger ? 'text-red-400 active:bg-red-500/15' : 'text-muted active:bg-white/15',
+        danger ? 'text-danger active:bg-danger/15' : 'text-muted active:bg-fg/10',
       )}
     >
       {children}
