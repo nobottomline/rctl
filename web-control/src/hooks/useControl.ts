@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats } from '../lib/engine'
+import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats, type MacroEvent } from '../lib/engine'
 import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
 import { api, apiJSON } from '../lib/rctl'
@@ -25,6 +25,9 @@ export function useControl(
   const [brightness, setBrightness] = useState(0.5)
   const brBusy = useRef(false)
   const brPend = useRef<number | null>(null)
+  const [recording, setRecording] = useState(false)
+  const [macroLen, setMacroLen] = useState(0)
+  const macroRef = useRef<MacroEvent[]>([])
 
   useEffect(() => {
     const stage = stageRef.current
@@ -178,6 +181,23 @@ export function useControl(
     sendBr(v)
   }
 
+  // Record / replay a touch+key macro (captured in the engine's input layer).
+  const toggleRecord = () => {
+    const eng = engineRef.current
+    if (!eng) return
+    if (recording) {
+      const m = eng.recordStop()
+      macroRef.current = m
+      setMacroLen(m.length)
+      setRecording(false)
+    } else {
+      eng.recordStart()
+      setMacroLen(0)
+      setRecording(true)
+    }
+  }
+  const playMacro = () => engineRef.current?.play(macroRef.current)
+
   // Listen toggle: start browser playback (needs this user gesture to unblock
   // autoplay) AND tell the device to begin capturing + sending Opus. Either part
   // failing reverts the whole toggle so the UI never lies about being live.
@@ -226,6 +246,7 @@ export function useControl(
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),
     screenshot: () => engineRef.current?.screenshot(),
+    record: { recording, count: macroLen, toggle: toggleRecord, play: playMacro },
     sysPress: (n: string) => engineRef.current?.sysPress(n),
     springboard: (u: number) => engineRef.current?.springboard(u),
     rotate: () => engineRef.current?.rotate(),

@@ -14,12 +14,21 @@ type DeviceInfo = {
   memory?: string; storage?: string; uptime?: string; udid?: string; serial?: string; imei?: string
 }
 type DiagnosticsResponse = { categories: { title: string; fields: { label: string; value: string }[] }[] }
+type RecordApi = { recording: boolean; count: number; toggle: () => void; play: () => void }
 
 const enc = encodeURIComponent
 const FIELD =
   'h-9 w-full min-w-0 rounded-lg bg-fg/[0.06] px-2.5 text-[13px] text-fg outline-none ring-1 ring-line/70 transition placeholder:text-faint focus:ring-2 focus:ring-signal/70'
 
-export default function ConsolePanel({ onClose, onScreenshot }: { onClose: () => void; onScreenshot: () => void }) {
+export default function ConsolePanel({
+  onClose,
+  onScreenshot,
+  record,
+}: {
+  onClose: () => void
+  onScreenshot: () => void
+  record: RecordApi
+}) {
   return (
     <Sheet title="Console" onClose={onClose} wide>
       <div className="space-y-2.5 p-3.5">
@@ -29,6 +38,7 @@ export default function ConsolePanel({ onClose, onScreenshot }: { onClose: () =>
           <FxCard />
           <CameraCard />
           <ScreenshotCard onScreenshot={onScreenshot} />
+          <RecordCard record={record} />
           <LaunchCard />
           <TextAction title="Open URL" placeholder="https://apple.com" button="Open" run={(v) => apiDo(`/v1/openurl?url=${enc(v)}`)} />
           <TextAction title="Type text" placeholder="into the focused field" button="Type" run={(v) => apiDo(`/v1/type?text=${enc(v)}`)} />
@@ -382,6 +392,25 @@ function CameraCard() {
       </div>
       {info && <div className="mt-2 text-[12px] text-muted">{info}</div>}
       {img && <img src={img} alt="camera" className="mt-2 w-full rounded-lg" />}
+    </Card>
+  )
+}
+
+function RecordCard({ record }: { record: RecordApi }) {
+  const status = record.recording
+    ? 'recording…'
+    : record.count
+      ? `recorded ${record.count} events`
+      : 'no recording'
+  return (
+    <Card title="Record & play">
+      <div className="mb-2 font-mono text-[12px] text-fg-dim">{status}</div>
+      <div className="flex gap-1.5">
+        <Btn onClick={record.toggle}>{record.recording ? 'Stop' : 'Record'}</Btn>
+        <Btn primary onClick={record.play}>
+          Play
+        </Btn>
+      </div>
     </Card>
   )
 }

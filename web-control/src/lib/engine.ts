@@ -38,6 +38,10 @@ export function codeToUsage(c: string): number {
 // HID modifier usages — held (press/release) rather than tapped.
 export const MOD_USAGES = new Set([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
 
+// A recorded input event: a touch ('t': phase p, finger i, normalized x/y) or a
+// key ('k': HID usage u, down d). `t` is ms since the recording started.
+export type MacroEvent = { t: number; k: 't' | 'k'; p?: number; i?: number; x?: number; y?: number; u?: number; d?: number }
+
 export type DiagStats = {
   fps: number
   res: string
@@ -81,6 +85,8 @@ export class ControlEngine {
   private orientTimer: number | undefined
   private stopped = false
   private statsPrev: { decoded: number; t: number } | null = null
+  private rec: MacroEvent[] | null = null // input recording buffer (null = not recording)
+  private recT0 = 0
 
   constructor(
     stage: HTMLElement,
@@ -197,6 +203,13 @@ export class ControlEngine {
   // Touch phase 0=down 1=move 2=up; finger 0..10.
   sendTouchAt(p: number, cx: number, cy: number, finger: number) {
     const [nx, ny] = this.clientToNorm(cx, cy)
+    this.sendTouchNorm(p, nx, ny, finger)
+  }
+
+  // Send an already-normalized touch (the input map for live pointers, and the
+  // replay path for recorded macros). Captures into the recording when active.
+  private sendTouchNorm(p: number, nx: number, ny: number, finger: number) {
+    if (this.rec) this.rec.push({ t: performance.now() - this.recT0, k: 't', p, i: finger, x: +nx.toFixed(4), y: +ny.toFixed(4) })
     if (this.control && this.control.readyState === 'open') {
       try {
         this.control.send(JSON.stringify({ t: 't', p, i: finger, x: +nx.toFixed(4), y: +ny.toFixed(4) }))
@@ -233,6 +246,7 @@ export class ControlEngine {
   }
 
   key(usage: number, down: number) {
+    if (this.rec) this.rec.push({ t: performance.now() - this.recT0, k: 'k', u: usage, d: down })
     if (this.control && this.control.readyState === 'open') {
       try {
         this.control.send(JSON.stringify({ t: 'k', pg: 7, u: usage, d: down }))
@@ -370,6 +384,31 @@ export class ControlEngine {
     a.download = `rctl-${Date.now()}.png`
     a.href = t.toDataURL('image/png')
     a.click()
+  }
+
+  // ---- macro record / play ------------------------------------------------
+  recordStart() {
+    this.rec = []
+    this.recT0 = performance.now()
+  }
+  recordStop(): MacroEvent[] {
+    const m = this.rec || []
+    this.rec = null
+    return m
+  }
+
+  // Replay a recorded macro with its original timing. Not recorded back (rec is
+  // null here), so playing while recording is impossible and replays are clean.
+  async play(macro: MacroEvent[]) {
+    if (!macro.length || this.rec) return
+    const start = performance.now()
+    for (const e of macro) {
+      const wait = e.t - (performance.now() - start)
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+      if (this.stopped) return
+      if (e.k === 't') this.sendTouchNorm(e.p ?? 1, e.x ?? 0, e.y ?? 0, e.i ?? 0)
+      else this.key(e.u ?? 0, e.d ?? 0)
+    }
   }
 
   // ---- WebRTC -------------------------------------------------------------
