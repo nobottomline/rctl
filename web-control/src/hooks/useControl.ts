@@ -225,6 +225,7 @@ export function useControl(
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),
+    screenshot: () => engineRef.current?.screenshot(),
     sysPress: (n: string) => engineRef.current?.sysPress(n),
     springboard: (u: number) => engineRef.current?.springboard(u),
     rotate: () => engineRef.current?.rotate(),

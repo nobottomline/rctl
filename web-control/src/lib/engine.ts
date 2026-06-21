@@ -348,6 +348,30 @@ export class ControlEngine {
     api(`/config?scale=${scale}&fps=${fps}&bitrate=${bitrate}`).catch(() => {})
   }
 
+  // Save the current frame as a PNG to the browser (nothing shows on the iPad).
+  // Grabs the raw <video> pixels and rotates them to effOrient so the image is
+  // upright regardless of how the device is held. Local MediaStream -> not tainted.
+  screenshot() {
+    const v = this.video
+    const sw = v.videoWidth
+    const sh = v.videoHeight
+    if (!sw || !sh) return
+    const deg = DEG[this.effOrient()] || 0
+    const r90 = deg === 90 || deg === -90
+    const t = document.createElement('canvas')
+    t.width = r90 ? sh : sw
+    t.height = r90 ? sw : sh
+    const x = t.getContext('2d')
+    if (!x) return
+    x.translate(t.width / 2, t.height / 2)
+    x.rotate((deg * Math.PI) / 180)
+    x.drawImage(v, -sw / 2, -sh / 2)
+    const a = document.createElement('a')
+    a.download = `rctl-${Date.now()}.png`
+    a.href = t.toDataURL('image/png')
+    a.click()
+  }
+
   // ---- WebRTC -------------------------------------------------------------
   private startWebRTC() {
     const vid = this.video

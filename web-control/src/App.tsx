@@ -70,7 +70,7 @@ export default function App() {
       )}
       {view === 'terminal' && <TerminalPanel onClose={() => setView(null)} />}
       {view === 'files' && <FilesPanel transfer={ctl.filesTransfer} onClose={() => setView(null)} />}
-      {view === 'console' && <ConsolePanel onClose={() => setView(null)} />}
+      {view === 'console' && <ConsolePanel onClose={() => setView(null)} onScreenshot={ctl.screenshot} />}
     </div>
   )
 }

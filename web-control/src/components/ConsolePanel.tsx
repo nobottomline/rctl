@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { api, apiDo, apiJSON } from '../lib/rctl'
 import { Sheet } from './Sheet'
@@ -19,7 +19,7 @@ const enc = encodeURIComponent
 const FIELD =
   'h-9 w-full min-w-0 rounded-lg bg-fg/[0.06] px-2.5 text-[13px] text-fg outline-none ring-1 ring-line/70 transition placeholder:text-faint focus:ring-2 focus:ring-signal/70'
 
-export default function ConsolePanel({ onClose }: { onClose: () => void }) {
+export default function ConsolePanel({ onClose, onScreenshot }: { onClose: () => void; onScreenshot: () => void }) {
   return (
     <Sheet title="Console" onClose={onClose} wide>
       <div className="space-y-2.5 p-3.5">
@@ -27,6 +27,8 @@ export default function ConsolePanel({ onClose }: { onClose: () => void }) {
         <DiagnosticsCard />
         <div className="gap-2.5 sm:columns-2 [&>*]:mb-2.5 [&>*]:break-inside-avoid">
           <FxCard />
+          <CameraCard />
+          <ScreenshotCard onScreenshot={onScreenshot} />
           <LaunchCard />
           <TextAction title="Open URL" placeholder="https://apple.com" button="Open" run={(v) => apiDo(`/v1/openurl?url=${enc(v)}`)} />
           <TextAction title="Type text" placeholder="into the focused field" button="Type" run={(v) => apiDo(`/v1/type?text=${enc(v)}`)} />
@@ -326,6 +328,71 @@ function ScriptCard() {
           Run
         </Btn>
       </div>
+    </Card>
+  )
+}
+
+function CameraCard() {
+  const [info, setInfo] = useState('')
+  const [img, setImg] = useState<string | null>(null)
+  const blobRef = useRef<Blob | null>(null)
+  const snap = async (pos: 'back' | 'front') => {
+    setInfo('capturing…')
+    setImg(null)
+    try {
+      const r = await api(`/v1/camera?pos=${pos}`)
+      if (!r.ok) {
+        let m = 'failed'
+        try {
+          m = ((await r.json()) as { error?: string }).error || m
+        } catch {
+          /* ignore */
+        }
+        setInfo(m)
+        return
+      }
+      const b = await r.blob()
+      blobRef.current = b
+      setImg(URL.createObjectURL(b))
+      setInfo('')
+    } catch {
+      setInfo('error')
+    }
+  }
+  const save = () => {
+    const b = blobRef.current
+    if (!b) return
+    const u = URL.createObjectURL(b)
+    const a = document.createElement('a')
+    a.href = u
+    a.download = `rctl-cam-${Date.now()}.jpg`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(u), 1000)
+  }
+  return (
+    <Card title="Camera">
+      <div className="flex flex-wrap gap-1.5">
+        <Btn onClick={() => snap('back')}>Rear</Btn>
+        <Btn onClick={() => snap('front')}>Front</Btn>
+        {img && (
+          <Btn primary onClick={save}>
+            Save
+          </Btn>
+        )}
+      </div>
+      {info && <div className="mt-2 text-[12px] text-muted">{info}</div>}
+      {img && <img src={img} alt="camera" className="mt-2 w-full rounded-lg" />}
+    </Card>
+  )
+}
+
+function ScreenshotCard({ onScreenshot }: { onScreenshot: () => void }) {
+  return (
+    <Card title="Screenshot">
+      <div className="mb-2 text-[12px] text-muted">Saves the current frame to your browser — invisible on the iPad.</div>
+      <Btn primary onClick={onScreenshot}>
+        Save frame
+      </Btn>
     </Card>
   )
 }
