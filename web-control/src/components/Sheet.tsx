@@ -11,18 +11,20 @@ export function Sheet({
   onClose,
   toolbar,
   children,
+  dim = true,
 }: {
   title: ReactNode
   onClose: () => void
   toolbar?: ReactNode
   children: ReactNode
+  dim?: boolean // focused tasks dim the video; the control center keeps it visible
 }) {
   return (
     <div className="fixed inset-0 z-40 flex flex-col sm:items-center sm:justify-center sm:p-4">
       <button
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/50 backdrop-blur-sm"
+        className={cn('absolute inset-0 cursor-default', dim ? 'bg-black/50 backdrop-blur-sm' : 'bg-transparent')}
       />
       <div
         className={cn(
