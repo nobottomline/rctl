@@ -363,12 +363,29 @@ static void *relay_supervisor_main(void *arg);
             NSString *ctype = http.allHeaderFields[@"Content-Type"];
             NSData *payload = data ?: [NSData data];
             NSString *encoded = [payload base64EncodedStringWithOptions:0] ?: @"";
-            NSMutableDictionary *reply = [@{@"type": @"http_response",
-                                            @"id": reqid,
-                                            @"status": @(status),
-                                            @"body": encoded} mutableCopy];
-            if ([ctype isKindOfClass:[NSString class]] && ctype.length) reply[@"content_type"] = ctype;
-            [self sendJSON:reply];
+            // A single multi-MB WebSocket message tears down the connection on iOS
+            // (NSURLSessionWebSocketTask), which kills the relay link mid-response.
+            // Split a large body into small ordered chunks the relay reassembles;
+            // small responses keep the original single-message path.
+            const NSUInteger kChunk = 256 * 1024;
+            if (encoded.length > kChunk) {
+                for (NSUInteger off = 0; off < encoded.length; off += kChunk) {
+                    NSRange r = NSMakeRange(off, MIN(kChunk, encoded.length - off));
+                    [self sendJSON:@{@"type": @"http_response_chunk", @"id": reqid,
+                                     @"data": [encoded substringWithRange:r]}];
+                }
+                NSMutableDictionary *end = [@{@"type": @"http_response_end",
+                                              @"id": reqid, @"status": @(status)} mutableCopy];
+                if ([ctype isKindOfClass:[NSString class]] && ctype.length) end[@"content_type"] = ctype;
+                [self sendJSON:end];
+            } else {
+                NSMutableDictionary *reply = [@{@"type": @"http_response",
+                                                @"id": reqid,
+                                                @"status": @(status),
+                                                @"body": encoded} mutableCopy];
+                if ([ctype isKindOfClass:[NSString class]] && ctype.length) reply[@"content_type"] = ctype;
+                [self sendJSON:reply];
+            }
         });
     }];
     [task resume];
