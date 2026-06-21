@@ -366,13 +366,12 @@ export class ControlEngine {
     api(`/config?scale=${scale}&fps=${fps}&bitrate=${bitrate}`).catch(() => {})
   }
 
-  // Save the current frame as a PNG to the browser (nothing shows on the iPad).
-  // Grabs the raw <video> pixels and rotates them to effOrient so the image is
-  // upright regardless of how the device is held. Local MediaStream -> not tainted.
-  screenshot() {
-    const v = this.video
-    const sw = v.videoWidth
-    const sh = v.videoHeight
+  // Download a captured frame as a PNG, rotated to the current orientation so it's
+  // upright. Both sources (the <video> overlay and the device's framebuffer PNG)
+  // are the raw native-portrait surface; only the browser knows how the screen is
+  // held, so it does the rotation here -- the same DEG[effOrient] the live overlay
+  // uses for display.
+  private downloadRotated(src: CanvasImageSource, sw: number, sh: number) {
     if (!sw || !sh) return
     const deg = DEG[this.effOrient()] || 0
     const r90 = deg === 90 || deg === -90
@@ -383,11 +382,48 @@ export class ControlEngine {
     if (!x) return
     x.translate(t.width / 2, t.height / 2)
     x.rotate((deg * Math.PI) / 180)
-    x.drawImage(v, -sw / 2, -sh / 2)
+    x.drawImage(src, -sw / 2, -sh / 2)
+    this.downloadHref(t.toDataURL('image/png'))
+  }
+
+  private downloadHref(href: string) {
     const a = document.createElement('a')
     a.download = `rctl-${Date.now()}.png`
-    a.href = t.toDataURL('image/png')
+    a.href = href
     a.click()
+  }
+
+  // Local fallback: save the current <video> frame (stream quality, but upright).
+  screenshot() {
+    const v = this.video
+    if (v.videoWidth && v.videoHeight) this.downloadRotated(v, v.videoWidth, v.videoHeight)
+  }
+
+  // Full-res device PNG (the raw native-portrait framebuffer): save it rotated to
+  // the current orientation. When already upright (portrait) keep the original
+  // bytes untouched; otherwise rotate through a canvas so a landscape screen isn't
+  // saved sideways.
+  async saveOrientedBlob(blob: Blob) {
+    if (!(DEG[this.effOrient()] || 0)) {
+      const u = URL.createObjectURL(blob)
+      this.downloadHref(u)
+      setTimeout(() => URL.revokeObjectURL(u), 1500)
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    try {
+      const img = await new Promise<HTMLImageElement>((res, rej) => {
+        const i = new Image()
+        i.onload = () => res(i)
+        i.onerror = rej
+        i.src = url
+      })
+      this.downloadRotated(img, img.naturalWidth, img.naturalHeight)
+    } catch {
+      /* ignore */
+    } finally {
+      URL.revokeObjectURL(url)
+    }
   }
 
   // ---- macro record / play ------------------------------------------------

@@ -221,22 +221,17 @@ export function useControl(
   // capture surface (/v1/screenshot). Falls back to the local <video> frame
   // (downscaled + H.264, the stream's quality) only if the device can't oblige.
   const captureScreenshot = async () => {
+    const eng = engineRef.current
     try {
       const r = await api('/v1/screenshot')
       if (r.ok) {
-        const b = await r.blob()
-        const u = URL.createObjectURL(b)
-        const a = document.createElement('a')
-        a.href = u
-        a.download = `rctl-${Date.now()}.png`
-        a.click()
-        setTimeout(() => URL.revokeObjectURL(u), 1500)
+        await eng?.saveOrientedBlob(await r.blob()) // full-res PNG, rotated upright
         return
       }
     } catch {
       /* fall through to the local capture */
     }
-    engineRef.current?.screenshot()
+    eng?.screenshot()
   }
 
   // Listen toggle: start browser playback (needs this user gesture to unblock
