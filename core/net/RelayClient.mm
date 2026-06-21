@@ -369,15 +369,14 @@ static void *relay_supervisor_main(void *arg);
             // small responses keep the original single-message path.
             const NSUInteger kChunk = 256 * 1024;
             if (encoded.length > kChunk) {
+                NSMutableArray<NSString *> *pieces = [NSMutableArray array];
                 for (NSUInteger off = 0; off < encoded.length; off += kChunk) {
-                    NSRange r = NSMakeRange(off, MIN(kChunk, encoded.length - off));
-                    [self sendJSON:@{@"type": @"http_response_chunk", @"id": reqid,
-                                     @"data": [encoded substringWithRange:r]}];
+                    [pieces addObject:[encoded substringWithRange:NSMakeRange(off, MIN(kChunk, encoded.length - off))]];
                 }
                 NSMutableDictionary *end = [@{@"type": @"http_response_end",
                                               @"id": reqid, @"status": @(status)} mutableCopy];
                 if ([ctype isKindOfClass:[NSString class]] && ctype.length) end[@"content_type"] = ctype;
-                [self sendJSON:end];
+                [self sendHTTPChunks:pieces at:0 end:end];   // paced: one chunk in flight at a time
             } else {
                 NSMutableDictionary *reply = [@{@"type": @"http_response",
                                                 @"id": reqid,
@@ -684,6 +683,17 @@ didReceiveResponse:(NSURLResponse *)response
 
 - (void)sendJSON:(NSDictionary *)dict completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
     [self sendJSON:dict toWebSocketTask:self.task completion:completion];
+}
+
+// Send a chunked response paced one frame at a time: each next chunk goes only
+// after the previous send completes, so the WS send buffer never holds more than
+// one ~256KB frame. Bursting all chunks at once buffers MBs and tears down the
+// NSURLSessionWebSocketTask connection (the camera/large-response EOF).
+- (void)sendHTTPChunks:(NSArray<NSString *> *)pieces at:(NSUInteger)idx end:(NSDictionary *)endMsg API_AVAILABLE(ios(13.0)) {
+    if (idx >= pieces.count) { [self sendJSON:endMsg]; return; }
+    __weak typeof(self) wself = self;
+    [self sendJSON:@{@"type": @"http_response_chunk", @"id": endMsg[@"id"] ?: @"", @"data": pieces[idx]}
+        completion:^{ [wself sendHTTPChunks:pieces at:idx + 1 end:endMsg]; }];
 }
 
 - (void)sendJSON:(NSDictionary *)dict toWebSocketTask:(id)task completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
