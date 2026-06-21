@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { Eraser, Power, X, type LucideProps } from 'lucide-react'
-import type { ComponentType, ReactNode } from 'react'
+import { Eraser, Power, X } from 'lucide-react'
 import { termWS } from '../lib/rctl'
 import { cn } from '../lib/cn'
 
-// Root terminal: xterm.js backed by rctld's PTY bridge over a WebSocket. The wire
-// protocol mirrors the vanilla page: client->device [1][utf8 bytes] = stdin,
-// [2][cols hi][cols lo][rows hi][rows lo] = resize; device->client = raw output
-// bytes (TextDecoder, streaming). Mounted only while open, so xterm is never
-// created until the user actually wants a shell.
+// Root terminal: xterm.js backed by rctld's PTY bridge over a WebSocket. Wire
+// protocol (mirrors the vanilla page): client->device [1][utf8] = stdin,
+// [2][cols hi][cols lo][rows hi][rows lo] = resize; device->client = raw output.
+//
+// Mobile-adapted: an accessory key bar (Esc/Tab/Ctrl combos/arrows/symbols the
+// soft keyboard lacks), visualViewport sizing so the keyboard never hides the
+// prompt, tap-to-focus to summon the keyboard, and safe-area insets. Mounted only
+// while open, so xterm is created lazily on demand.
 type State = 'disconnected' | 'connecting' | 'connected' | 'error'
 
 const THEME = {
@@ -22,15 +24,41 @@ const THEME = {
   brightBlue: '#409cff', brightMagenta: '#da8fff', brightCyan: '#8ee8ff', brightWhite: '#ffffff',
 }
 
+// Keys a phone keyboard can't reach; each sends the raw bytes a real terminal would.
+const KEYS: { label: string; seq: string }[] = [
+  { label: 'esc', seq: '\x1b' },
+  { label: 'tab', seq: '\t' },
+  { label: '^C', seq: '\x03' },
+  { label: '^D', seq: '\x04' },
+  { label: '^Z', seq: '\x1a' },
+  { label: '^L', seq: '\x0c' },
+  { label: '|', seq: '|' },
+  { label: '~', seq: '~' },
+  { label: '/', seq: '/' },
+  { label: '-', seq: '-' },
+  { label: '←', seq: '\x1b[D' },
+  { label: '↑', seq: '\x1b[A' },
+  { label: '↓', seq: '\x1b[B' },
+  { label: '→', seq: '\x1b[C' },
+]
+
+const STATE_DOT: Record<State, string> = {
+  connected: 'bg-green-400',
+  connecting: 'bg-yellow-400',
+  error: 'bg-red-400',
+  disconnected: 'bg-white/30',
+}
+
 export default function TerminalPanel({ onClose }: { onClose: () => void }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const decRef = useRef(new TextDecoder())
   const [state, setState] = useState<State>('disconnected')
+  const [touch] = useState(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)
 
-  // refs to the helpers so the mount effect can call the latest without re-running
   const sendResize = (cols: number, rows: number) => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !cols || !rows) return
@@ -52,6 +80,17 @@ export default function TerminalPanel({ onClose }: { onClose: () => void }) {
       /* ignore */
     }
     sendResize(term.cols, term.rows)
+  }
+  // Send stdin to the PTY and keep focus so the keyboard stays up on mobile.
+  const sendInput = (data: string | Uint8Array) => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    const raw = typeof data === 'string' ? new TextEncoder().encode(data) : data
+    const pkt = new Uint8Array(raw.length + 1)
+    pkt[0] = 1
+    pkt.set(raw, 1)
+    ws.send(pkt)
+    termRef.current?.focus()
   }
   const connect = () => {
     const term = termRef.current
@@ -98,15 +137,7 @@ export default function TerminalPanel({ onClose }: { onClose: () => void }) {
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(viewRef.current!)
-    term.onData((d) => {
-      const ws = wsRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN) return
-      const raw = new TextEncoder().encode(d)
-      const pkt = new Uint8Array(raw.length + 1)
-      pkt[0] = 1
-      pkt.set(raw, 1)
-      ws.send(pkt)
-    })
+    term.onData((d) => sendInput(d))
     term.onResize(({ cols, rows }) => sendResize(cols, rows))
     termRef.current = term
     fitRef.current = fit
@@ -120,10 +151,24 @@ export default function TerminalPanel({ onClose }: { onClose: () => void }) {
     const ro = new ResizeObserver(() => fitNow())
     if (viewRef.current) ro.observe(viewRef.current)
 
+    // Mobile: pin the panel to the *visible* viewport so the soft keyboard shrinks
+    // the terminal instead of covering the prompt, and refit to the new rows.
+    const vv = window.visualViewport
+    const applyVV = () => {
+      if (!vv || !wrapRef.current) return
+      wrapRef.current.style.height = vv.height + 'px'
+      fitNow()
+    }
+    vv?.addEventListener('resize', applyVV)
+    vv?.addEventListener('scroll', applyVV)
+    applyVV()
+
     return () => {
       clearTimeout(t)
       removeEventListener('resize', onResize)
       ro.disconnect()
+      vv?.removeEventListener('resize', applyVV)
+      vv?.removeEventListener('scroll', applyVV)
       disconnect()
       try {
         term.dispose()
@@ -135,58 +180,82 @@ export default function TerminalPanel({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const ctrlC = () => {
-    const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(new Uint8Array([1, 3]))
-      termRef.current?.focus()
-    }
-  }
   const toggleConn = () =>
     wsRef.current && wsRef.current.readyState === WebSocket.OPEN ? disconnect() : connect()
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-[#050506]">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line-2 px-3">
-        <div className="mr-auto text-[13px] font-semibold text-white">Root Terminal</div>
-        <span
-          className={cn(
-            'font-mono text-[11px]',
-            state === 'connected' ? 'text-green-400' : state === 'error' ? 'text-red-400' : 'text-muted',
-          )}
-        >
-          {state}
-        </span>
-        <TBtn onClick={toggleConn} icon={Power} active={state === 'connected'} />
-        <TBtn onClick={ctrlC} label="^C" />
-        <TBtn onClick={() => termRef.current?.clear()} icon={Eraser} />
-        <TBtn onClick={onClose} icon={X} />
+    <div
+      ref={wrapRef}
+      className="fixed inset-x-0 top-0 z-40 flex flex-col bg-[#050506]"
+      style={{ height: '100dvh', paddingTop: 'env(safe-area-inset-top)' }}
+    >
+      <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line-2 px-3.5">
+        <span className={cn('size-2 shrink-0 rounded-full', STATE_DOT[state])} />
+        <div className="text-[13px] font-semibold text-white">Root Terminal</div>
+        <span className="mr-auto font-mono text-[11px] text-muted">{state}</span>
+        <TopBtn onClick={toggleConn} active={state === 'connected'} title="Connect">
+          <Power className="size-4" />
+        </TopBtn>
+        <TopBtn onClick={() => termRef.current?.clear()} title="Clear">
+          <Eraser className="size-4" />
+        </TopBtn>
+        <TopBtn onClick={onClose} title="Close">
+          <X className="size-4" />
+        </TopBtn>
       </div>
-      <div ref={viewRef} className="min-h-0 flex-1 p-2" />
+
+      <div
+        ref={viewRef}
+        onPointerDown={() => termRef.current?.focus()}
+        className="min-h-0 flex-1 overflow-hidden px-2 py-1.5"
+      />
+
+      {touch && (
+        <div
+          className="flex shrink-0 gap-1 overflow-x-auto border-t border-line-2 bg-black/40 px-2 py-1.5"
+          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 6px)' }}
+        >
+          {KEYS.map((k) => (
+            <button
+              key={k.label}
+              // pointerdown (not click) so focus never leaves the terminal -> keyboard stays up
+              onPointerDown={(e) => {
+                e.preventDefault()
+                sendInput(k.seq)
+              }}
+              className="grid h-9 min-w-9 shrink-0 place-items-center rounded-lg bg-white/10 px-2.5 font-mono text-[13px] text-white active:bg-white/25"
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-function TBtn({
+function TopBtn({
   onClick,
-  icon: Icon,
-  label,
   active,
+  title,
+  children,
 }: {
   onClick: () => void
-  icon?: ComponentType<LucideProps>
-  label?: string
   active?: boolean
-}): ReactNode {
+  title: string
+  children: ReactNode
+}) {
   return (
     <button
       onClick={onClick}
+      title={title}
+      aria-label={title}
       className={cn(
-        'grid h-8 min-w-8 place-items-center rounded-lg px-2 text-[12px] font-medium text-white transition-colors',
-        active ? 'bg-signal text-on-signal' : 'bg-white/10 active:bg-white/20',
+        'grid size-9 place-items-center rounded-lg transition-colors',
+        active ? 'bg-signal text-on-signal' : 'bg-white/10 text-white active:bg-white/20',
       )}
     >
-      {Icon ? <Icon className="size-4" /> : label}
+      {children}
     </button>
   )
 }
