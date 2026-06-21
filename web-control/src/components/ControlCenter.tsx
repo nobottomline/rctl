@@ -2,6 +2,7 @@ import { useState, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   ChevronDown,
+  ChevronRight,
   FolderOpen,
   Headphones,
   House,
@@ -29,10 +30,14 @@ import { cn } from '../lib/cn'
 // occasional tooling is offloaded behind Tools. Dismissed by the FAB or a video tap.
 type Ctl = ReturnType<typeof useControl>
 
+// Encode presets (scale = resolution × of Retina, fps, bitrate). Capped at half
+// res -- the iPad can't sustain full Retina over WebRTC. The axis is really "how
+// much link you have": Smooth trades bitrate for 60fps motion, Balanced is the
+// safe middle, Saver survives weak/cellular paths.
 const QUALITY = [
   { id: 'smooth', label: 'Smooth', scale: 0.5, fps: 60, bitrate: 5_000_000 },
-  { id: 'phone', label: 'Phone', scale: 0.5, fps: 30, bitrate: 2_500_000 },
-  { id: 'lite', label: 'Lite', scale: 0.4, fps: 24, bitrate: 1_200_000 },
+  { id: 'balanced', label: 'Balanced', scale: 0.5, fps: 30, bitrate: 2_500_000 },
+  { id: 'saver', label: 'Saver', scale: 0.4, fps: 24, bitrate: 1_200_000 },
 ]
 
 export default function ControlCenter({
@@ -92,25 +97,20 @@ export default function ControlCenter({
         </div>
         <div className="mt-2 flex items-center gap-2 px-0.5">
           <Sun className="size-3.5 shrink-0 text-muted" />
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(ctl.brightness * 100)}
-            onChange={(e) => ctl.setBrightness(Number(e.target.value) / 100)}
-            className="h-1 flex-1 cursor-pointer accent-signal"
-            aria-label="Brightness"
-          />
+          <Brightness value={ctl.brightness} onChange={ctl.setBrightness} />
         </div>
       </div>
 
       <Quality ctl={ctl} />
 
-      <Group title="Tools">
-        <Key icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
-        <Key icon={FolderOpen} label="Files" onClick={onFiles} />
-        <Key icon={Wand2} label="Console" onClick={onConsole} />
-      </Group>
+      <div>
+        <Label>Tools</Label>
+        <div className="space-y-1.5">
+          <ToolRow icon={FolderOpen} label="Files" onClick={onFiles} />
+          <ToolRow icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
+          <ToolRow icon={Wand2} label="Console" onClick={onConsole} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -150,6 +150,40 @@ function IconToggle({
       )}
     >
       <Icon className="size-3.5" />
+    </button>
+  )
+}
+
+// Custom range: the native accent only colours the thumb, leaving a grey track.
+// Paint the filled portion with the signal colour via a gradient and style the
+// thumb, so it reads as a real (themed) brightness control.
+function Brightness({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const pct = Math.round(value * 100)
+  return (
+    <input
+      type="range"
+      min={0}
+      max={100}
+      value={pct}
+      onChange={(e) => onChange(Number(e.target.value) / 100)}
+      aria-label="Brightness"
+      style={{ background: `linear-gradient(to right, var(--color-signal) ${pct}%, var(--color-line-2) ${pct}%)` }}
+      className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full [&::-moz-range-thumb]:size-3.5 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-fg [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-fg [&::-webkit-slider-thumb]:shadow-sm"
+    />
+  )
+}
+
+// Tools open full-screen surfaces, so they read as a list of destinations (icon +
+// chevron), distinct from the toggle keys above. Scales as more tools are added.
+function ToolRow({ icon: Icon, label, onClick }: { icon: ComponentType<LucideProps>; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-center gap-2.5 rounded-lg bg-fg/8 px-2.5 py-2 text-[12px] font-medium text-fg transition-colors active:bg-fg/15"
+    >
+      <Icon className="size-4 shrink-0 text-fg-dim" />
+      <span className="mr-auto">{label}</span>
+      <ChevronRight className="size-3.5 shrink-0 text-faint" />
     </button>
   )
 }
