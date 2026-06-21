@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { api, apiDo, apiJSON } from '../lib/rctl'
+import type { FileTransfer } from '../lib/files'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 
@@ -33,10 +34,12 @@ export default function ConsolePanel({
   onClose,
   onScreenshot,
   record,
+  transfer,
 }: {
   onClose: () => void
   onScreenshot: () => void | Promise<void>
   record: RecordApi
+  transfer: FileTransfer
 }) {
   return (
     <Sheet title="Console" onClose={onClose} wide>
@@ -45,7 +48,7 @@ export default function ConsolePanel({
         <DiagnosticsCard />
         <div className="gap-2.5 sm:columns-2 [&>*]:mb-2.5 [&>*]:break-inside-avoid">
           <FxCard />
-          <CameraCard />
+          <CameraCard transfer={transfer} />
           <ScreenshotCard onScreenshot={onScreenshot} />
           <RecordCard record={record} />
           <LaunchCard />
@@ -351,7 +354,7 @@ function ScriptCard() {
   )
 }
 
-function CameraCard() {
+function CameraCard({ transfer }: { transfer: FileTransfer }) {
   const [info, setInfo] = useState('')
   const [img, setImg] = useState<string | null>(null)
   const blobRef = useRef<Blob | null>(null)
@@ -359,6 +362,9 @@ function CameraCard() {
     setInfo('capturing…')
     setImg(null)
     try {
+      // /v1/camera only triggers the snap and returns a tiny status; the JPEG is
+      // pulled over the P2P files channel (the relay tunnel can't carry a multi-MB
+      // body without dropping the device link).
       const r = await api(`/v1/camera?pos=${pos}`)
       if (!r.ok) {
         let m = 'failed'
@@ -370,12 +376,18 @@ function CameraCard() {
         setInfo(m)
         return
       }
-      const b = await r.blob()
-      blobRef.current = b
-      setImg(URL.createObjectURL(b))
+      const j = (await r.json()) as { ready?: boolean; path?: string }
+      if (!j.ready) {
+        setInfo('no photo')
+        return
+      }
+      setInfo('transferring…')
+      const blob = await transfer.fetch(j.path || '/tmp/rctl_cam.jpg')
+      blobRef.current = blob
+      setImg(URL.createObjectURL(blob))
       setInfo('')
-    } catch {
-      setInfo('error')
+    } catch (e) {
+      setInfo(e instanceof Error ? e.message : 'transfer failed')
     }
   }
   const save = () => {

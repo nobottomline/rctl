@@ -32,6 +32,8 @@ export class FileTransfer {
   private ch: RTCDataChannel | null = null
   private dl: { name: string; size: number; got: number; parts: ArrayBuffer[] } | null = null
   private ul: { name: string; size: number } | null = null
+  private dlResolve: ((b: Blob) => void) | null = null // set when fetch()ing to memory instead of downloading
+  private dlReject: ((e: Error) => void) | null = null
   onStatus: (s: TransferStatus) => void = () => {}
   onDone: () => void = () => {} // refresh the listing after an upload completes
 
@@ -79,9 +81,16 @@ export class FileTransfer {
       this.status(`↓ ${this.dl.name} 0%`, 'down')
     } else if (m.op === 'get_eof') {
       if (this.dl) {
-        saveBlob(this.dl.parts, this.dl.name)
+        const { parts, name } = this.dl
         this.dl = null
         this.status('', 'idle')
+        if (this.dlResolve) {
+          this.dlResolve(new Blob(parts))
+          this.dlResolve = null
+          this.dlReject = null
+        } else {
+          saveBlob(parts, name)
+        }
       }
     } else if (m.op === 'put_ok') {
       this.ul = null
@@ -90,6 +99,11 @@ export class FileTransfer {
     } else if (m.op === 'err') {
       this.dl = null
       this.ul = null
+      if (this.dlReject) {
+        this.dlReject(new Error(m.msg || 'error'))
+        this.dlResolve = null
+        this.dlReject = null
+      }
       this.status(`⚠ ${m.msg || 'error'}`, 'err')
     }
   }
@@ -99,6 +113,22 @@ export class FileTransfer {
     this.dl = { name: name || 'file', size: 0, got: 0, parts: [] } // provisional until get_meta
     this.ch!.send(JSON.stringify({ op: 'get', path }))
     return true
+  }
+
+  // Fetch a file into memory over the P2P channel (preview, not download). Used for
+  // camera/screenshot images the relay WebSocket can't carry. Rejects if the channel
+  // is busy/closed or the device errors; resolves with the Blob on completion.
+  fetch(path: string): Promise<Blob> {
+    return new Promise((resolve, reject) => {
+      if (!this.ready() || this.dl) {
+        reject(new Error('files channel busy'))
+        return
+      }
+      this.dl = { name: '', size: 0, got: 0, parts: [] }
+      this.dlResolve = resolve
+      this.dlReject = reject
+      this.ch!.send(JSON.stringify({ op: 'get', path }))
+    })
   }
 
   async upload(file: File, destPath: string): Promise<boolean> {
