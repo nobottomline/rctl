@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats } from '../lib/engine'
+import { AudioPlayer } from '../lib/audio'
+import { api } from '../lib/rctl'
 
 // Wires the imperative ControlEngine to React: creates it against the stage +
 // canvas elements, attaches pointer/keyboard input + window resize, and surfaces
@@ -14,6 +16,10 @@ export function useControl(
   const [stats, setStats] = useState<DiagStats | null>(null)
   const [statsOn, setStatsOn] = useState(false)
   const engineRef = useRef<ControlEngine | null>(null)
+  const audioRef = useRef(new AudioPlayer())
+  const [listening, setListening] = useState(false)
+  const [audioBusy, setAudioBusy] = useState(false)
+  const [deviceSpeaker, setDeviceSpeaker] = useState(true)
 
   useEffect(() => {
     const stage = stageRef.current
@@ -24,6 +30,7 @@ export function useControl(
     const engine = new ControlEngine(stage, canvas, video, {
       onStatus: setStatus,
       onOrient: (o, manual) => setOrient({ o, manual }),
+      onAudioChannel: (ch) => audioRef.current.attach(ch),
     })
     engineRef.current = engine
     engine.start()
@@ -136,11 +143,47 @@ export function useControl(
     }
   }, [statsOn])
 
+  // Listen toggle: start browser playback (needs this user gesture to unblock
+  // autoplay) AND tell the device to begin capturing + sending Opus. Either part
+  // failing reverts the whole toggle so the UI never lies about being live.
+  const toggleListen = async () => {
+    if (audioBusy) return
+    setAudioBusy(true)
+    const next = !listening
+    try {
+      if (next && !(await audioRef.current.resume())) throw new Error('audioctx')
+      const r = await api(`/v1/audio_capture?on=${next ? 1 : 0}`)
+      if (!r.ok) throw new Error('capture')
+      if (!next) audioRef.current.mute()
+      setListening(next)
+    } catch {
+      audioRef.current.mute()
+      setListening(false)
+    } finally {
+      setAudioBusy(false)
+    }
+  }
+
+  // Mute/unmute the iPad's own speaker (capture happens before output, so browser
+  // playback keeps working with the device silent).
+  const toggleSpeaker = async () => {
+    try {
+      const next = !deviceSpeaker
+      const r = await api(`/v1/audio_output?device=${next ? 1 : 0}`)
+      if (!r.ok) return
+      const j = (await r.json()) as { device?: boolean }
+      setDeviceSpeaker(!!j.device)
+    } catch {
+      /* ignore */
+    }
+  }
+
   return {
     status,
     orient,
     stats,
     statsOn,
+    audio: { listening, busy: audioBusy, deviceSpeaker, toggleListen, toggleSpeaker },
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),

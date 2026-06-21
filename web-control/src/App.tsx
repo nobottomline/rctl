@@ -3,6 +3,7 @@ import {
   Activity,
   ChevronDown,
   Gauge,
+  Headphones,
   House,
   Lock,
   RotateCw,
@@ -11,6 +12,7 @@ import {
   Smartphone,
   Volume1,
   Volume2,
+  VolumeX,
   type LucideProps,
 } from 'lucide-react'
 import { useControl } from './hooks/useControl'
@@ -122,6 +124,22 @@ function Panel({ ctl }: { ctl: ReturnType<typeof useControl> }) {
           <Key icon={Lock} label="Lock" onClick={() => ctl.sysPress('lock')} />
           <Key icon={SlidersHorizontal} label="Control" onClick={() => ctl.springboard(1)} />
           <Key icon={ChevronDown} label="Shade" onClick={() => ctl.springboard(2)} />
+        </div>
+      </Section>
+      <Section title="Audio">
+        <div className="grid grid-cols-2 gap-1.5">
+          <Key
+            icon={Headphones}
+            label={ctl.audio.busy ? '…' : 'Listen'}
+            active={ctl.audio.listening}
+            onClick={ctl.audio.toggleListen}
+          />
+          <Key
+            icon={ctl.audio.deviceSpeaker ? Volume2 : VolumeX}
+            label="iPad"
+            active={ctl.audio.deviceSpeaker}
+            onClick={ctl.audio.toggleSpeaker}
+          />
         </div>
       </Section>
       <Section title="Volume">
