@@ -11,6 +11,25 @@
 #import <sys/socket.h>
 #import <netinet/in.h>
 #import <unistd.h>
+#import <AudioToolbox/AudioToolbox.h>
+
+// Mute the camera shutter for OUR snaps only. AVCaptureStillImageOutput plays a
+// system sound on capture; gRctlSnapping is set just around our captureStillImage
+// call so the host app's own sounds are untouched. We suppress ALL system sounds
+// in that brief window so the shutter is caught whatever its sound id. (typedef so
+// the block-typed completion parameter parses in %hookf.)
+typedef void (^RctlSoundDone)(void);
+static BOOL gRctlSnapping = NO;
+%hookf(void, AudioServicesPlaySystemSound, SystemSoundID sid) {
+    (void)sid;
+    if (gRctlSnapping) return;
+    %orig;
+}
+%hookf(void, AudioServicesPlaySystemSoundWithCompletion, SystemSoundID sid, RctlSoundDone block) {
+    (void)sid;
+    if (gRctlSnapping) { if (block) block(); return; }
+    %orig;
+}
 
 // Send the JPEG to the root daemon over a RAW loopback socket. A sandboxed App
 // Store app can't write /tmp and ATS blocks NSURLSession http://, but a raw socket
@@ -94,6 +113,8 @@ static void rctl_capture(int position) {
               } @catch (id e) {}
               ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));
             };
+            gRctlSnapping = YES;   // mute the shutter for this snap
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ gRctlSnapping = NO; });
             @try { ((void (*)(id, SEL, id, id))objc_msgSend)(out, NSSelectorFromString(@"captureStillImageAsynchronouslyFromConnection:completionHandler:"), conn, done); }
             @catch (NSException *ex) { caplog([NSString stringWithFormat:@"capture threw %@", ex.reason]); ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning")); }
           } @catch (id e) {}

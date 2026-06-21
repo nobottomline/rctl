@@ -8,6 +8,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = rctlcap
 rctlcap_FILES = rctlcap.xm
 rctlcap_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-rctlcap_FRAMEWORKS = UIKit Foundation CoreFoundation
+rctlcap_FRAMEWORKS = UIKit Foundation CoreFoundation AudioToolbox
 
 include $(THEOS)/makefiles/tweak.mk
