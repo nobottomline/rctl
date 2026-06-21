@@ -103,9 +103,9 @@ export default function ControlCenter({
       <Quality ctl={ctl} />
 
       <div className="flex gap-1.5 pt-0.5">
+        <Launch icon={Wand2} label="Console" onClick={onConsole} />
         <Launch icon={FolderOpen} label="Files" onClick={onFiles} />
         <Launch icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
-        <Launch icon={Wand2} label="Console" onClick={onConsole} />
       </div>
     </div>
   )
