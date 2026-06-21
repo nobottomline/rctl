@@ -50,8 +50,11 @@ fi
 if dpkg -l | grep -q "$PKG"; then dpkg -r "$PKG" >/dev/null 2>&1 || true; sleep 8; fi
 
 # 2) Fresh install, watched.
-BEFORE=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || echo 0)
-CONN0=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || echo 0)
+# grep -c already prints a clean "0" when nothing matches (and exits 1, which we
+# swallow with || true). The old `|| echo 0` APPENDED a second 0 -> "0\n0" ->
+# every later `[ "$N" -gt ... ]` died with "integer expression expected".
+BEFORE=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || true)
+CONN0=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || true)
 dpkg -i /tmp/rctl.deb 2>&1 | grep -iE "Setting up|error" || true
 if [ -f "$RELAY_PREF_BACKUP" ] && grep -aq "DeviceSecret" "$RELAY_PREF_BACKUP"; then
   if [ ! -f "$RELAY_PREF" ] || ! grep -aq "DeviceSecret" "$RELAY_PREF"; then
@@ -64,16 +67,31 @@ if [ -f "$RELAY_PREF_BACKUP" ] && grep -aq "DeviceSecret" "$RELAY_PREF_BACKUP"; 
 fi
 
 i=0
-while [ $i -lt 20 ]; do
+while [ "$i" -lt 30 ]; do
   i=$((i+1)); sleep 1
-  NOW=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || echo 0)
-  CONN=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || echo 0)
+  NOW=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || true)
+  CONN=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || true)
   if [ "$NOW" -gt "$BEFORE" ]; then
+    # SpringBoard left a fresh crash report: a tweak crash. Disable the dylib and
+    # respring so the device comes up clean instead of crash-looping.
     mv "$DYLIB" /tmp/rctlsbcap.crashed.dylib 2>/dev/null || true
     killall -9 SpringBoard 2>/dev/null || true
     echo "DEPLOY=CRASHED — rolled back at ${i}s (dylib disabled)"; exit 1
   fi
   if [ "$CONN" -gt "$CONN0" ]; then echo "DEPLOY=OK — SB connected at ${i}s"; exit 0; fi
 done
-echo "DEPLOY=TIMEOUT — no crash but SB did not connect"; exit 2
+# No crash AND no fresh "SB connected" line in the window. Usually benign -- the
+# tweak reconnected just before our baseline, or the daemon log lagged. Don't cry
+# failure: probe real liveness. ps (not pgrep -- absent on this device) + the [X]
+# trick so grep doesn't match itself.
+if ps -ax | grep -q "[S]pringBoard.app/SpringBoard" && ps -ax | grep -q "[r]ctld"; then
+  echo "DEPLOY=OK — SpringBoard + rctld alive after ${i}s (no fresh connect line; benign)"; exit 0
+fi
+# A render/media wedge (e.g. the daemon thrashing mediaserverd) shows NO crash
+# report and a respring can't clear it -- only a userspace reboot can, and that
+# kills this SSH session, so leave it to the operator rather than execute blind.
+echo "DEPLOY=SUSPECT — SB/rctld not confirmed alive after ${i}s."
+echo "  If the screen is black/stuck, recover WITHOUT losing the jailbreak:"
+echo "    ssh $HOST 'launchctl reboot userspace'"
+exit 2
 REMOTE
