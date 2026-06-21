@@ -14,7 +14,16 @@ type DeviceInfo = {
   memory?: string; storage?: string; uptime?: string; udid?: string; serial?: string; imei?: string
 }
 type DiagnosticsResponse = { categories: { title: string; fields: { label: string; value: string }[] }[] }
-type RecordApi = { recording: boolean; count: number; toggle: () => void; play: () => void }
+type RecordApi = {
+  mode: 'idle' | 'recording' | 'paused' | 'playing'
+  count: number
+  start: () => void
+  pause: () => void
+  resume: () => void
+  stop: () => void
+  play: () => void
+  stopPlay: () => void
+}
 
 const enc = encodeURIComponent
 const FIELD =
@@ -397,19 +406,66 @@ function CameraCard() {
 }
 
 function RecordCard({ record }: { record: RecordApi }) {
-  const status = record.recording
-    ? 'recording…'
-    : record.count
-      ? `recorded ${record.count} events`
-      : 'no recording'
+  const { mode, count } = record
+  const status =
+    mode === 'recording'
+      ? 'recording…'
+      : mode === 'paused'
+        ? 'paused'
+        : mode === 'playing'
+          ? 'playing…'
+          : count
+            ? `${count} events recorded`
+            : 'no recording'
+  const dot =
+    mode === 'recording'
+      ? 'bg-red-500 animate-pulse'
+      : mode === 'paused'
+        ? 'bg-amber-400'
+        : mode === 'playing'
+          ? 'bg-signal animate-pulse'
+          : 'bg-faint'
   return (
     <Card title="Record & play">
-      <div className="mb-2 font-mono text-[12px] text-fg-dim">{status}</div>
-      <div className="flex gap-1.5">
-        <Btn onClick={record.toggle}>{record.recording ? 'Stop' : 'Record'}</Btn>
-        <Btn primary onClick={record.play}>
-          Play
-        </Btn>
+      <div className="mb-2 flex items-center gap-2 font-mono text-[12px] text-fg-dim">
+        <span className={cn('size-2 rounded-full', dot)} />
+        {status}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {mode === 'recording' && (
+          <>
+            <Btn onClick={record.pause}>Pause</Btn>
+            <Btn primary onClick={record.stop}>
+              Stop
+            </Btn>
+          </>
+        )}
+        {mode === 'paused' && (
+          <>
+            <Btn onClick={record.resume}>Resume</Btn>
+            <Btn primary onClick={record.stop}>
+              Stop
+            </Btn>
+          </>
+        )}
+        {mode === 'playing' && (
+          <>
+            <Btn onClick={record.start}>Record</Btn>
+            <Btn primary onClick={record.stopPlay}>
+              Stop
+            </Btn>
+          </>
+        )}
+        {mode === 'idle' && (
+          <>
+            <Btn onClick={record.start}>{count ? 'Re-record' : 'Record'}</Btn>
+            {count > 0 && (
+              <Btn primary onClick={record.play}>
+                Play
+              </Btn>
+            )}
+          </>
+        )}
       </div>
     </Card>
   )

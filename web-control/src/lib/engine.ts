@@ -87,6 +87,9 @@ export class ControlEngine {
   private statsPrev: { decoded: number; t: number } | null = null
   private rec: MacroEvent[] | null = null // input recording buffer (null = not recording)
   private recT0 = 0
+  private recPaused = false
+  private recPausedAt = 0
+  private playToken = 0 // bumped to cancel an in-flight play()
 
   constructor(
     stage: HTMLElement,
@@ -209,7 +212,8 @@ export class ControlEngine {
   // Send an already-normalized touch (the input map for live pointers, and the
   // replay path for recorded macros). Captures into the recording when active.
   private sendTouchNorm(p: number, nx: number, ny: number, finger: number) {
-    if (this.rec) this.rec.push({ t: performance.now() - this.recT0, k: 't', p, i: finger, x: +nx.toFixed(4), y: +ny.toFixed(4) })
+    if (this.rec && !this.recPaused)
+      this.rec.push({ t: performance.now() - this.recT0, k: 't', p, i: finger, x: +nx.toFixed(4), y: +ny.toFixed(4) })
     if (this.control && this.control.readyState === 'open') {
       try {
         this.control.send(JSON.stringify({ t: 't', p, i: finger, x: +nx.toFixed(4), y: +ny.toFixed(4) }))
@@ -246,7 +250,7 @@ export class ControlEngine {
   }
 
   key(usage: number, down: number) {
-    if (this.rec) this.rec.push({ t: performance.now() - this.recT0, k: 'k', u: usage, d: down })
+    if (this.rec && !this.recPaused) this.rec.push({ t: performance.now() - this.recT0, k: 'k', u: usage, d: down })
     if (this.control && this.control.readyState === 'open') {
       try {
         this.control.send(JSON.stringify({ t: 'k', pg: 7, u: usage, d: down }))
@@ -388,24 +392,50 @@ export class ControlEngine {
 
   // ---- macro record / play ------------------------------------------------
   recordStart() {
+    this.stopPlay() // recording from within a playback restarts fresh
     this.rec = []
     this.recT0 = performance.now()
+    this.recPaused = false
+  }
+  // Pause/resume freeze the timeline (recT0 is shifted by the paused span) so the
+  // gap doesn't appear in playback.
+  recordPause() {
+    if (this.rec && !this.recPaused) {
+      this.recPausedAt = performance.now()
+      this.recPaused = true
+    }
+  }
+  recordResume() {
+    if (this.rec && this.recPaused) {
+      this.recT0 += performance.now() - this.recPausedAt
+      this.recPaused = false
+    }
   }
   recordStop(): MacroEvent[] {
     const m = this.rec || []
     this.rec = null
+    this.recPaused = false
     return m
   }
 
-  // Replay a recorded macro with its original timing. Not recorded back (rec is
-  // null here), so playing while recording is impossible and replays are clean.
+  stopPlay() {
+    this.playToken++ // invalidates any in-flight play() loop
+  }
+
+  // Replay a recorded macro with its original timing. Cancellable: the wait is
+  // sliced so stopPlay() (or starting a record) aborts within ~50ms. Replays
+  // aren't captured (rec stays null during play). Resolves when done or aborted.
   async play(macro: MacroEvent[]) {
     if (!macro.length || this.rec) return
+    const token = ++this.playToken
     const start = performance.now()
     for (const e of macro) {
-      const wait = e.t - (performance.now() - start)
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait))
-      if (this.stopped) return
+      while (this.playToken === token && !this.stopped) {
+        const remaining = e.t - (performance.now() - start)
+        if (remaining <= 0) break
+        await new Promise((r) => setTimeout(r, Math.min(remaining, 50)))
+      }
+      if (this.playToken !== token || this.stopped) return // cancelled
       if (e.k === 't') this.sendTouchNorm(e.p ?? 1, e.x ?? 0, e.y ?? 0, e.i ?? 0)
       else this.key(e.u ?? 0, e.d ?? 0)
     }

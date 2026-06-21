@@ -25,7 +25,7 @@ export function useControl(
   const [brightness, setBrightness] = useState(0.5)
   const brBusy = useRef(false)
   const brPend = useRef<number | null>(null)
-  const [recording, setRecording] = useState(false)
+  const [recMode, setRecMode] = useState<'idle' | 'recording' | 'paused' | 'playing'>('idle')
   const [macroLen, setMacroLen] = useState(0)
   const macroRef = useRef<MacroEvent[]>([])
 
@@ -181,22 +181,41 @@ export function useControl(
     sendBr(v)
   }
 
-  // Record / replay a touch+key macro (captured in the engine's input layer).
-  const toggleRecord = () => {
+  // Record / replay a touch+key macro (captured in the engine's input layer) as a
+  // small state machine: idle · recording · paused · playing.
+  const startRecord = () => {
     const eng = engineRef.current
     if (!eng) return
-    if (recording) {
-      const m = eng.recordStop()
-      macroRef.current = m
-      setMacroLen(m.length)
-      setRecording(false)
-    } else {
-      eng.recordStart()
-      setMacroLen(0)
-      setRecording(true)
-    }
+    eng.recordStart() // cancels any in-flight playback internally
+    setMacroLen(0)
+    setRecMode('recording')
   }
-  const playMacro = () => engineRef.current?.play(macroRef.current)
+  const pauseRecord = () => {
+    engineRef.current?.recordPause()
+    setRecMode('paused')
+  }
+  const resumeRecord = () => {
+    engineRef.current?.recordResume()
+    setRecMode('recording')
+  }
+  const stopRecord = () => {
+    const eng = engineRef.current
+    if (!eng) return
+    const m = eng.recordStop()
+    macroRef.current = m
+    setMacroLen(m.length)
+    setRecMode('idle')
+  }
+  const playMacro = async () => {
+    const eng = engineRef.current
+    if (!eng || !macroRef.current.length) return
+    setRecMode('playing')
+    await eng.play(macroRef.current)
+    // only fall back to idle if we're still the active playback (a fresh record
+    // may have taken over and switched the mode)
+    setRecMode((m) => (m === 'playing' ? 'idle' : m))
+  }
+  const stopPlay = () => engineRef.current?.stopPlay()
 
   // Listen toggle: start browser playback (needs this user gesture to unblock
   // autoplay) AND tell the device to begin capturing + sending Opus. Either part
@@ -246,7 +265,16 @@ export function useControl(
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),
     screenshot: () => engineRef.current?.screenshot(),
-    record: { recording, count: macroLen, toggle: toggleRecord, play: playMacro },
+    record: {
+      mode: recMode,
+      count: macroLen,
+      start: startRecord,
+      pause: pauseRecord,
+      resume: resumeRecord,
+      stop: stopRecord,
+      play: playMacro,
+      stopPlay,
+    },
     sysPress: (n: string) => engineRef.current?.sysPress(n),
     springboard: (u: number) => engineRef.current?.springboard(u),
     rotate: () => engineRef.current?.rotate(),
