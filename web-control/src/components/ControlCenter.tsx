@@ -2,7 +2,6 @@ import { useState, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   ChevronDown,
-  ChevronRight,
   FolderOpen,
   Headphones,
   House,
@@ -103,13 +102,10 @@ export default function ControlCenter({
 
       <Quality ctl={ctl} />
 
-      <div>
-        <Label>Tools</Label>
-        <div className="space-y-1.5">
-          <ToolRow icon={FolderOpen} label="Files" onClick={onFiles} />
-          <ToolRow icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
-          <ToolRow icon={Wand2} label="Console" onClick={onConsole} />
-        </div>
+      <div className="flex gap-1.5 pt-0.5">
+        <Launch icon={FolderOpen} label="Files" onClick={onFiles} />
+        <Launch icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
+        <Launch icon={Wand2} label="Console" onClick={onConsole} />
       </div>
     </div>
   )
@@ -173,17 +169,17 @@ function Brightness({ value, onChange }: { value: number; onChange: (v: number) 
   )
 }
 
-// Tools open full-screen surfaces, so they read as a list of destinations (icon +
-// chevron), distinct from the toggle keys above. Scales as more tools are added.
-function ToolRow({ icon: Icon, label, onClick }: { icon: ComponentType<LucideProps>; label: string; onClick: () => void }) {
+// The tools sit in a launcher dock: three raised, gradient "app tiles" in one row
+// (icon + label) instead of stacked rows -- compact and distinct from the toggle
+// keys. Pressing scales it down and floods it with the signal colour.
+function Launch({ icon: Icon, label, onClick }: { icon: ComponentType<LucideProps>; label: string; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-2.5 rounded-lg bg-fg/8 px-2.5 py-2 text-[12px] font-medium text-fg transition-colors active:bg-fg/15"
+      className="group flex flex-1 flex-col items-center gap-1.5 rounded-2xl bg-gradient-to-b from-fg/[0.09] to-fg/[0.03] py-3 ring-1 ring-line/50 transition active:scale-[0.96] active:from-signal active:to-signal active:ring-signal"
     >
-      <Icon className="size-4 shrink-0 text-fg-dim" />
-      <span className="mr-auto">{label}</span>
-      <ChevronRight className="size-3.5 shrink-0 text-faint" />
+      <Icon className="size-[18px] text-fg transition-colors group-active:text-on-signal" />
+      <span className="text-[9.5px] font-medium text-muted transition-colors group-active:text-on-signal">{label}</span>
     </button>
   )
 }
