@@ -563,10 +563,18 @@ static void *ipc_manager(void *unused) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 uint8_t qtype = buf[4];
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    NSString *r = qtype == RCTL_Q_CLIPBOARD ? rctl_get_clipboard()
-                                : qtype == RCTL_Q_DEVINFO   ? rctl_device_info()
-                                : qtype == RCTL_Q_APPLIST   ? rctl_app_list()
-                                : qtype == RCTL_Q_AUDIOOUT  ? rctl_audio_output_info() : @"";
+                    NSString *r;
+                    if (qtype == RCTL_Q_SCREENSHOT) {
+                        // Full-res lossless PNG of the live capture surface. On the main queue
+                        // -- the same queue gSession's lifecycle runs on -- so it can't race a
+                        // reconfigure that stops/replaces the session mid-grab.
+                        r = (gSession && rctl_session_snapshot_png(gSession, "/tmp/rctl-shot.png") == 0) ? @"ok" : @"";
+                    } else {
+                        r = qtype == RCTL_Q_CLIPBOARD ? rctl_get_clipboard()
+                          : qtype == RCTL_Q_DEVINFO   ? rctl_device_info()
+                          : qtype == RCTL_Q_APPLIST   ? rctl_app_list()
+                          : qtype == RCTL_Q_AUDIOOUT  ? rctl_audio_output_info() : @"";
+                    }
                     send_reply(reqid, r);
                 });
             } else if (type == RCTL_MSG_BITRATE && len >= 4) {

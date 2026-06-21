@@ -109,16 +109,12 @@ void rctl_capture_render(IOSurfaceRef dst) {
     if (gRender && dst) gRender(0, gDisplayName, dst, 0, 0);
 }
 
-int rctl_capture_one_png(const char *path) {
+int rctl_surface_to_png(IOSurfaceRef dst, const char *path) {
+    if (!dst || !path) return 4;
     @autoreleasepool {
-        rctl_capture_wake_display();
-        size_t w = 0, h = 0;
-        IOSurfaceRef dst = rctl_capture_create_surface(1.0, &w, &h);
-        if (!dst) { fprintf(stderr, "[capture] FAIL: no surface\n"); return 2; }
-        rctl_capture_render(dst);
-
         int rc = 4;
         IOSurfaceLock(dst, kIOSurfaceLockReadOnly, NULL);
+        size_t w = IOSurfaceGetWidth(dst), h = IOSurfaceGetHeight(dst);
         void *base = IOSurfaceGetBaseAddress(dst);
         size_t bpr = IOSurfaceGetBytesPerRow(dst);
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
@@ -140,6 +136,18 @@ int rctl_capture_one_png(const char *path) {
         if (ctx) CGContextRelease(ctx);
         CGColorSpaceRelease(cs);
         IOSurfaceUnlock(dst, kIOSurfaceLockReadOnly, NULL);
+        return rc;
+    }
+}
+
+int rctl_capture_one_png(const char *path) {
+    @autoreleasepool {
+        rctl_capture_wake_display();
+        size_t w = 0, h = 0;
+        IOSurfaceRef dst = rctl_capture_create_surface(1.0, &w, &h);
+        if (!dst) { fprintf(stderr, "[capture] FAIL: no surface\n"); return 2; }
+        rctl_capture_render(dst);
+        int rc = rctl_surface_to_png(dst, path);
         CFRelease(dst);
         return rc;
     }

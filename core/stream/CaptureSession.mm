@@ -68,6 +68,20 @@ void rctl_session_request_keyframe(rctl_session *s) {
     if (s && s->enc) rctl_encoder_request_keyframe(s->enc);
 }
 
+int rctl_session_snapshot_png(rctl_session *s, const char *path) {
+    if (!s || !s->queue || !s->surface || !path) return -1;
+    // Run on the capture queue: serialized with the render+encode loop, so the
+    // grab never races the render server. Render one fresh native-res frame, then
+    // encode it losslessly. The PNG pass briefly pauses the stream -- acceptable
+    // for an occasional screenshot, and the device user's UI is never blocked.
+    __block int rc = -1;
+    dispatch_sync(s->queue, ^{
+        rctl_capture_render(s->surface);
+        rc = rctl_surface_to_png(s->surface, path);
+    });
+    return rc;
+}
+
 void rctl_session_stop(rctl_session *s) {
     if (!s) return;
     if (s->timer) {

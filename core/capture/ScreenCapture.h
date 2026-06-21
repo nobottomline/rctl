@@ -27,6 +27,11 @@ void rctl_capture_undim(void);
 // Convenience: capture a single frame to a PNG file. Returns 0 on success.
 int rctl_capture_one_png(const char *path);
 
+// Encode an already-rendered BGRA IOSurface to a lossless PNG file (dimensions
+// read from the surface). Shared by the one-shot grab and the live session's
+// snapshot. Returns 0 on success.
+int rctl_surface_to_png(IOSurfaceRef surface, const char *path);
+
 #ifdef __cplusplus
 }
 #endif

@@ -36,7 +36,7 @@ enum {
 };
 
 // Query types carried in RCTL_MSG_QUERY (request/response over the socket).
-enum { RCTL_Q_CLIPBOARD = 1, RCTL_Q_DEVINFO = 2, RCTL_Q_APPLIST = 3, RCTL_Q_AUDIOOUT = 4 };
+enum { RCTL_Q_CLIPBOARD = 1, RCTL_Q_DEVINFO = 2, RCTL_Q_APPLIST = 3, RCTL_Q_AUDIOOUT = 4, RCTL_Q_SCREENSHOT = 5 };
 
 #pragma pack(push, 1)
 typedef struct { int32_t phase; int32_t finger; double x; double y; } rctl_ipc_input;

@@ -1028,6 +1028,20 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         char *buf = (char *)malloc(sz); size_t rd = fread(buf, 1, sz, f); fclose(f);
         *out_len = (int)rd; *out_ctype = "image/jpeg";
         return buf;
+    } else if (!strcmp(path, "/v1/screenshot")) {   // full-res lossless PNG (no stream downscale/H.264)
+        const char *shot = "/tmp/rctl-shot.png";
+        unlink(shot);
+        char *st = sb_query(RCTL_Q_SCREENSHOT, NULL, 0, 5.0);   // SB renders+encodes, then replies
+        int ok = st && st[0] == 'o';
+        free(st);
+        if (!ok) { *status = 500; return strdup("{\"error\":\"capture failed\"}"); }
+        FILE *f = fopen(shot, "rb");
+        if (!f) { *status = 500; return strdup("{\"error\":\"no image file\"}"); }
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        if (sz <= 0 || sz > (64 << 20)) { fclose(f); *status = 500; return strdup("{\"error\":\"bad image\"}"); }
+        char *buf = (char *)malloc(sz); size_t rd = fread(buf, 1, sz, f); fclose(f);
+        *out_len = (int)rd; *out_ctype = "image/png";
+        return buf;
     } else {
         *status = 404; return strdup("{\"error\":\"unknown action\"}");
     }

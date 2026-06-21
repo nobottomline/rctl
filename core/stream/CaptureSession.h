@@ -18,6 +18,11 @@ void rctl_session_stop(rctl_session *s);
 void rctl_session_set_bitrate(rctl_session *s, int bitrate_bps);
 void rctl_session_request_keyframe(rctl_session *s);
 
+// Capture a fresh native-resolution frame from the live session and write it as
+// a lossless PNG. Serialized on the capture queue (safe vs the render loop), so
+// the screenshot is full quality, not the downscaled/H.264 stream. 0 on success.
+int rctl_session_snapshot_png(rctl_session *s, const char *path);
+
 #ifdef __cplusplus
 }
 #endif
