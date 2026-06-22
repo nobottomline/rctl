@@ -427,6 +427,8 @@ static void handle_client(rctl_http_server *s, int fd) {
 
     if (strncmp(req, "GET /ws/term", 12) == 0) {
         rctl_term_handle_ws(fd, req);
+    } else if (strncmp(req, "GET /ws/signal", 14) == 0) {
+        rctl_signal_handle_ws(fd, req);
     } else if (strncmp(req, "GET /stream", 11) == 0) {
         const char *h =
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"

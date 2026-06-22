@@ -32,6 +32,11 @@ using nlohmann::json;
 using std::chrono::duration;
 
 static void (*g_send)(const char *) = nullptr;
+// Per-session outbound signaling override: local /ws/signal sessions route their
+// offer/ICE to their own WebSocket via (fn,ctx) instead of the global relay
+// sender g_send. Guarded by g_mtx.
+struct SessionSender { void (*fn)(void *ctx, const char *json); void *ctx; };
+static std::map<std::string, SessionSender> g_session_send;
 static void (*g_viewer_cb)(bool) = nullptr;
 static void (*g_keyframe_cb)(void) = nullptr;
 static void (*g_touch_cb)(int phase, int finger, double x, double y) = nullptr;
@@ -71,11 +76,21 @@ static void wlog(const std::string &m) {
 }
 
 static void send_signal(const std::string &id, const std::string &kind, const json &payload) {
-    if (!g_send) return;
     json m = {{"type", "webrtc_signal"}, {"id", id}, {"kind", kind}};
     if (!payload.is_null()) m["payload"] = payload;
     std::string s = m.dump();
-    g_send(s.c_str());
+    // Route to the session's own sender (local /ws/signal) if registered, else the
+    // global relay sender. Copy the target under the lock, then call it unlocked
+    // (the sender may block on a socket write).
+    void (*fn)(void *, const char *) = nullptr;
+    void *ctx = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        auto it = g_session_send.find(id);
+        if (it != g_session_send.end()) { fn = it->second.fn; ctx = it->second.ctx; }
+    }
+    if (fn) fn(ctx, s.c_str());
+    else if (g_send) g_send(s.c_str());
 }
 
 // A PLI/FIR from the browser asks for an intra frame (it lost reference frames
@@ -373,6 +388,30 @@ static void start_session(const std::string &id, const json &ice) {
     }
     destroy_session(prior);     // safe teardown if a stale session reused this id
     pc->setLocalDescription();  // device offers
+}
+
+extern "C" void rctl_webrtc_route_session(const char *id, void (*send)(void *ctx, const char *json), void *ctx) {
+    if (!id || !send) return;
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_session_send[std::string(id)] = SessionSender{send, ctx};
+}
+
+extern "C" void rctl_webrtc_unroute_session(const char *id) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_session_send.erase(std::string(id));
+}
+
+// The local browser sends {kind, payload}; wrap it with the session id into the
+// {type, id, kind, payload} envelope handle_signal expects, and dispatch.
+extern "C" void rctl_webrtc_handle_local_signal(const char *id, const char *browser_json) {
+    if (!id || !browser_json) return;
+    json b;
+    try { b = json::parse(browser_json); } catch (...) { return; }
+    json m = {{"type", "webrtc_signal"}, {"id", std::string(id)}};
+    if (b.contains("kind")) m["kind"] = b["kind"];
+    if (b.contains("payload")) m["payload"] = b["payload"];
+    rctl_webrtc_handle_signal(m.dump().c_str());
 }
 
 extern "C" void rctl_webrtc_set_sender(void (*send)(const char *)) {

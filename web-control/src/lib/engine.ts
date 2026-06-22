@@ -4,9 +4,9 @@
 // DataChannel vs HTTP input fallback) operating on DOM elements React hands it,
 // so the hard-won behavior moves over unchanged instead of being re-derived.
 //
-// Not yet ported here (follow-ups): the /stream WebCodecs fallback/local path,
-// audio playback, the files DataChannel. The engine exposes the audio/files
-// channels via callbacks so those layers can attach later.
+// Two transports share this engine: WebRTC (relay) and the device-local
+// /stream WebCodecs path (below). Audio playback and the files DataChannel are
+// exposed via callbacks so those layers attach on top.
 
 import { WEBRTC_MODE, RELAY_MODE, api, signalWS } from './rctl'
 
@@ -37,6 +37,23 @@ export function codeToUsage(c: string): number {
 
 // HID modifier usages — held (press/release) rather than tapped.
 export const MOD_USAGES = new Set([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
+
+// Big-endian 64-bit µs PTS from the 8-byte /stream payload header.
+function ptsFromPayload(d: Uint8Array): number {
+  const hi = d[0] * 16777216 + (d[1] << 16) + (d[2] << 8) + d[3]
+  const lo = ((d[4] << 24) >>> 0) + (d[5] << 16) + (d[6] << 8) + d[7]
+  return hi * 4294967296 + lo
+}
+
+// WebCodecs codec string from an Annex-B SPS NAL (type 7): avc1.PPCCLL.
+function codecFromAU(au: Uint8Array): string | null {
+  for (let i = 0; i + 8 < au.length; i++) {
+    if (au[i] === 0 && au[i + 1] === 0 && au[i + 2] === 0 && au[i + 3] === 1 && (au[i + 4] & 0x1f) === 7) {
+      return 'avc1.' + [au[i + 5], au[i + 6], au[i + 7]].map((x) => x.toString(16).padStart(2, '0')).join('')
+    }
+  }
+  return null
+}
 
 // A recorded input event: a touch ('t': phase p, finger i, normalized x/y) or a
 // key ('k': HID usage u, down d). `t` is ms since the recording started.
@@ -91,6 +108,17 @@ export class ControlEngine {
   private recPausedAt = 0
   private playToken = 0 // bumped to cancel an in-flight play()
 
+  // ---- local /stream (WebCodecs) decode state -----------------------------
+  private dec: VideoDecoder | null = null
+  private streamStarted = false
+  private codec = 'avc1.640033'
+  private vq: VideoFrame[] = [] // decoded frames awaiting paced presentation
+  private rafId = 0
+  private ctx2d: CanvasRenderingContext2D | null = null
+  private localMode = false // device-local P2P (no relay): signal over /ws/signal
+  private fellBack = false // local WebRTC failed -> using the /stream fallback
+  private rtcFallbackTimer = 0
+
   constructor(
     stage: HTMLElement,
     canvas: HTMLCanvasElement,
@@ -106,9 +134,47 @@ export class ControlEngine {
 
   // ---- lifecycle ----------------------------------------------------------
   start() {
-    if (WEBRTC_MODE) this.startWebRTC()
-    // else: /stream WebCodecs path — ported in a follow-up.
-    else this.status('local /stream path not ported yet')
+    if (WEBRTC_MODE) {
+      this.startWebRTC(signalWS())
+    } else if (typeof RTCPeerConnection !== 'undefined') {
+      // Device-local P2P: signal over the device's own /ws/signal with host-only
+      // ICE -> direct-LAN WebRTC (relay-grade video, no relay, no TURN). Falls
+      // back to the WebCodecs /stream path if WebRTC can't connect (e.g. iOS
+      // Safari over plain HTTP, which gates it).
+      this.localMode = true
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+      this.startWebRTC(`${proto}://${location.host}/ws/signal`)
+    } else {
+      this.startStream()
+    }
+  }
+
+  // Local WebRTC couldn't connect: fall back to the WebCodecs /stream path
+  // (itself guarded if WebCodecs is unavailable). Idempotent.
+  private fallbackToStream() {
+    if (this.fellBack) return
+    this.fellBack = true
+    if (this.rtcFallbackTimer) {
+      clearTimeout(this.rtcFallbackTimer)
+      this.rtcFallbackTimer = 0
+    }
+    try {
+      this.pc?.close()
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.ws?.close()
+    } catch {
+      /* ignore */
+    }
+    this.pc = null
+    try {
+      this.video.style.display = 'none'
+    } catch {
+      /* ignore */
+    }
+    this.startStream()
   }
 
   stop() {
@@ -124,6 +190,8 @@ export class ControlEngine {
     } catch {
       /* ignore */
     }
+    if (this.rafId) cancelAnimationFrame(this.rafId)
+    this.resetStream()
     this.control = null
   }
 
@@ -181,7 +249,12 @@ export class ControlEngine {
     const bbW = r90 ? ch : cw
     const bbH = r90 ? cw : ch
     const sc = Math.min(innerWidth / bbW, innerHeight / bbH)
-    el.style.transform = `rotate(${deg}deg) scale(${sc})`
+    // Absolute-center like the WebRTC <video> path (grid centering drifted the
+    // large intrinsic-size canvas downward on some layouts).
+    el.style.position = 'absolute'
+    el.style.left = '50%'
+    el.style.top = '50%'
+    el.style.transform = `translate(-50%,-50%) rotate(${deg}deg) scale(${sc})`
   }
 
   // Map a client (px) point on the displayed (rotated/scaled) surface back to
@@ -477,8 +550,186 @@ export class ControlEngine {
     }
   }
 
+  // ---- local /stream (WebCodecs) path -------------------------------------
+  // Device-direct mode (no relay): pull the H.264 elementary stream over the
+  // chunked HTTP body, decode with WebCodecs, and present through a small
+  // PTS-paced jitter buffer aligned to the display refresh. The vanilla page
+  // drew each frame the instant it decoded, so network jitter showed as
+  // micro-stutter; buffering ~60ms and releasing on a playout clock makes it
+  // as smooth as the WebRTC path while staying fully device-local.
+  private async startStream() {
+    if (typeof VideoDecoder === 'undefined') {
+      // WebCodecs is a secure-context API: over plain HTTP on a LAN IP it's gated
+      // off in standard Chromium (and others), so the decoder is unavailable.
+      // Fail gracefully with a clear status instead of throwing a ReferenceError
+      // that would leave the page looking dead.
+      this.status('video unavailable here (WebCodecs needs a secure context)')
+      return
+    }
+    this.status('connecting')
+    this.dispEl = this.canvas
+    this.canvas.style.display = ''
+    if (!this.rafId) this.rafId = requestAnimationFrame(this.present)
+    let resp: Response
+    try {
+      resp = await fetch('/stream')
+    } catch {
+      this.status('stream failed')
+      return
+    }
+    if (!resp.body) {
+      this.status('no stream')
+      return
+    }
+    const reader = resp.body.getReader()
+    let buf = new Uint8Array(0)
+    this.status('')
+    for (;;) {
+      if (this.stopped) {
+        try {
+          await reader.cancel()
+        } catch {
+          /* ignore */
+        }
+        return
+      }
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch {
+        this.status('stream error')
+        break
+      }
+      if (chunk.done) {
+        this.status('stream ended')
+        break
+      }
+      const v = chunk.value!
+      const nb = new Uint8Array(buf.length + v.length)
+      nb.set(buf, 0)
+      nb.set(v, buf.length)
+      buf = nb
+      for (;;) {
+        if (buf.length < 5) break
+        const type = buf[0]
+        const len = ((buf[1] << 24) >>> 0) + (buf[2] << 16) + (buf[3] << 8) + buf[4]
+        if (buf.length < 5 + len) break
+        const data = buf.slice(5, 5 + len)
+        buf = buf.subarray(5 + len)
+        if (type === 2) {
+          if (data.length >= 1 && data[0] !== this.orient) {
+            this.orient = data[0]
+            this.applyOrient()
+            if (this.manualOrient == null) this.cb.onOrient?.(this.orient, false)
+          }
+          continue
+        }
+        if (type === 3) {
+          this.resetStream()
+          continue
+        }
+        if (type === 4) continue // local PCM audio — follow-up
+        if (type !== 0 && type !== 1) continue
+        if (data.length < 8) continue
+        const pts = ptsFromPayload(data)
+        const au = data.slice(8)
+        const key = type === 1
+        if (!this.streamStarted) {
+          if (!key) continue // wait for a keyframe to start decoding
+          const cs = codecFromAU(au)
+          if (cs) this.codec = cs
+          this.mkdec()
+          this.streamStarted = true
+        }
+        try {
+          this.dec!.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: pts, data: au }))
+        } catch {
+          /* decode error -> resync at the next keyframe */
+        }
+      }
+    }
+  }
+
+  private mkdec() {
+    if (this.dec) {
+      try {
+        this.dec.close()
+      } catch {
+        /* ignore */
+      }
+    }
+    this.dec = new VideoDecoder({
+      output: (f) => {
+        this.vq.push(f)
+        if (this.vq.length > 24) this.vq.shift()?.close() // hard cap (decoder has finite output buffers)
+        this.frames++
+        this.cb.onFrame?.()
+      },
+      error: () => this.resetStream(),
+    })
+    this.dec.configure({ codec: this.codec, optimizeForLatency: true } as VideoDecoderConfig)
+  }
+
+  // Present the freshest decoded frame and drop any older queued ones, aligned to
+  // the display refresh. Vsync pacing removes the vanilla's draw-on-decode judder
+  // while keeping latency at ~one frame (LAN jitter is low, so a playout buffer
+  // would only add lag).
+  private present = () => {
+    if (this.stopped) return
+    this.rafId = requestAnimationFrame(this.present)
+    const q = this.vq
+    if (!q.length) return
+    const f = q.pop()!
+    while (q.length) {
+      try {
+        q.shift()?.close()
+      } catch {
+        /* ignore */
+      }
+    }
+    this.drawFrame(f)
+    try {
+      f.close()
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private drawFrame(f: VideoFrame) {
+    const ctx = this.ctx2d ?? (this.ctx2d = this.canvas.getContext('2d'))
+    if (!ctx) return
+    if (this.canvas.width !== f.displayWidth || this.canvas.height !== f.displayHeight) {
+      this.canvas.width = f.displayWidth
+      this.canvas.height = f.displayHeight
+      this.applyOrient()
+    }
+    ctx.drawImage(f, 0, 0)
+  }
+
+  private resetStream() {
+    this.streamStarted = false
+    if (this.dec) {
+      try {
+        this.dec.close()
+      } catch {
+        /* ignore */
+      }
+      this.dec = null
+    }
+    for (const f of this.vq) {
+      try {
+        f.close()
+      } catch {
+        /* ignore */
+      }
+    }
+    this.vq = []
+  }
+
   // ---- WebRTC -------------------------------------------------------------
-  private startWebRTC() {
+  // wsUrl is the signaling socket: the relay's /signal for internet sessions, or
+  // the device's own /ws/signal for device-local P2P.
+  private startWebRTC(wsUrl: string) {
     const vid = this.video
     vid.autoplay = true
     vid.playsInline = true
@@ -509,6 +760,11 @@ export class ControlEngine {
           this.canvas.height = vid.videoHeight
           this.applyOrient()
           this.frames++
+          if (this.rtcFallbackTimer) {
+            clearTimeout(this.rtcFallbackTimer)
+            this.rtcFallbackTimer = 0
+          }
+          this.status('')
           this.cb.onFrame?.()
         }
       }
@@ -530,11 +786,20 @@ export class ControlEngine {
     }
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') this.status('webrtc failed')
+      if (pc.connectionState === 'failed') {
+        this.status('webrtc failed')
+        if (this.localMode) this.fallbackToStream()
+      }
     }
 
-    const ws = new WebSocket(signalWS())
+    const ws = new WebSocket(wsUrl)
     this.ws = ws
+    // Local P2P: if no frame renders within 6s (WebRTC blocked/unreachable), drop
+    // to the WebCodecs /stream path so the user still gets video where possible.
+    if (this.localMode)
+      this.rtcFallbackTimer = window.setTimeout(() => {
+        if (!this.frames) this.fallbackToStream()
+      }, 6000)
     pc.onicecandidate = (e) => {
       if (e.candidate && ws.readyState === 1)
         ws.send(JSON.stringify({ kind: 'candidate', payload: { candidate: e.candidate.candidate, mid: e.candidate.sdpMid } }))

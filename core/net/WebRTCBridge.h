@@ -43,6 +43,15 @@ void rctl_webrtc_files_send_text(const char *json);
 void rctl_webrtc_files_send_binary(const uint8_t *data, size_t len);
 uint64_t rctl_webrtc_files_buffered(void);
 
+// Local (non-relay) signaling: a device-served /ws/signal WebSocket drives the
+// same bridge directly. route_session sends a session's outbound offer/ICE to
+// (send,ctx) instead of the global relay sender (call BEFORE feeding its "open").
+// handle_local_signal wraps a browser {kind,payload} message with the session id
+// and dispatches it. unroute_session detaches the sender on disconnect.
+void rctl_webrtc_route_session(const char *id, void (*send)(void *ctx, const char *json), void *ctx);
+void rctl_webrtc_unroute_session(const char *id);
+void rctl_webrtc_handle_local_signal(const char *id, const char *browser_json);
+
 #ifdef __cplusplus
 }
 #endif
