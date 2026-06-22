@@ -142,6 +142,11 @@ export class ControlEngine {
       // back to the WebCodecs /stream path if WebRTC can't connect (e.g. iOS
       // Safari over plain HTTP, which gates it).
       this.localMode = true
+      // Full-res 60fps is wasteful for remote control and overloads the single
+      // shared encoder (a fresh rctld defaults to it) -- with a 2nd viewer it can
+      // CPU-kill the daemon. Start local at a smooth, light profile; the user can
+      // raise it from the quality menu.
+      this.setQuality(0.7, 30, 10000000)
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
       this.startWebRTC(`${proto}://${location.host}/ws/signal`)
     } else {
@@ -744,7 +749,9 @@ export class ControlEngine {
     pc.ontrack = (e) => {
       vid.srcObject = e.streams[0] || new MediaStream([e.track])
       try {
-        ;(e.receiver as RTCRtpReceiver & { playoutDelayHint?: number }).playoutDelayHint = 0
+        // Direct-LAN local sessions need a small playout buffer (~50ms) to ride out
+        // bursty delivery; the relay path stays at 0 (its RTT already buffers).
+        ;(e.receiver as RTCRtpReceiver & { playoutDelayHint?: number }).playoutDelayHint = this.localMode ? 0.05 : 0
       } catch {
         /* ignore */
       }

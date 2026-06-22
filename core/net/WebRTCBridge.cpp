@@ -264,8 +264,14 @@ static void start_session(const std::string &id, const json &ice) {
     // Wi-Fi loss/jitter burst (giving NACK retransmits time to arrive) instead of
     // freezing -- the buffer shrinks back toward 0 once the link settles.
     rtpConfig->playoutDelayId = kPlayoutDelayExtId;
-    rtpConfig->playoutDelayMin = 0;
-    rtpConfig->playoutDelayMax = 6;
+    // Direct-LAN (local /ws/signal) sessions have near-zero network latency, so the
+    // receiver's jitter buffer sits almost empty -> the encoder's bursty delivery
+    // (keyframes, motion spikes) shows as freezes. Give the local path a small floor
+    // so it rides those out; the relay path keeps the freshest-frame floor since its
+    // own RTT already buffers. Units are 10ms (min 5 = 50ms, max 15 = 150ms).
+    bool localSession = id.rfind("lws_", 0) == 0;
+    rtpConfig->playoutDelayMin = localSession ? 5 : 0;
+    rtpConfig->playoutDelayMax = localSession ? 15 : 6;
     // StartSequence auto-detects 3- and 4-byte Annex-B start codes; the encoder
     // mixes them (SPS/PPS vs SEI/IDR), and LongStartSequence would mis-parse the
     // keyframe's NALs so the browser could never assemble a frame.
