@@ -18,6 +18,7 @@
 #include <opus/opus.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <cstring>
+#include <thread>
 
 #include <algorithm>
 #include <chrono>
@@ -189,6 +190,7 @@ static void add_ice_servers(rtc::Configuration &config, const json &arr) {
 // (and the Track destructor's own triggerClosed() then invokes an empty callback).
 // MUST be called WITHOUT g_mtx held: an in-flight onClosed takes g_mtx, so holding
 // it here would deadlock resetCallbacks().
+static void mic_teardown();
 static void destroy_session(std::shared_ptr<Session> dead) {
     if (!dead) return;
     if (dead->control) dead->control->resetCallbacks();
@@ -220,6 +222,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
         if (dead->filesDc && g_files_dc && g_files_dc.get() == dead->filesDc.get()) g_files_dc.reset();
     }
     if (lastGone && g_viewer_cb) g_viewer_cb(false);
+    if (dead->micIn) mic_teardown();   // its onClosed is detached above
     // `dead` drops at the caller: callbacks detached + none in flight -> safe.
 }
 
@@ -228,14 +231,42 @@ static void destroy_session(std::shared_ptr<Session> dead) {
 // -> iPad speaker. Validates the reverse audio path (browser -> device) that the
 // virtual-mic (Phase C) will reuse, routing the PCM into the mic input instead of
 // the speaker. Lazy-init on the first frame; mono 48k to match the browser encoder.
+extern "C" void rctl_audio_session_activate(void);  // defined in main.mm
+extern "C" void rctl_audio_boost_begin(void);       // defined in main.mm
+extern "C" void rctl_audio_boost_end(void);         // defined in main.mm
 static std::mutex g_micMtx;
 static OpusDecoder *g_micDec = nullptr;
-static AudioQueueRef g_micAQ = nullptr;
+static AudioQueueRef g_micAQ = nullptr;       // created once per process, never disposed
+static bool g_micBoosted = false;             // inside a talk burst (volume raised)
+static bool g_micWatchStarted = false;
+static std::chrono::steady_clock::time_point g_micLast{};
 static const int kMicRate = 48000;
 
 static void mic_aq_done(void *user, AudioQueueRef aq, AudioQueueBufferRef buf) {
     (void)user;
     AudioQueueFreeBuffer(aq, buf);
+}
+
+// Re-creating an AudioQueue after AudioQueueDispose in the same process yields a
+// SILENT queue on iOS (the second talk produced no sound). So the queue + decoder
+// are created exactly once and kept for the process lifetime; talk on/off is just
+// a gap in the frame stream. A watchdog detects that gap to restore the user's
+// volume and flush/reset for the next burst -- without tearing the queue down.
+static void mic_watchdog() {
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        std::lock_guard<std::mutex> lk(g_micMtx);
+        if (!g_micBoosted) continue;
+        auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - g_micLast).count();
+        if (idle > 700) {
+            rctl_audio_boost_end();
+            if (g_micAQ) AudioQueueReset(g_micAQ);          // drop stale queued audio
+            if (g_micDec) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
+            g_micBoosted = false;
+            wlog("mic intercom: talk idle -> volume restored");
+        }
+    }
 }
 
 static void mic_play_opus(const uint8_t *opus, size_t len) {
@@ -245,9 +276,6 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         g_micDec = opus_decoder_create(kMicRate, 1, &err);
         if (err != OPUS_OK) { g_micDec = nullptr; return; }
     }
-    int16_t pcm[5760];   // up to 120ms @ 48k mono
-    int frames = opus_decode(g_micDec, opus, (opus_int32)len, pcm, 5760, 0);
-    if (frames <= 0) return;
     if (!g_micAQ) {
         AudioStreamBasicDescription a = {};
         a.mSampleRate = kMicRate;
@@ -258,18 +286,47 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         a.mBytesPerFrame = 2;
         a.mFramesPerPacket = 1;
         a.mBytesPerPacket = 2;
+        rctl_audio_session_activate();
         if (AudioQueueNewOutput(&a, mic_aq_done, nullptr, nullptr, nullptr, 0, &g_micAQ) != noErr) {
             g_micAQ = nullptr; return;
         }
+        AudioQueueSetParameter(g_micAQ, kAudioQueueParam_Volume, 1.0f);
         AudioQueueStart(g_micAQ, nullptr);
-        wlog("mic intercom: AudioQueue started");
+        wlog("mic intercom: AudioQueue started (persistent)");
+        if (!g_micWatchStarted) { std::thread(mic_watchdog).detach(); g_micWatchStarted = true; }
     }
+    // Burst start after idle: re-route + raise volume, flush stale audio, reset the
+    // decoder so a fresh browser Opus stream decodes cleanly.
+    if (!g_micBoosted) {
+        rctl_audio_session_activate();
+        rctl_audio_boost_begin();
+        AudioQueueReset(g_micAQ);
+        opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
+        g_micBoosted = true;
+        wlog("mic intercom: talk burst start");
+    }
+    g_micLast = std::chrono::steady_clock::now();
+    int16_t pcm[5760];   // up to 120ms @ 48k mono
+    int frames = opus_decode(g_micDec, opus, (opus_int32)len, pcm, 5760, 0);
+    if (frames <= 0) return;
     UInt32 bytes = (UInt32)frames * 2;
     AudioQueueBufferRef buf = nullptr;
     if (AudioQueueAllocateBuffer(g_micAQ, bytes, &buf) != noErr) return;
     memcpy(buf->mAudioData, pcm, bytes);
     buf->mAudioDataByteSize = bytes;
     AudioQueueEnqueueBuffer(g_micAQ, buf, 0, nullptr);
+}
+
+// Session/channel gone: restore the user's volume promptly and reset, but KEEP the
+// queue alive (disposing + recreating it later goes silent on iOS).
+static void mic_teardown() {
+    std::lock_guard<std::mutex> lk(g_micMtx);
+    if (g_micBoosted) {
+        rctl_audio_boost_end();
+        if (g_micAQ) AudioQueueReset(g_micAQ);
+        if (g_micDec) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
+        g_micBoosted = false;
+    }
 }
 
 static void start_session(const std::string &id, const json &ice) {
@@ -449,6 +506,7 @@ static void start_session(const std::string &id, const json &ice) {
         const auto &b = std::get<rtc::binary>(msg);
         mic_play_opus(reinterpret_cast<const uint8_t *>(b.data()), b.size());
     });
+    micIn->onClosed([]() { mic_teardown(); });
 
     std::shared_ptr<Session> prior;
     {

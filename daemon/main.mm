@@ -10,6 +10,7 @@
 // launchd restarts us on any crash.
 
 #import <Foundation/Foundation.h>
+#import <objc/message.h>
 #import <pthread.h>
 #import <unistd.h>
 #import <stdio.h>
@@ -1192,6 +1193,75 @@ static void *audio_lease_thread(void *arg) {
         pthread_mutex_unlock(&gAudioCtlLock);
     }
     return NULL;
+}
+
+// Activate a Playback audio session so AudioQueue output from this daemon is
+// actually routed to the speaker. rctld is a LaunchDaemon (not an app), so it has
+// no audio session by default and AudioQueue plays into the void -- this is why the
+// mic intercom decoded fine but was silent. Driven via the runtime (AVFoundation
+// dlopen'd lazily) so we don't link it. Idempotent; called on the first mic frame.
+extern "C" void rctl_audio_session_activate(void) {
+    // NOT dispatch_once: the OS can deactivate our session when a WebRTC session
+    // tears down or mediaserverd restarts, so we re-assert it every time a new mic
+    // queue is created (once per talk session) -- otherwise playback works once and
+    // is silent on reconnect.
+    @try {
+        dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY);
+        Class C = NSClassFromString(@"AVAudioSession");
+        if (!C) { dlog("AVAudioSession class missing"); return; }
+        id sess = ((id (*)(id, SEL))objc_msgSend)((id)C, NSSelectorFromString(@"sharedInstance"));
+        if (!sess) return;
+        NSError *err = nil;
+        // Playback category: audible through the media volume, ignores the mute
+        // switch. (PlayAndRecord/DefaultToSpeaker comes with the virtual mic.)
+        ((BOOL (*)(id, SEL, id, NSError **))objc_msgSend)(
+            sess, NSSelectorFromString(@"setCategory:error:"), @"AVAudioSessionCategoryPlayback", &err);
+        ((BOOL (*)(id, SEL, BOOL, NSError **))objc_msgSend)(
+            sess, NSSelectorFromString(@"setActive:error:"), YES, &err);
+        dlog("AVAudioSession (re)activated (playback)");
+    } @catch (id e) {}
+}
+
+// AudioQueue plays through the system media volume, so at min volume the intercom
+// is inaudible. Raise the media volume to an audible floor while talking and
+// restore the user's level afterwards, via the private AVSystemController (the
+// daemon-side way to set system volume on iOS 14). Best-effort: if the private API
+// is unavailable it simply falls back to respecting the current volume.
+static float g_savedVol = -1.0f;
+static id rctl_av_system_controller(void) {
+    Class C = NSClassFromString(@"AVSystemController");
+    if (!C) {
+        dlopen("/System/Library/PrivateFrameworks/Celestial.framework/Celestial", RTLD_LAZY);
+        dlopen("/System/Library/PrivateFrameworks/MediaServices.framework/MediaServices", RTLD_LAZY);
+        C = NSClassFromString(@"AVSystemController");
+    }
+    if (!C) return nil;
+    return ((id (*)(id, SEL))objc_msgSend)((id)C, NSSelectorFromString(@"sharedAVSystemController"));
+}
+extern "C" void rctl_audio_boost_begin(void) {
+    @try {
+        id ctrl = rctl_av_system_controller();
+        if (!ctrl) return;
+        NSString *cat = @"Audio/Video";
+        float cur = -1.0f;
+        ((BOOL (*)(id, SEL, float *, NSString *))objc_msgSend)(
+            ctrl, NSSelectorFromString(@"getVolume:forCategory:"), &cur, cat);
+        if (g_savedVol < 0 && cur >= 0) g_savedVol = cur;   // remember the user's level once
+        ((BOOL (*)(id, SEL, float, NSString *))objc_msgSend)(
+            ctrl, NSSelectorFromString(@"setVolumeTo:forCategory:"), 0.8f, cat);
+        dlog("audio boost: media volume -> 0.8 (was saved)");
+    } @catch (id e) {}
+}
+extern "C" void rctl_audio_boost_end(void) {
+    @try {
+        if (g_savedVol < 0) return;
+        id ctrl = rctl_av_system_controller();
+        if (ctrl)
+            ((BOOL (*)(id, SEL, float, NSString *))objc_msgSend)(
+                ctrl, NSSelectorFromString(@"setVolumeTo:forCategory:"), g_savedVol, @"Audio/Video");
+        dlog("audio boost: media volume restored");
+        g_savedVol = -1.0f;
+    } @catch (id e) {}
 }
 
 int main(int argc, char **argv) {
