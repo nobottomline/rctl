@@ -4,7 +4,7 @@
 **jailbroken iPad**: view the live screen, hear real device playback audio,
 inject real touches and keyboard input, transfer files, open a root terminal, and
 automate device actions from a browser or native client. LAN works today;
-internet access is the next transport phase.
+authenticated relay access is in active development.
 
 > Why jailbreak: Apple's iPhone Mirroring needs iOS 18 + the same Apple ID + a Mac + the
 > same network. App Store apps (TeamViewer / AnyDesk / RustDesk) can only *view* an iOS
@@ -12,13 +12,12 @@ internet access is the next transport phase.
 
 ## Status
 
-Live screen streaming, real touch control, and real iPad playback audio work.
-A SpringBoard-injected agent captures the display, hardware-encodes H.264
-(VideoToolbox), streams it over HTTP to a browser (decoded with WebCodecs), and
-injects real touches back through `IOHIDEvent`. A guarded mediaserverd payload
-captures system playback PCM for browser audio. The browser can also toggle
-whether audio remains audible on the iPad itself. The web client includes a
-root PTY terminal rendered with xterm.js over `/ws/term`.
+Live screen streaming, real touch control, real iPad playback audio, files,
+camera stills, and a root PTY terminal work. A SpringBoard-injected agent
+captures the display, hardware-encodes H.264 (VideoToolbox), and sends it to
+`rctld`. The browser control app uses WebRTC for the current low-latency path
+(H.264 RTP video track plus DataChannels for input/audio/files) and keeps the
+local `/stream` WebCodecs path as compatibility fallback.
 
 ## Target device
 
@@ -45,8 +44,9 @@ rctl/
 ├── daemon/         # rctld — root daemon (launchd KeepAlive): hosts the transport + relay
 ├── audio/          # rctlaudio — inactive mediaserverd system-audio payload
 ├── cap/            # rctlcap — frontmost-app camera still capture payload
-├── web/            # browser client (WebCodecs decoder, pointer/keyboard input)
-│   └── vendor/     #   vendored xterm.js assets for the web terminal
+├── web/            # canonical React/Vite control app; build output is web/dist/
+│   └── legacy/     #   old vanilla single-file client + vendor assets, reference only
+├── relay/          # Go relay server + relay/web-admin admin SPA
 ├── layout/         # package payload: LaunchDaemon plist, web client, postinst/prerm
 ├── control         # Debian package metadata
 ├── Makefile        # Theos aggregate: builds every component into one .deb
@@ -61,18 +61,17 @@ browser audio capture is enabled.
 
 ## Transport / decode decision
 
-- **Decode: WebCodecs** (frame-level, low latency) — the client decoder, kept long-term.
-- **Transport now (LAN/dev): HTTP chunked** — H.264 video plus PCM audio frames,
-  simple and good enough on a local network.
-- **Transport for internet (P3): WebRTC** — DataChannel carrying encoded frames + WebCodecs
-  decode (lowest latency, full control), with ICE/STUN/**TURN** for NAT traversal. On-device
-  WebRTC via **libdatachannel** (lightweight) rather than libwebrtc. Signaling = small Go server.
+- **Primary browser app:** `web/` (React/Vite). `make package` stages
+  `web/dist/index.html` as `/var/mobile/rctl/index.html`.
+- **Primary live transport:** WebRTC via **libdatachannel** in `rctld`: H.264 RTP
+  video track, reliable DataChannels for control/audio/files, relay signaling,
+  and optional STUN/TURN for NAT traversal.
+- **Compatibility fallback:** local `/stream` over HTTP chunked H.264 decoded
+  with WebCodecs. The relay stream tunnel is kept for smoke/debug fallback, not
+  as the preferred internet video path.
 - **Internet packaging:** public release `.deb` files stay LAN-only. Relay-enabled
   packages are generated per user with `make package-relay` and must not be
   published. See `docs/RELAY.md`.
-- **Internet video architecture:** the current relay stream is a fallback/debug
-  path, not the final remote-video transport. The planned production path is
-  WebRTC DataChannels via `libdatachannel`; see `docs/TRANSPORT.md`.
 
 ## Build & deploy
 
@@ -105,5 +104,5 @@ shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
 2. **P2 — done.** Real touch control through `IOHIDEvent`, correct in all orientations.
 3. **P2.5 — working.** Real system playback audio, camera stills, files, clipboard,
    app launch, root terminal, and automation endpoints.
-4. **P3.** Authenticated internet access: relay first, then WebRTC/Opus for the
-   low-latency media path.
+4. **P3 — active.** Authenticated relay access with WebRTC media/control,
+   relay-hosted control page, and TURN hardening.

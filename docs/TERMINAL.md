@@ -26,11 +26,10 @@ programs, terminal resize, prompts, and streaming output.
 
 - `core/net/Term.mm`: WebSocket handshake, PTY lifecycle, frame parsing, resize,
   shell spawn, cleanup.
-- `core/net/HttpStreamServer.mm`: routes `/ws/term` and serves static terminal
-  assets from `/var/mobile/rctl/vendor`.
-- `web/vendor/`: vendored xterm.js assets shipped in the Debian package.
-- `web/index.html`: Terminal modal, connection controls, resize handling, and
-  xterm.js rendering.
+- `core/net/HttpStreamServer.mm`: routes `/ws/term`.
+- `web/`: React/Vite control app; xterm is bundled into the single-file
+  `web/dist/index.html` staged onto the device.
+- `web/legacy/`: old vanilla client and vendored xterm assets, reference only.
 
 ## WebSocket protocol
 

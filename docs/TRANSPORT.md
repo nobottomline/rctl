@@ -5,30 +5,27 @@ remote control.
 
 ## Current State
 
-Local LAN mode works well enough:
+The control app now has two production-maintained transport paths:
 
-- `rctld` serves `web/index.html`.
-- Browser fetches `/stream`.
-- `rctld` sends chunked HTTP frames containing H.264 Access Units and small
-  control/audio frames.
-- Browser decodes H.264 with WebCodecs.
-- Input, keys, files, device info, and terminal are local HTTP/WebSocket calls to
-  `rctld`.
+- `web/` is the canonical React/Vite control app. `make package` stages the
+  single-file `web/dist/index.html` onto the device.
+- Local direct-LAN mode first tries WebRTC through rctld's `/ws/signal`; if that
+  cannot connect, it falls back to `/stream` + WebCodecs.
+- Relay mode uses the Go relay for admin auth, enrollment, approval, device
+  presence, signaling, HTTP tunnel, terminal tunnel, and TURN credential minting.
+- The low-latency media/control path is WebRTC via libdatachannel inside
+  `rctld`: H.264 over an RTP video track, with DataChannels for input, audio,
+  and file transfer.
 
-Internet relay mode is functional but not a good video transport:
+The old reliable relay stream still exists as compatibility/debug fallback:
 
-- The Go relay handles admin auth, enrollment, device approval, and sessions.
-- Device control/API calls go through `/proxy/devices/{id}/...`.
-- Video uses `/stream/devices/{id}/stream`.
-- Video frames currently travel iPad -> relay -> browser over reliable TCP-based
-  WebSocket/HTTP paths.
-- Terminal has its own relay tunnel at `/term/devices/{id}` and works.
-- Video stream was moved off the main device control WebSocket into a binary
-  stream channel, which prevents video from blocking terminal/control as badly,
-  but it does not solve video latency.
+- Device control/API calls can go through `/proxy/devices/{id}/...`.
+- Fallback video can use `/stream/devices/{id}/stream`.
+- Terminal has its own relay tunnel at `/term/devices/{id}`.
 
-The remaining problem is architectural: reliable ordered TCP is the wrong
-default for realtime screen video over the public internet.
+Reliable ordered TCP remains the wrong default for realtime screen video over
+the public internet, so the relay stream should not be treated as the preferred
+remote-desktop transport.
 
 ## Why The Current Relay Video Freezes
 
@@ -52,7 +49,7 @@ Symptoms seen in practice:
 This means the encoder and local WebCodecs pipeline are not the primary problem.
 The internet video transport is.
 
-## Target Transport
+## Current Target Transport
 
 Keep the Go relay for control-plane responsibilities:
 
@@ -61,15 +58,17 @@ Keep the Go relay for control-plane responsibilities:
 - device presence;
 - signaling exchange;
 - fallback HTTP/terminal tunnels;
-- future TURN credential issuance if needed.
+- TURN credential issuance when configured.
 
-Move realtime media/control to WebRTC DataChannels:
+Realtime media/control is WebRTC:
 
 - Browser side: native `RTCPeerConnection`.
 - iPad side: `libdatachannel` inside `rctld`.
 - Signaling: Go relay stores and forwards offers, answers, and ICE candidates.
 - NAT traversal: STUN first, TURN via `coturn` for networks where direct UDP
   fails.
+- Video: H.264 RTP media track.
+- Control/audio/files: reliable DataChannels.
 
 Do not use full `libwebrtc` unless `libdatachannel` proves impossible on the
 jailbroken iOS target. `libwebrtc` is far larger, harder to cross-compile, and
@@ -78,32 +77,32 @@ WebCodecs decode.
 
 ## Channel Design
 
-Use multiple DataChannels:
+The current design uses one RTP video track plus multiple DataChannels:
 
 ```text
 video
-  ordered: false
-  maxRetransmits: 0
-  payload: current rctl framed H.264 Access Units
-  behavior: drop stale delta frames; recover on the next keyframe
+  RTP H.264 media track
+  payload: VideoToolbox Annex-B access units packetized by libdatachannel
+  recovery: NACK + debounced PLI -> forced keyframe
 
 control
   ordered: true
   reliable
-  payload: input/key/config commands or a compact binary equivalent
+  payload: touch/key commands
 
-terminal
+audio
   ordered: true
   reliable
-  payload: existing terminal packets
+  payload: Opus frames
 
-files/api
-  keep current relay HTTP tunnel initially
-  move later only if needed
+files
+  ordered: true
+  reliable
+  payload: JSON control + binary chunks
 ```
 
-The important part is `video` being unordered/unreliable. Lost video packets are
-acceptable. Delayed old video packets are harmful.
+The terminal still uses its dedicated WebSocket tunnel. General REST calls still
+use the authenticated HTTP tunnel.
 
 ## Browser Decode Rules
 
@@ -121,13 +120,14 @@ latency-oriented:
 
 `rctld` should continue to own local capture and H.264 encode.
 
-For the WebRTC path it should:
+For the WebRTC path it currently:
 
 - connect to relay for auth/presence as today;
-- receive a signaling command or poll signaling state;
-- create a `libdatachannel` PeerConnection;
-- send encoded Access Units on the `video` DataChannel;
-- accept control input on the `control` DataChannel;
+- receives signaling commands from the relay or direct `/ws/signal`;
+- creates one `libdatachannel` PeerConnection per signaling session;
+- sends encoded access units on the H.264 RTP track;
+- accepts control input on the `control` DataChannel;
+- exposes audio and file transfer on separate DataChannels;
 - keep local LAN HTTP mode unchanged.
 
 The `.deb` installed on a device must continue to work locally even when relay
@@ -139,45 +139,21 @@ Do not delete the current relay video path immediately.
 
 Keep this priority:
 
-1. Local LAN HTTP/WebCodecs path.
-2. WebRTC/libdatachannel internet path.
-3. Current relay HTTP/WebSocket stream as fallback/debug only.
+1. Direct-LAN WebRTC via `/ws/signal`.
+2. Relay WebRTC via `/signal/devices/{id}`.
+3. HTTP/WebCodecs `/stream` as local/fallback/debug only.
 
 The fallback is useful for smoke tests, HTTP-only environments, and diagnosing
 signaling failures, but it should not be treated as the production internet
 video path.
 
-## Implementation Plan
+## Remaining Work
 
-Phase 1: signaling skeleton
-
-- Add relay APIs for offer/answer/candidate exchange.
-- Add browser-side `RTCPeerConnection` behind a feature flag.
-- Add smoke tests for signaling state only.
-
-Phase 2: libdatachannel spike
-
-- Build a minimal `libdatachannel` executable on macOS/Linux.
-- Verify browser <-> native DataChannel with STUN disabled on localhost.
-- Add a small binary protocol test using synthetic H.264-like frames.
-
-Phase 3: iOS build
-
-- Cross-compile `libdatachannel` and required dependencies for iOS arm64.
-- Link into `rctld`, not SpringBoard.
-- Keep arm64-only daemon constraints in mind for iOS 14.4.
-
-Phase 4: video channel
-
-- Send current rctl video frame format over unreliable unordered DataChannel.
-- Add keyframe recovery and frame dropping in the browser.
+- Make TURN deployment and health checks easier to operate.
+- Show ICE path quality clearly in admin/control diagnostics.
+- Keep improving capture restart/keyframe recovery around camera/audio events.
 - Keep the old `/stream` endpoint behind fallback mode.
 
-Phase 5: TURN
-
-- Document `coturn` deployment.
-- Make relay admin show whether a connection is direct, STUN, TURN, or fallback.
-- Add health checks for TURN reachability.
 
 ## Security Notes
 
@@ -190,8 +166,9 @@ Phase 5: TURN
 
 ## Decision
 
-The current relay video transport is a compatibility fallback, not the final
+The reliable relay video stream is a compatibility fallback, not the final
 internet architecture.
 
-The next serious engineering step for internet video is WebRTC DataChannels via
-`libdatachannel`, with the Go relay acting as auth/signaling/TURN coordination.
+The active internet architecture is WebRTC via `libdatachannel`: H.264 over an
+RTP media track, control/audio/files over DataChannels, and the Go relay as the
+auth/signaling/TURN coordination plane.

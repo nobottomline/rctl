@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a per-user .deb that enables the future internet relay path.
+# Build a per-user .deb that enables the authenticated internet relay path.
 #
 # The normal release package remains LAN-only. This script injects only the
 # caller-provided relay URL and enrollment token into a copy of an existing .deb.

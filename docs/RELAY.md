@@ -138,7 +138,9 @@ sudo install -m 0755 rctl-relay /usr/local/bin/rctl-relay
 sudo useradd --system --home-dir /var/lib/rctl-relay --shell /usr/sbin/nologin rctl-relay
 sudo install -d -m 0750 -o rctl-relay -g rctl-relay /var/lib/rctl-relay
 sudo install -d -m 0755 /opt/rctl-relay
-sudo cp -R ../web /opt/rctl-relay/web
+( cd ../web && npm ci && npm run build )
+sudo rm -rf /opt/rctl-relay/web
+sudo cp -R ../web/dist /opt/rctl-relay/web
 sudo install -d -m 0700 /etc/rctl-relay
 sudo cp rctl-relay.env.example /etc/rctl-relay/relay.env
 sudo chmod 0640 /etc/rctl-relay/relay.env
@@ -324,12 +326,11 @@ LAN stream at `http://127.0.0.1:8080/{local_path...}` using a streaming
 sends `stream_cancel` so the device closes the local stream.
 
 This stream tunnel is a compatibility and debug path. It is reliable and
-TCP-based, so it is not the final production transport for internet video. Real
-remote-desktop video should prefer the newest frame and drop stale frames rather
-than queue old frames forever. The planned internet video architecture is
-WebRTC DataChannels via `libdatachannel`, with this Go relay kept for auth,
-signaling, TURN coordination, and fallback. See `docs/TRANSPORT.md` before
-working on video latency.
+TCP-based, so it is not the preferred production transport for internet video.
+The current low-latency path is WebRTC via `libdatachannel` in `rctld`:
+H.264 RTP video track plus DataChannels for input/audio/files. The Go relay is
+kept for auth, signaling, TURN coordination, HTTP/terminal fallback, and admin
+operations. See `docs/TRANSPORT.md` before working on video latency.
 
 The local LAN/USB server remains independent. Installing a relay-enabled package
 does not disable or replace `http://<ipad-ip>:8080` or `http://localhost:8080`
@@ -337,27 +338,35 @@ over USB forwarding.
 
 ## Relay-Hosted Web Client
 
-The relay can serve the existing web client directly:
+The relay can serve the same control client used by the local `.deb`:
 
 ```text
 /control/devices/{device_id}
 ```
 
 This route requires an authenticated admin browser session and an approved
-device. It reads `web/index.html`, injects:
+device. It reads the built control client from `RCTL_RELAY_WEB_DIR/index.html`
+normally `web/dist/index.html` in development or `/app/web/index.html` in the
+Docker image, then injects:
 
 ```text
 RCTL_PROXY_BASE=/proxy/devices/{device_id}
 RCTL_STREAM_BASE=/stream/devices/{device_id}
+RCTL_TERM_WS_BASE=/term/devices/{device_id}
+RCTL_RELAY_DEVICE_ID={device_id}
+RCTL_WEBRTC=0|1
 ```
 
-and serves static client dependencies from `web/vendor/`. The normal released
-LAN package still opens the same `web/index.html` without injected globals, so
-all local paths keep going directly to `rctld`.
+The control client is a single-file Vite build, so `/vendor/*` is no longer part
+of the runtime surface. The normal released LAN package stages the same
+`web/dist/index.html` to `/var/mobile/rctl/index.html` without injected globals,
+so all local paths keep going directly to `rctld`.
 
-In Docker, `web/` is copied into the image and `RCTL_RELAY_WEB_DIR=/app/web`.
+In Docker, `web/` is built in a Node stage and `web/dist/` is copied into the
+runtime image as `/app/web`, so `RCTL_RELAY_WEB_DIR=/app/web`.
 When running the Go binary directly, set `RCTL_RELAY_WEB_DIR` to the repository
-`web/` directory if the default `../web` does not match your working directory.
+`web/dist/` directory if the default `../web/dist` does not match your working
+directory.
 
 ## Browser Sessions
 

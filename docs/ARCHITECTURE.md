@@ -32,9 +32,9 @@ AMFI bypass enable real touch/keyboard injection and camera-from-any-app.
   │         │ TCP 127.0.0.1:8079 PCM                         │
   │  mediaserverd ──[rctlaudio.dylib] system playback audio │
   └─────────┼────────────────────────────────────────────┘
-            │ Wi-Fi / USB (iproxy)            (internet: TODO, §6)
+            │ Wi-Fi / USB (iproxy) or relay/WebRTC
             ▼
-       Browser (web/index.html): WebCodecs video, Web Audio, input, console
+       Browser (`web/` control app): video, audio, input, files, console
 ```
 
 Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
@@ -45,12 +45,15 @@ Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 | **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), WebSocket terminal `/ws/term`, relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
 | **rctlcap** (`cap/`) | injected into **every** app | captures a camera still in the frontmost app on a Darwin-notification pulse; uploads the JPEG to the daemon over a raw loopback socket |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
-| **web** (`web/index.html`) | the controlling browser | decodes the H.264 stream via WebCodecs, forwards pointer/keyboard input, hosts the console (FX, camera, files, launch, etc.) |
+| **web** (`web/`) | the controlling browser | React/Vite control app. Primary path is WebRTC (H.264 RTP track + DataChannels); `/stream` WebCodecs remains a local/fallback path. `web/legacy/` keeps the old vanilla client for reference only. |
 
 `core/` holds the shared C/C++/ObjC modules (capture, encode, stream, net, input,
 ipc) so rctlsbcap, rctld, and the media payloads don't duplicate code. `layout/`
-is the static package payload (LaunchDaemon plist, web client, maintainer
-scripts). `docs/` holds these notes + the mediaserverd class dump.
+is the static package payload (LaunchDaemon plist and maintainer scripts);
+`Makefile` stages `web/dist/index.html` into `/var/mobile/rctl/index.html`.
+`relay/web-admin` is a separate admin SPA embedded into
+`relay/internal/relay/webdist`; it is not the device control UI. `docs/` holds
+these notes + the mediaserverd class dump.
 `scripts/deploy.sh` is the one-command safe deploy.
 
 ---
@@ -58,12 +61,12 @@ scripts). `docs/` holds these notes + the mediaserverd class dump.
 ## 2. Data flow
 
 **Screen → browser.** rctlsbcap captures the framebuffer via
-`CARenderServerRenderDisplay` (off a render timer), encodes H.264 with VideoToolbox
-(High profile, native res, ~30 fps), and ships Annex-B access units over the IPC
-socket to rctld. rctld broadcasts them to `/stream` subscribers as HTTP chunks with
-app-framing `[1B type:0=delta,1=key,2=orient,3=reset][4B BE len][data]`. The browser
-decodes with WebCodecs and draws to a canvas. Capture/encode run **only while a
-viewer is connected** (idle-by-default, §4).
+`CARenderServerRenderDisplay` (off a render timer), encodes H.264 with
+VideoToolbox, and ships Annex-B access units over the IPC socket to rctld. rctld
+feeds the same access units to open WebRTC RTP video tracks and, for fallback,
+to `/stream` subscribers as HTTP chunks with app-framing
+`[1B type:0=delta,1=key,2=orient,3=reset][4B BE len][data]`. Capture/encode run
+**only while a viewer is connected** (idle-by-default, §4).
 
 **Input → device.** The browser sends `GET /input?phase=&id=&x=&y=` (touch) and
 `/key?p=&u=&d=` (keyboard/buttons). rctld forwards them over IPC to rctlsbcap, which
