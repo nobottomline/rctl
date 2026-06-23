@@ -12,6 +12,7 @@
 #import <netinet/in.h>
 #import <unistd.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <substrate.h>
 
 // Mute the camera shutter for OUR snaps only. AVCaptureStillImageOutput plays a
 // system sound on capture; gRctlSnapping is set just around our captureStillImage
@@ -20,6 +21,28 @@
 // the block-typed completion parameter parses in %hookf.)
 typedef void (^RctlSoundDone)(void);
 static BOOL gRctlSnapping = NO;
+// Force the camera TCC check to "granted" ONLY during our snap, so the capture
+// works in any app (even one whose camera permission is notDetermined/denied)
+// without the system "<App> wants to access the Camera" prompt. Gated by
+// gRctlCapturing, so the host app's own camera-permission behaviour is untouched
+// the rest of the time. TCCAccessPreflight/Request live in the private TCC
+// framework, so we resolve + hook them via dlsym/MSHookFunction (see %ctor).
+static BOOL gRctlCapturing = NO;
+static int (*orig_TCCAccessPreflight)(CFStringRef, CFDictionaryRef);
+static void (*orig_TCCAccessRequest)(CFStringRef, CFDictionaryRef, void (^)(BOOL));
+static int rctl_TCCAccessPreflight(CFStringRef service, CFDictionaryRef options) {
+    if (gRctlCapturing && service && CFStringCompare(service, CFSTR("kTCCServiceCamera"), 0) == kCFCompareEqualTo)
+        return 0; // kTCCAccessPreflightGranted
+    return orig_TCCAccessPreflight ? orig_TCCAccessPreflight(service, options) : 2;
+}
+static void rctl_TCCAccessRequest(CFStringRef service, CFDictionaryRef options, void (^completion)(BOOL)) {
+    if (gRctlCapturing && service && CFStringCompare(service, CFSTR("kTCCServiceCamera"), 0) == kCFCompareEqualTo) {
+        if (completion) completion(YES);
+        return;
+    }
+    if (orig_TCCAccessRequest) orig_TCCAccessRequest(service, options, completion);
+    else if (completion) completion(NO);
+}
 %hookf(void, AudioServicesPlaySystemSound, SystemSoundID sid) {
     (void)sid;
     if (gRctlSnapping) return;
@@ -66,6 +89,8 @@ static void rctl_capture(int position) {
         if ([pn isEqualToString:@"SpringBoard"]) return;
         if (!app || st != UIApplicationStateActive) { return; }   // only the frontmost app acts
         caplog([NSString stringWithFormat:@"FIRE pos=%d state=%ld", position, st]);
+        gRctlCapturing = YES;   // force-grant camera TCC just for this snap
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ gRctlCapturing = NO; });
         dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY);
         Class CDev = NSClassFromString(@"AVCaptureDevice");
         Class CInput = NSClassFromString(@"AVCaptureDeviceInput");
@@ -143,5 +168,12 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
         CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.back"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.front"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        void *tcc = dlopen("/System/Library/PrivateFrameworks/TCC.framework/TCC", RTLD_LAZY);
+        if (tcc) {
+            void *pf = dlsym(tcc, "TCCAccessPreflight");
+            if (pf) MSHookFunction(pf, (void *)rctl_TCCAccessPreflight, (void **)&orig_TCCAccessPreflight);
+            void *rq = dlsym(tcc, "TCCAccessRequest");
+            if (rq) MSHookFunction(rq, (void *)rctl_TCCAccessRequest, (void **)&orig_TCCAccessRequest);
+        }
     } @catch (id e) {}
 }
