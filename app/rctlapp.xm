@@ -1,9 +1,12 @@
-// rctlcap — injected into every app. The camera can only be used by the FRONTMOST
-// app (a valid foreground client), so we capture there: when rctld pulses a Darwin
-// notification, the active app grabs a still, writes /tmp/rctl_cam.jpg, and pulses a
-// "done" notification. AVFoundation is driven via the runtime (dlopen'd lazily so we
-// don't load it into every app); the NSBundle hook supplies the camera usage string
-// so the privacy check never aborts the host app.
+// rctlapp — app-side media agent injected into every app. It brokers the daemon's
+// per-app media access from inside the FRONTMOST app (the only valid camera/mic
+// client). Camera: on a Darwin-notification pulse from rctld the active app grabs a
+// still, writes /tmp/rctl_cam.jpg, and pulses a "done" notification. AVFoundation is
+// driven via the runtime (dlopen'd lazily so we don't load it into every app); the
+// NSBundle hook supplies the camera usage string so the privacy check never aborts
+// the host app, and a gated TCC hook force-grants access just for our snap. The
+// microphone (listen + inject) lands here next, for the same reason: the active app
+// is where the mic actually lives.
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <dlfcn.h>

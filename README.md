@@ -43,7 +43,7 @@ rctl/
 ├── springboard/    # the injected agent (rctlsbcap): capture + encode + inject (thin)
 ├── daemon/         # rctld — root daemon (launchd KeepAlive): hosts the transport + relay
 ├── audio/          # rctlaudio — inactive mediaserverd system-audio payload
-├── cap/            # rctlcap — frontmost-app camera still capture payload
+├── app/            # rctlapp — frontmost-app camera still capture payload
 ├── web/            # canonical React/Vite control app; build output is web/dist/
 │   └── legacy/     #   old vanilla single-file client + vendor assets, reference only
 ├── relay/          # Go relay server + relay/web-admin admin SPA

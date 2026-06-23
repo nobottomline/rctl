@@ -1,7 +1,7 @@
 # rctl — aggregate project. Builds every component into one Debian package:
 #   springboard/  -> rctlsbcap.dylib  (thin SpringBoard agent: capture/encode/inject)
 #   daemon/       -> rctld            (root daemon: transport + automation API)   [added in P2.5b]
-#   cap/          -> rctlcap.dylib    (frontmost-app camera still capture)
+#   app/          -> rctlapp.dylib    (app-side media agent: camera + mic)
 #   audio/        -> rctlaudio.dylib  (inactive mediaserverd audio payload)
 # Extra payload (web client, LaunchDaemon plist) ships via layout/.
 #
@@ -29,7 +29,7 @@ include $(THEOS)/makefiles/common.mk
 
 SUBPROJECTS += springboard
 SUBPROJECTS += daemon
-SUBPROJECTS += cap
+SUBPROJECTS += app
 
 include $(THEOS)/makefiles/aggregate.mk
 

@@ -29,7 +29,7 @@ Do not merge `sys_audio` and `mic`. They are different products:
 
 Camera access is validated by iOS/mediaserverd against the foreground app. Prior
 daemon/SpringBoard camera attempts reached authorization but were rejected at
-hardware client validation. The current still-photo path works because `rctlcap`
+hardware client validation. The current still-photo path works because `rctlapp`
 is injected into every UIKit app and only the active foreground app performs the
 capture.
 

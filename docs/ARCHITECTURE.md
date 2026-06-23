@@ -19,7 +19,7 @@ AMFI bypass enable real touch/keyboard injection and camera-from-any-app.
 ```
   ┌─────────── iPad (jailbroken) ────────────────────────────┐
   │                                                          │
-  │  SpringBoard ──[rctlsbcap.dylib]──┐   every app ──[rctlcap.dylib]
+  │  SpringBoard ──[rctlsbcap.dylib]──┐   every app ──[rctlapp.dylib]
   │   screen capture + H.264 encode   │    camera capture in the
   │   touch/key injection             │    FRONTMOST app
   │   SB private-API actions          │         │ raw-socket POST
@@ -43,7 +43,7 @@ Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 |---|---|---|
 | **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
 | **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), WebSocket terminal `/ws/term`, relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
-| **rctlcap** (`cap/`) | injected into **every** app | captures a camera still in the frontmost app on a Darwin-notification pulse; uploads the JPEG to the daemon over a raw loopback socket |
+| **rctlapp** (`app/`) | injected into **every** app | captures a camera still in the frontmost app on a Darwin-notification pulse; uploads the JPEG to the daemon over a raw loopback socket |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/`) | the controlling browser | React/Vite control app. Primary path is WebRTC (H.264 RTP track + DataChannels); `/stream` WebCodecs remains a local/fallback path. `web/legacy/` keeps the old vanilla client for reference only. |
 
@@ -94,7 +94,7 @@ audio_output) — curl- and script-friendly, separate from the realtime plane,
 shares the IPC action path where SpringBoard context is required.
 
 **Camera → browser.** `/v1/camera?pos=` posts a Darwin notification; the **frontmost
-app** (via rctlcap) silently captures a still and POSTs it back over a raw loopback
+app** (via rctlapp) silently captures a still and POSTs it back over a raw loopback
 socket to `/v1/cam_upload`; rctld returns the JPEG. See §5 for why this convoluted
 path is necessary.
 
@@ -175,7 +175,7 @@ dylib into mediaserverd (`docs/mediaserverd-capture-classes.txt` is the class du
 SpringBoard never even reaches mediaserverd (its sandbox forbids it as a camera
 client).
 
-**The solution: capture IN the frontmost app.** `rctlcap` is injected into every app
+**The solution: capture IN the frontmost app.** `rctlapp` is injected into every app
 (`Filter.Bundles = com.apple.UIKit`). On a Darwin-notification pulse from rctld, the
 foreground-active app (a *valid* camera client) silently grabs a still with
 `AVCaptureStillImageOutput` (driven via the ObjC runtime to dodge the AVFoundation
@@ -192,7 +192,7 @@ reports Active but can't capture and would race the real app for the device).
    `killall tccd`. (`defaults` is absent on-device; `plutil -key` works.) The
    `prerm` revokes them on uninstall.
 3. **Sandbox + ATS** — a sandboxed App Store app can't write `/tmp` (outside its
-   container) and ATS blocks `NSURLSession http://`. Fix: rctlcap POSTs the JPEG over
+   container) and ATS blocks `NSURLSession http://`. Fix: rctlapp POSTs the JPEG over
    a **raw loopback socket** (`connect 127.0.0.1:8080`, hand-written HTTP) — exempt
    from ATS, allowed by the sandbox; the root daemon writes the file.
    This also forced the HTTP server to become **thread-per-connection**, because
@@ -244,7 +244,7 @@ internet phase.
   Do not manually kill mediaserverd while streaming.
 - **Same-basename `.o` collision:** two subprojects both named `Tweak.xm` collide in
   `.theos/obj`. Name each tweak's source after the tweak (`rctlsbcap.xm`,
-  `rctlcap.xm`). This is also the answer to "Tweak.xm vs rctlcam.xm": unique names
+  `rctlapp.xm`). This is also the answer to "Tweak.xm vs rctlcam.xm": unique names
   per tweak in a monorepo.
 - **AVFoundation umbrella won't build in a `.xm`** — it drags in camera/simd headers
   whose libc++ `<cmath>` isn't on the include path. Drive AVFoundation classes via

@@ -6,7 +6,7 @@
 set -e
 
 DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
-CAPLIB=/Library/MobileSubstrate/DynamicLibraries/rctlcap.dylib
+CAPLIB=/Library/MobileSubstrate/DynamicLibraries/rctlapp.dylib
 DAEMON=/usr/local/bin/rctld
 PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
 AUDIOSRC=/usr/local/lib/rctl/audio/rctlaudio.dylib
@@ -16,6 +16,11 @@ AUDIO_CAPTURE_MARKER=/tmp/rctl-audio-capture
 AUDIO_TONE_MARKER=/tmp/rctl-audio-tone
 RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
 RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
+
+# The app-side media agent was renamed rctlcap -> rctlapp; remove any stale copy
+# so the old and new dylibs don't both inject (double hooks) on an in-place upgrade.
+rm -f /Library/MobileSubstrate/DynamicLibraries/rctlcap.dylib \
+      /Library/MobileSubstrate/DynamicLibraries/rctlcap.plist 2>/dev/null || true
 
 if command -v ldid >/dev/null 2>&1; then
     [ -f "$DYLIB" ]   && ldid -S "$DYLIB"   || true
