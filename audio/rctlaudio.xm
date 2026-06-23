@@ -26,6 +26,7 @@
 #define RCTL_AUDIO_SOURCE_LOG "/tmp/rctl-audio.log"
 #define RCTL_AUDIO_SOURCE_MARKER "/tmp/rctl-audio-tone"
 #define RCTL_AUDIO_CAPTURE_MARKER "/tmp/rctl-audio-capture"
+#define RCTL_AUDIO_PROBE_MARKER "/tmp/rctl-audio-probe"
 #define RCTL_AUDIO_SOURCE_RATE 48000
 #define RCTL_AUDIO_SOURCE_FRAMES 960
 #define RCTL_CAPTURE_MAX_QUEUE 64
@@ -187,6 +188,7 @@ static capture_packet *gCaptureTail = NULL;
 static int gCaptureQueued = 0;
 static uint64_t gCapturePtsUs = 0;
 static bool gCaptureEnabled = false;
+static bool gProbe = false;   // Phase 0: verbose input-path logging, gated by RCTL_AUDIO_PROBE_MARKER
 static bool gCaptureWorkerStarted = false;
 static time_t gCaptureDeadline = 0;
 static int gCaptureLoggedFormats = 0;
@@ -464,12 +466,45 @@ static OSStatus hook_AudioQueueEnqueueBufferWithParameters(AudioQueueRef inAQ, A
                                                       inStartTime, outActualStartTime);
 }
 
+// Phase 0 probe: log every Nth AudioUnitRender's format/bus/scope/peak so we can
+// see WHERE the mic PCM appears in mediaserverd -- which unit/bus/scope carries
+// non-silent input while an app records (Voice Memos / Discord). Diagnostics only.
+static void probe_log_au(AudioUnit unit, UInt32 bus, UInt32 frames, AudioBufferList *io) {
+    static unsigned gProbeN = 0;
+    if ((++gProbeN & 0x0f) != 0) return;   // ~1 in 16
+    AudioStreamBasicDescription a; UInt32 sz = sizeof(a);
+    const char *scope = "out";
+    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, bus, &a, &sz) != noErr || sz < sizeof(a)) {
+        scope = "in"; sz = sizeof(a);
+        if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, bus, &a, &sz) != noErr) return;
+    }
+    long peak = 0;
+    if (io && io->mNumberBuffers > 0 && io->mBuffers[0].mData && io->mBuffers[0].mDataByteSize) {
+        const AudioBuffer *b = &io->mBuffers[0];
+        if ((a.mFormatFlags & kAudioFormatFlagIsSignedInteger) && a.mBitsPerChannel == 16) {
+            const int16_t *s = (const int16_t *)b->mData; uint32_t n = b->mDataByteSize / 2;
+            for (uint32_t i = 0; i < n; i++) { int v = s[i] < 0 ? -s[i] : s[i]; if (v > peak) peak = v; }
+        } else if (a.mBitsPerChannel == 32) {
+            const float *f = (const float *)b->mData; uint32_t n = b->mDataByteSize / 4;
+            for (uint32_t i = 0; i < n; i++) { float v = f[i] < 0 ? -f[i] : f[i]; long iv = (long)(v * 32767.0f); if (iv > peak) peak = iv; }
+        }
+    }
+    char line[224];
+    snprintf(line, sizeof line, "PROBE AUR unit=%p bus=%u nbuf=%u frames=%u rate=%.0f ch=%u bits=%u flags=0x%08x scope=%s peak=%ld",
+             (void *)unit, (unsigned)bus, io ? (unsigned)io->mNumberBuffers : 0, (unsigned)frames,
+             a.mSampleRate, (unsigned)a.mChannelsPerFrame, (unsigned)a.mBitsPerChannel, (unsigned)a.mFormatFlags, scope, peak);
+    as_log(line);
+}
+
 static OSStatus hook_AudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *ioActionFlags,
                                      const AudioTimeStamp *inTimeStamp, UInt32 inOutputBusNumber,
                                      UInt32 inNumberFrames, AudioBufferList *ioData) {
     OSStatus st = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber,
                                        inNumberFrames, ioData);
-    if (st == noErr) maybe_capture_audiounit(inUnit, inOutputBusNumber, inNumberFrames, ioData);
+    if (st == noErr) {
+        if (gProbe) probe_log_au(inUnit, inOutputBusNumber, inNumberFrames, ioData);
+        maybe_capture_audiounit(inUnit, inOutputBusNumber, inNumberFrames, ioData);
+    }
     return st;
 }
 
@@ -523,6 +558,7 @@ static void start_capture_hook(void) {
     @autoreleasepool {
         NSString *proc = [[NSProcessInfo processInfo] processName] ?: @"?";
         if (![proc isEqualToString:@"mediaserverd"]) return;
+        gProbe = (access(RCTL_AUDIO_PROBE_MARKER, F_OK) == 0);
 
         if (access(RCTL_AUDIO_CAPTURE_MARKER, F_OK) == 0) {
             as_log("loaded with capture marker; installing hook");
