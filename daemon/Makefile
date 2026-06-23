@@ -36,7 +36,7 @@ rctld_LDFLAGS = $(DC)/build-ios/libdatachannel.a \
                 $(MBED)/lib/libmbedtls.a $(MBED)/lib/libmbedx509.a $(MBED)/lib/libmbedcrypto.a \
                 $(OPUS)/lib/libopus.a \
                 -lc++
-rctld_FRAMEWORKS = Foundation IOKit
+rctld_FRAMEWORKS = Foundation IOKit AudioToolbox
 rctld_INSTALL_PATH = /usr/local/bin
 
 include $(THEOS)/makefiles/tool.mk

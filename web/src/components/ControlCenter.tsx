@@ -6,6 +6,8 @@ import {
   Headphones,
   House,
   Lock,
+  Mic,
+  MicOff,
   Moon,
   RotateCw,
   SlidersHorizontal,
@@ -86,6 +88,14 @@ export default function ControlCenter({
           active={ctl.audio.deviceSpeaker}
           onClick={ctl.audio.toggleSpeaker}
         />
+        {ctl.talk.supported && (
+          <Key
+            icon={ctl.talk.talking ? Mic : MicOff}
+            label={ctl.talk.talking ? 'Talking' : 'Talk'}
+            active={ctl.talk.talking}
+            onClick={() => (ctl.talk.talking ? ctl.talk.stop() : ctl.talk.start())}
+          />
+        )}
       </Group>
 
       <div>

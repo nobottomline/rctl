@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats, type MacroEvent } from '../lib/engine'
 import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
+import { MicTalk, micSupported } from '../lib/mic'
 import { api, apiJSON } from '../lib/rctl'
 
 // Wires the imperative ControlEngine to React: creates it against the stage +
@@ -19,6 +20,8 @@ export function useControl(
   const engineRef = useRef<ControlEngine | null>(null)
   const audioRef = useRef(new AudioPlayer())
   const filesRef = useRef(new FileTransfer())
+  const micRef = useRef(new MicTalk())
+  const [talking, setTalking] = useState(false)
   const [listening, setListening] = useState(false)
   const [audioBusy, setAudioBusy] = useState(false)
   const [deviceSpeaker, setDeviceSpeaker] = useState(true)
@@ -40,7 +43,9 @@ export function useControl(
       onOrient: (o, manual) => setOrient({ o, manual }),
       onAudioChannel: (ch) => audioRef.current.attach(ch),
       onFilesChannel: (ch) => filesRef.current.attach(ch),
+      onMicChannel: (ch) => micRef.current.attach(ch),
     })
+    micRef.current.onState = setTalking
     engineRef.current = engine
     engine.start()
 
@@ -278,6 +283,12 @@ export function useControl(
     brightness,
     setBrightness: changeBrightness,
     filesTransfer: filesRef.current,
+    talk: {
+      supported: micSupported(),
+      talking,
+      start: () => micRef.current.start(),
+      stop: () => micRef.current.stop(),
+    },
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),

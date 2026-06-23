@@ -79,6 +79,7 @@ export type EngineCallbacks = {
   onControlChannel?: (ch: RTCDataChannel) => void
   onAudioChannel?: (ch: RTCDataChannel) => void
   onFilesChannel?: (ch: RTCDataChannel) => void
+  onMicChannel?: (ch: RTCDataChannel) => void
 }
 
 export class ControlEngine {
@@ -794,6 +795,8 @@ export class ControlEngine {
         this.cb.onAudioChannel?.(ch)
       } else if (ch.label === 'files') {
         this.cb.onFilesChannel?.(ch)
+      } else if (ch.label === 'mic-in') {
+        this.cb.onMicChannel?.(ch)
       }
     }
 

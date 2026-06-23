@@ -16,6 +16,8 @@
 #include "rtc/rtc.hpp"
 #include "nlohmann/json.hpp"
 #include <opus/opus.h>
+#include <AudioToolbox/AudioToolbox.h>
+#include <cstring>
 
 #include <algorithm>
 #include <chrono>
@@ -49,6 +51,7 @@ struct Session {
     std::shared_ptr<rtc::DataChannel> audioDc;
     std::shared_ptr<rtc::DataChannel> control;
     std::shared_ptr<rtc::DataChannel> filesDc;
+    std::shared_ptr<rtc::DataChannel> micIn;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
@@ -191,6 +194,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     if (dead->control) dead->control->resetCallbacks();
     if (dead->filesDc) dead->filesDc->resetCallbacks();
     if (dead->audioDc) dead->audioDc->resetCallbacks();
+    if (dead->micIn)   dead->micIn->resetCallbacks();
     if (dead->track)   dead->track->resetCallbacks();
     if (dead->pc)      dead->pc->resetCallbacks();
     // Purge from the global send lists; the onClosed that normally does this is
@@ -217,6 +221,55 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     }
     if (lastGone && g_viewer_cb) g_viewer_cb(false);
     // `dead` drops at the caller: callbacks detached + none in flight -> safe.
+}
+
+// ---- Mic intercom (Phase B.5) -------------------------------------------------
+// Browser mic -> Opus over the "mic-in" DataChannel -> here -> decode -> AudioQueue
+// -> iPad speaker. Validates the reverse audio path (browser -> device) that the
+// virtual-mic (Phase C) will reuse, routing the PCM into the mic input instead of
+// the speaker. Lazy-init on the first frame; mono 48k to match the browser encoder.
+static std::mutex g_micMtx;
+static OpusDecoder *g_micDec = nullptr;
+static AudioQueueRef g_micAQ = nullptr;
+static const int kMicRate = 48000;
+
+static void mic_aq_done(void *user, AudioQueueRef aq, AudioQueueBufferRef buf) {
+    (void)user;
+    AudioQueueFreeBuffer(aq, buf);
+}
+
+static void mic_play_opus(const uint8_t *opus, size_t len) {
+    std::lock_guard<std::mutex> lk(g_micMtx);
+    if (!g_micDec) {
+        int err = 0;
+        g_micDec = opus_decoder_create(kMicRate, 1, &err);
+        if (err != OPUS_OK) { g_micDec = nullptr; return; }
+    }
+    int16_t pcm[5760];   // up to 120ms @ 48k mono
+    int frames = opus_decode(g_micDec, opus, (opus_int32)len, pcm, 5760, 0);
+    if (frames <= 0) return;
+    if (!g_micAQ) {
+        AudioStreamBasicDescription a = {};
+        a.mSampleRate = kMicRate;
+        a.mFormatID = kAudioFormatLinearPCM;
+        a.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+        a.mChannelsPerFrame = 1;
+        a.mBitsPerChannel = 16;
+        a.mBytesPerFrame = 2;
+        a.mFramesPerPacket = 1;
+        a.mBytesPerPacket = 2;
+        if (AudioQueueNewOutput(&a, mic_aq_done, nullptr, nullptr, nullptr, 0, &g_micAQ) != noErr) {
+            g_micAQ = nullptr; return;
+        }
+        AudioQueueStart(g_micAQ, nullptr);
+        wlog("mic intercom: AudioQueue started");
+    }
+    UInt32 bytes = (UInt32)frames * 2;
+    AudioQueueBufferRef buf = nullptr;
+    if (AudioQueueAllocateBuffer(g_micAQ, bytes, &buf) != noErr) return;
+    memcpy(buf->mAudioData, pcm, bytes);
+    buf->mAudioDataByteSize = bytes;
+    AudioQueueEnqueueBuffer(g_micAQ, buf, 0, nullptr);
 }
 
 static void start_session(const std::string &id, const json &ice) {
@@ -383,6 +436,18 @@ static void start_session(const std::string &id, const json &ice) {
     filesDc->onClosed([fptr]() {
         std::lock_guard<std::mutex> lk(g_mtx);
         if (g_files_dc && g_files_dc.get() == fptr) g_files_dc.reset();
+    });
+
+    // Mic-in channel (Phase B.5): the browser sends Opus frames of its microphone;
+    // we decode + play them through the iPad speaker (intercom). Reliable+ordered
+    // (default) like the audio channel -- simple and proven; can switch to lossy
+    // for lower latency later.
+    auto micIn = pc->createDataChannel("mic-in");
+    sess->micIn = micIn;
+    micIn->onMessage([](rtc::message_variant msg) {
+        if (!std::holds_alternative<rtc::binary>(msg)) return;
+        const auto &b = std::get<rtc::binary>(msg);
+        mic_play_opus(reinterpret_cast<const uint8_t *>(b.data()), b.size());
     });
 
     std::shared_ptr<Session> prior;
