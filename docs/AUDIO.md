@@ -37,8 +37,7 @@ respring the UI or break touch/video control.
 
 When `/v1/audio_capture?on=1` is called, `rctld`:
 
-1. removes any stale active audio payload or marker, including legacy
-   `rctlaudiosource.*` names;
+1. removes any stale active audio payload or marker;
 2. copies `rctlaudio.dylib` and `rctlaudio.plist` into
    `/Library/MobileSubstrate/DynamicLibraries`;
 3. signs the active dylib with on-device `ldid`;

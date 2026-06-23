@@ -46,10 +46,6 @@ extern char **environ;
 #define RCTL_AUDIO_CAPTURE_MARKER "/tmp/rctl-audio-capture"
 #define RCTL_AUDIO_TONE_MARKER "/tmp/rctl-audio-tone"
 #define RCTL_AUDIO_LOG "/tmp/rctl-audio.log"
-#define RCTL_AUDIO_LEGACY_ACTIVE_DYLIB "/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.dylib"
-#define RCTL_AUDIO_LEGACY_ACTIVE_PLIST "/Library/MobileSubstrate/DynamicLibraries/rctlaudiosource.plist"
-#define RCTL_AUDIO_LEGACY_CAPTURE_MARKER "/tmp/rctl-audiosource-capture"
-#define RCTL_AUDIO_LEGACY_TONE_MARKER "/tmp/rctl-audiosource-tone"
 static void respring_device(void) {
     pid_t pid;
     char *argv[] = { (char *)"killall", (char *)"SpringBoard", NULL };
@@ -524,10 +520,6 @@ static bool audio_capture_set(bool on, char *err, size_t errsz) {
             unlink(RCTL_AUDIO_CAPTURE_MARKER);
             unlink(RCTL_AUDIO_ACTIVE_DYLIB);
             unlink(RCTL_AUDIO_ACTIVE_PLIST);
-            unlink(RCTL_AUDIO_LEGACY_TONE_MARKER);
-            unlink(RCTL_AUDIO_LEGACY_CAPTURE_MARKER);
-            unlink(RCTL_AUDIO_LEGACY_ACTIVE_DYLIB);
-            unlink(RCTL_AUDIO_LEGACY_ACTIVE_PLIST);
             if (!copy_file(RCTL_AUDIO_PAYLOAD_DYLIB, RCTL_AUDIO_ACTIVE_DYLIB, 0755) ||
                 !copy_file(RCTL_AUDIO_PAYLOAD_PLIST, RCTL_AUDIO_ACTIVE_PLIST, 0644)) {
                 set_err(err, errsz, "copy audio payload failed");
@@ -550,17 +542,11 @@ static bool audio_capture_set(bool on, char *err, size_t errsz) {
         }
     } else {
         bool hadActive = file_exists(RCTL_AUDIO_ACTIVE_DYLIB) || file_exists(RCTL_AUDIO_ACTIVE_PLIST) ||
-                         file_exists(RCTL_AUDIO_CAPTURE_MARKER) || file_exists(RCTL_AUDIO_TONE_MARKER) ||
-                         file_exists(RCTL_AUDIO_LEGACY_ACTIVE_DYLIB) || file_exists(RCTL_AUDIO_LEGACY_ACTIVE_PLIST) ||
-                         file_exists(RCTL_AUDIO_LEGACY_CAPTURE_MARKER) || file_exists(RCTL_AUDIO_LEGACY_TONE_MARKER);
+                         file_exists(RCTL_AUDIO_CAPTURE_MARKER) || file_exists(RCTL_AUDIO_TONE_MARKER);
         unlink(RCTL_AUDIO_ACTIVE_DYLIB);
         unlink(RCTL_AUDIO_ACTIVE_PLIST);
         unlink(RCTL_AUDIO_CAPTURE_MARKER);
         unlink(RCTL_AUDIO_TONE_MARKER);
-        unlink(RCTL_AUDIO_LEGACY_ACTIVE_DYLIB);
-        unlink(RCTL_AUDIO_LEGACY_ACTIVE_PLIST);
-        unlink(RCTL_AUDIO_LEGACY_CAPTURE_MARKER);
-        unlink(RCTL_AUDIO_LEGACY_TONE_MARKER);
         if (gAudioCaptureDesired || hadActive) {
             bool resumeVideo = pause_video_for_media_restart();
             restart_mediaserverd();
