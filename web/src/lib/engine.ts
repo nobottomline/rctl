@@ -4,8 +4,8 @@
 // DataChannel vs HTTP input fallback) operating on DOM elements React hands it,
 // so the hard-won behavior moves over unchanged instead of being re-derived.
 //
-// Two transports share this engine: WebRTC (relay) and the device-local
-// /stream WebCodecs path (below). Audio playback and the files DataChannel are
+// Two transports share this engine: WebRTC (relay or direct LAN) and the
+// /stream WebCodecs fallback path. Audio playback and the files DataChannel are
 // exposed via callbacks so those layers attach on top.
 
 import { WEBRTC_MODE, RELAY_MODE, api, signalWS } from './rctl'
@@ -136,6 +136,11 @@ export class ControlEngine {
   start() {
     if (WEBRTC_MODE) {
       this.startWebRTC(signalWS())
+    } else if (RELAY_MODE) {
+      // Relay with WebRTC disabled: use the authenticated stream tunnel as a
+      // compatibility/debug fallback. Do not try local /ws/signal from a relay
+      // origin; that endpoint exists only on rctld itself.
+      this.startStream()
     } else if (typeof RTCPeerConnection !== 'undefined') {
       // Device-local P2P: signal over the device's own /ws/signal with host-only
       // ICE -> direct-LAN WebRTC (relay-grade video, no relay, no TURN). Falls
@@ -577,7 +582,7 @@ export class ControlEngine {
     if (!this.rafId) this.rafId = requestAnimationFrame(this.present)
     let resp: Response
     try {
-      resp = await fetch('/stream')
+      resp = await api('/stream')
     } catch {
       this.status('stream failed')
       return

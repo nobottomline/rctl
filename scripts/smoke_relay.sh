@@ -53,6 +53,17 @@ extract_json_string() {
 require curl
 require go
 
+if [[ ! -f "${ROOT}/web/dist/index.html" ]] ||
+   find "${ROOT}/web/src" "${ROOT}/web/index.html" "${ROOT}/web/package.json" -newer "${ROOT}/web/dist/index.html" 2>/dev/null | grep -q .; then
+  require npm
+  say "building web client"
+  (
+    cd "${ROOT}/web"
+    [[ -d node_modules ]] || npm ci
+    npm run build
+  )
+fi
+
 say "building relay binary"
 (
   cd "${ROOT}/relay"
@@ -252,7 +263,7 @@ RCTL_RELAY_LISTEN="127.0.0.1:${PORT}" \
 RCTL_RELAY_PUBLIC_URL="${BASE_URL}" \
 RCTL_RELAY_ALLOW_INSECURE=1 \
 RCTL_RELAY_DB="${WORK}/relay.db" \
-RCTL_RELAY_WEB_DIR="${ROOT}/web" \
+RCTL_RELAY_WEB_DIR="${ROOT}/web/dist" \
 RCTL_RELAY_ADMIN_SECRET="admin-secret-0123456789abcdef" \
 RCTL_RELAY_SESSION_SECRET="session-secret-0123456789abcdef0123456789" \
 RCTL_RELAY_TUNNEL_TIMEOUT=5s \
@@ -313,7 +324,6 @@ curl -fsS -b "${WORK}/admin.cookies" \
   "${BASE_URL}/control/devices/smoke-device" >"${WORK}/control.html"
 grep -q 'RCTL_PROXY_BASE="/proxy/devices/smoke-device"' "${WORK}/control.html"
 grep -q 'RCTL_STREAM_BASE="/stream/devices/smoke-device"' "${WORK}/control.html"
-curl -fsSI "${BASE_URL}/vendor/xterm.js" | grep -q '200 OK'
 
 say "checking HTTP tunnel"
 curl -fsS -b "${WORK}/admin.cookies" \

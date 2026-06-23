@@ -9,6 +9,12 @@ obj/
 *.deb
 relay/rctl-relay
 
+# Frontend local artifacts. Docker builds the control web client itself.
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+relay/web-admin/node_modules/
+
 # Debug captures may include private device screen/audio data.
 *.png
 *.h264

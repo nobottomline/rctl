@@ -47,13 +47,3 @@ window.RCTL_WEBRTC=` + webrtc + `;
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	writeText(w, http.StatusOK, "text/html; charset=utf-8", page)
 }
-
-
-func (s *server) handleWebVendor(w http.ResponseWriter, r *http.Request) {
-	name := filepath.Clean(r.PathValue("path"))
-	if name == "." || strings.HasPrefix(name, "..") || filepath.IsAbs(name) {
-		writeErr(w, http.StatusBadRequest, "bad_asset_path")
-		return
-	}
-	http.ServeFile(w, r, filepath.Join(s.cfg.WebDir, "vendor", name))
-}

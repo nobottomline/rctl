@@ -42,7 +42,7 @@ func loadConfig() (config, error) {
 		ListenAddr:         getenv("RCTL_RELAY_LISTEN", ":8080"),
 		PublicURL:          getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080"),
 		DatabasePath:       getenv("RCTL_RELAY_DB", "./data/rctl-relay.db"),
-		WebDir:             getenv("RCTL_RELAY_WEB_DIR", "../web"),
+		WebDir:             getenv("RCTL_RELAY_WEB_DIR", "../web/dist"),
 		AdminSecret:        os.Getenv("RCTL_RELAY_ADMIN_SECRET"),
 		SessionSecret:      os.Getenv("RCTL_RELAY_SESSION_SECRET"),
 		AllowInsecure:      getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),

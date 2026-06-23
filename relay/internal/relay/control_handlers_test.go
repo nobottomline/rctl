@@ -102,23 +102,6 @@ func TestControlPageInjectsRelayPaths(t *testing.T) {
 	}
 }
 
-func TestWebVendorAsset(t *testing.T) {
-	ts := newControlPageTestServer(t)
-
-	resp, err := ts.client.Get(ts.URL + "/vendor/xterm.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	got := readResponseBody(t, resp)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d: %s", resp.StatusCode, http.StatusOK, got)
-	}
-	if got != "vendor-ok" {
-		t.Fatalf("body = %q, want vendor-ok", got)
-	}
-}
-
 type controlPageTestServer struct {
 	*httptest.Server
 	client        *http.Client
@@ -129,13 +112,7 @@ func newControlPageTestServer(t *testing.T) controlPageTestServer {
 	t.Helper()
 
 	webDir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(webDir, "vendor"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte(`<html><head></head><body><script>fetch('/v1/info')</script></body></html>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(webDir, "vendor", "xterm.js"), []byte("vendor-ok"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

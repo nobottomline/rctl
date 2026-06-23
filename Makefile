@@ -33,13 +33,13 @@ SUBPROJECTS += cap
 
 include $(THEOS)/makefiles/aggregate.mk
 
-# Stage the React/Vite control client (web-control/) as the device control page.
+# Stage the React/Vite control client (web/) as the device control page.
 # It's one self-contained index.html (xterm etc. inlined), rebuilt only when its
-# sources changed. The old vanilla page is kept at web/legacy.html for reference.
+# sources changed. The old vanilla page is kept under web/legacy/ for reference.
 after-stage::
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/var/mobile/rctl"$(ECHO_END)
-	$(ECHO_NOTHING)if [ ! -f web-control/dist/index.html ] || find web-control/src web-control/index.html web-control/package.json -newer web-control/dist/index.html 2>/dev/null | grep -q .; then echo "==> Building web-control client"; ( cd web-control && { [ -d node_modules ] || npm install; } && npm run build ); fi$(ECHO_END)
-	$(ECHO_NOTHING)cp web-control/dist/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
+	$(ECHO_NOTHING)if [ ! -f web/dist/index.html ] || find web/src web/index.html web/package.json -newer web/dist/index.html 2>/dev/null | grep -q .; then echo "==> Building web client"; ( cd web && { [ -d node_modules ] || npm ci; } && npm run build ); fi$(ECHO_END)
+	$(ECHO_NOTHING)cp web/dist/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
 	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
 	$(ECHO_NOTHING)set -e; dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
