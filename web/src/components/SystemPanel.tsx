@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
 import {
+  Check,
+  ChevronDown,
   ChevronRight,
   Copy,
   Download,
@@ -7,6 +9,7 @@ import {
   FileText,
   Globe,
   Library,
+  ListFilter,
   MoreVertical,
   Package,
   Power,
@@ -274,7 +277,7 @@ export default function SystemPanel({ onClose, transfer }: { onClose: () => void
             }}
             className={cn(
               'flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[12px] font-medium transition-colors',
-              tab === t.id ? 'bg-signal text-on-signal' : 'text-fg-dim active:bg-fg/10',
+              tab === t.id ? 'bg-signal text-on-signal' : 'text-fg-dim hover:bg-fg/8 hover:text-fg active:bg-fg/10',
             )}
           >
             <t.icon className="size-3.5" />
@@ -300,42 +303,42 @@ export default function SystemPanel({ onClose, transfer }: { onClose: () => void
             className="h-9 w-full min-w-0 rounded-lg bg-fg/[0.06] pl-8 pr-2.5 text-[13px] text-fg outline-none ring-1 ring-line/70 transition placeholder:text-faint focus:ring-2 focus:ring-signal/70"
           />
         </div>
+        {tab === 'packages' && (
+          <FilterDropdown
+            value={pkgMode}
+            onChange={(v) => {
+              setPkgMode(v as PkgMode)
+              setExpanded(null)
+            }}
+            options={[
+              ['user', 'User'],
+              ['expert', 'Expert'],
+              ['recent', 'Recent'],
+            ]}
+          />
+        )}
+        {tab === 'dylibs' && (
+          <FilterDropdown
+            value={dylibFilter}
+            onChange={(v) => {
+              setDylibFilter(v as DylibFilter)
+              setExpanded(null)
+            }}
+            options={[
+              ['all', 'All'],
+              ['injected', 'Injected'],
+              ['system', 'System'],
+            ]}
+          />
+        )}
         <button
           onClick={() => load(tab, true)}
           aria-label="Refresh"
-          className="grid size-9 shrink-0 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors active:bg-fg/15"
+          className="grid size-9 shrink-0 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors hover:bg-fg/12 active:bg-fg/15"
         >
           <RotateCw className={cn('size-4', busy && 'animate-spin')} />
         </button>
       </div>
-      {tab === 'packages' && (
-        <Segment
-          value={pkgMode}
-          onChange={(v) => {
-            setPkgMode(v as PkgMode)
-            setExpanded(null)
-          }}
-          options={[
-            ['user', 'User'],
-            ['expert', 'Expert'],
-            ['recent', 'Recent'],
-          ]}
-        />
-      )}
-      {tab === 'dylibs' && (
-        <Segment
-          value={dylibFilter}
-          onChange={(v) => {
-            setDylibFilter(v as DylibFilter)
-            setExpanded(null)
-          }}
-          options={[
-            ['all', 'All'],
-            ['injected', 'Injected'],
-            ['system', 'System'],
-          ]}
-        />
-      )}
     </div>
   )
 
@@ -768,29 +771,55 @@ function RepoIcon({ icon, big }: { icon?: string; big?: boolean }) {
   )
 }
 
-function Segment<T extends string>({
+// A compact filter affordance: a button showing the current option that opens a
+// dropdown -- tidier than a second segmented bar under the tabs.
+function FilterDropdown({
   value,
-  onChange,
   options,
+  onChange,
 }: {
-  value: T
-  onChange: (v: T) => void
-  options: [T, string][]
+  value: string
+  options: [string, string][]
+  onChange: (v: string) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o[0] === value)?.[1] ?? ''
   return (
-    <div className="flex gap-1 rounded-lg bg-fg/6 p-0.5">
-      {options.map(([v, label]) => (
-        <button
-          key={v}
-          onClick={() => onChange(v)}
-          className={cn(
-            'flex-1 rounded-md py-1 text-[11px] font-medium transition-colors',
-            value === v ? 'bg-signal text-on-signal' : 'text-fg-dim hover:bg-fg/8 active:bg-fg/10',
-          )}
-        >
-          {label}
-        </button>
-      ))}
+    <div className="relative shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          'flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium transition-colors',
+          open ? 'bg-fg/12 text-fg' : 'bg-fg/8 text-fg-dim hover:bg-fg/12 hover:text-fg',
+        )}
+      >
+        <ListFilter className="size-3.5" />
+        {current}
+        <ChevronDown className={cn('size-3.5 text-faint transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <>
+          <button className="fixed inset-0 z-40 cursor-default" aria-label="Close" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full z-50 mt-1 w-36 overflow-hidden rounded-xl bg-elevated p-1 shadow-2xl shadow-black/50 ring-1 ring-line-2">
+            {options.map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => {
+                  onChange(v)
+                  setOpen(false)
+                }}
+                className={cn(
+                  'flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-fg/8',
+                  v === value ? 'font-medium text-signal' : 'text-fg',
+                )}
+              >
+                {label}
+                {v === value && <Check className="size-3.5" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
