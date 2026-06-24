@@ -998,6 +998,20 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
             if (f) { fwrite(body, 1, body_len, f); fclose(f); }
         }
         // -> default {"ok":true}
+    } else if (!strcmp(path, "/v1/applog")) {         // rctlapp is sandboxed (no /tmp); it ships diagnostics here
+        if (body && body_len > 0) {
+            char ln[480]; size_t n = (size_t)body_len < sizeof(ln) - 1 ? (size_t)body_len : sizeof(ln) - 1;
+            memcpy(ln, body, n); ln[n] = 0;
+            char tag[520]; snprintf(tag, sizeof tag, "[applog] %s", ln);
+            dlog(tag);
+        }
+        // -> default {"ok":true}
+    } else if (!strcmp(path, "/v1/mic_capture")) {    // Phase A: toggle the app-side mic tap (listen mic)
+        char onp[8]; int on = 0;
+        if (get_param(query, "on", onp, sizeof onp) && onp[0] == '1') on = 1;
+        notify_post(on ? "com.greatlove.rctl.mic.on" : "com.greatlove.rctl.mic.off");
+        dlog(on ? "mic_capture on" : "mic_capture off");
+        // -> default {"ok":true}
     } else if (!strcmp(path, "/v1/camera")) {         // snap a photo IN the frontmost app
         int pos = 1; char posp[16];                   // 1=back, 2=front
         if (get_param(query, "pos", posp, sizeof posp) && (!strcmp(posp, "front") || !strcmp(posp, "2"))) pos = 2;
