@@ -29,7 +29,9 @@ if [[ -n "${RCTL_DEB:-}" ]]; then
   [[ -f "$DEB" ]] || { echo "[deploy] RCTL_DEB not found: $DEB" >&2; exit 1; }
 else
   make -C "$ROOT" THEOS="$THEOS" package
-  DEB="$(ls -t "$ROOT"/packages/*.deb | head -1)"
+  # sed -n 1p (not head -1) drains ls fully -- head closes the pipe early and,
+  # once packages/ holds many .debs, that SIGPIPEs ls and pipefail aborts the deploy.
+  DEB="$(ls -t "$ROOT"/packages/*.deb | sed -n '1p')"
 fi
 echo "[deploy] $DEB -> $HOST"
 scp -q "$DEB" "$HOST:/tmp/rctl.deb"
