@@ -35,6 +35,7 @@
 #import <net/if.h>
 #import <mach/mach.h>
 #import <stdlib.h>
+#import <mach-o/dyld.h>
 #import "net/HttpStreamServer.h"
 #import "net/RelayClient.h"
 #import "ipc/Ipc.h"
@@ -843,6 +844,132 @@ static void rctl_mic_capture_stop(void);
 static void rctl_mic_refresh(void);
 static bool rctl_mic_record_start(void);
 static void rctl_mic_record_stop(void);
+
+// ---- System Inspector --------------------------------------------------------
+// All read-only. JSON is built via NSJSONSerialization (handles escaping) and
+// returned as a malloc'd C string, matching list_dir()'s contract.
+
+// Installed packages, parsed straight from dpkg's status DB (no shelling out).
+static char *rctl_packages_json(void) {
+    NSString *raw = nil;
+    for (NSString *p in @[ @"/var/lib/dpkg/status", @"/var/jb/var/lib/dpkg/status" ]) {
+        raw = [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil];
+        if (!raw) raw = [NSString stringWithContentsOfFile:p encoding:NSISOLatin1StringEncoding error:nil];
+        if (raw) break;
+    }
+    NSMutableArray *pkgs = [NSMutableArray array];
+    if (raw) {
+        for (NSString *stanza in [raw componentsSeparatedByString:@"\n\n"]) {
+            if (stanza.length == 0) continue;
+            NSString *pkg = nil, *ver = nil, *name = nil, *section = nil, *desc = nil, *author = nil, *st = nil;
+            long size = 0;
+            for (NSString *line in [stanza componentsSeparatedByString:@"\n"]) {
+                if ([line hasPrefix:@" "]) continue;            // long-description continuation
+                NSRange c = [line rangeOfString:@": "];
+                if (c.location == NSNotFound) continue;
+                NSString *k = [line substringToIndex:c.location];
+                NSString *v = [line substringFromIndex:c.location + 2];
+                if ([k isEqualToString:@"Package"]) pkg = v;
+                else if ([k isEqualToString:@"Version"]) ver = v;
+                else if ([k isEqualToString:@"Name"]) name = v;             // Cydia display name
+                else if ([k isEqualToString:@"Section"]) section = v;
+                else if ([k isEqualToString:@"Author"]) author = v;
+                else if ([k isEqualToString:@"Installed-Size"]) size = [v integerValue]; // KB
+                else if ([k isEqualToString:@"Status"]) st = v;
+                else if ([k isEqualToString:@"Description"]) desc = v;
+            }
+            if (!pkg) continue;
+            if (st && [st rangeOfString:@"installed"].location == NSNotFound) continue; // not actually installed
+            [pkgs addObject:@{
+                @"id": pkg,
+                @"name": (name.length ? name : pkg),
+                @"version": (ver ?: @""),
+                @"section": (section ?: @""),
+                @"author": (author ?: @""),
+                @"desc": (desc ?: @""),
+                @"size": @((long long)size * 1024),
+            }];
+        }
+    }
+    [pkgs sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"name"] caseInsensitiveCompare:b[@"name"]];
+    }];
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"count": @(pkgs.count), @"packages": pkgs } options:0 error:nil];
+    if (!jd) return strdup("{\"count\":0,\"packages\":[]}");
+    char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+    return out;
+}
+
+// MobileSubstrate tweaks: each .dylib with its filter (which bundles/executables
+// it injects into), read from the companion .plist.
+static char *rctl_tweaks_json(void) {
+    NSMutableArray *tweaks = [NSMutableArray array];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *dirs = @[ @"/Library/MobileSubstrate/DynamicLibraries", @"/usr/lib/TweakInject",
+                       @"/var/jb/Library/MobileSubstrate/DynamicLibraries", @"/var/jb/usr/lib/TweakInject" ];
+    for (NSString *dir in dirs) {
+        for (NSString *f in ([fm contentsOfDirectoryAtPath:dir error:nil] ?: @[])) {
+            if (![[f pathExtension] isEqualToString:@"plist"]) continue;
+            NSString *base = [f stringByDeletingPathExtension];
+            NSString *plistPath = [dir stringByAppendingPathComponent:f];
+            NSString *dylibPath = [dir stringByAppendingPathComponent:[base stringByAppendingPathExtension:@"dylib"]];
+            NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:plistPath];
+            NSArray *bundles = @[], *execs = @[];
+            if ([plist isKindOfClass:[NSDictionary class]]) {
+                NSDictionary *filter = plist[@"Filter"];
+                if ([filter isKindOfClass:[NSDictionary class]]) {
+                    if ([filter[@"Bundles"] isKindOfClass:[NSArray class]]) bundles = filter[@"Bundles"];
+                    if ([filter[@"Executables"] isKindOfClass:[NSArray class]]) execs = filter[@"Executables"];
+                }
+            }
+            struct stat stt; long size = (stat(dylibPath.fileSystemRepresentation, &stt) == 0) ? (long)stt.st_size : 0;
+            [tweaks addObject:@{
+                @"name": base,
+                @"path": dylibPath,
+                @"bundles": bundles,
+                @"executables": execs,
+                @"size": @(size),
+                @"present": @([fm fileExistsAtPath:dylibPath]),
+            }];
+        }
+    }
+    [tweaks sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"name"] caseInsensitiveCompare:b[@"name"]];
+    }];
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"count": @(tweaks.count), @"tweaks": tweaks } options:0 error:nil];
+    if (!jd) return strdup("{\"count\":0,\"tweaks\":[]}");
+    char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+    return out;
+}
+
+// Dynamic libraries currently mapped into this process (rctld). Anything not an OS
+// image (outside /System and /usr/lib) is flagged so injected/3rd-party code shows.
+static char *rctl_dylibs_json(void) {
+    NSMutableArray *libs = [NSMutableArray array];
+    uint32_t n = _dyld_image_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char *nm = _dyld_get_image_name(i);
+        if (!nm) continue;
+        NSString *path = [NSString stringWithUTF8String:nm];
+        if (!path) continue;
+        BOOL injected = !([path hasPrefix:@"/System/"] || [path hasPrefix:@"/usr/lib/"]);
+        struct stat stt; long size = (stat(nm, &stt) == 0) ? (long)stt.st_size : 0;
+        [libs addObject:@{
+            @"name": [path lastPathComponent],
+            @"path": path,
+            @"size": @(size),
+            @"injected": @(injected),
+        }];
+    }
+    [libs sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"name"] caseInsensitiveCompare:b[@"name"]];
+    }];
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"count": @(libs.count), @"process": @"rctld", @"dylibs": libs } options:0 error:nil];
+    if (!jd) return strdup("{\"count\":0,\"dylibs\":[]}");
+    char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+    return out;
+}
+
 static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
@@ -922,6 +1049,18 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         char *d = rctl_diagnostics_json();
         if (d) return d;
         *status = 500; return strdup("{\"error\":\"diagnostics failed\"}");
+    } else if (!strcmp(path, "/v1/packages")) {       // installed dpkg packages
+        char *p = rctl_packages_json();
+        if (p) return p;
+        *status = 500; return strdup("{\"error\":\"packages failed\"}");
+    } else if (!strcmp(path, "/v1/tweaks")) {         // MobileSubstrate tweaks + filters
+        char *t = rctl_tweaks_json();
+        if (t) return t;
+        *status = 500; return strdup("{\"error\":\"tweaks failed\"}");
+    } else if (!strcmp(path, "/v1/dylibs")) {         // dylibs loaded in rctld
+        char *dl = rctl_dylibs_json();
+        if (dl) return dl;
+        *status = 500; return strdup("{\"error\":\"dylibs failed\"}");
     } else if (!strcmp(path, "/v1/apps")) {
         char *apps = sb_query(RCTL_Q_APPLIST, NULL, 0, 3.0);   // enumeration can be slower
         if (apps) return apps;            // JSON array [{id,name}]

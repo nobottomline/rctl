@@ -1,6 +1,7 @@
 import { useState, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
+  Boxes,
   ChevronDown,
   Download,
   Ear,
@@ -51,6 +52,7 @@ export default function ControlCenter({
   onTerminal,
   onFiles,
   onConsole,
+  onSystem,
 }: {
   ctl: Ctl
   theme: Theme
@@ -58,6 +60,7 @@ export default function ControlCenter({
   onTerminal: () => void
   onFiles: () => void
   onConsole: () => void
+  onSystem: () => void
 }) {
   return (
     <div className="fixed bottom-16 right-3 z-30 max-h-[calc(100dvh-5rem)] w-60 space-y-2.5 overflow-y-auto rounded-2xl bg-elevated/90 p-2.5 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2 backdrop-blur-2xl">
@@ -111,6 +114,7 @@ export default function ControlCenter({
 
       <div className="flex gap-1.5 pt-0.5">
         <Launch icon={Wand2} label="Console" onClick={onConsole} />
+        <Launch icon={Boxes} label="System" onClick={onSystem} />
         <Launch icon={FolderOpen} label="Files" onClick={onFiles} />
         <Launch icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
       </div>

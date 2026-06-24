@@ -7,8 +7,9 @@ import ControlCenter from './components/ControlCenter'
 import TerminalPanel from './components/TerminalPanel'
 import FilesPanel from './components/FilesPanel'
 import ConsolePanel from './components/ConsolePanel'
+import SystemPanel from './components/SystemPanel'
 
-type View = null | 'cc' | 'terminal' | 'files' | 'console'
+type View = null | 'cc' | 'terminal' | 'files' | 'console' | 'system'
 
 export default function App() {
   const stageRef = useRef<HTMLDivElement>(null)
@@ -68,6 +69,7 @@ export default function App() {
           onTerminal={() => setView('terminal')}
           onFiles={() => setView('files')}
           onConsole={() => setView('console')}
+          onSystem={() => setView('system')}
         />
       )}
       {view === 'terminal' && <TerminalPanel onClose={() => setView(null)} />}
@@ -80,6 +82,7 @@ export default function App() {
           transfer={ctl.filesTransfer}
         />
       )}
+      {view === 'system' && <SystemPanel onClose={() => setView(null)} />}
     </div>
   )
 }
