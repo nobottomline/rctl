@@ -120,6 +120,10 @@ export class ControlEngine {
   private localMode = false // device-local P2P (no relay): signal over /ws/signal
   private fellBack = false // local WebRTC failed -> using the /stream fallback
   private rtcFallbackTimer = 0
+  private wsUrl = '' // remembered so we can re-dial the same signaling socket
+  private reconnectTimer = 0
+  private rtcAttempts = 0 // consecutive failed WebRTC connects (reset on first frame)
+  private disconnectGrace = 0 // pending "is this blip going to self-heal?" timer
 
   constructor(
     stage: HTMLElement,
@@ -170,6 +174,10 @@ export class ControlEngine {
       clearTimeout(this.rtcFallbackTimer)
       this.rtcFallbackTimer = 0
     }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = 0
+    }
     try {
       this.pc?.close()
     } catch {
@@ -189,9 +197,53 @@ export class ControlEngine {
     this.startStream()
   }
 
+  // The WebRTC link dropped (peer 'failed', or no video within the grace window).
+  // Tear the dead session down and re-dial the signaling socket with a capped
+  // backoff -- this is what makes a tab heal itself instead of needing a manual
+  // reload after the daemon was briefly busy (e.g. a second viewer churning). On
+  // the relay path, after a few WebRTC misses we drop to the stream tunnel; the
+  // local path has no usable stream fallback, so it keeps re-dialing.
+  private scheduleReconnect() {
+    if (this.stopped || this.fellBack || this.reconnectTimer) return
+    if (this.rtcFallbackTimer) {
+      clearTimeout(this.rtcFallbackTimer)
+      this.rtcFallbackTimer = 0
+    }
+    if (this.disconnectGrace) {
+      clearTimeout(this.disconnectGrace)
+      this.disconnectGrace = 0
+    }
+    try {
+      this.pc?.close()
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.ws?.close()
+    } catch {
+      /* ignore */
+    }
+    this.pc = null
+    this.ws = null
+    if (!this.localMode && this.rtcAttempts >= 5) {
+      this.fallbackToStream()
+      return
+    }
+    const backoff = Math.min(5000, 600 * 2 ** this.rtcAttempts) + Math.floor(Math.random() * 250)
+    this.rtcAttempts++
+    this.status('reconnecting…')
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = 0
+      if (this.stopped || this.fellBack) return
+      this.startWebRTC(this.wsUrl)
+    }, backoff)
+  }
+
   stop() {
     this.stopped = true
     if (this.orientTimer) clearInterval(this.orientTimer)
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    if (this.disconnectGrace) clearTimeout(this.disconnectGrace)
     try {
       this.pc?.close()
     } catch {
@@ -742,6 +794,17 @@ export class ControlEngine {
   // wsUrl is the signaling socket: the relay's /signal for internet sessions, or
   // the device's own /ws/signal for device-local P2P.
   private startWebRTC(wsUrl: string) {
+    this.wsUrl = wsUrl
+    // Re-entrant: a reconnect calls this again, so clear timers from the prior dial
+    // (the orient poll re-arms below) to avoid stacking intervals/timeouts.
+    if (this.orientTimer) {
+      clearInterval(this.orientTimer)
+      this.orientTimer = undefined
+    }
+    if (this.rtcFallbackTimer) {
+      clearTimeout(this.rtcFallbackTimer)
+      this.rtcFallbackTimer = 0
+    }
     const vid = this.video
     vid.autoplay = true
     vid.playsInline = true
@@ -778,6 +841,7 @@ export class ControlEngine {
             clearTimeout(this.rtcFallbackTimer)
             this.rtcFallbackTimer = 0
           }
+          this.rtcAttempts = 0 // a healthy link; let the next drop retry from scratch
           this.status('')
           this.cb.onFrame?.()
         }
@@ -804,20 +868,36 @@ export class ControlEngine {
     }
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') {
-        this.status('webrtc failed')
-        if (this.localMode) this.fallbackToStream()
+      const st = pc.connectionState
+      if (st === 'failed') {
+        this.scheduleReconnect()
+      } else if (st === 'disconnected') {
+        // A 'disconnected' is often a transient blip that recovers on its own;
+        // only re-dial if it hasn't healed within a short grace.
+        if (!this.disconnectGrace)
+          this.disconnectGrace = window.setTimeout(() => {
+            this.disconnectGrace = 0
+            if (this.pc === pc && (pc.connectionState === 'disconnected' || pc.connectionState === 'failed'))
+              this.scheduleReconnect()
+          }, 4000)
+      } else if (st === 'connected') {
+        if (this.disconnectGrace) {
+          clearTimeout(this.disconnectGrace)
+          this.disconnectGrace = 0
+        }
       }
     }
 
     const ws = new WebSocket(wsUrl)
     this.ws = ws
-    // Local P2P: if no frame renders within 6s (WebRTC blocked/unreachable), drop
-    // to the WebCodecs /stream path so the user still gets video where possible.
-    if (this.localMode)
-      this.rtcFallbackTimer = window.setTimeout(() => {
-        if (!this.frames) this.fallbackToStream()
-      }, 6000)
+    // If no video renders within the grace window the link is wedged (daemon busy,
+    // a peer churning, ICE lost a race) -- re-dial rather than sit on a dead view.
+    // Baseline the frame count so this also catches a reconnect that re-establishes
+    // signaling but never delivers a new frame.
+    const framesAtDial = this.frames
+    this.rtcFallbackTimer = window.setTimeout(() => {
+      if (this.frames === framesAtDial) this.scheduleReconnect()
+    }, 7000)
     pc.onicecandidate = (e) => {
       if (e.candidate && ws.readyState === 1)
         ws.send(JSON.stringify({ kind: 'candidate', payload: { candidate: e.candidate.candidate, mid: e.candidate.sdpMid } }))
