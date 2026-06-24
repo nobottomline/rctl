@@ -44,6 +44,9 @@ window.RCTL_WEBRTC=` + webrtc + `;
 	page := strings.Replace(string(raw), "<head>", "<head>"+inject, 1)
 	// connect-src also allows STUN/TURN schemes so RTCPeerConnection can reach the
 	// ICE servers (some browsers enforce CSP on ICE URLs).
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+	// img-src allows https so the System Inspector can show repo package icons
+	// (images only -- no frame-src, so untrusted repo HTML is never embedded here;
+	// depictions open in a separate browser tab instead).
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	writeText(w, http.StatusOK, "text/html; charset=utf-8", page)
 }

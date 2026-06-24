@@ -862,6 +862,7 @@ static char *rctl_packages_json(void) {
         for (NSString *stanza in [raw componentsSeparatedByString:@"\n\n"]) {
             if (stanza.length == 0) continue;
             NSString *pkg = nil, *ver = nil, *name = nil, *section = nil, *desc = nil, *author = nil, *st = nil;
+            NSString *home = nil, *depiction = nil, *icon = nil, *role = @"";
             long size = 0;
             for (NSString *line in [stanza componentsSeparatedByString:@"\n"]) {
                 if ([line hasPrefix:@" "]) continue;            // long-description continuation
@@ -877,9 +878,26 @@ static char *rctl_packages_json(void) {
                 else if ([k isEqualToString:@"Installed-Size"]) size = [v integerValue]; // KB
                 else if ([k isEqualToString:@"Status"]) st = v;
                 else if ([k isEqualToString:@"Description"]) desc = v;
+                else if ([k isEqualToString:@"Homepage"]) home = v;
+                else if ([k isEqualToString:@"Depiction"]) depiction = v;
+                else if ([k isEqualToString:@"Icon"]) icon = v;
+                else if ([k isEqualToString:@"Tag"]) {          // role::user/hacker/developer/cydia -> User/Expert filter
+                    NSRange rr = [v rangeOfString:@"role::"];
+                    if (rr.location != NSNotFound) {
+                        NSString *rest = [v substringFromIndex:rr.location + 6];
+                        NSRange e = [rest rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@", \t"]];
+                        role = (e.location == NSNotFound) ? rest : [rest substringToIndex:e.location];
+                    }
+                }
             }
             if (!pkg) continue;
             if (st && [st rangeOfString:@"installed"].location == NSNotFound) continue; // not actually installed
+            long installed = 0;                                 // install time = mtime of the dpkg file list
+            for (NSString *info in @[ @"/var/lib/dpkg/info", @"/var/jb/var/lib/dpkg/info" ]) {
+                struct stat lst;
+                NSString *lp = [NSString stringWithFormat:@"%@/%@.list", info, pkg];
+                if (stat(lp.fileSystemRepresentation, &lst) == 0) { installed = (long)lst.st_mtime; break; }
+            }
             [pkgs addObject:@{
                 @"id": pkg,
                 @"name": (name.length ? name : pkg),
@@ -888,6 +906,11 @@ static char *rctl_packages_json(void) {
                 @"author": (author ?: @""),
                 @"desc": (desc ?: @""),
                 @"size": @((long long)size * 1024),
+                @"role": role,
+                @"home": (home ?: @""),
+                @"depiction": (depiction ?: @""),
+                @"icon": (icon ?: @""),
+                @"installed": @(installed),
             }];
         }
     }
@@ -1063,6 +1086,60 @@ static char *rctl_pkg_remove(const char *id) {
     return r;
 }
 
+static char *rctl_pkg_meta_json(const char *cid) {
+    NSString *pkgid = [NSString stringWithUTF8String:cid] ?: @"";
+    NSData *needHead = [[NSString stringWithFormat:@"Package: %@\n", pkgid] dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *needMid  = [[NSString stringWithFormat:@"\nPackage: %@\n", pkgid] dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *blank = [@"\n\n" dataUsingEncoding:NSUTF8StringEncoding];
+    NSMutableDictionary *meta = [NSMutableDictionary dictionary];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL done = NO;
+    for (NSString *dir in @[ @"/var/lib/apt/lists", @"/var/jb/var/lib/apt/lists" ]) {
+        if (done) break;
+        for (NSString *f in ([fm contentsOfDirectoryAtPath:dir error:nil] ?: @[])) {
+            if (done) break;
+            if (![f hasSuffix:@"Packages"]) continue;
+            @autoreleasepool {
+                NSData *data = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:f] options:NSDataReadingMappedIfSafe error:nil];
+                NSUInteger start = NSNotFound;
+                if (data.length >= needHead.length && memcmp(data.bytes, needHead.bytes, needHead.length) == 0) {
+                    start = 0;                                  // first stanza in the file
+                } else if (data.length) {
+                    NSRange mr = [data rangeOfData:needMid options:0 range:NSMakeRange(0, data.length)];
+                    if (mr.location != NSNotFound) start = mr.location + 1;   // past the leading '\n'
+                }
+                if (start != NSNotFound) {
+                    NSRange er = [data rangeOfData:blank options:0 range:NSMakeRange(start, data.length - start)];
+                    NSUInteger stop = (er.location == NSNotFound) ? data.length : er.location;
+                    NSData *slice = [data subdataWithRange:NSMakeRange(start, stop - start)];
+                    NSString *stanza = [[NSString alloc] initWithData:slice encoding:NSUTF8StringEncoding];
+                    for (NSString *line in [(stanza ?: @"") componentsSeparatedByString:@"\n"]) {
+                        if ([line hasPrefix:@" "]) continue;
+                        NSRange c = [line rangeOfString:@": "];
+                        if (c.location == NSNotFound) continue;
+                        NSString *k = [line substringToIndex:c.location];
+                        const char *vc = [[line substringFromIndex:c.location + 2] UTF8String];
+                        NSString *v = vc ? [NSString stringWithUTF8String:vc] : @"";
+                        if ([k isEqualToString:@"Depiction"]) meta[@"depiction"] = v;
+                        else if ([k isEqualToString:@"Icon"]) { if (!meta[@"icon"]) meta[@"icon"] = v; }
+                        else if ([k isEqualToString:@"Homepage"]) { if (!meta[@"home"]) meta[@"home"] = v; }
+                        else if ([k isEqualToString:@"Description"]) { if (!meta[@"desc"]) meta[@"desc"] = v; }
+                        else if ([k isEqualToString:@"Author"]) { if (!meta[@"author"]) meta[@"author"] = v; }
+                        else if ([k isEqualToString:@"Maintainer"]) { if (!meta[@"maintainer"]) meta[@"maintainer"] = v; }
+                        else if ([k isEqualToString:@"Section"]) { if (!meta[@"section"]) meta[@"section"] = v; }
+                        else if ([k isEqualToString:@"Version"]) { if (!meta[@"version"]) meta[@"version"] = v; }
+                    }
+                    if (meta[@"depiction"]) done = YES;        // richest record found; stop
+                }
+            }
+        }
+    }
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:meta options:0 error:nil];
+    if (!jd) return strdup("{}");
+    char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+    return out;
+}
+
 static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
@@ -1174,6 +1251,10 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         char id[256];
         if (!get_param(query, "id", id, sizeof id) || !rctl_safe_id(id)) { *status = 400; return strdup("{\"error\":\"bad id\"}"); }
         return rctl_pkg_remove(id);
+    } else if (!strcmp(path, "/v1/pkg_meta")) {       // rich repo metadata (depiction/icon) from apt lists
+        char id[256];
+        if (!get_param(query, "id", id, sizeof id) || !rctl_safe_id(id)) { *status = 400; return strdup("{\"error\":\"bad id\"}"); }
+        return rctl_pkg_meta_json(id);
     } else if (!strcmp(path, "/v1/apps")) {
         char *apps = sb_query(RCTL_Q_APPLIST, NULL, 0, 3.0);   // enumeration can be slower
         if (apps) return apps;            // JSON array [{id,name}]

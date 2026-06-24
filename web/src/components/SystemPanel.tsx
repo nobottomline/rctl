@@ -3,7 +3,9 @@ import {
   ChevronRight,
   Copy,
   Download,
+  ExternalLink,
   FileText,
+  Globe,
   Library,
   MoreVertical,
   Package,
@@ -28,7 +30,33 @@ import { cn } from '../lib/cn'
 // a banner. Reads are pure; writes are explicit and confirmed.
 
 type Tab = 'packages' | 'tweaks' | 'dylibs'
-type Pkg = { id: string; name: string; version: string; section: string; author: string; desc: string; size: number }
+type PkgMode = 'user' | 'expert' | 'recent'
+type DylibFilter = 'all' | 'injected' | 'system'
+type Pkg = {
+  id: string
+  name: string
+  version: string
+  section: string
+  author: string
+  desc: string
+  size: number
+  role: string
+  home: string
+  depiction: string
+  icon: string
+  installed: number
+}
+// Richer per-package metadata pulled on demand from the repo (apt) lists.
+type PkgMeta = {
+  depiction?: string
+  icon?: string
+  home?: string
+  desc?: string
+  author?: string
+  maintainer?: string
+  section?: string
+  version?: string
+}
 type Tweak = {
   name: string
   path: string
@@ -59,6 +87,31 @@ function fmtSize(b: number) {
 
 function baseName(p: string) {
   return p.split('/').pop() || p
+}
+
+// Only http(s) icons can render in the browser; package Icon fields are often
+// file:// paths on the device, which we can't show.
+function httpIcon(s?: string): string {
+  return s && /^https?:\/\//i.test(s) ? s : ''
+}
+function hostOf(url?: string): string {
+  if (!url) return ''
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+function cleanAuthor(s?: string): string {
+  return (s || '').replace(/\s*<[^>]*>/g, '').trim()
+}
+function fmtDate(unix: number): string {
+  if (!unix) return ''
+  try {
+    return new Date(unix * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  } catch {
+    return ''
+  }
 }
 
 // Clipboard over plain HTTP isn't a secure context, so navigator.clipboard may be
@@ -100,6 +153,9 @@ export default function SystemPanel({ onClose, transfer }: { onClose: () => void
   const [needRespring, setNeedRespring] = useState(false)
   const [filesFor, setFilesFor] = useState<{ id: string; name: string } | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const [pkgMode, setPkgMode] = useState<PkgMode>('user')
+  const [dylibFilter, setDylibFilter] = useState<DylibFilter>('all')
+  const [meta, setMeta] = useState<Record<string, PkgMeta>>({})
 
   const load = async (t: Tab, force = false) => {
     if (!force && ((t === 'packages' && pkgs) || (t === 'tweaks' && tweaks) || (t === 'dylibs' && dylibs))) return
@@ -120,10 +176,30 @@ export default function SystemPanel({ onClose, transfer }: { onClose: () => void
 
   const filtered = useMemo(() => {
     if (!data) return null
+    let list = data as Item[]
     const needle = q.trim().toLowerCase()
-    if (!needle) return data as Item[]
-    return (data as Item[]).filter((it) => haystack(tab, it).includes(needle))
-  }, [data, q, tab])
+    if (needle) list = list.filter((it) => haystack(tab, it).includes(needle))
+    if (tab === 'packages') {
+      // User hides the infrastructure dpkg tags Cydia hides; Recent sorts by install date.
+      if (pkgMode === 'user') list = (list as Pkg[]).filter((p) => !['cydia', 'developer', 'hacker'].includes(p.role))
+      else if (pkgMode === 'recent') list = [...(list as Pkg[])].sort((a, b) => (b.installed || 0) - (a.installed || 0))
+    } else if (tab === 'dylibs') {
+      if (dylibFilter === 'injected') list = (list as Dylib[]).filter((d) => d.injected)
+      else if (dylibFilter === 'system') list = (list as Dylib[]).filter((d) => !d.injected)
+    }
+    return list
+  }, [data, q, tab, pkgMode, dylibFilter])
+
+  // Lazily pull rich repo metadata when a package row opens (cached per id).
+  useEffect(() => {
+    if (tab !== 'packages' || !expanded?.startsWith('p:')) return
+    const id = expanded.slice(2)
+    if (meta[id]) return
+    apiJSON<PkgMeta>(`/v1/pkg_meta?id=${enc(id)}`).then((j) => {
+      if (j) setMeta((prev) => ({ ...prev, [id]: j }))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, tab])
 
   // ---- actions ----
   const toggleTweak = async (t: Tweak) => {
@@ -232,6 +308,34 @@ export default function SystemPanel({ onClose, transfer }: { onClose: () => void
           <RotateCw className={cn('size-4', busy && 'animate-spin')} />
         </button>
       </div>
+      {tab === 'packages' && (
+        <Segment
+          value={pkgMode}
+          onChange={(v) => {
+            setPkgMode(v as PkgMode)
+            setExpanded(null)
+          }}
+          options={[
+            ['user', 'User'],
+            ['expert', 'Expert'],
+            ['recent', 'Recent'],
+          ]}
+        />
+      )}
+      {tab === 'dylibs' && (
+        <Segment
+          value={dylibFilter}
+          onChange={(v) => {
+            setDylibFilter(v as DylibFilter)
+            setExpanded(null)
+          }}
+          options={[
+            ['all', 'All'],
+            ['injected', 'Injected'],
+            ['system', 'System'],
+          ]}
+        />
+      )}
     </div>
   )
 
@@ -266,6 +370,7 @@ export default function SystemPanel({ onClose, transfer }: { onClose: () => void
                   key={k}
                   tab={tab}
                   item={it}
+                  meta={tab === 'packages' ? meta[(it as Pkg).id] : undefined}
                   open={expanded === k}
                   onToggle={() => setExpanded(expanded === k ? null : k)}
                   onMenu={(e) => openMenu(e, k, it)}
@@ -337,12 +442,14 @@ function rowKey(tab: Tab, it: Item): string {
 function Row({
   tab,
   item,
+  meta,
   open,
   onToggle,
   onMenu,
 }: {
   tab: Tab
   item: Item
+  meta?: PkgMeta
   open: boolean
   onToggle: () => void
   onMenu: (e: React.MouseEvent) => void
@@ -361,6 +468,7 @@ function Row({
       <div className="flex items-center transition-colors hover:bg-fg/[0.05] active:bg-fg/[0.07]">
         <button onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left">
           <ChevronRight className={cn('size-3.5 shrink-0 text-faint transition-transform', open && 'rotate-90')} />
+          {tab === 'packages' && <RepoIcon icon={(item as Pkg).icon} />}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="truncate text-[13px] font-medium text-fg">{title.trim()}</span>
@@ -392,7 +500,7 @@ function Row({
           <MoreVertical className="size-4" />
         </button>
       </div>
-      {open && <Detail tab={tab} item={item} />}
+      {open && <Detail tab={tab} item={item} meta={meta} />}
     </li>
   )
 }
@@ -574,23 +682,115 @@ function targetSummary(t: Tweak): string {
   return `${n} target${n > 1 ? 's' : ''}`
 }
 
-function Detail({ tab, item }: { tab: Tab; item: Item }) {
+function Detail({ tab, item, meta }: { tab: Tab; item: Item; meta?: PkgMeta }) {
   return (
     <div className="border-t border-line/40 bg-fg/[0.02] px-3 py-2.5 text-[11.5px]">
-      {tab === 'packages' && <PkgDetail p={item as Pkg} />}
+      {tab === 'packages' && <PkgDetail p={item as Pkg} meta={meta} />}
       {tab === 'tweaks' && <TweakDetail t={item as Tweak} />}
       {tab === 'dylibs' && <KV label="Path" value={(item as Dylib).path} mono />}
     </div>
   )
 }
 
-function PkgDetail({ p }: { p: Pkg }) {
+// A native rich card (Sileo-style): the package's own metadata rendered by us,
+// with the full repo depiction opened in a new, isolated tab (never embedded into
+// this privileged control page).
+function PkgDetail({ p, meta }: { p: Pkg; meta?: PkgMeta }) {
+  const depiction = meta?.depiction || p.depiction
+  const home = meta?.home || p.home
+  const desc = meta?.desc || p.desc
+  const author = cleanAuthor(meta?.author || p.author)
+  const section = meta?.section || p.section
+  const repo = hostOf(depiction) || hostOf(home)
   return (
-    <div className="space-y-1">
-      <KV label="Identifier" value={p.id} mono />
-      <KV label="Version" value={p.version} mono />
-      {p.author && <KV label="Author" value={p.author} />}
-      {p.desc && <KV label="Description" value={p.desc} />}
+    <div className="space-y-2.5">
+      <div className="flex items-start gap-3">
+        <RepoIcon icon={meta?.icon || p.icon} big />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="truncate text-[13px] font-semibold text-fg">{p.name.trim()}</div>
+          <div className="truncate text-[11px] text-muted">
+            {p.version}
+            {author ? ` · ${author}` : ''}
+          </div>
+          {repo && <div className="truncate text-[11px] text-faint">{repo}</div>}
+        </div>
+      </div>
+      {desc && <div className="leading-relaxed text-fg-dim">{desc}</div>}
+      <div className="space-y-1">
+        <KV label="Identifier" value={p.id} mono />
+        {section && <KV label="Section" value={section} />}
+        {p.installed > 0 && <KV label="Installed" value={fmtDate(p.installed)} />}
+      </div>
+      {(depiction || home) && (
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
+          {depiction && <LinkBtn href={depiction} icon={ExternalLink} label="Depiction" />}
+          {home && home !== depiction && <LinkBtn href={home} icon={Globe} label="Homepage" />}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LinkBtn({ href, icon: Icon, label }: { href: string; icon: ComponentType<LucideProps>; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex items-center gap-1.5 rounded-lg bg-fg/8 px-2.5 py-1.5 text-[12px] font-medium text-fg transition-colors hover:bg-fg/12 active:bg-signal active:text-on-signal"
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </a>
+  )
+}
+
+// A package's repo icon, with a neutral-glyph fallback when it's not an http(s)
+// URL (most Icon fields are device file:// paths) or when the repo's image server
+// refuses cross-origin loading (CORP) or 404s.
+function RepoIcon({ icon, big }: { icon?: string; big?: boolean }) {
+  const url = httpIcon(icon)
+  const [failed, setFailed] = useState(false)
+  const box = big ? 'size-12 rounded-xl ring-line/40' : 'size-6 rounded-md ring-line/30'
+  if (url && !failed)
+    return (
+      <img
+        src={url}
+        alt=""
+        onError={() => setFailed(true)}
+        className={cn('shrink-0 bg-fg/5 object-cover ring-1', box)}
+      />
+    )
+  return (
+    <div className={cn('grid shrink-0 place-items-center bg-fg/5 ring-1', box)}>
+      <Package className={cn('text-faint', big ? 'size-5' : 'size-3.5')} />
+    </div>
+  )
+}
+
+function Segment<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T
+  onChange: (v: T) => void
+  options: [T, string][]
+}) {
+  return (
+    <div className="flex gap-1 rounded-lg bg-fg/6 p-0.5">
+      {options.map(([v, label]) => (
+        <button
+          key={v}
+          onClick={() => onChange(v)}
+          className={cn(
+            'flex-1 rounded-md py-1 text-[11px] font-medium transition-colors',
+            value === v ? 'bg-signal text-on-signal' : 'text-fg-dim hover:bg-fg/8 active:bg-fg/10',
+          )}
+        >
+          {label}
+        </button>
+      ))}
     </div>
   )
 }
