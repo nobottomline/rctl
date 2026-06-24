@@ -15,18 +15,25 @@ export function fmtSize(n: number): string {
   return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB'
 }
 
-function saveBlob(parts: ArrayBuffer[], name: string) {
-  const blob = new Blob(parts)
+// Trigger a browser download of a Blob. Caller should invoke this synchronously
+// within (or in the gesture's async continuation of) a user click -- Safari only
+// permits programmatic downloads while the user activation is live, which is why
+// downloads must be driven from the click handler, not the channel's onmessage.
+// The anchor is also appended to the document: Safari/Firefox ignore click() on a
+// detached element (Chrome allows it).
+export function saveBlobToFile(blob: Blob, name: string) {
   const u = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = u
   a.download = name
-  // Safari/Firefox only fire a download if the anchor is in the document; a
-  // detached element's click() is a no-op there (Chrome allows it).
   document.body.appendChild(a)
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(u), 1500)
+}
+
+function saveBlob(parts: ArrayBuffer[], name: string) {
+  saveBlobToFile(new Blob(parts), name)
 }
 
 const CHUNK = 64 * 1024

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, Download, File as FileIcon, Folder, RefreshCw, Trash2, Upload } from 'lucide-react'
 import { api, apiJSON } from '../lib/rctl'
-import { fmtSize, type FileTransfer, type TransferStatus } from '../lib/files'
+import { fmtSize, saveBlobToFile, type FileTransfer, type TransferStatus } from '../lib/files'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 
@@ -48,15 +48,18 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
 
   const download = async (e: Entry) => {
     const p = join(path, e.name)
-    if (transfer.download(p, e.name)) return // P2P, any size
+    try {
+      // Fetch over P2P (any size) then save in this click's async continuation --
+      // Safari only allows the download while the user gesture is still live.
+      const blob = await transfer.fetch(p)
+      saveBlobToFile(blob, e.name)
+      return
+    } catch {
+      /* channel busy/unavailable -> small-file HTTP fallback */
+    }
     try {
       const b = await (await api(`/v1/pull?path=${enc(p)}`)).blob()
-      const u = URL.createObjectURL(b)
-      const a = document.createElement('a')
-      a.href = u
-      a.download = e.name
-      a.click()
-      URL.revokeObjectURL(u)
+      saveBlobToFile(b, e.name)
     } catch {
       /* ignore */
     }
