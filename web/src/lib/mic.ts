@@ -98,7 +98,25 @@ export class MicTalk {
   async start(): Promise<boolean> {
     if (this.active) return true
     if (!this.ready() || !micSupported()) return false
-    if (!this.ensureGraph()) return false
+    // getUserMedia FIRST: Safari pins an AudioContext's sample rate to the active
+    // audio session, so the mic must be live before we build the 48kHz context --
+    // otherwise Safari hands back a 44.1kHz context and ensureGraph() would reject it.
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      })
+    } catch {
+      this.stop()
+      return false
+    }
+    if (!this.stream.getAudioTracks()[0]) {
+      this.stop()
+      return false
+    }
+    if (!this.ensureGraph()) {
+      this.stop()
+      return false
+    }
     try {
       await this.ctx!.resume()
     } catch {
@@ -121,18 +139,6 @@ export class MicTalk {
       })
       this.enc.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1, bitrate: 24000 })
     } catch {
-      this.stop()
-      return false
-    }
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      })
-    } catch {
-      this.stop()
-      return false
-    }
-    if (!this.stream.getAudioTracks()[0]) {
       this.stop()
       return false
     }
