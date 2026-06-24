@@ -171,10 +171,11 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
         <div className="mt-1.5 flex items-center gap-1.5">
           <button
             onClick={r.save}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-fg/8 px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal"
+            disabled={r.saving}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-fg/8 px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal disabled:opacity-60"
           >
-            <Download className="size-3.5 shrink-0" />
-            Save {fmtDur(r.seconds)} · {fmtSize(r.bytes)}
+            <Download className={cn('size-3.5 shrink-0', r.saving && 'animate-pulse')} />
+            {r.saving ? 'Saving…' : `Save ${fmtDur(r.seconds)} · ${fmtSize(r.bytes)}`}
           </button>
           <button
             onClick={r.discard}

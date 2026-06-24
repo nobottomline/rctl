@@ -21,7 +21,11 @@ function saveBlob(parts: ArrayBuffer[], name: string) {
   const a = document.createElement('a')
   a.href = u
   a.download = name
+  // Safari/Firefox only fire a download if the anchor is in the document; a
+  // detached element's click() is a no-op there (Chrome allows it).
+  document.body.appendChild(a)
   a.click()
+  a.remove()
   setTimeout(() => URL.revokeObjectURL(u), 1500)
 }
 

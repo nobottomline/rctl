@@ -5,6 +5,21 @@ import { FileTransfer } from '../lib/files'
 import { MicTalk, micSupported } from '../lib/mic'
 import { api, apiJSON } from '../lib/rctl'
 
+const REC_PATH = '/var/mobile/rctl/mic-recording.m4a'
+
+// Save a Blob to a file. The click -> save is kept synchronous (no async gap) so
+// Safari, which only allows downloads inside the user-gesture window, accepts it.
+function downloadBlob(blob: Blob, name: string) {
+  const u = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = u
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(u), 2000)
+}
+
 // Wires the imperative ControlEngine to React: creates it against the stage +
 // canvas elements, attaches pointer/keyboard input + window resize, and surfaces
 // status/orientation + action callbacks. All the delicate behavior lives in the
@@ -25,6 +40,8 @@ export function useControl(
   const [talking, setTalking] = useState(false)
   const [listeningMic, setListeningMic] = useState(false)
   const [micRec, setMicRec] = useState({ recording: false, seconds: 0, bytes: 0 })
+  const recBlob = useRef<{ bytes: number; blob: Blob } | null>(null) // the fetched .m4a, cached for instant re-save
+  const [savingRec, setSavingRec] = useState(false)
   const [listening, setListening] = useState(false)
   const [audioBusy, setAudioBusy] = useState(false)
   const [deviceSpeaker, setDeviceSpeaker] = useState(true)
@@ -335,7 +352,9 @@ export function useControl(
       recording: micRec.recording,
       seconds: micRec.seconds,
       bytes: micRec.bytes,
+      saving: savingRec,
       start: async () => {
+        recBlob.current = null // a new recording invalidates the cached download
         await api('/v1/mic_record?on=1').catch(() => {})
         setMicRec((s) => ({ ...s, recording: true }))
       },
@@ -343,8 +362,26 @@ export function useControl(
         await api('/v1/mic_record?on=0').catch(() => {})
         setMicRec((s) => ({ ...s, recording: false }))
       },
-      save: () => filesRef.current.download('/var/mobile/rctl/mic-recording.m4a', 'rctl-mic-recording.m4a'),
+      // Pull the finished .m4a over the P2P files channel, cache it, and download.
+      // Re-saving uses the cache so the click -> download stays synchronous (Safari
+      // only permits a download inside the user-gesture window).
+      save: async () => {
+        if (recBlob.current && recBlob.current.bytes === micRec.bytes) {
+          downloadBlob(recBlob.current.blob, 'rctl-mic-recording.m4a')
+          return
+        }
+        setSavingRec(true)
+        try {
+          const blob = await filesRef.current.fetch(REC_PATH)
+          recBlob.current = { bytes: micRec.bytes, blob }
+          downloadBlob(blob, 'rctl-mic-recording.m4a')
+        } catch {
+          /* ignore */
+        }
+        setSavingRec(false)
+      },
       discard: async () => {
+        recBlob.current = null
         await api('/v1/mic_record?discard=1').catch(() => {})
         setMicRec({ recording: false, seconds: 0, bytes: 0 })
       },
