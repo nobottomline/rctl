@@ -22,10 +22,28 @@ RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
 rm -f /Library/MobileSubstrate/DynamicLibraries/rctlcap.dylib \
       /Library/MobileSubstrate/DynamicLibraries/rctlcap.plist 2>/dev/null || true
 
+# rctld is a root daemon with no TCC entry, so mediaserverd feeds it SILENCE when it
+# captures the mic. Grant it microphone + camera via the private TCC entitlement
+# (accepted with AMFI patched) so the daemon-side "listen to the room anytime" works.
+RCTLD_ENT=/tmp/rctld-ent.plist
+cat > "$RCTLD_ENT" <<'ENT'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.private.tcc.allow</key>
+  <array>
+    <string>kTCCServiceMicrophone</string>
+    <string>kTCCServiceCamera</string>
+  </array>
+</dict>
+</plist>
+ENT
+
 if command -v ldid >/dev/null 2>&1; then
     [ -f "$DYLIB" ]   && ldid -S "$DYLIB"   || true
     [ -f "$CAPLIB" ]  && ldid -S "$CAPLIB"  || true
-    [ -f "$DAEMON" ]  && ldid -S "$DAEMON"  || true
+    [ -f "$DAEMON" ]  && ldid -S"$RCTLD_ENT" "$DAEMON"  || true
     [ -f "$AUDIOSRC" ] && ldid -S "$AUDIOSRC" || true
 fi
 

@@ -2,6 +2,7 @@ import { useState, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   ChevronDown,
+  Ear,
   FolderOpen,
   Headphones,
   House,
@@ -87,6 +88,12 @@ export default function ControlCenter({
           label="iPad"
           active={ctl.audio.deviceSpeaker}
           onClick={ctl.audio.toggleSpeaker}
+        />
+        <Key
+          icon={Ear}
+          label={ctl.listenMic.active ? 'Mic on' : 'Mic'}
+          active={ctl.listenMic.active}
+          onClick={ctl.listenMic.toggle}
         />
         {ctl.talk.supported && (
           <Key

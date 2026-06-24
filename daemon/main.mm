@@ -11,6 +11,8 @@
 
 #import <Foundation/Foundation.h>
 #import <objc/message.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <AudioUnit/AudioUnit.h>
 #import <pthread.h>
 #import <unistd.h>
 #import <stdio.h>
@@ -827,6 +829,8 @@ static char *list_dir(const char *dir, int *status) {
     return out;
 }
 
+static bool rctl_mic_capture_start(void);
+static void rctl_mic_capture_stop(void);
 static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
@@ -1006,11 +1010,14 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
             dlog(tag);
         }
         // -> default {"ok":true}
-    } else if (!strcmp(path, "/v1/mic_capture")) {    // Phase A: toggle the app-side mic tap (listen mic)
+    } else if (!strcmp(path, "/v1/mic_capture")) {    // listen to the iPad mic ANYTIME (daemon-side RemoteIO capture)
         char onp[8]; int on = 0;
         if (get_param(query, "on", onp, sizeof onp) && onp[0] == '1') on = 1;
-        notify_post(on ? "com.greatlove.rctl.mic.on" : "com.greatlove.rctl.mic.off");
-        dlog(on ? "mic_capture on" : "mic_capture off");
+        if (on) {
+            if (!rctl_mic_capture_start()) { *status = 500; return strdup("{\"error\":\"mic capture failed (see /tmp/rctld.log)\"}"); }
+        } else {
+            rctl_mic_capture_stop();
+        }
         // -> default {"ok":true}
     } else if (!strcmp(path, "/v1/camera")) {         // snap a photo IN the frontmost app
         int pos = 1; char posp[16];                   // 1=back, 2=front
@@ -1276,6 +1283,99 @@ extern "C" void rctl_audio_boost_end(void) {
         dlog("audio boost: media volume restored");
         g_savedVol = -1.0f;
     } @catch (id e) {}
+}
+
+// ---- Daemon-side mic capture (listen to the room ANYTIME) --------------------
+// The app-side tap only sees the mic while some app records it. To listen no matter
+// what's on screen, the daemon opens its OWN RemoteIO input and pulls the mic. The
+// session is PlayAndRecord + MixWithOthers so a game/YouTube keeps playing. (Phase A
+// probe: log the level; next step encodes Opus -> the room-mic channel.)
+static AudioUnit g_micUnit = NULL;
+static bool g_micCapturing = false;
+
+static void rctl_mic_session_record(void) {
+    @try {
+        dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY);
+        Class C = NSClassFromString(@"AVAudioSession");
+        if (!C) return;
+        id sess = ((id (*)(id, SEL))objc_msgSend)((id)C, NSSelectorFromString(@"sharedInstance"));
+        if (!sess) return;
+        NSError *err = nil;
+        // PlayAndRecord + MixWithOthers(1) | DefaultToSpeaker(8): capture without
+        // ducking/stopping whatever audio the foreground app is playing.
+        ((BOOL (*)(id, SEL, id, unsigned long, NSError **))objc_msgSend)(
+            sess, NSSelectorFromString(@"setCategory:withOptions:error:"),
+            @"AVAudioSessionCategoryPlayAndRecord", (unsigned long)(1 | 8), &err);
+        ((BOOL (*)(id, SEL, BOOL, NSError **))objc_msgSend)(
+            sess, NSSelectorFromString(@"setActive:error:"), YES, &err);
+        dlog("AVAudioSession PlayAndRecord active");
+    } @catch (id e) {}
+}
+
+static OSStatus rctl_mic_input_cb(void *ref, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts,
+                                  UInt32 bus, UInt32 nframes, AudioBufferList *ioData) {
+    (void)ref; (void)ioData;
+    if (!g_micUnit || nframes == 0) return noErr;
+    int16_t buf[8192];
+    UInt32 want = nframes > 8192 ? 8192 : nframes;
+    AudioBufferList abl;
+    abl.mNumberBuffers = 1;
+    abl.mBuffers[0].mNumberChannels = 1;
+    abl.mBuffers[0].mDataByteSize = want * 2;
+    abl.mBuffers[0].mData = buf;
+    OSStatus st = AudioUnitRender(g_micUnit, flags, ts, bus, want, &abl);
+    if (st != noErr) {
+        static unsigned e = 0;
+        if ((++e & 0x3f) == 0) { char l[80]; snprintf(l, sizeof l, "miccap render err %d", (int)st); dlog(l); }
+        return st;
+    }
+    long peak = 0;
+    for (UInt32 i = 0; i < want; i++) { int v = buf[i] < 0 ? -buf[i] : buf[i]; if (v > peak) peak = v; }
+    static unsigned n = 0;
+    if ((++n & 0x1f) == 0) { char l[96]; snprintf(l, sizeof l, "miccap peak=%ld frames=%u", peak, (unsigned)want); dlog(l); }
+    rctl_webrtc_push_mic(buf, (int)want, 1, 48000);   // -> room-mic channel
+    return noErr;
+}
+
+static bool rctl_mic_capture_start(void) {
+    if (g_micCapturing) return true;
+    rctl_mic_session_record();
+    AudioComponentDescription d; memset(&d, 0, sizeof d);
+    d.componentType = kAudioUnitType_Output;
+    d.componentSubType = kAudioUnitSubType_RemoteIO;
+    d.componentManufacturer = kAudioUnitManufacturer_Apple;
+    AudioComponent comp = AudioComponentFindNext(NULL, &d);
+    if (!comp) { dlog("miccap: no RemoteIO component"); return false; }
+    if (AudioComponentInstanceNew(comp, &g_micUnit) != noErr || !g_micUnit) { dlog("miccap: instance new failed"); g_micUnit = NULL; return false; }
+    UInt32 one = 1, zero = 0;
+    AudioUnitSetProperty(g_micUnit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &one, sizeof one);
+    AudioUnitSetProperty(g_micUnit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &zero, sizeof zero);
+    AudioStreamBasicDescription f; memset(&f, 0, sizeof f);
+    f.mSampleRate = 48000; f.mFormatID = kAudioFormatLinearPCM;
+    f.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    f.mChannelsPerFrame = 1; f.mBitsPerChannel = 16; f.mBytesPerFrame = 2; f.mFramesPerPacket = 1; f.mBytesPerPacket = 2;
+    AudioUnitSetProperty(g_micUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &f, sizeof f);
+    AURenderCallbackStruct cb; cb.inputProc = rctl_mic_input_cb; cb.inputProcRefCon = NULL;
+    AudioUnitSetProperty(g_micUnit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &cb, sizeof cb);
+    OSStatus st = AudioUnitInitialize(g_micUnit);
+    if (st != noErr) { char l[80]; snprintf(l, sizeof l, "miccap: init failed %d", (int)st); dlog(l); AudioComponentInstanceDispose(g_micUnit); g_micUnit = NULL; return false; }
+    st = AudioOutputUnitStart(g_micUnit);
+    if (st != noErr) { char l[80]; snprintf(l, sizeof l, "miccap: start failed %d", (int)st); dlog(l); AudioUnitUninitialize(g_micUnit); AudioComponentInstanceDispose(g_micUnit); g_micUnit = NULL; return false; }
+    g_micCapturing = true;
+    dlog("miccap: started (daemon RemoteIO input)");
+    return true;
+}
+
+static void rctl_mic_capture_stop(void) {
+    if (!g_micCapturing) return;
+    if (g_micUnit) {
+        AudioOutputUnitStop(g_micUnit);
+        AudioUnitUninitialize(g_micUnit);
+        AudioComponentInstanceDispose(g_micUnit);
+        g_micUnit = NULL;
+    }
+    g_micCapturing = false;
+    dlog("miccap: stopped");
 }
 
 int main(int argc, char **argv) {

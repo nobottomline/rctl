@@ -18,6 +18,10 @@ export class AudioPlayer {
   private ts = 0 // synthetic 20ms-per-frame timestamp (Opus frames are 20ms)
   private playTime = 0
 
+  // gain lets the room-mic player run louder than the app-audio one (the daemon's
+  // raw mic input is quiet without AGC).
+  constructor(private gainValue = 0.75) {}
+
   // Wire the WebRTC audio DataChannel handed over by the engine on session open.
   attach(ch: RTCDataChannel) {
     ch.binaryType = 'arraybuffer'
@@ -97,7 +101,7 @@ export class AudioPlayer {
     }
     if (!this.gain) {
       this.gain = this.ctx.createGain()
-      this.gain.gain.value = 0.75
+      this.gain.gain.value = this.gainValue
       this.gain.connect(this.ctx.destination)
     }
     try {

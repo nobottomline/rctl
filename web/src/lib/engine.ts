@@ -80,6 +80,7 @@ export type EngineCallbacks = {
   onAudioChannel?: (ch: RTCDataChannel) => void
   onFilesChannel?: (ch: RTCDataChannel) => void
   onMicChannel?: (ch: RTCDataChannel) => void
+  onRoomMicChannel?: (ch: RTCDataChannel) => void
 }
 
 export class ControlEngine {
@@ -797,6 +798,8 @@ export class ControlEngine {
         this.cb.onFilesChannel?.(ch)
       } else if (ch.label === 'mic-in') {
         this.cb.onMicChannel?.(ch)
+      } else if (ch.label === 'room-mic') {
+        this.cb.onRoomMicChannel?.(ch)
       }
     }
 

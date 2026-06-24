@@ -53,11 +53,17 @@ struct Session {
     std::shared_ptr<rtc::DataChannel> control;
     std::shared_ptr<rtc::DataChannel> filesDc;
     std::shared_ptr<rtc::DataChannel> micIn;
+    std::shared_ptr<rtc::DataChannel> roomMic;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
 static std::vector<std::shared_ptr<rtc::Track>> g_tracks;
 static std::vector<std::shared_ptr<rtc::DataChannel>> g_audio_dcs;
+// Room-mic (listen to the iPad mic): device->browser over its own channel + its own
+// Opus encoder, kept separate from the system-output "audio" path.
+static std::vector<std::shared_ptr<rtc::DataChannel>> g_microom_dcs;
+static OpusEncoder *g_micEnc = nullptr;
+static std::vector<int16_t> g_micPcm;
 // File transfer rides its own reliable+ordered "files" DataChannel (P2P, so it
 // bypasses the relay's body cap and streams any size). One transfer at a time, so
 // a single active channel is enough for the daemon to send replies/chunks back.
@@ -197,6 +203,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     if (dead->filesDc) dead->filesDc->resetCallbacks();
     if (dead->audioDc) dead->audioDc->resetCallbacks();
     if (dead->micIn)   dead->micIn->resetCallbacks();
+    if (dead->roomMic) dead->roomMic->resetCallbacks();
     if (dead->track)   dead->track->resetCallbacks();
     if (dead->pc)      dead->pc->resetCallbacks();
     // Purge from the global send lists; the onClosed that normally does this is
@@ -218,6 +225,12 @@ static void destroy_session(std::shared_ptr<Session> dead) {
             g_audio_dcs.erase(std::remove_if(g_audio_dcs.begin(), g_audio_dcs.end(),
                                   [ap](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == ap; }),
                               g_audio_dcs.end());
+        }
+        if (dead->roomMic) {
+            rtc::DataChannel *rp = dead->roomMic.get();
+            g_microom_dcs.erase(std::remove_if(g_microom_dcs.begin(), g_microom_dcs.end(),
+                                  [rp](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == rp; }),
+                              g_microom_dcs.end());
         }
         if (dead->filesDc && g_files_dc && g_files_dc.get() == dead->filesDc.get()) g_files_dc.reset();
     }
@@ -449,6 +462,26 @@ static void start_session(const std::string &id, const json &ice) {
                           g_audio_dcs.end());
     });
 
+    // Room-mic channel (device -> browser): the iPad's own microphone, Opus over a
+    // dedicated channel (separate encoder from the system-audio path so the two
+    // sources don't share Opus state).
+    auto roomMic = pc->createDataChannel("room-mic");
+    sess->roomMic = roomMic;
+    rtc::DataChannel *rmptr = roomMic.get();
+    roomMic->onOpen([id, rmptr]() {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        auto it = g_sessions.find(id);
+        if (it == g_sessions.end() || !it->second->roomMic || it->second->roomMic.get() != rmptr) return;
+        g_microom_dcs.push_back(it->second->roomMic);
+        wlog("session " + id + " room-mic channel open");
+    });
+    roomMic->onClosed([rmptr]() {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_microom_dcs.erase(std::remove_if(g_microom_dcs.begin(), g_microom_dcs.end(),
+                              [rmptr](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == rmptr; }),
+                          g_microom_dcs.end());
+    });
+
     // Control channel: the browser sends input (touch/keys) over this reliable,
     // ordered DataChannel instead of an HTTP round-trip per event -- low-latency
     // remote control on the same PeerConnection as the video. The device, as the
@@ -671,6 +704,38 @@ extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyfra
 // needs fixed 20ms frames (960 samples/channel @ 48kHz), so accumulate and drain.
 // Wire format per message: [1B channels][Opus frame] -- the browser configures a
 // WebCodecs Opus decoder from the channel count, then decodes each frame.
+extern "C" void rctl_webrtc_push_mic(const int16_t *pcm, int frames, int channels, int rate) {
+    if (!pcm || frames <= 0 || channels != 1 || rate != 48000) return;
+    std::vector<std::shared_ptr<rtc::DataChannel>> dcs;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (g_microom_dcs.empty()) return;   // nobody listening
+        dcs = g_microom_dcs;
+    }
+    if (!g_micEnc) {
+        int err = 0;
+        g_micEnc = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &err);
+        g_micPcm.clear();
+        if (err != 0 || !g_micEnc) { g_micEnc = nullptr; return; }
+    }
+    g_micPcm.insert(g_micPcm.end(), pcm, pcm + (size_t)frames);
+    const int FRAME = 960;  // 20ms @ 48k mono
+    const size_t MAX_BUFFERED = 256u * 1024;
+    unsigned char out[4000];
+    while ((int)g_micPcm.size() >= FRAME) {
+        int n = opus_encode(g_micEnc, g_micPcm.data(), FRAME, out, (opus_int32)sizeof out);
+        g_micPcm.erase(g_micPcm.begin(), g_micPcm.begin() + FRAME);
+        if (n <= 0) continue;
+        std::vector<std::byte> msg(1 + (size_t)n);
+        msg[0] = static_cast<std::byte>(1);
+        std::memcpy(msg.data() + 1, out, (size_t)n);
+        for (auto &d : dcs) {
+            if (!d->isOpen() || d->bufferedAmount() > MAX_BUFFERED) continue;
+            try { d->send(msg); } catch (...) {}
+        }
+    }
+}
+
 extern "C" void rctl_webrtc_push_audio(const int16_t *pcm, int frames, int channels,
                                        int rate, uint64_t pts_us) {
     (void)pts_us;

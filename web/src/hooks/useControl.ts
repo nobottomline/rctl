@@ -21,7 +21,9 @@ export function useControl(
   const audioRef = useRef(new AudioPlayer())
   const filesRef = useRef(new FileTransfer())
   const micRef = useRef(new MicTalk())
+  const roomMicRef = useRef(new AudioPlayer(3)) // the iPad's own mic, run a bit louder (raw input is quiet)
   const [talking, setTalking] = useState(false)
+  const [listeningMic, setListeningMic] = useState(false)
   const [listening, setListening] = useState(false)
   const [audioBusy, setAudioBusy] = useState(false)
   const [deviceSpeaker, setDeviceSpeaker] = useState(true)
@@ -44,6 +46,7 @@ export function useControl(
       onAudioChannel: (ch) => audioRef.current.attach(ch),
       onFilesChannel: (ch) => filesRef.current.attach(ch),
       onMicChannel: (ch) => micRef.current.attach(ch),
+      onRoomMicChannel: (ch) => roomMicRef.current.attach(ch),
     })
     micRef.current.onState = setTalking
     engineRef.current = engine
@@ -274,6 +277,22 @@ export function useControl(
     }
   }
 
+  // Listen to the iPad's own microphone (the room), captured by the daemon itself
+  // so it works regardless of what app is foreground. resume() needs this click as
+  // the audio-unlock gesture.
+  const toggleListenMic = async () => {
+    if (listeningMic) {
+      roomMicRef.current.mute()
+      setListeningMic(false)
+      api('/v1/mic_capture?on=0').catch(() => {})
+    } else {
+      const ok = await roomMicRef.current.resume()
+      if (!ok) return
+      setListeningMic(true)
+      api('/v1/mic_capture?on=1').catch(() => {})
+    }
+  }
+
   return {
     status,
     orient,
@@ -289,6 +308,7 @@ export function useControl(
       start: () => micRef.current.start(),
       stop: () => micRef.current.stop(),
     },
+    listenMic: { active: listeningMic, toggle: toggleListenMic },
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),
