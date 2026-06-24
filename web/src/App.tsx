@@ -82,7 +82,7 @@ export default function App() {
           transfer={ctl.filesTransfer}
         />
       )}
-      {view === 'system' && <SystemPanel onClose={() => setView(null)} />}
+      {view === 'system' && <SystemPanel onClose={() => setView(null)} transfer={ctl.filesTransfer} />}
     </div>
   )
 }

@@ -909,10 +909,12 @@ static char *rctl_tweaks_json(void) {
                        @"/var/jb/Library/MobileSubstrate/DynamicLibraries", @"/var/jb/usr/lib/TweakInject" ];
     for (NSString *dir in dirs) {
         for (NSString *f in ([fm contentsOfDirectoryAtPath:dir error:nil] ?: @[])) {
-            if (![[f pathExtension] isEqualToString:@"plist"]) continue;
-            NSString *base = [f stringByDeletingPathExtension];
+            BOOL disabled = [f hasSuffix:@".plist.disabled"];   // toggled off by us
+            if (!disabled && ![[f pathExtension] isEqualToString:@"plist"]) continue;
+            NSString *base = disabled ? [f substringToIndex:f.length - @".plist.disabled".length]
+                                      : [f stringByDeletingPathExtension];
             NSString *plistPath = [dir stringByAppendingPathComponent:f];
-            NSString *dylibPath = [dir stringByAppendingPathComponent:[base stringByAppendingPathExtension:@"dylib"]];
+            NSString *dylibPath = [dir stringByAppendingPathComponent:[base stringByAppendingString:(disabled ? @".dylib.disabled" : @".dylib")]];
             NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:plistPath];
             NSArray *bundles = @[], *execs = @[];
             if ([plist isKindOfClass:[NSDictionary class]]) {
@@ -929,6 +931,7 @@ static char *rctl_tweaks_json(void) {
                 @"bundles": bundles,
                 @"executables": execs,
                 @"size": @(size),
+                @"enabled": @(!disabled),
                 @"present": @([fm fileExistsAtPath:dylibPath]),
             }];
         }
@@ -968,6 +971,96 @@ static char *rctl_dylibs_json(void) {
     if (!jd) return strdup("{\"count\":0,\"dylibs\":[]}");
     char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
     return out;
+}
+
+// dpkg package ids are a tight charset; reject anything else so it can never reach
+// a shell as an argument.
+static bool rctl_safe_id(const char *s) {
+    if (!s || !*s) return false;
+    for (const char *p = s; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '.' || c == '+' || c == '-' || c == '_')) return false;
+    }
+    return true;
+}
+
+// Enable/disable a tweak by renaming its .dylib + .plist to/from a .disabled
+// suffix (Substrate only loads *.dylib, so this cleanly stops injection without
+// the "no plist -> loads globally" footgun). Takes effect on the next respring.
+// Returns NULL for a path outside a tweak dir so the caller can 400.
+static char *rctl_tweak_toggle(const char *cpath, int on) {
+    NSString *path = [NSString stringWithUTF8String:cpath] ?: @"";
+    if (!([path containsString:@"/DynamicLibraries/"] || [path containsString:@"/TweakInject/"])) return NULL;
+    if (!([path hasSuffix:@".dylib"] || [path hasSuffix:@".dylib.disabled"])) return NULL;
+    NSString *dy = [path hasSuffix:@".disabled"] ? [path substringToIndex:path.length - @".disabled".length] : path;
+    NSString *dyD = [dy stringByAppendingString:@".disabled"];
+    NSString *pl = [[dy substringToIndex:dy.length - @".dylib".length] stringByAppendingString:@".plist"];
+    NSString *plD = [pl stringByAppendingString:@".disabled"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (on) {
+        if ([fm fileExistsAtPath:dyD]) [fm moveItemAtPath:dyD toPath:dy error:nil];
+        if ([fm fileExistsAtPath:plD]) [fm moveItemAtPath:plD toPath:pl error:nil];
+    } else {
+        if ([fm fileExistsAtPath:dy]) [fm moveItemAtPath:dy toPath:dyD error:nil];
+        if ([fm fileExistsAtPath:pl]) [fm moveItemAtPath:pl toPath:plD error:nil];
+    }
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"ok": @YES, @"enabled": @(on != 0) } options:0 error:nil];
+    char *r = (char *)malloc(jd.length + 1); memcpy(r, jd.bytes, jd.length); r[jd.length] = 0;
+    return r;
+}
+
+// Which installed package owns a file (dpkg's .list DB). Used to turn "remove this
+// tweak" into "uninstall its package". Strips a .disabled suffix first.
+static char *rctl_owner_json(const char *cpath) {
+    NSString *target = [NSString stringWithUTF8String:cpath] ?: @"";
+    if ([target hasSuffix:@".disabled"]) target = [target substringToIndex:target.length - @".disabled".length];
+    NSString *found = @"";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *info in @[ @"/var/lib/dpkg/info", @"/var/jb/var/lib/dpkg/info" ]) {
+        for (NSString *f in ([fm contentsOfDirectoryAtPath:info error:nil] ?: @[])) {
+            if (![f hasSuffix:@".list"]) continue;
+            NSString *content = [NSString stringWithContentsOfFile:[info stringByAppendingPathComponent:f] encoding:NSUTF8StringEncoding error:nil];
+            if (!content) continue;
+            if ([[content componentsSeparatedByString:@"\n"] containsObject:target]) { found = [f stringByDeletingPathExtension]; break; }
+        }
+        if (found.length) break;
+    }
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"package": found } options:0 error:nil];
+    char *r = (char *)malloc(jd.length + 1); memcpy(r, jd.bytes, jd.length); r[jd.length] = 0;
+    return r;
+}
+
+// The files a package installed (dpkg .list).
+static char *rctl_pkg_files_json(const char *id) {
+    NSMutableArray *files = [NSMutableArray array];
+    for (NSString *info in @[ @"/var/lib/dpkg/info", @"/var/jb/var/lib/dpkg/info" ]) {
+        NSString *lp = [NSString stringWithFormat:@"%@/%s.list", info, id];
+        NSString *content = [NSString stringWithContentsOfFile:lp encoding:NSUTF8StringEncoding error:nil];
+        if (!content) continue;
+        for (NSString *line in [content componentsSeparatedByString:@"\n"]) if (line.length) [files addObject:line];
+        break;
+    }
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"count": @(files.count), @"files": files } options:0 error:nil];
+    char *r = (char *)malloc(jd.length + 1); memcpy(r, jd.bytes, jd.length); r[jd.length] = 0;
+    return r;
+}
+
+// Uninstall a package via dpkg -r (id is pre-validated by rctl_safe_id). Captures
+// dpkg's output + exit status for the UI; a respring usually follows.
+static char *rctl_pkg_remove(const char *id) {
+    char cmd[320];
+    snprintf(cmd, sizeof cmd, "dpkg -r %s 2>&1", id);
+    FILE *p = popen(cmd, "r");
+    if (!p) return strdup("{\"ok\":false,\"output\":\"could not run dpkg\"}");
+    NSMutableData *buf = [NSMutableData data];
+    char chunk[1024]; size_t n;
+    while ((n = fread(chunk, 1, sizeof chunk, p)) > 0) [buf appendBytes:chunk length:n];
+    int rc = pclose(p);
+    NSString *outs = [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding] ?: @"";
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"ok": @(rc == 0), @"output": outs } options:0 error:nil];
+    char *r = (char *)malloc(jd.length + 1); memcpy(r, jd.bytes, jd.length); r[jd.length] = 0;
+    return r;
 }
 
 static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
@@ -1061,6 +1154,26 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         char *dl = rctl_dylibs_json();
         if (dl) return dl;
         *status = 500; return strdup("{\"error\":\"dylibs failed\"}");
+    } else if (!strcmp(path, "/v1/tweak_toggle")) {   // enable/disable a tweak (rename +/- .disabled)
+        char raw[1024], pth[1024]; int on = get_i(query, "on", 0);
+        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        url_decode(raw, pth, sizeof pth);
+        char *r = rctl_tweak_toggle(pth, on);
+        if (r) return r;
+        *status = 400; return strdup("{\"error\":\"not a tweak path\"}");
+    } else if (!strcmp(path, "/v1/owner")) {          // which package owns a file
+        char raw[1024], pth[1024];
+        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        url_decode(raw, pth, sizeof pth);
+        return rctl_owner_json(pth);
+    } else if (!strcmp(path, "/v1/pkg_files")) {      // files a package installed
+        char id[256];
+        if (!get_param(query, "id", id, sizeof id) || !rctl_safe_id(id)) { *status = 400; return strdup("{\"error\":\"bad id\"}"); }
+        return rctl_pkg_files_json(id);
+    } else if (!strcmp(path, "/v1/pkg_remove")) {     // dpkg -r <id>
+        char id[256];
+        if (!get_param(query, "id", id, sizeof id) || !rctl_safe_id(id)) { *status = 400; return strdup("{\"error\":\"bad id\"}"); }
+        return rctl_pkg_remove(id);
     } else if (!strcmp(path, "/v1/apps")) {
         char *apps = sb_query(RCTL_Q_APPLIST, NULL, 0, 3.0);   // enumeration can be slower
         if (apps) return apps;            // JSON array [{id,name}]
