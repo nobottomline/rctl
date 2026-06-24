@@ -24,6 +24,7 @@ export function useControl(
   const roomMicRef = useRef(new AudioPlayer(3)) // the iPad's own mic, run a bit louder (raw input is quiet)
   const [talking, setTalking] = useState(false)
   const [listeningMic, setListeningMic] = useState(false)
+  const [micRec, setMicRec] = useState({ recording: false, seconds: 0, bytes: 0 })
   const [listening, setListening] = useState(false)
   const [audioBusy, setAudioBusy] = useState(false)
   const [deviceSpeaker, setDeviceSpeaker] = useState(true)
@@ -277,6 +278,27 @@ export function useControl(
     }
   }
 
+  // Mic recording lives on the device (it keeps recording after the browser leaves),
+  // so the truth is the daemon's status. Poll it: fast while recording (live timer),
+  // slow otherwise. Restores the live state + elapsed time after a page reload.
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      try {
+        const j = (await apiJSON('/v1/mic_record')) as { recording?: boolean; seconds?: number; bytes?: number }
+        if (alive) setMicRec({ recording: !!j.recording, seconds: j.seconds || 0, bytes: j.bytes || 0 })
+      } catch {
+        /* ignore */
+      }
+    }
+    tick()
+    const id = window.setInterval(tick, micRec.recording ? 1000 : 5000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [micRec.recording])
+
   // Listen to the iPad's own microphone (the room), captured by the daemon itself
   // so it works regardless of what app is foreground. resume() needs this click as
   // the audio-unlock gesture.
@@ -309,6 +331,24 @@ export function useControl(
       stop: () => micRef.current.stop(),
     },
     listenMic: { active: listeningMic, toggle: toggleListenMic },
+    micRecord: {
+      recording: micRec.recording,
+      seconds: micRec.seconds,
+      bytes: micRec.bytes,
+      start: async () => {
+        await api('/v1/mic_record?on=1').catch(() => {})
+        setMicRec((s) => ({ ...s, recording: true }))
+      },
+      stop: async () => {
+        await api('/v1/mic_record?on=0').catch(() => {})
+        setMicRec((s) => ({ ...s, recording: false }))
+      },
+      save: () => filesRef.current.download('/var/mobile/rctl/mic-recording.m4a', 'rctl-mic-recording.m4a'),
+      discard: async () => {
+        await api('/v1/mic_record?discard=1').catch(() => {})
+        setMicRec({ recording: false, seconds: 0, bytes: 0 })
+      },
+    },
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),

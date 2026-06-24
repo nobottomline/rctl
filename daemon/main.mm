@@ -829,8 +829,20 @@ static char *list_dir(const char *dir, int *status) {
     return out;
 }
 
+static AudioUnit g_micUnit = NULL;
+static bool g_micCapturing = false;
+static bool g_micListenWant = false;   // browser is listening to the mic
+static bool g_micRecordWant = false;   // a recording is armed
+static ExtAudioFileRef g_recFile = NULL;
+static bool g_recording = false;
+static uint64_t g_recFrames = 0;       // mono frames @ 48k written so far
+static pthread_mutex_t g_recLock = PTHREAD_MUTEX_INITIALIZER;
+#define RCTL_MIC_REC_PATH "/var/mobile/rctl/mic-recording.m4a"
 static bool rctl_mic_capture_start(void);
 static void rctl_mic_capture_stop(void);
+static void rctl_mic_refresh(void);
+static bool rctl_mic_record_start(void);
+static void rctl_mic_record_stop(void);
 static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
@@ -1013,12 +1025,39 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
     } else if (!strcmp(path, "/v1/mic_capture")) {    // listen to the iPad mic ANYTIME (daemon-side RemoteIO capture)
         char onp[8]; int on = 0;
         if (get_param(query, "on", onp, sizeof onp) && onp[0] == '1') on = 1;
-        if (on) {
-            if (!rctl_mic_capture_start()) { *status = 500; return strdup("{\"error\":\"mic capture failed (see /tmp/rctld.log)\"}"); }
-        } else {
-            rctl_mic_capture_stop();
-        }
+        g_micListenWant = on;
+        rctl_mic_refresh();
+        if (on && !g_micCapturing) { *status = 500; return strdup("{\"error\":\"mic capture failed (see /tmp/rctld.log)\"}"); }
         // -> default {"ok":true}
+    } else if (!strcmp(path, "/v1/mic_record")) {     // record the iPad mic to a file; download later via the files channel
+        char onp[8], dp[8];
+        if (get_param(query, "discard", dp, sizeof dp) && dp[0] == '1') {
+            rctl_mic_record_stop();
+            g_micRecordWant = false;
+            unlink(RCTL_MIC_REC_PATH);
+            rctl_mic_refresh();
+            // -> default {"ok":true}
+        } else if (get_param(query, "on", onp, sizeof onp)) {
+            if (onp[0] == '1') {
+                g_micRecordWant = true;
+                rctl_mic_refresh();
+                if (!rctl_mic_record_start()) { g_micRecordWant = false; rctl_mic_refresh(); *status = 500; return strdup("{\"error\":\"record start failed\"}"); }
+            } else {
+                rctl_mic_record_stop();
+                g_micRecordWant = false;
+                rctl_mic_refresh();
+            }
+            // -> default {"ok":true}
+        } else {
+            pthread_mutex_lock(&g_recLock);
+            bool rec = g_recording; long fr = (long)g_recFrames;
+            pthread_mutex_unlock(&g_recLock);
+            struct stat stt; long bytes = (stat(RCTL_MIC_REC_PATH, &stt) == 0) ? (long)stt.st_size : 0;
+            char *j = (char *)malloc(208);
+            snprintf(j, 208, "{\"recording\":%s,\"seconds\":%d,\"bytes\":%ld,\"path\":\"%s\"}",
+                     rec ? "true" : "false", (int)(fr / 48000), bytes, RCTL_MIC_REC_PATH);
+            return j;
+        }
     } else if (!strcmp(path, "/v1/camera")) {         // snap a photo IN the frontmost app
         int pos = 1; char posp[16];                   // 1=back, 2=front
         if (get_param(query, "pos", posp, sizeof posp) && (!strcmp(posp, "front") || !strcmp(posp, "2"))) pos = 2;
@@ -1290,8 +1329,7 @@ extern "C" void rctl_audio_boost_end(void) {
 // what's on screen, the daemon opens its OWN RemoteIO input and pulls the mic. The
 // session is PlayAndRecord + MixWithOthers so a game/YouTube keeps playing. (Phase A
 // probe: log the level; next step encodes Opus -> the room-mic channel.)
-static AudioUnit g_micUnit = NULL;
-static bool g_micCapturing = false;
+// mic capture + recording state is declared earlier (before rest_handler).
 
 static void rctl_mic_session_record(void) {
     @try {
@@ -1329,11 +1367,19 @@ static OSStatus rctl_mic_input_cb(void *ref, AudioUnitRenderActionFlags *flags, 
         if ((++e & 0x3f) == 0) { char l[80]; snprintf(l, sizeof l, "miccap render err %d", (int)st); dlog(l); }
         return st;
     }
-    long peak = 0;
-    for (UInt32 i = 0; i < want; i++) { int v = buf[i] < 0 ? -buf[i] : buf[i]; if (v > peak) peak = v; }
-    static unsigned n = 0;
-    if ((++n & 0x1f) == 0) { char l[96]; snprintf(l, sizeof l, "miccap peak=%ld frames=%u", peak, (unsigned)want); dlog(l); }
-    rctl_webrtc_push_mic(buf, (int)want, 1, 48000);   // -> room-mic channel
+    rctl_webrtc_push_mic(buf, (int)want, 1, 48000);   // -> room-mic channel (live listen)
+    if (g_recording) {
+        pthread_mutex_lock(&g_recLock);
+        if (g_recording && g_recFile) {
+            AudioBufferList rabl;
+            rabl.mNumberBuffers = 1;
+            rabl.mBuffers[0].mNumberChannels = 1;
+            rabl.mBuffers[0].mDataByteSize = want * 2;
+            rabl.mBuffers[0].mData = buf;
+            if (ExtAudioFileWriteAsync(g_recFile, want, &rabl) == noErr) g_recFrames += want;
+        }
+        pthread_mutex_unlock(&g_recLock);
+    }
     return noErr;
 }
 
@@ -1376,6 +1422,50 @@ static void rctl_mic_capture_stop(void) {
     }
     g_micCapturing = false;
     dlog("miccap: stopped");
+}
+
+// Capture runs while EITHER the browser is listening OR a recording is armed, so a
+// recording keeps going after the listener walks away / the page disconnects.
+static void rctl_mic_refresh(void) {
+    bool want = g_micListenWant || g_micRecordWant;
+    if (want && !g_micCapturing) rctl_mic_capture_start();
+    else if (!want && g_micCapturing) rctl_mic_capture_stop();
+}
+
+// Record the captured mic to an AAC .m4a via ExtAudioFile: hours fit in tens of MB
+// and it plays everywhere. The file finalizes (moov atom) on stop/dispose.
+static bool rctl_mic_record_start(void) {
+    pthread_mutex_lock(&g_recLock);
+    if (g_recording) { pthread_mutex_unlock(&g_recLock); return true; }
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)RCTL_MIC_REC_PATH, strlen(RCTL_MIC_REC_PATH), false);
+    AudioStreamBasicDescription aac; memset(&aac, 0, sizeof aac);
+    aac.mFormatID = kAudioFormatMPEG4AAC; aac.mSampleRate = 48000; aac.mChannelsPerFrame = 1;
+    OSStatus st = ExtAudioFileCreateWithURL(url, kAudioFileM4AType, &aac, NULL, kAudioFileFlags_EraseFile, &g_recFile);
+    if (url) CFRelease(url);
+    if (st != noErr || !g_recFile) { char l[80]; snprintf(l, sizeof l, "micrec: create failed %d", (int)st); dlog(l); g_recFile = NULL; pthread_mutex_unlock(&g_recLock); return false; }
+    AudioStreamBasicDescription pcm; memset(&pcm, 0, sizeof pcm);
+    pcm.mSampleRate = 48000; pcm.mFormatID = kAudioFormatLinearPCM;
+    pcm.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    pcm.mChannelsPerFrame = 1; pcm.mBitsPerChannel = 16; pcm.mBytesPerFrame = 2; pcm.mFramesPerPacket = 1; pcm.mBytesPerPacket = 2;
+    st = ExtAudioFileSetProperty(g_recFile, kExtAudioFileProperty_ClientDataFormat, sizeof pcm, &pcm);
+    if (st != noErr) { char l[80]; snprintf(l, sizeof l, "micrec: client fmt %d", (int)st); dlog(l); ExtAudioFileDispose(g_recFile); g_recFile = NULL; pthread_mutex_unlock(&g_recLock); return false; }
+    ExtAudioFileWriteAsync(g_recFile, 0, NULL);   // prime the async writer thread
+    g_recFrames = 0;
+    g_recording = true;
+    pthread_mutex_unlock(&g_recLock);
+    dlog("micrec: started");
+    return true;
+}
+
+static void rctl_mic_record_stop(void) {
+    pthread_mutex_lock(&g_recLock);
+    if (g_recording && g_recFile) {
+        g_recording = false;
+        ExtAudioFileDispose(g_recFile);
+        g_recFile = NULL;
+        dlog("micrec: stopped");
+    }
+    pthread_mutex_unlock(&g_recLock);
 }
 
 int main(int argc, char **argv) {

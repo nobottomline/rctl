@@ -2,6 +2,7 @@ import { useState, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   ChevronDown,
+  Download,
   Ear,
   FolderOpen,
   Headphones,
@@ -15,6 +16,7 @@ import {
   Smartphone,
   SquareTerminal,
   Sun,
+  Trash2,
   Volume1,
   Volume2,
   VolumeX,
@@ -89,21 +91,9 @@ export default function ControlCenter({
           active={ctl.audio.deviceSpeaker}
           onClick={ctl.audio.toggleSpeaker}
         />
-        <Key
-          icon={Ear}
-          label={ctl.listenMic.active ? 'Mic on' : 'Mic'}
-          active={ctl.listenMic.active}
-          onClick={ctl.listenMic.toggle}
-        />
-        {ctl.talk.supported && (
-          <Key
-            icon={ctl.talk.talking ? Mic : MicOff}
-            label={ctl.talk.talking ? 'Talking' : 'Talk'}
-            active={ctl.talk.talking}
-            onClick={() => (ctl.talk.talking ? ctl.talk.stop() : ctl.talk.start())}
-          />
-        )}
       </Group>
+
+      <MicGroup ctl={ctl} />
 
       <div>
         <Label>Display</Label>
@@ -124,6 +114,77 @@ export default function ControlCenter({
         <Launch icon={FolderOpen} label="Files" onClick={onFiles} />
         <Launch icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
       </div>
+    </div>
+  )
+}
+
+function fmtDur(s: number) {
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+function fmtSize(b: number) {
+  return b < 1048576 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`
+}
+
+// The iPad's own microphone: Listen (hear the room live), Record (the daemon keeps
+// recording to a file even after you leave — come back and Save it), and Talk (your
+// browser mic out the iPad speaker). The record control shows a live timer; Save
+// pulls the .m4a over the P2P files channel.
+function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
+  const r = ctl.micRecord
+  return (
+    <div>
+      <Label>Microphone</Label>
+      <div className="grid grid-cols-2 gap-1.5">
+        <Key
+          icon={Ear}
+          label={ctl.listenMic.active ? 'Listening' : 'Listen'}
+          active={ctl.listenMic.active}
+          onClick={ctl.listenMic.toggle}
+        />
+        {r.recording ? (
+          <button
+            onClick={r.stop}
+            className="flex items-center justify-center gap-1.5 rounded-lg bg-red-500 px-2 py-2 text-[12px] font-medium text-white"
+          >
+            <span className="size-2.5 rounded-full bg-white/90 animate-pulse" />
+            {fmtDur(r.seconds)}
+          </button>
+        ) : (
+          <button
+            onClick={r.start}
+            className="flex items-center justify-center gap-1.5 rounded-lg bg-fg/8 px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-red-500 active:text-white"
+          >
+            <span className="size-2.5 rounded-full bg-red-500" />
+            Record
+          </button>
+        )}
+        {ctl.talk.supported && (
+          <Key
+            icon={ctl.talk.talking ? Mic : MicOff}
+            label={ctl.talk.talking ? 'Talking' : 'Talk'}
+            active={ctl.talk.talking}
+            onClick={() => (ctl.talk.talking ? ctl.talk.stop() : ctl.talk.start())}
+          />
+        )}
+      </div>
+      {!r.recording && r.bytes > 0 && (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <button
+            onClick={r.save}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-fg/8 px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal"
+          >
+            <Download className="size-3.5 shrink-0" />
+            Save {fmtDur(r.seconds)} · {fmtSize(r.bytes)}
+          </button>
+          <button
+            onClick={r.discard}
+            aria-label="Discard recording"
+            className="grid size-9 shrink-0 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors active:bg-fg/15"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
