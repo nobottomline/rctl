@@ -90,6 +90,14 @@ export class AudioPlayer {
   // Create/resume the AudioContext and start playing. Must be called from a user
   // gesture (browsers block autoplay). Returns whether playback is live.
   async resume(): Promise<boolean> {
+    // iOS Safari silences Web Audio when the phone's ring/silent switch is on unless
+    // the page claims a 'playback' audio session. No-op on browsers without the API.
+    try {
+      const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession
+      if (session) session.type = 'playback'
+    } catch {
+      /* ignore */
+    }
     const AC = window.AudioContext || (window as WebkitWindow).webkitAudioContext
     if (!AC) return false
     if (!this.ctx) {
