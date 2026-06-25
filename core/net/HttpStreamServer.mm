@@ -585,7 +585,10 @@ static void handle_client(rctl_http_server *s, int fd) {
     } else if (strncmp(req, "GET / ", 6) == 0 || strncmp(req, "GET /index", 10) == 0) {
         size_t hlen = 0;
         char *html = read_file("/var/mobile/rctl/index.html", &hlen);
-        send_text(fd, "200 OK", "text/html; charset=utf-8", html ? html : kHtml);
+        // send_data with the real length, not strlen: the inlined web bundle can
+        // contain NUL bytes (embedded WASM) that would truncate a strlen() send.
+        if (html) send_data(fd, "200 OK", "text/html; charset=utf-8", html, hlen);
+        else send_text(fd, "200 OK", "text/html; charset=utf-8", kHtml);
         free(html);
         close(fd);
     } else {
