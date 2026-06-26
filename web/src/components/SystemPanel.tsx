@@ -92,9 +92,10 @@ function baseName(p: string) {
   return p.split('/').pop() || p
 }
 
-// Only http(s) icons can render in the browser; package Icon fields are often
-// file:// paths on the device, which we can't show.
-function httpIcon(s?: string): string {
+// Keep only http(s) URLs from untrusted repo metadata. Icons that are file://
+// paths can't render; and a Depiction/Homepage of `javascript:`/`data:` would, if
+// rendered as a link href, run code in this privileged control page when clicked.
+function httpUrl(s?: string): string {
   return s && /^https?:\/\//i.test(s) ? s : ''
 }
 function hostOf(url?: string): string {
@@ -699,8 +700,8 @@ function Detail({ tab, item, meta }: { tab: Tab; item: Item; meta?: PkgMeta }) {
 // with the full repo depiction opened in a new, isolated tab (never embedded into
 // this privileged control page).
 function PkgDetail({ p, meta }: { p: Pkg; meta?: PkgMeta }) {
-  const depiction = meta?.depiction || p.depiction
-  const home = meta?.home || p.home
+  const depiction = httpUrl(meta?.depiction || p.depiction)
+  const home = httpUrl(meta?.home || p.home)
   const desc = meta?.desc || p.desc
   const author = cleanAuthor(meta?.author || p.author)
   const section = meta?.section || p.section
@@ -752,7 +753,7 @@ function LinkBtn({ href, icon: Icon, label }: { href: string; icon: ComponentTyp
 // URL (most Icon fields are device file:// paths) or when the repo's image server
 // refuses cross-origin loading (CORP) or 404s.
 function RepoIcon({ icon, big }: { icon?: string; big?: boolean }) {
-  const url = httpIcon(icon)
+  const url = httpUrl(icon)
   const [failed, setFailed] = useState(false)
   const box = big ? 'size-12 rounded-xl ring-line/40' : 'size-6 rounded-md ring-line/30'
   if (url && !failed)
