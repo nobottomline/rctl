@@ -407,11 +407,22 @@ static void *audio_test_loop(void *arg) {
 
 static void send_data(int fd, const char *status, const char *ctype,
                       const void *body, size_t len) {
-    char hdr[256];
+    // Ship the same security headers the relay sets on the control page, so the
+    // device-served (LAN) page isn't a weaker origin: a strict CSP (frame-ancestors
+    // none, no eval, https-only images), nosniff, and no referrer leakage. The CSP
+    // is ignored on non-document responses (the /v1 JSON) but nosniff still helps.
+    char hdr[640];
     int n = snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
-        "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        "Access-Control-Allow-Origin: *\r\n"
+        "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+        "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; "
+        "img-src 'self' data: blob: https:; media-src 'self' blob:; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'self'\r\n"
+        "Connection: close\r\n\r\n",
         status, ctype, len);
+    if (n < 0 || n >= (int)sizeof(hdr)) return;   // header overflow: drop, don't send garbage
     send_full(fd, hdr, n);
     send_full(fd, body, len);
 }
