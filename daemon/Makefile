@@ -9,13 +9,17 @@ ARCHS := arm64
 
 include $(THEOS)/makefiles/common.mk
 
-# WebRTC DataChannels (libdatachannel + deps + mbedtls), cross-compiled for iOS
-# by relay/experiments/webrtc-spike/build-ios.sh. Local/gitignored artifacts for
-# now (feasibility) — Phase 4 will vendor them properly.
-WEBRTC := ../relay/experiments/webrtc-spike
+# WebRTC DataChannels + media/RTP (libdatachannel + deps), DTLS (Mbed TLS) and the
+# Opus codec, cross-compiled for iOS by third_party/webrtc/build-ios.sh. Build them
+# with `make deps` from the repo root; the .a output under .lib/ is gitignored and
+# reproducible from pinned upstream sources.
+WEBRTC := ../third_party/webrtc
 DC := $(WEBRTC)/.lib/libdatachannel
 MBED := $(WEBRTC)/.lib/ios/mbedtls-install
 OPUS := $(WEBRTC)/.lib/ios/opus-install
+ifeq ($(wildcard $(DC)/build-ios/libdatachannel.a),)
+$(error WebRTC static libs not found; run 'make deps' first - see third_party/webrtc/README.md)
+endif
 # Theos SDKs ship no libc++ headers (the pre-existing ObjC code never used the
 # STL); libdatachannel is heavy C++, so pull libc++ headers from the Xcode SDK.
 LIBCPP := $(shell xcrun --sdk iphoneos --show-sdk-path)/usr/include/c++/v1

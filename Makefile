@@ -5,6 +5,7 @@
 #   audio/        -> rctlaudio.dylib  (inactive mediaserverd audio payload)
 # Extra payload (web client, LaunchDaemon plist) ships via layout/.
 #
+#   make deps              build the pinned iOS WebRTC static libs (run once, first)
 #   make package           build the .deb into ./packages/
 #   make package-relay     build a private relay-enabled .deb into ./personalized/
 #   make package install   ... and install it over SSH (USB tunnel: see below)
@@ -61,3 +62,7 @@ release-check:
 .PHONY: test-personalize
 test-personalize:
 	@scripts/test_personalize_deb.sh
+
+.PHONY: deps
+deps:
+	@third_party/webrtc/build-ios.sh

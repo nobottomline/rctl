@@ -1,0 +1,3 @@
+# Built dependency tree: fetched sources + iOS static libs. Reproducible from
+# pinned versions via `make deps` (build-ios.sh), so never committed.
+.lib/
