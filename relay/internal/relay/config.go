@@ -18,6 +18,7 @@ type config struct {
 	AllowInsecure      bool
 	CookieSecure       bool
 	TrustProxyHeaders  bool
+	TrustedProxyDepth  int
 	EnableWebRTC       bool
 	TurnSecret         string
 	TurnURLs           []string
@@ -47,6 +48,11 @@ func loadConfig() (config, error) {
 		SessionSecret:      os.Getenv("RCTL_RELAY_SESSION_SECRET"),
 		AllowInsecure:      getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),
 		TrustProxyHeaders:  getenvBool("RCTL_RELAY_TRUST_PROXY_HEADERS", false),
+		// Number of trusted reverse proxies in front of the relay. The client IP is
+		// taken this many hops from the RIGHT of X-Forwarded-For (the rightmost entry
+		// is the one our own edge proxy appended); entries further left are
+		// client-supplied and spoofable. Default 1 = a single trusted edge proxy.
+		TrustedProxyDepth:  getenvInt("RCTL_RELAY_TRUSTED_PROXY_DEPTH", 1),
 		EnableWebRTC:       getenvBool("RCTL_RELAY_ENABLE_WEBRTC", false),
 		TurnSecret:         os.Getenv("RCTL_RELAY_TURN_SECRET"),
 		TurnURLs:           getenvList("RCTL_RELAY_TURN_URLS"),

@@ -88,7 +88,7 @@ func (l *rateLimiter) gcLocked(now time.Time) {
 
 func (s *server) clientIP(r *http.Request) string {
 	if s.cfg.TrustProxyHeaders {
-		if ip := forwardedClientIP(r); ip != "" {
+		if ip := forwardedClientIP(r, s.cfg.TrustedProxyDepth); ip != "" {
 			return ip
 		}
 	}
@@ -98,14 +98,28 @@ func (s *server) clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func forwardedClientIP(r *http.Request) string {
+// forwardedClientIP resolves the real client IP from the proxy headers. It reads
+// X-Forwarded-For from the RIGHT: with `depth` trusted proxies in front, the real
+// client is the depth-th entry from the end (the rightmost was appended by our own
+// edge proxy and can't be spoofed). Taking the leftmost entry instead — the naive
+// reading — lets a client forge its own source IP and bypass the per-IP limiter.
+func forwardedClientIP(r *http.Request, depth int) string {
+	if depth < 1 {
+		depth = 1
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		for _, part := range parts {
+		var ips []string
+		for _, part := range strings.Split(xff, ",") {
 			ip := strings.TrimSpace(part)
 			if net.ParseIP(ip) != nil {
-				return ip
+				ips = append(ips, ip)
 			}
+		}
+		// Only trust the chain if it's at least as long as the proxies we expect; a
+		// shorter chain means the request didn't traverse them all (or is forged), so
+		// fall through to X-Real-IP / RemoteAddr — fail closed, never onto a spoof.
+		if len(ips) >= depth {
+			return ips[len(ips)-depth]
 		}
 	}
 	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(xrip) != nil {

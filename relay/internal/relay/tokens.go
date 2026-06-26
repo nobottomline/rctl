@@ -22,7 +22,22 @@ func newTokenPair(prefix string) (string, string, error) {
 	return prefix + "_" + base64.RawURLEncoding.EncodeToString(idBytes), base64.RawURLEncoding.EncodeToString(secretBytes), nil
 }
 
+// argonGate caps how many memory-hard hashes run at once. Each argon2.IDKey below
+// pins 64 MB and runs on every device/enrollment handshake; without a bound, a
+// burst of (even wrong) tokens stacks 64 MB allocations and OOMs the relay. A small
+// gate keeps peak hash memory bounded (here 2 -> ~128 MB); real device handshakes
+// are rare, so legitimate logins don't meaningfully queue.
+var argonGate = make(chan struct{}, 2)
+
 func hashToken(token string) string {
+	// Cheap pre-reject before the expensive hash: real tokens are short, so anything
+	// empty or absurdly long is garbage that can never match a stored hash -- skip it
+	// without paying the 64 MB Argon2 cost.
+	if len(token) == 0 || len(token) > 256 {
+		return ""
+	}
+	argonGate <- struct{}{}
+	defer func() { <-argonGate }()
 	sum := argon2.IDKey([]byte(token), []byte("rctl-relay-v1"), 1, 64*1024, 4, 32)
 	return hex.EncodeToString(sum)
 }
