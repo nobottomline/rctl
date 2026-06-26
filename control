@@ -7,4 +7,4 @@ Maintainer: GreatLove
 Author: GreatLove
 Section: Tweaks
 Depends: mobilesubstrate, firmware (>= 14.0)
-Homepage: https://github.com/greatlove/rctl
+Homepage: https://github.com/nobottomline/rctl

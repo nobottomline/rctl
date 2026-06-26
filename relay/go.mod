@@ -1,4 +1,4 @@
-module github.com/greatlove/rctl/relay
+module github.com/nobottomline/rctl/relay
 
 go 1.22
 
