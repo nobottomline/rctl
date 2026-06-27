@@ -1,22 +1,58 @@
 // Browser-side playback of the iPad's captured audio. The device encodes its
 // output as Opus and sends each frame over the WebRTC "audio" DataChannel as
 // [1B channel count][Opus frame] (a DataChannel, NOT a media track -- a 2nd SRTP
-// stream kills all media RTP on the iOS libsrtp backend). WebCodecs decodes the
-// Opus; a ~180ms Web Audio jitter buffer schedules playback. The AudioContext
-// runs at 48kHz to match Opus so buffers aren't per-frame resampled (that hissed).
+// stream kills all media RTP on the iOS libsrtp backend). A ~180ms Web Audio jitter
+// buffer schedules playback. The AudioContext runs at 48kHz to match Opus so buffers
+// aren't per-frame resampled (that hissed).
 //
-// Faithful port of the vanilla page's setupAudioChannel/playRtcAudio/ensureAudio.
+// Decoding Opus: modern browsers use the built-in WebCodecs AudioDecoder. iOS Safari
+// only shipped AudioDecoder in version 26 -- on 16.4..18.x it's undefined, so every
+// frame was silently dropped (no sound on older iPhones). For those we fall back to a
+// libopus WASM decoder (opus-decoder), whose WASM we embed ourselves as base64 and
+// inject via OpusDecoder.module (its own dynEncode-string packaging can't survive the
+// single-file HTML build -- see vite.config.ts).
+
+import { OpusDecoder as OpusDecoderImpl } from 'opus-decoder'
+import { OPUS_WASM_B64 } from './opus-wasm.b64'
 
 type WebkitWindow = Window & { webkitAudioContext?: typeof AudioContext }
+
+interface OpusWasmDecoder {
+  ready: Promise<void>
+  decodeFrame(frame: Uint8Array): { channelData: Float32Array[]; samplesDecoded: number; sampleRate: number }
+  free(): void
+}
+type OpusDecoderCtor = new (opts?: { channels?: number }) => OpusWasmDecoder
+const OpusDecoder = OpusDecoderImpl as unknown as OpusDecoderCtor & { module?: WebAssembly.Module }
+
+// Compile the embedded Opus WASM once (shared across players) and hand it to
+// opus-decoder as a precompiled module, so it never touches its own (stripped) string.
+let ctorPromise: Promise<OpusDecoderCtor> | null = null
+function loadOpusDecoder(): Promise<OpusDecoderCtor> {
+  if (!ctorPromise) {
+    ctorPromise = (async () => {
+      if (!OpusDecoder.module) {
+        const bin = Uint8Array.from(atob(OPUS_WASM_B64), (c) => c.charCodeAt(0))
+        OpusDecoder.module = await WebAssembly.compile(bin)
+      }
+      return OpusDecoder
+    })()
+  }
+  return ctorPromise
+}
 
 export class AudioPlayer {
   private ctx: AudioContext | null = null
   private gain: GainNode | null = null
   private enabled = false
-  private dec: AudioDecoder | null = null
+  private dec: AudioDecoder | null = null // WebCodecs (Safari 26+, Chrome, etc.)
+  private wdec: OpusWasmDecoder | null = null // WASM fallback (iOS Safari < 26)
+  private wdecInit: Promise<void> | null = null
   private channels = 0
   private ts = 0 // synthetic 20ms-per-frame timestamp (Opus frames are 20ms)
   private playTime = 0
+  // Decode via WebCodecs when present; otherwise the WASM fallback. Fixed per page.
+  private readonly useWasm = typeof AudioDecoder === 'undefined'
 
   // gain lets the room-mic player run louder than the app-audio one (the daemon's
   // raw mic input is quiet without AGC).
@@ -34,6 +70,10 @@ export class AudioPlayer {
     const u = new Uint8Array(buf)
     const chn = u[0] || 1
     const opus = u.subarray(1)
+    if (this.useWasm) {
+      this.decodeWasm(chn, opus)
+      return
+    }
     if (this.dec && this.channels !== chn) this.closeDecoder() // mono<->stereo switch: rebuild
     if (!this.dec) {
       if (typeof AudioDecoder === 'undefined') return
@@ -59,15 +99,48 @@ export class AudioPlayer {
     }
   }
 
-  private play(ad: AudioData) {
-    const ctx = this.ctx
-    if (!ctx) {
-      ad.close()
+  // WASM fallback: decode the Opus frame to deinterleaved PCM and schedule it. The
+  // decoder is created lazily (compiling the WASM is async); frames are dropped until
+  // it's ready, and rebuilt on a mono<->stereo switch.
+  private decodeWasm(chn: number, opus: Uint8Array) {
+    if (this.wdec && this.channels !== chn) {
+      try {
+        this.wdec.free()
+      } catch {
+        /* ignore */
+      }
+      this.wdec = null
+      this.wdecInit = null
+    }
+    this.channels = chn
+    if (!this.wdec) {
+      if (!this.wdecInit) {
+        this.wdecInit = loadOpusDecoder()
+          .then(async (Ctor) => {
+            const d = new Ctor({ channels: chn })
+            await d.ready
+            this.wdec = d
+            this.playTime = 0
+          })
+          .catch(() => {
+            this.wdecInit = null
+          })
+      }
+      return // not ready yet -- drop this frame
+    }
+    let r
+    try {
+      r = this.wdec.decodeFrame(new Uint8Array(opus)) // own buffer, not a subarray view
+    } catch {
       return
     }
+    if (r.samplesDecoded > 0) this.schedule(r.channelData, r.sampleRate, r.samplesDecoded)
+  }
+
+  private play(ad: AudioData) {
     const n = ad.numberOfFrames
     const chn = ad.numberOfChannels
-    const ab = ctx.createBuffer(chn, n, ad.sampleRate)
+    const channels: Float32Array[] = []
     for (let c = 0; c < chn; c++) {
       const f = new Float32Array(n)
       try {
@@ -75,9 +148,20 @@ export class AudioPlayer {
       } catch {
         /* ignore */
       }
-      ab.getChannelData(c).set(f)
+      channels.push(f)
     }
+    const rate = ad.sampleRate
     ad.close()
+    this.schedule(channels, rate, n)
+  }
+
+  // Build an AudioBuffer from deinterleaved channels and schedule it on the jitter
+  // buffer. Shared by both decode paths.
+  private schedule(channels: Float32Array[], sampleRate: number, n: number) {
+    const ctx = this.ctx
+    if (!ctx || n <= 0 || channels.length === 0) return
+    const ab = ctx.createBuffer(channels.length, n, sampleRate)
+    for (let c = 0; c < channels.length; c++) ab.getChannelData(c).set(channels[c].subarray(0, n))
     const src = ctx.createBufferSource()
     src.buffer = ab
     src.connect(this.gain || ctx.destination)
@@ -134,5 +218,7 @@ export class AudioPlayer {
       /* ignore */
     }
     this.dec = null
+    // Keep the WASM decoder instance across mute/attach for fast re-enable; it's only
+    // rebuilt on a channel-count change (see decodeWasm).
   }
 }
