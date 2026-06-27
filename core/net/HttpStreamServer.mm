@@ -416,7 +416,7 @@ static void send_data(int fd, const char *status, const char *ctype,
         "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
         "Access-Control-Allow-Origin: *\r\n"
         "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
-        "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; "
         "img-src 'self' data: blob: https:; media-src 'self' blob:; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'self'\r\n"
