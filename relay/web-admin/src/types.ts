@@ -23,6 +23,7 @@ export interface Session {
   ip: string
   user_agent: string
   client_hints?: string
+  touch_points?: number // navigator.maxTouchPoints; >1 means an iPad (which sends a macOS UA)
 }
 
 export interface Enrollment {

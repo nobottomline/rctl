@@ -64,7 +64,7 @@ export function SessionsPanel({
                 >
                   <div className="flex items-center gap-2">
                     <span className="truncate text-[13.5px] font-medium text-fg">
-                      {describeClient(s.user_agent, s.client_hints)}
+                      {describeClient(s.user_agent, s.client_hints, s.touch_points)}
                     </span>
                     {s.current && (
                       <span className="shrink-0 rounded-full bg-online/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-online ring-1 ring-online/25">
@@ -146,7 +146,7 @@ function SessionDetailModal({
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-[14.5px] font-medium text-fg">
-                {describeClient(session.user_agent, session.client_hints)}
+                {describeClient(session.user_agent, session.client_hints, session.touch_points)}
               </div>
               <div className="font-mono text-[12px] text-muted">{session.ip || 'unknown IP'}</div>
             </div>

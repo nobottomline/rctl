@@ -30,8 +30,10 @@ export function shortId(id: string, head = 8, tail = 4): string {
   return `${id.slice(0, head)}…${end}`
 }
 
-// Best-effort "Browser · OS" label from a User-Agent string.
-export function describeUserAgent(ua?: string): string {
+// Best-effort "Browser · OS" label from a User-Agent string. `touch` is the
+// client's navigator.maxTouchPoints: iPadOS Safari sends a macOS User-Agent in its
+// default desktop mode, so touch capability is the only way to tell an iPad apart.
+export function describeUserAgent(ua?: string, touch?: number): string {
   if (!ua) return 'Unknown client'
   const browser = /Edg\//.test(ua)
     ? 'Edge'
@@ -53,7 +55,9 @@ export function describeUserAgent(ua?: string): string {
       : /Android/.test(ua)
         ? 'Android'
         : /Mac OS X|Macintosh/.test(ua)
-          ? 'macOS'
+          ? (touch ?? 0) > 1
+            ? 'iPad' // iPadOS Safari sends a macOS UA in desktop mode; touch tells it from a Mac
+            : 'macOS'
           : /Windows/.test(ua)
             ? 'Windows'
             : /Linux/.test(ua)
@@ -80,10 +84,10 @@ function brandFromHints(hints?: string): string {
 
 // "Browser · OS", preferring the client-hint brand so e.g. Brave isn't mislabeled
 // as Chrome. Falls back to the User-Agent for the browser and always for the OS.
-export function describeClient(ua?: string, hints?: string): string {
+export function describeClient(ua?: string, hints?: string, touch?: number): string {
   const brand = brandFromHints(hints)
-  if (!brand) return describeUserAgent(ua)
-  const full = describeUserAgent(ua)
+  if (!brand) return describeUserAgent(ua, touch)
+  const full = describeUserAgent(ua, touch)
   const os = full.includes(' · ') ? full.split(' · ')[1] : ''
   return os ? `${brand} · ${os}` : brand
 }

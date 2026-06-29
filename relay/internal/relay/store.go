@@ -65,6 +65,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 		`ALTER TABLE sessions ADD COLUMN ip TEXT`,
 		`ALTER TABLE sessions ADD COLUMN user_agent TEXT`,
 		`ALTER TABLE sessions ADD COLUMN client_hints TEXT`,
+		// navigator.maxTouchPoints (X-RCTL-Touch) — iPadOS Safari sends a macOS
+		// User-Agent, so touch capability is the only signal that tells an iPad apart.
+		`ALTER TABLE sessions ADD COLUMN touch_points INTEGER`,
 		`ALTER TABLE audit_log ADD COLUMN session_id TEXT`,
 	} {
 		if _, e := s.db.ExecContext(ctx, stmt); e != nil &&

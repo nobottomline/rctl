@@ -149,7 +149,7 @@ export function ActivityPanel({
   const actorOf = (e: AuditEntry): string => {
     if (!e.session_id) return ''
     const s = sessMap.get(e.session_id)
-    return s ? describeClient(s.user_agent, s.client_hints).split(' · ')[0] : 'admin'
+    return s ? describeClient(s.user_agent, s.client_hints, s.touch_points).split(' · ')[0] : 'admin'
   }
 
   // Build the option lists from the events actually present.
@@ -171,7 +171,7 @@ export function ActivityPanel({
       const s = sessMap.get(e.session_id)
       opts.push({
         key: e.session_id,
-        label: s ? `${describeClient(s.user_agent, s.client_hints)} · ${s.ip}` : `Session ${shortId(e.session_id, 6, 4)}`,
+        label: s ? `${describeClient(s.user_agent, s.client_hints, s.touch_points)} · ${s.ip}` : `Session ${shortId(e.session_id, 6, 4)}`,
       })
     }
     return [{ key: 'all', label: 'All admins' }, ...opts]

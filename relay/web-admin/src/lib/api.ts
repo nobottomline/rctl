@@ -31,7 +31,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     credentials: 'same-origin',
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      // iPadOS Safari masquerades as macOS in its User-Agent; send the touch-point
+      // count so the relay can tell an iPad from a Mac in the sessions list.
+      'X-RCTL-Touch': String((typeof navigator !== 'undefined' && navigator.maxTouchPoints) || 0),
+      ...(options.headers || {}),
+    },
   })
   let body: unknown = {}
   try {

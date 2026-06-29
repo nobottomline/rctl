@@ -49,15 +49,17 @@ func (s *server) validSessionToken(r *http.Request, sessionID, secret string) bo
 		return false
 	}
 	if now-lastSeen >= 60 { // refresh last_seen at most once a minute, not on every request
-		// Backfill Sec-CH-UA client hints for sessions created before that column
-		// existed, so browser detection works without forcing a re-login.
+		// Backfill Sec-CH-UA client hints and the touch-points signal for sessions
+		// created before those columns existed, so detection works without a re-login.
+		// COALESCE leaves an already-set value alone; touchHeader is nil when the
+		// header is absent, so it never clobbers a stored value.
 		hints := r.Header.Get("Sec-Ch-Ua")
 		if len(hints) > 256 {
 			hints = hints[:256]
 		}
 		_, _ = s.db.ExecContext(r.Context(),
-			`UPDATE sessions SET last_seen_at=?, client_hints=COALESCE(NULLIF(client_hints,''), ?) WHERE id=?`,
-			now, hints, sessionID)
+			`UPDATE sessions SET last_seen_at=?, client_hints=COALESCE(NULLIF(client_hints,''), ?), touch_points=COALESCE(touch_points, ?) WHERE id=?`,
+			now, hints, touchHeader(r), sessionID)
 	}
 	return true
 }

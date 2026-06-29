@@ -15,6 +15,21 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// touchHeader reads navigator.maxTouchPoints from the X-RCTL-Touch header the admin
+// SPA sends. iPadOS Safari reports a macOS User-Agent, so touch capability (iPad > 1,
+// Mac 0) is the only way to tell them apart. Returns nil (SQL NULL) when absent or
+// invalid, so a backfill COALESCE leaves an existing value untouched.
+func touchHeader(r *http.Request) any {
+	v := r.Header.Get("X-Rctl-Touch")
+	if v == "" {
+		return nil
+	}
+	if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 32 {
+		return n
+	}
+	return nil
+}
+
 func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin", http.StatusFound)
 }
@@ -50,8 +65,8 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		hints = hints[:256]
 	}
 	_, err = s.db.ExecContext(r.Context(),
-		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at, ip, user_agent, client_hints) VALUES(?,?,?,?,?,?,?,?)`,
-		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix(), s.clientIP(r), ua, hints)
+		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at, ip, user_agent, client_hints, touch_points) VALUES(?,?,?,?,?,?,?,?,?)`,
+		sessionID, hmacToken(s.cfg.SessionSecret, sessionSecret), now.Add(s.cfg.SessionLifetime).Unix(), now.Unix(), now.Unix(), s.clientIP(r), ua, hints, touchHeader(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "session_create_failed")
 		return
@@ -88,7 +103,7 @@ func (s *server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM sessions WHERE expires_at<?`, now)
 	rows, err := s.db.QueryContext(r.Context(), `
-SELECT id, expires_at, created_at, last_seen_at, ip, user_agent, client_hints
+SELECT id, expires_at, created_at, last_seen_at, ip, user_agent, client_hints, touch_points
 FROM sessions
 WHERE expires_at>=?
 ORDER BY last_seen_at DESC`, now)
@@ -107,18 +122,21 @@ ORDER BY last_seen_at DESC`, now)
 		IP          string `json:"ip"`
 		UserAgent   string `json:"user_agent"`
 		ClientHints string `json:"client_hints"`
+		TouchPoints int    `json:"touch_points"`
 	}
 	out := []session{}
 	for rows.Next() {
 		var item session
 		var ip, ua, ch sql.NullString
-		if err := rows.Scan(&item.ID, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &ip, &ua, &ch); err != nil {
+		var tp sql.NullInt64
+		if err := rows.Scan(&item.ID, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &ip, &ua, &ch, &tp); err != nil {
 			writeErr(w, http.StatusInternalServerError, "session_scan_failed")
 			return
 		}
 		item.IP = ip.String
 		item.UserAgent = ua.String
 		item.ClientHints = ch.String
+		item.TouchPoints = int(tp.Int64)
 		item.Current = item.ID == currentID
 		out = append(out, item)
 	}
