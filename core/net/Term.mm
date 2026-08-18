@@ -344,8 +344,9 @@ void rctl_signal_handle_ws(int fd, const char *req) {
     pthread_mutex_lock(&s_counter_mtx);
     unsigned long seq = ++s_counter;
     pthread_mutex_unlock(&s_counter_mtx);
+    bool camera = strstr(req, "GET /ws/signal?media=camera ") != NULL;
     char id[48];
-    snprintf(id, sizeof(id), "lws_%d_%lu", fd, seq);
+    snprintf(id, sizeof(id), camera ? "lcam_%d_%lu" : "lws_%d_%lu", fd, seq);
 
     struct signal_session s;
     s.ws_fd = fd;
@@ -354,9 +355,10 @@ void rctl_signal_handle_ws(int fd, const char *req) {
     // Route this session's outbound envelopes to our socket, THEN trigger the
     // device offer with an empty ICE list (host-only -> direct LAN).
     rctl_webrtc_route_session(id, signal_ws_send, &s);
-    char openmsg[160];
+    char openmsg[192];
     snprintf(openmsg, sizeof(openmsg),
-             "{\"type\":\"webrtc_signal\",\"id\":\"%s\",\"kind\":\"open\",\"payload\":[]}", id);
+             "{\"type\":\"webrtc_signal\",\"id\":\"%s\",\"kind\":\"open\",\"payload\":{\"role\":\"%s\",\"ice\":[]}}",
+             id, camera ? "camera" : "screen");
     rctl_webrtc_handle_signal(openmsg);
 
     for (;;) {

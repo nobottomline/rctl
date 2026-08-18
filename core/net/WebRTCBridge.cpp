@@ -42,6 +42,7 @@ struct SessionSender { void (*fn)(void *ctx, const char *json); void *ctx; };
 static std::map<std::string, SessionSender> g_session_send;
 static void (*g_viewer_cb)(bool) = nullptr;
 static void (*g_keyframe_cb)(void) = nullptr;
+static void (*g_camera_keyframe_cb)(void) = nullptr;
 static void (*g_touch_cb)(int phase, int finger, double x, double y) = nullptr;
 static void (*g_key_cb)(int page, int usage, int down) = nullptr;
 static std::mutex g_mtx;
@@ -49,6 +50,7 @@ static std::mutex g_mtx;
 struct Session {
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
+    bool camera = false;
     std::shared_ptr<rtc::DataChannel> audioDc;
     std::shared_ptr<rtc::DataChannel> control;
     std::shared_ptr<rtc::DataChannel> filesDc;
@@ -58,6 +60,7 @@ struct Session {
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
 static std::vector<std::shared_ptr<rtc::Track>> g_tracks;
+static std::vector<std::shared_ptr<rtc::Track>> g_camera_tracks;
 static std::vector<std::shared_ptr<rtc::DataChannel>> g_audio_dcs;
 // Room-mic (listen to the iPad mic): device->browser over its own channel + its own
 // Opus encoder, kept separate from the system-output "audio" path.
@@ -70,6 +73,7 @@ static std::vector<int16_t> g_micPcm;
 static std::shared_ptr<rtc::DataChannel> g_files_dc;
 static void (*g_files_cb)(const uint8_t *data, size_t len, int is_binary) = nullptr;
 static std::chrono::steady_clock::time_point g_lastPli{};
+static std::chrono::steady_clock::time_point g_lastCameraPli{};
 
 // Opus encoder for the captured 48kHz PCM. Single-threaded (only push_audio
 // touches it), so it needs no lock; only g_audio_dcs (the open audio channels)
@@ -111,16 +115,18 @@ static void send_signal(const std::string &id, const std::string &kind, const js
 // keyframes would otherwise storm huge intra frames onto every other viewer
 // (collapsing the healthy LAN Mac too). NACK still repairs ordinary loss fast;
 // PLI is only the unrecoverable-loss fallback, so a long window is cheap.
-static void request_keyframe() {
-    if (!g_keyframe_cb) return;
+static void request_keyframe(bool camera) {
+    void (*cb)(void) = camera ? g_camera_keyframe_cb : g_keyframe_cb;
+    if (!cb) return;
     auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lk(g_mtx);
-        if (now - g_lastPli < std::chrono::milliseconds(1000)) return;
-        g_lastPli = now;
+        auto &last = camera ? g_lastCameraPli : g_lastPli;
+        if (now - last < std::chrono::milliseconds(1000)) return;
+        last = now;
     }
-    wlog("PLI -> force keyframe");
-    g_keyframe_cb();
+    wlog(std::string(camera ? "camera" : "screen") + " PLI -> force keyframe");
+    cb();
 }
 
 // Drop a session's track from the active send list when its connection dies (ICE
@@ -130,18 +136,21 @@ static void request_keyframe() {
 // daemon never re-applies the remote encode profile. Idempotent with onClosed.
 static void retire_track(const std::string &id) {
     bool lastGone = false;
+    bool camera = false;
     {
         std::lock_guard<std::mutex> lk(g_mtx);
         auto it = g_sessions.find(id);
         if (it == g_sessions.end() || !it->second->track) return;
+        camera = it->second->camera;
         rtc::Track *tptr = it->second->track.get();
-        size_t before = g_tracks.size();
-        g_tracks.erase(std::remove_if(g_tracks.begin(), g_tracks.end(),
+        auto &tracks = camera ? g_camera_tracks : g_tracks;
+        size_t before = tracks.size();
+        tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                           [tptr](const std::shared_ptr<rtc::Track> &t) { return t.get() == tptr; }),
-                       g_tracks.end());
-        lastGone = (before > 0 && g_tracks.empty());
+                       tracks.end());
+        lastGone = (before > 0 && tracks.empty());
     }
-    if (lastGone && g_viewer_cb) g_viewer_cb(false);
+    if (!camera && lastGone && g_viewer_cb) g_viewer_cb(false);
 }
 
 // Build the libdatachannel ICE config from the RTCIceServer list the relay mints
@@ -214,11 +223,12 @@ static void destroy_session(std::shared_ptr<Session> dead) {
         std::lock_guard<std::mutex> lk(g_mtx);
         if (dead->track) {
             rtc::Track *tp = dead->track.get();
-            size_t before = g_tracks.size();
-            g_tracks.erase(std::remove_if(g_tracks.begin(), g_tracks.end(),
+            auto &tracks = dead->camera ? g_camera_tracks : g_tracks;
+            size_t before = tracks.size();
+            tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                               [tp](const std::shared_ptr<rtc::Track> &t) { return t.get() == tp; }),
-                           g_tracks.end());
-            lastGone = (before > 0 && g_tracks.empty());
+                           tracks.end());
+            lastGone = (before > 0 && tracks.empty());
         }
         if (dead->audioDc) {
             rtc::DataChannel *ap = dead->audioDc.get();
@@ -234,7 +244,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
         }
         if (dead->filesDc && g_files_dc && g_files_dc.get() == dead->filesDc.get()) g_files_dc.reset();
     }
-    if (lastGone && g_viewer_cb) g_viewer_cb(false);
+    if (!dead->camera && lastGone && g_viewer_cb) g_viewer_cb(false);
     if (dead->micIn) mic_teardown();   // its onClosed is detached above
     // `dead` drops at the caller: callbacks detached + none in flight -> safe.
 }
@@ -342,8 +352,9 @@ static void mic_teardown() {
     }
 }
 
-static void start_session(const std::string &id, const json &ice) {
+static void start_session(const std::string &id, const json &ice, bool camera) {
     auto sess = std::make_shared<Session>();
+    sess->camera = camera;
     rtc::Configuration config;
     add_ice_servers(config, ice);
     auto pc = std::make_shared<rtc::PeerConnection>(config);
@@ -365,11 +376,13 @@ static void start_session(const std::string &id, const json &ice) {
 
     // Offer one send-only H.264 track (device -> browser). The browser answers
     // with a recvonly video m-line and attaches the track to a <video> element.
-    const rtc::SSRC ssrc = 42;
+    const rtc::SSRC ssrc = camera ? 43 : 42;
+    const char *mediaName = camera ? "camera" : "video";
+    const char *cname = camera ? "rctl-camera" : "rctl-video";
     const int kPlayoutDelayExtId = 1;
-    rtc::Description::Video media("video", rtc::Description::Direction::SendOnly);
+    rtc::Description::Video media(mediaName, rtc::Description::Direction::SendOnly);
     media.addH264Codec(96);
-    media.addSSRC(ssrc, "rctl-video");
+    media.addSSRC(ssrc, cname);
     // Ask the receiver to play out with zero added delay (min = max = 0). For
     // remote control we want the freshest frame, not a smoothing buffer; this is
     // the standard playout-delay RTP header extension, which the packetizer
@@ -381,7 +394,7 @@ static void start_session(const std::string &id, const json &ice) {
     sess->track = track;
 
     auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
-        ssrc, "rctl-video", 96, rtc::H264RtpPacketizer::ClockRate);
+        ssrc, cname, 96, rtc::H264RtpPacketizer::ClockRate);
     // min = 0 keeps latency at the floor when the link is clean; max = 6 (60ms)
     // lets the receiver's jitter buffer grow just enough to ride out an occasional
     // Wi-Fi loss/jitter burst (giving NACK retransmits time to arrive) instead of
@@ -392,7 +405,7 @@ static void start_session(const std::string &id, const json &ice) {
     // (keyframes, motion spikes) shows as freezes. Give the local path a small floor
     // so it rides those out; the relay path keeps the freshest-frame floor since its
     // own RTT already buffers. Units are 10ms (min 5 = 50ms, max 15 = 150ms).
-    bool localSession = id.rfind("lws_", 0) == 0;
+    bool localSession = id.rfind("lws_", 0) == 0 || id.rfind("lcam_", 0) == 0;
     rtpConfig->playoutDelayMin = localSession ? 5 : 0;
     rtpConfig->playoutDelayMax = localSession ? 15 : 6;
     // StartSequence auto-detects 3- and 4-byte Annex-B start codes; the encoder
@@ -405,7 +418,7 @@ static void start_session(const std::string &id, const json &ice) {
     // Let the browser pull a fresh intra frame on demand (PLI): a late-joining
     // second viewer, or loss that NACK can't repair, gets a keyframe right away
     // instead of waiting up to the encoder's GOP for the next periodic IDR.
-    packetizer->addToChain(std::make_shared<rtc::PliHandler>([]() { request_keyframe(); }));
+    packetizer->addToChain(std::make_shared<rtc::PliHandler>([camera]() { request_keyframe(camera); }));
     track->setMediaHandler(packetizer);
 
     rtc::Track *tptr = track.get();
@@ -414,30 +427,53 @@ static void start_session(const std::string &id, const json &ice) {
     // shared_ptr from the session when the track opens.
     track->onOpen([id, tptr]() {
         bool firstViewer = false;
+        bool camera = false;
         {
             std::lock_guard<std::mutex> lk(g_mtx);
             auto it = g_sessions.find(id);
             if (it == g_sessions.end() || !it->second->track || it->second->track.get() != tptr) return;
-            firstViewer = g_tracks.empty();
-            g_tracks.push_back(it->second->track);
+            camera = it->second->camera;
+            auto &tracks = camera ? g_camera_tracks : g_tracks;
+            firstViewer = tracks.empty();
+            tracks.push_back(it->second->track);
         }
-        if (firstViewer && g_viewer_cb) g_viewer_cb(true);
-        wlog("session " + id + " video track open");
+        if (!camera && firstViewer && g_viewer_cb) g_viewer_cb(true);
+        wlog("session " + id + (camera ? " camera" : " screen") + " track open");
     });
     track->onClosed([id, tptr]() {
         bool lastGone = false;
+        bool camera = false;
         {
             std::lock_guard<std::mutex> lk(g_mtx);
-            g_tracks.erase(std::remove_if(g_tracks.begin(), g_tracks.end(),
+            auto it = g_sessions.find(id);
+            camera = it != g_sessions.end() && it->second->camera;
+            auto &tracks = camera ? g_camera_tracks : g_tracks;
+            tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                               [tptr](const std::shared_ptr<rtc::Track> &t) {
                                   return t.get() == tptr;
                               }),
-                          g_tracks.end());
-            lastGone = g_tracks.empty();
+                          tracks.end());
+            lastGone = tracks.empty();
         }
-        if (lastGone && g_viewer_cb) g_viewer_cb(false);
-        wlog("session " + id + " video track closed");
+        if (!camera && lastGone && g_viewer_cb) g_viewer_cb(false);
+        wlog("session " + id + (camera ? " camera" : " screen") + " track closed");
     });
+
+    // Camera gets a dedicated PeerConnection. The iOS libsrtp/mbedtls build has
+    // proven unreliable with a second media SSRC on the screen connection; one
+    // H.264 track per connection keeps native RTP/NACK/PLI without that failure.
+    if (camera) {
+        std::shared_ptr<Session> prior;
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            auto it = g_sessions.find(id);
+            if (it != g_sessions.end()) prior = it->second;
+            g_sessions[id] = sess;
+        }
+        destroy_session(prior);
+        pc->setLocalDescription();
+        return;
+    }
 
     // Audio: Opus over a dedicated DataChannel (NOT a media track). The iOS
     // libsrtp/mbedtls backend drops ALL media RTP the moment a 2nd SRTP stream
@@ -589,6 +625,10 @@ extern "C" void rctl_webrtc_set_keyframe_cb(void (*cb)(void)) {
     g_keyframe_cb = cb;
 }
 
+extern "C" void rctl_webrtc_set_camera_keyframe_cb(void (*cb)(void)) {
+    g_camera_keyframe_cb = cb;
+}
+
 extern "C" void rctl_webrtc_set_input_cb(void (*touch)(int, int, double, double),
                                          void (*key)(int, int, int)) {
     g_touch_cb = touch;
@@ -633,7 +673,14 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
 
     if (kind == "open") {
         wlog("session open " + id);
-        start_session(id, m.contains("payload") ? m["payload"] : json::array());
+        json payload = m.contains("payload") ? m["payload"] : json::array();
+        json ice = payload;
+        bool camera = false;
+        if (payload.is_object()) {
+            ice = payload.contains("ice") ? payload["ice"] : json::array();
+            camera = payload.value("role", std::string("screen")) == "camera";
+        }
+        start_session(id, ice, camera);
         return;
     }
     if (kind == "close") {
@@ -698,6 +745,28 @@ extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyfra
 
     if (keyframe)
         wlog("keyframe " + std::to_string(len) + "B -> " + std::to_string(tracks.size()) + " track(s)");
+}
+
+extern "C" void rctl_webrtc_push_camera_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us) {
+    if (!data || len == 0) return;
+
+    std::vector<std::shared_ptr<rtc::Track>> tracks;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (g_camera_tracks.empty()) return;
+        tracks = g_camera_tracks;
+    }
+
+    rtc::binary au(reinterpret_cast<const std::byte *>(data),
+                   reinterpret_cast<const std::byte *>(data + len));
+    rtc::FrameInfo info(duration<double>((double)pts_us / 1e6));
+    info.isKeyFrame = keyframe;
+    for (auto &t : tracks) {
+        if (!t->isOpen()) continue;
+        try { t->sendFrame(au, info); } catch (...) {}
+    }
+    if (keyframe)
+        wlog("camera keyframe " + std::to_string(len) + "B -> " + std::to_string(tracks.size()) + " track(s)");
 }
 
 // Encode captured 48kHz PCM to Opus and send every open audio DataChannel. Opus

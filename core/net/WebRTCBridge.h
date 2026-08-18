@@ -18,6 +18,10 @@ void rctl_webrtc_handle_signal(const char *json);
 // main.mm pushes each Annex-B access unit (the same one it gives /stream) to all
 // open WebRTC video channels.
 void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us);
+// Camera video uses a separate PeerConnection/session. The current iOS SRTP
+// backend is stable with one media SSRC per connection, but not with a second
+// media track on the screen connection.
+void rctl_webrtc_push_camera_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us);
 void rctl_webrtc_push_audio(const int16_t *pcm, int frames, int channels, int rate, uint64_t pts_us);
 void rctl_webrtc_push_mic(const int16_t *pcm, int frames, int channels, int rate);
 
@@ -28,6 +32,7 @@ void rctl_webrtc_set_viewer_cb(void (*cb)(bool any));
 // The browser can ask (via RTCP PLI) for an intra frame; the bridge invokes this
 // so the daemon forces the encoder to emit a keyframe.
 void rctl_webrtc_set_keyframe_cb(void (*cb)(void));
+void rctl_webrtc_set_camera_keyframe_cb(void (*cb)(void));
 
 // The browser sends input (touch/keys) over the WebRTC control DataChannel; the
 // bridge decodes it and invokes these so the daemon injects it just like /input.

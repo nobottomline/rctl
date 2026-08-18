@@ -25,6 +25,11 @@ type signalClientMessage struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
+type signalOpenPayload struct {
+	Role string          `json:"role"`
+	ICE  json.RawMessage `json:"ice"`
+}
+
 // handleSignalWS bridges a browser WebRTC signaling websocket to an approved,
 // online device. The signaling session is the websocket connection itself; the
 // relay only routes opaque sdp/ice payloads in both directions.
@@ -41,6 +46,14 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.deviceApproved(r.Context(), deviceID) {
 		writeErr(w, http.StatusForbidden, "device_not_approved")
+		return
+	}
+	role := r.URL.Query().Get("media")
+	if role == "" {
+		role = "screen"
+	}
+	if role != "screen" && role != "camera" {
+		writeErr(w, http.StatusBadRequest, "invalid_media_role")
 		return
 	}
 
@@ -67,14 +80,15 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	ice := s.iceServersJSON(sessionID)
 
 	openCtx, cancel := context.WithTimeout(r.Context(), s.cfg.WriteTimeout)
-	err = dc.writeJSON(openCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "open", Payload: ice})
+	openPayload, _ := json.Marshal(signalOpenPayload{Role: role, ICE: ice})
+	err = dc.writeJSON(openCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "open", Payload: openPayload})
 	cancel()
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "device_write_failed")
 		return
 	}
 	_ = wsjsonWrite(r.Context(), ws, signalClientMessage{Kind: "ready", Payload: ice})
-	s.audit(r, "webrtc_signal_open", "device_id", deviceID, "session_id", sessionID)
+	s.audit(r, "webrtc_signal_open", "device_id", deviceID, "session_id", sessionID, "media", role)
 
 	readDone := make(chan struct{})
 	go func() {

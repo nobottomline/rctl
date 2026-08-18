@@ -46,9 +46,10 @@ export function apiDo(path: string, init?: RequestInit): void {
 
 // WebSocket URL for the relay signaling / terminal channels (these are relay
 // routes, not rctld paths, so they don't go through rctlPath).
-export function signalWS(): string {
+export function signalWS(media: 'screen' | 'camera' = 'screen'): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${location.host}/signal/devices/${DEVICE_ID}`
+  const suffix = media === 'camera' ? '?media=camera' : ''
+  return `${proto}://${location.host}/signal/devices/${DEVICE_ID}${suffix}`
 }
 
 // WebSocket URL for the PTY bridge. RCTL_TERM_WS_BASE is a path: in relay mode

@@ -113,3 +113,50 @@ func TestSignalWSGates(t *testing.T) {
 		t.Fatalf("disabled status=%d, want 404", resp2.StatusCode)
 	}
 }
+
+func TestSignalWSRejectsUnknownMediaRole(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	s := &server{
+		cfg:     config{EnableWebRTC: true},
+		db:      db,
+		devices: make(map[string]*deviceConn),
+		limiter: newRateLimiter(5 * time.Minute),
+	}
+	if err := s.migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO devices(id, name, status, created_at, updated_at) VALUES(?,?,?,?,?)`,
+		"dev1", "dev1", "approved", now, now); err != nil {
+		t.Fatal(err)
+	}
+	s.devices["dev1"] = newSignalDeviceConn()
+	sessionID, secret := "sess1", "secret1"
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO sessions(id, secret_hash, expires_at, created_at, last_seen_at) VALUES(?,?,?,?,?)`,
+		sessionID, hmacToken(s.cfg.SessionSecret, secret), now+3600, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	s.routes(mux)
+	ts := httptest.NewServer(s.securityHeaders(mux))
+	t.Cleanup(ts.Close)
+	req, _ := http.NewRequest("GET", ts.URL+"/signal/devices/dev1?media=audio", nil)
+	req.AddCookie(&http.Cookie{Name: "rctl_session", Value: sessionID + "." + secret})
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid media status=%d, want 400", resp.StatusCode)
+	}
+}
