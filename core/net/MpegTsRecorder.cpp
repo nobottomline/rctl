@@ -18,6 +18,7 @@ struct rctl_ts_recorder {
     uint64_t first_pts_us = 0;
     uint64_t last_pts_90k = 0;
     uint64_t bytes = 0;
+    bool started = false;
 };
 
 static uint32_t mpeg_crc32(const uint8_t *data, size_t length) {
@@ -150,6 +151,10 @@ rctl_ts_recorder *rctl_ts_recorder_open(const char *path) {
 bool rctl_ts_recorder_write(rctl_ts_recorder *recorder, const uint8_t *annex_b,
                             size_t length, bool keyframe, uint64_t pts_us) {
     if (!recorder || !annex_b || !length) return false;
+    // A standalone recording must begin with SPS/PPS + IDR. Ignore the tail of
+    // the current GOP while the app-side encoder handles our keyframe request.
+    if (!recorder->started && !keyframe) return true;
+    recorder->started = true;
     if (!recorder->first_pts_us) recorder->first_pts_us = pts_us ? pts_us : 1;
     uint64_t relative_us = pts_us >= recorder->first_pts_us ? pts_us - recorder->first_pts_us : 0;
     uint64_t pts_90k = relative_us * 90ULL / 1000ULL;

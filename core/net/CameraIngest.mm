@@ -323,6 +323,7 @@ bool rctl_camera_record_start(void) {
         g_record_last_ms = 0;
     }
     pthread_mutex_unlock(&g_record_lock);
+    if (ok) notify_post("com.greatlove.rctl.cam.keyframe");
     return ok;
 }
 

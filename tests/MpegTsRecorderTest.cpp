@@ -28,6 +28,10 @@ int main() {
 
     rctl_ts_recorder *recorder = rctl_ts_recorder_open(path);
     require(recorder != nullptr, "open");
+    uint64_t table_bytes = rctl_ts_recorder_bytes(recorder);
+    require(rctl_ts_recorder_write(recorder, delta, sizeof(delta), false, 900000), "leading delta");
+    require(rctl_ts_recorder_bytes(recorder) == table_bytes, "leading delta ignored");
+    require(rctl_ts_recorder_duration_ms(recorder) == 0, "duration starts at keyframe");
     require(rctl_ts_recorder_write(recorder, keyframe, sizeof(keyframe), true, 1000000), "keyframe");
     require(rctl_ts_recorder_write(recorder, delta, sizeof(delta), false, 1100000), "delta frame");
     require(rctl_ts_recorder_duration_ms(recorder) == 100, "duration");
