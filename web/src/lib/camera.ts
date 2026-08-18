@@ -12,7 +12,11 @@ export class CameraTransport {
   private stopped = true
   private retry = 0
   private disconnectGrace = 0
+  private frameWatchdog = 0
   private generation = 0
+  private expectedLive = false
+  private lastVideoTime = 0
+  private lastFrameAt = 0
 
   constructor(video: HTMLVideoElement, callbacks: CameraTransportCallbacks = {}) {
     this.video = video
@@ -22,7 +26,19 @@ export class CameraTransport {
   start() {
     this.stopped = false
     this.retry = 0
+    this.expectedLive = false
+    this.lastVideoTime = this.video.currentTime
+    this.lastFrameAt = performance.now()
+    if (this.frameWatchdog) window.clearInterval(this.frameWatchdog)
+    this.frameWatchdog = window.setInterval(() => this.checkFrames(), 2000)
     this.connect()
+  }
+
+  setExpectedLive(expected: boolean) {
+    if (expected === this.expectedLive) return
+    this.expectedLive = expected
+    this.lastVideoTime = this.video.currentTime
+    this.lastFrameAt = performance.now()
   }
 
   stop() {
@@ -30,8 +46,11 @@ export class CameraTransport {
     this.generation++
     if (this.retry) window.clearTimeout(this.retry)
     if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
+    if (this.frameWatchdog) window.clearInterval(this.frameWatchdog)
     this.retry = 0
     this.disconnectGrace = 0
+    this.frameWatchdog = 0
+    this.expectedLive = false
     this.ws?.close()
     this.pc?.close()
     this.ws = null
@@ -48,6 +67,22 @@ export class CameraTransport {
     }, 1200)
   }
 
+  private checkFrames() {
+    if (this.stopped || !this.expectedLive) return
+    const now = performance.now()
+    const current = this.video.currentTime
+    if (current > this.lastVideoTime + 0.001) {
+      this.lastVideoTime = current
+      this.lastFrameAt = now
+      return
+    }
+    const state = this.pc?.connectionState
+    if (state === 'connected' && now - this.lastFrameAt > 8000)
+      this.scheduleReconnect()
+    else if ((state === 'new' || state === 'connecting') && now - this.lastFrameAt > 10000)
+      this.scheduleReconnect()
+  }
+
   private connect() {
     if (this.stopped) return
     const generation = ++this.generation
@@ -55,6 +90,8 @@ export class CameraTransport {
     this.disconnectGrace = 0
     this.ws?.close()
     this.pc?.close()
+    this.lastVideoTime = this.video.currentTime
+    this.lastFrameAt = performance.now()
     this.callbacks.onState?.('connecting')
 
     const pc = new RTCPeerConnection({})
@@ -69,6 +106,8 @@ export class CameraTransport {
     pc.ontrack = (event) => {
       if (generation !== this.generation) return
       this.video.srcObject = event.streams[0] || new MediaStream([event.track])
+      this.lastVideoTime = this.video.currentTime
+      this.lastFrameAt = performance.now()
       this.video.play().catch(() => {})
       this.callbacks.onState?.('live')
     }

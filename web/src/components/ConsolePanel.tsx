@@ -451,30 +451,75 @@ function CameraLiveView({
   const [status, setStatus] = useState<CameraStatus | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const loadStatus = () => apiJSON<CameraStatus>('/v1/cam_status?lease=1').then((value) => value && setStatus(value))
+  const applyStatus = (value: CameraStatus) => {
+    setStatus(value)
+    transportRef.current?.setExpectedLive(value.state === 'live')
+  }
+  const loadStatus = () => apiJSON<CameraStatus>('/v1/cam_status?lease=1')
   useEffect(() => {
     let cancelled = false
+    let startTimer = 0
+    let requestAbort: AbortController | null = null
+    const retryStart = () => {
+      if (!cancelled) startTimer = window.setTimeout(start, 1500)
+    }
     const start = async () => {
-      const response = await api(`/v1/cam_live?on=1&pos=${initialPosition}&fps=10&bitrate=1500000`)
-      if (!response.ok || cancelled) {
-        setTransportState('camera unavailable')
+      const controller = new AbortController()
+      requestAbort = controller
+      const timeout = window.setTimeout(() => controller.abort(), 8000)
+      let response: Response
+      try {
+        response = await api(`/v1/cam_live?on=1&pos=${initialPosition}&fps=10&bitrate=1500000`, {
+          signal: controller.signal,
+        })
+      } catch {
+        if (!cancelled) {
+          setTransportState('reconnecting')
+          retryStart()
+        }
+        return
+      } finally {
+        window.clearTimeout(timeout)
+        if (requestAbort === controller) requestAbort = null
+      }
+      if (!response.ok) {
+        if (!cancelled) {
+          setTransportState('camera unavailable')
+          retryStart()
+        }
         return
       }
+      if (cancelled) return
       const value = (await response.json()) as CameraStatus
-      if (!cancelled) setStatus(value)
+      if (cancelled) return
+      setStatus(value)
       const video = videoRef.current
-      if (!video || cancelled) return
+      if (!video) return
       const transport = new CameraTransport(video, { onState: setTransportState })
       transportRef.current = transport
       transport.start()
+      transport.setExpectedLive(value.state === 'live')
     }
-    start().catch(() => setTransportState('camera unavailable'))
+    start().catch(() => {
+      if (!cancelled) {
+        setTransportState('camera unavailable')
+        retryStart()
+      }
+    })
     let pollTimer = window.setTimeout(async function poll() {
-      await loadStatus()
-      if (!cancelled) pollTimer = window.setTimeout(poll, 1000)
+      try {
+        const value = await loadStatus()
+        if (!cancelled && value) applyStatus(value)
+      } catch {
+        if (!cancelled) setTransportState('reconnecting')
+      } finally {
+        if (!cancelled) pollTimer = window.setTimeout(poll, 1000)
+      }
     }, 1000)
     return () => {
       cancelled = true
+      requestAbort?.abort()
+      window.clearTimeout(startTimer)
       window.clearTimeout(pollTimer)
       transportRef.current?.stop()
       apiDo('/v1/cam_live?on=0')
@@ -488,7 +533,7 @@ function CameraLiveView({
     setBusy(false)
     if (response?.ok) {
       setPosition(next)
-      loadStatus()
+      loadStatus().then((value) => { if (value) applyStatus(value) }).catch(() => {})
     }
   }
   const toggleRecording = async () => {
@@ -496,7 +541,7 @@ function CameraLiveView({
     const on = !status?.recording
     const response = await api(`/v1/cam_record?on=${on ? 1 : 0}`).catch(() => null)
     setBusy(false)
-    if (response?.ok) setStatus((await response.json()) as CameraStatus)
+    if (response?.ok) applyStatus((await response.json()) as CameraStatus)
   }
   const saveRecording = async () => {
     if (!status?.record_path || status.recording) return
