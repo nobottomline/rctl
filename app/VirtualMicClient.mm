@@ -3,17 +3,17 @@
 #import <arpa/inet.h>
 #import <atomic>
 #import <cerrno>
-#import <dlfcn.h>
+#import <cstring>
 #import <netinet/in.h>
 #import <new>
 #import <pthread.h>
-#import <substrate.h>
 #import <sys/socket.h>
 #import <time.h>
 #import <unistd.h>
 
 #import "net/VirtualMicServer.h"
 #import "audio/VirtualMicDSP.h"
+#import "VirtualMicClient.h"
 
 static const uint16_t kVirtualMicPort = RCTL_VIRTUAL_MIC_PORT;
 static const uint64_t kRingSamples = 48000 * 2;
@@ -27,10 +27,12 @@ static std::atomic<uint64_t> g_read{0};
 static std::atomic<uint64_t> g_last_render_ms{0};
 static std::atomic<uint64_t> g_last_packet_ms{0};
 static std::atomic<bool> g_capture_seen{false};
-static std::atomic<bool> g_receiver_started{false};
-
-static OSStatus (*g_original_render)(AudioUnit, AudioUnitRenderActionFlags *,
-                                    const AudioTimeStamp *, UInt32, UInt32, AudioBufferList *);
+static std::atomic<AudioUnit> g_pending_unit{nullptr};
+static std::atomic<AudioUnit> g_configured_unit{nullptr};
+static std::atomic<uint64_t> g_format_rate{0};
+static std::atomic<uint32_t> g_format_flags{0};
+static std::atomic<uint32_t> g_format_bits{0};
+static std::atomic<uint32_t> g_format_channels{0};
 
 static uint64_t monotonic_ms(void) {
     timespec now = {};
@@ -38,14 +40,55 @@ static uint64_t monotonic_ms(void) {
     return static_cast<uint64_t>(now.tv_sec) * 1000 + static_cast<uint64_t>(now.tv_nsec / 1000000);
 }
 
-static bool is_input_unit(AudioUnit unit, UInt32 bus) {
-    if (bus != 1 || !unit) return false;
+static bool read_input_format(AudioUnit unit, AudioStreamBasicDescription *format) {
+    if (!unit || !format) return false;
     AudioComponent component = AudioComponentInstanceGetComponent(unit);
     AudioComponentDescription description = {};
     if (!component || AudioComponentGetDescription(component, &description) != noErr) return false;
-    return description.componentType == kAudioUnitType_Output &&
-           (description.componentSubType == kAudioUnitSubType_RemoteIO ||
-            description.componentSubType == kAudioUnitSubType_VoiceProcessingIO);
+    if (description.componentType != kAudioUnitType_Output ||
+        (description.componentSubType != kAudioUnitSubType_RemoteIO &&
+         description.componentSubType != kAudioUnitSubType_VoiceProcessingIO)) return false;
+    UInt32 size = sizeof(*format);
+    return AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output,
+                                1, format, &size) == noErr &&
+           format->mFormatID == kAudioFormatLinearPCM && format->mSampleRate >= 8000;
+}
+
+static void publish_format(AudioUnit unit, const AudioStreamBasicDescription &format) {
+    uint64_t rate = 0;
+    static_assert(sizeof(rate) == sizeof(format.mSampleRate), "sample rate storage must match");
+    memcpy(&rate, &format.mSampleRate, sizeof(rate));
+    g_format_rate.store(rate, std::memory_order_relaxed);
+    g_format_flags.store(format.mFormatFlags, std::memory_order_relaxed);
+    g_format_bits.store(format.mBitsPerChannel, std::memory_order_relaxed);
+    g_format_channels.store(format.mChannelsPerFrame, std::memory_order_relaxed);
+    g_configured_unit.store(unit, std::memory_order_release);
+}
+
+static bool load_format(AudioUnit unit, AudioStreamBasicDescription *format) {
+    if (!format || g_configured_unit.load(std::memory_order_acquire) != unit) return false;
+    uint64_t rate = g_format_rate.load(std::memory_order_relaxed);
+    memcpy(&format->mSampleRate, &rate, sizeof(rate));
+    format->mFormatID = kAudioFormatLinearPCM;
+    format->mFormatFlags = g_format_flags.load(std::memory_order_relaxed);
+    format->mBitsPerChannel = g_format_bits.load(std::memory_order_relaxed);
+    format->mChannelsPerFrame = g_format_channels.load(std::memory_order_relaxed);
+    return true;
+}
+
+static void *format_main(void *) {
+    pthread_setname_np("com.greatlove.rctl.vmic.format");
+    for (;;) {
+        AudioUnit pending = g_pending_unit.load(std::memory_order_acquire);
+        if (!pending || pending == g_configured_unit.load(std::memory_order_acquire)) {
+            usleep(20000);
+            continue;
+        }
+        AudioStreamBasicDescription format = {};
+        if (read_input_format(pending, &format)) publish_format(pending, format);
+        else usleep(100000);
+    }
+    return nullptr;
 }
 
 static void ring_clear(void) {
@@ -55,7 +98,7 @@ static void ring_clear(void) {
 }
 
 static void ring_push(const int16_t *samples, size_t count) {
-    if (!samples || !count) return;
+    if (!g_ring || !samples || !count) return;
     if (count > kRingSamples) { samples += count - kRingSamples; count = kRingSamples; }
     uint64_t write = g_write.load(std::memory_order_relaxed);
     for (size_t i = 0; i < count; i++)
@@ -86,8 +129,11 @@ static int read_exact(int fd, void *buffer, size_t length) {
 
 static void *receiver_main(void *) {
     pthread_setname_np("com.greatlove.rctl.vmic.client");
+    bool firstConnection = true;
     for (;;) {
-        while (!g_capture_seen.load(std::memory_order_acquire)) usleep(250000);
+        if (!firstConnection)
+            while (!g_capture_seen.load(std::memory_order_acquire)) usleep(250000);
+        firstConnection = false;
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) { sleep(1); continue; }
         sockaddr_in address = {};
@@ -104,7 +150,8 @@ static void *receiver_main(void *) {
             uint32_t networkLength = 0;
             int headerResult = read_exact(fd, &networkLength, sizeof(networkLength));
             if (headerResult < 0) {
-                if (monotonic_ms() - g_last_render_ms.load(std::memory_order_acquire) > 10000) {
+                uint64_t lastRender = g_last_render_ms.load(std::memory_order_acquire);
+                if (lastRender && monotonic_ms() - lastRender > 10000) {
                     g_capture_seen.store(false, std::memory_order_release);
                     break;
                 }
@@ -119,7 +166,8 @@ static void *receiver_main(void *) {
         }
         close(fd);
         ring_clear();
-        if (monotonic_ms() - g_last_render_ms.load(std::memory_order_acquire) > 10000)
+        uint64_t lastRender = g_last_render_ms.load(std::memory_order_acquire);
+        if (lastRender && monotonic_ms() - lastRender > 10000)
             g_capture_seen.store(false, std::memory_order_release);
         else
             usleep(500000);
@@ -185,13 +233,9 @@ static void render_sample(void *rawContext, uint32_t frame, int16_t sample) {
     write_sample(context->buffers, *context->format, frame, sample);
 }
 
-static void replace_input(AudioUnit unit, UInt32 bus, UInt32 frames, AudioBufferList *io) {
+static void replace_input(const AudioStreamBasicDescription &format, UInt32 frames,
+                          AudioBufferList *io) {
     if (!io || !io->mNumberBuffers || !frames) return;
-    AudioStreamBasicDescription format = {};
-    UInt32 size = sizeof(format);
-    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output,
-                             bus, &format, &size) != noErr || format.mSampleRate < 8000) return;
-    if (format.mFormatID != kAudioFormatLinearPCM) return;
     bool supported = ((format.mFormatFlags & kAudioFormatFlagIsFloat) && format.mBitsPerChannel == 32) ||
                      ((format.mFormatFlags & kAudioFormatFlagIsSignedInteger) &&
                       (format.mBitsPerChannel == 16 || format.mBitsPerChannel == 32));
@@ -207,30 +251,58 @@ static void replace_input(AudioUnit unit, UInt32 bus, UInt32 frames, AudioBuffer
     g_read.store(newRead, std::memory_order_release);
 }
 
-static OSStatus hooked_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
-                              const AudioTimeStamp *timestamp, UInt32 bus, UInt32 frames,
-                              AudioBufferList *io) {
-    OSStatus status = g_original_render(unit, flags, timestamp, bus, frames, io);
-    if (status != noErr || !is_input_unit(unit, bus)) return status;
+static bool infer_format(AudioBufferList *buffers, UInt32 frames,
+                         AudioStreamBasicDescription *format) {
+    if (!buffers || !buffers->mNumberBuffers || !frames || !format) return false;
+    const AudioBuffer &first = buffers->mBuffers[0];
+    UInt32 channels = MAX(1u, first.mNumberChannels);
+    uint64_t samples = static_cast<uint64_t>(frames) * channels;
+    if (!first.mData || !samples || first.mDataByteSize % samples) return false;
+    UInt32 bytesPerSample = first.mDataByteSize / samples;
+    if (bytesPerSample != sizeof(float) && bytesPerSample != sizeof(int16_t)) return false;
+    for (UInt32 i = 1; i < buffers->mNumberBuffers; i++) {
+        const AudioBuffer &buffer = buffers->mBuffers[i];
+        UInt32 bufferChannels = MAX(1u, buffer.mNumberChannels);
+        uint64_t bufferSamples = static_cast<uint64_t>(frames) * bufferChannels;
+        if (!buffer.mData || !bufferSamples ||
+            buffer.mDataByteSize != bufferSamples * bytesPerSample) return false;
+    }
+    format->mSampleRate = 48000.0;
+    format->mFormatID = kAudioFormatLinearPCM;
+    format->mFormatFlags = kAudioFormatFlagIsPacked |
+        (bytesPerSample == sizeof(float) ? kAudioFormatFlagIsFloat
+                                         : kAudioFormatFlagIsSignedInteger);
+    if (buffers->mNumberBuffers > 1) format->mFormatFlags |= kAudioFormatFlagIsNonInterleaved;
+    format->mBitsPerChannel = bytesPerSample * 8;
+    format->mChannelsPerFrame = buffers->mNumberBuffers > 1 ? 1 : channels;
+    return true;
+}
+
+OSStatus rctl_virtual_mic_process(AudioUnit unit, AudioUnitRenderActionFlags *flags,
+                                  const AudioTimeStamp *timestamp, UInt32 bus, UInt32 frames,
+                                  AudioBufferList *io, OSStatus status) {
+    (void)flags;
+    (void)timestamp;
+    if (status != noErr || !g_ring || !unit || bus != 1) return status;
     g_last_render_ms.store(monotonic_ms(), std::memory_order_release);
     g_capture_seen.store(true, std::memory_order_release);
-    bool expected = false;
-    if (g_receiver_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        pthread_t receiver;
-        if (pthread_create(&receiver, nullptr, receiver_main, nullptr) == 0) pthread_detach(receiver);
-        else g_receiver_started.store(false, std::memory_order_release);
-    }
-    replace_input(unit, bus, frames, io);
+    g_pending_unit.store(unit, std::memory_order_release);
+    AudioStreamBasicDescription format = {};
+    if (!load_format(unit, &format) && !infer_format(io, frames, &format)) return status;
+    replace_input(format, frames, io);
     return status;
 }
 
-extern "C" void rctl_virtual_mic_initialize(void) {
+extern "C" void rctl_virtual_mic_activate(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         g_ring = new (std::nothrow) std::atomic<int16_t>[kRingSamples]();
         if (!g_ring) return;
-        void *symbol = dlsym(RTLD_DEFAULT, "AudioUnitRender");
-        if (symbol) MSHookFunction(symbol, reinterpret_cast<void *>(hooked_render),
-                                   reinterpret_cast<void **>(&g_original_render));
+        pthread_t receiver;
+        if (pthread_create(&receiver, nullptr, receiver_main, nullptr) == 0)
+            pthread_detach(receiver);
+        pthread_t format;
+        if (pthread_create(&format, nullptr, format_main, nullptr) == 0)
+            pthread_detach(format);
     });
 }

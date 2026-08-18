@@ -36,11 +36,15 @@ int main() {
     timeval timeout = {.tv_sec = 0, .tv_usec = 200000};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     usleep(50000);
+    assert(rctl_vmic_client_count() == 1);
+    assert(rctl_vmic_frames_pushed() == 0);
+    assert(rctl_vmic_frames_broadcast() == 0);
 
     const int16_t samples[] = {-32768, -1234, 0, 1234, 32767};
     rctl_vmic_push(samples, 5);
     uint32_t ignored = 0;
     assert(recv(fd, &ignored, sizeof(ignored), 0) < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+    assert(rctl_vmic_frames_pushed() == 0);
 
     rctl_vmic_set_route(RCTL_TALK_VIRTUAL_MIC);
     rctl_vmic_push(samples, 5);
@@ -50,6 +54,8 @@ int main() {
     int16_t received[5] = {};
     assert(read_all(fd, received, sizeof(received)));
     assert(memcmp(received, samples, sizeof(samples)) == 0);
+    assert(rctl_vmic_frames_pushed() == 5);
+    assert(rctl_vmic_frames_broadcast() == 5);
 
     rctl_vmic_set_route(RCTL_TALK_BOTH);
     assert(rctl_vmic_route() == RCTL_TALK_BOTH);

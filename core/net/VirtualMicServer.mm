@@ -3,11 +3,13 @@
 #import <Foundation/Foundation.h>
 #import <arpa/inet.h>
 #import <atomic>
+#import <chrono>
 #import <condition_variable>
 #import <deque>
 #import <mutex>
 #import <netinet/in.h>
 #import <pthread.h>
+#import <notify.h>
 #import <sys/socket.h>
 #import <unistd.h>
 #import <vector>
@@ -22,6 +24,22 @@ static std::vector<int> g_clients;
 static std::mutex g_queue_mutex;
 static std::condition_variable g_queue_cond;
 static std::deque<std::vector<int16_t>> g_queue;
+static std::atomic<uint64_t> g_last_notify_ms{0};
+static std::atomic<uint64_t> g_frames_pushed{0};
+static std::atomic<uint64_t> g_frames_broadcast{0};
+
+static uint64_t monotonic_ms(void) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+static void notify_active_app(void) {
+    uint64_t now = monotonic_ms();
+    uint64_t prior = g_last_notify_ms.load(std::memory_order_relaxed);
+    if (now - prior < 1000 ||
+        !g_last_notify_ms.compare_exchange_strong(prior, now, std::memory_order_relaxed)) return;
+    notify_post("com.greatlove.rctl.vmic.active");
+}
 
 static bool write_all(int fd, const void *buffer, size_t length) {
     const uint8_t *bytes = static_cast<const uint8_t *>(buffer);
@@ -46,6 +64,7 @@ static void broadcast(const std::vector<int16_t> &frame) {
             ++it;
         }
     }
+    if (!g_clients.empty()) g_frames_broadcast.fetch_add(frame.size(), std::memory_order_relaxed);
 }
 
 static void *sender_main(void *) {
@@ -121,6 +140,8 @@ int rctl_vmic_server_start(void) {
 
 void rctl_vmic_push(const int16_t *pcm, int frames) {
     if (!pcm || frames <= 0 || g_route.load(std::memory_order_relaxed) == RCTL_TALK_SPEAKER) return;
+    notify_active_app();
+    g_frames_pushed.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
     std::vector<int16_t> copy(pcm, pcm + frames);
     {
         std::lock_guard<std::mutex> lock(g_queue_mutex);
@@ -137,4 +158,17 @@ void rctl_vmic_set_route(int route) {
 
 int rctl_vmic_route(void) {
     return g_route.load(std::memory_order_relaxed);
+}
+
+size_t rctl_vmic_client_count(void) {
+    std::lock_guard<std::mutex> lock(g_clients_mutex);
+    return g_clients.size();
+}
+
+uint64_t rctl_vmic_frames_pushed(void) {
+    return g_frames_pushed.load(std::memory_order_relaxed);
+}
+
+uint64_t rctl_vmic_frames_broadcast(void) {
+    return g_frames_broadcast.load(std::memory_order_relaxed);
 }

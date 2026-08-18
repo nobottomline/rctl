@@ -22,6 +22,9 @@ int rctl_vmic_server_start(void);
 void rctl_vmic_push(const int16_t *pcm, int frames);
 void rctl_vmic_set_route(int route);
 int rctl_vmic_route(void);
+size_t rctl_vmic_client_count(void);
+uint64_t rctl_vmic_frames_pushed(void);
+uint64_t rctl_vmic_frames_broadcast(void);
 
 #ifdef __cplusplus
 }

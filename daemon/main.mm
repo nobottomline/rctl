@@ -1202,8 +1202,12 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         }
         const char *current = rctl_vmic_route() == RCTL_TALK_VIRTUAL_MIC ? "mic" :
                               rctl_vmic_route() == RCTL_TALK_BOTH ? "both" : "speaker";
-        char response[64];
-        snprintf(response, sizeof(response), "{\"ok\":true,\"mode\":\"%s\"}", current);
+        char response[192];
+        snprintf(response, sizeof(response),
+                 "{\"ok\":true,\"mode\":\"%s\",\"clients\":%zu,\"frames_pushed\":%llu,\"frames_broadcast\":%llu}",
+                 current, rctl_vmic_client_count(),
+                 (unsigned long long)rctl_vmic_frames_pushed(),
+                 (unsigned long long)rctl_vmic_frames_broadcast());
         return strdup(response);
     } else if (!strcmp(path, "/v1/tap")) {
         schedule_tap(get_d(query,"x",0), get_d(query,"y",0), 0);

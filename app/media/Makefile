@@ -12,7 +12,6 @@ rctlappmedia_CFLAGS = -fobjc-arc -I.. -I../../core -Wno-deprecated-declarations
 rctlappmedia_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP)
 rctlappmedia_FRAMEWORKS = UIKit Foundation CoreFoundation AudioToolbox AVFoundation \
                           VideoToolbox CoreMedia CoreVideo IOSurface
-rctlappmedia_LIBRARIES = substrate
 rctlappmedia_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
 rctlappmedia_INSTALL = 0
 

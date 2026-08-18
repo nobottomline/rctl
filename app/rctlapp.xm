@@ -1,6 +1,6 @@
 // rctlapp — app-side media agent injected into every UIKit app. The foreground app
 // owns still/live camera capture and sends media to rctld over loopback. A separate
-// AudioUnit hook replaces supported app microphone buffers with fresh browser PCM.
+// A lazy AudioUnit hook replaces supported app microphone buffers with fresh browser PCM.
 // AVFoundation still capture is runtime-driven; scoped bundle/TCC hooks prevent a
 // host app without camera declarations or permission from aborting our capture.
 #import <UIKit/UIKit.h>
@@ -13,6 +13,51 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <substrate.h>
 #include <stdatomic.h>
+
+typedef OSStatus (*rctl_virtual_mic_process_fn)(AudioUnit, AudioUnitRenderActionFlags *,
+                                                const AudioTimeStamp *, UInt32, UInt32,
+                                                AudioBufferList *, OSStatus);
+typedef void (*rctl_virtual_mic_activate_fn)(void);
+typedef OSStatus (*rctl_audio_unit_render_fn)(AudioUnit, AudioUnitRenderActionFlags *,
+                                              const AudioTimeStamp *, UInt32, UInt32,
+                                              AudioBufferList *);
+static _Atomic(rctl_virtual_mic_process_fn) gRctlVirtualMicProcess = NULL;
+static rctl_virtual_mic_activate_fn gRctlVirtualMicActivate = NULL;
+static rctl_audio_unit_render_fn gRctlOriginalAudioUnitRender = NULL;
+
+static OSStatus rctl_audio_unit_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
+                                      const AudioTimeStamp *timestamp, UInt32 bus, UInt32 frames,
+                                      AudioBufferList *buffers) {
+    OSStatus status = gRctlOriginalAudioUnitRender(unit, flags, timestamp, bus, frames, buffers);
+    rctl_virtual_mic_process_fn process = atomic_load_explicit(
+        &gRctlVirtualMicProcess, memory_order_acquire);
+    return process ? process(unit, flags, timestamp, bus, frames, buffers, status) : status;
+}
+
+// Hooking AudioUnitRender during process startup breaks RemoteIO capture on this
+// iOS 14 arm64e target even when the replacement is a pure pass-through. Install
+// the proven MSHookFunction trampoline only after Talk begins, and only in the
+// active foreground app. The replacement itself stays in this original
+// Substitute-loaded image; the optional media dylib only owns post-processing.
+static void rctl_install_virtual_mic_hook(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIApplication *application = [UIApplication sharedApplication];
+        if (!application || application.applicationState != UIApplicationStateActive) return;
+        if (gRctlVirtualMicActivate) gRctlVirtualMicActivate();
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            void *symbol = dlsym(RTLD_DEFAULT, "AudioUnitRender");
+            if (symbol) MSHookFunction(symbol, (void *)rctl_audio_unit_render,
+                                       (void **)&gRctlOriginalAudioUnitRender);
+        });
+    });
+}
+
+static void vmic_cb(CFNotificationCenterRef center, void *observer, CFStringRef name,
+                    const void *object, CFDictionaryRef userInfo) {
+    (void)center; (void)observer; (void)name; (void)object; (void)userInfo;
+    rctl_install_virtual_mic_hook();
+}
 
 // Mute the camera shutter for OUR snaps only. AVCaptureStillImageOutput plays a
 // system sound on capture; gRctlSnapping is set just around our captureStillImage
@@ -172,6 +217,7 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
         CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.back"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.front"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        CFNotificationCenterAddObserver(nc, NULL, vmic_cb, CFSTR("com.greatlove.rctl.vmic.active"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         void *tcc = dlopen("/System/Library/PrivateFrameworks/TCC.framework/TCC", RTLD_LAZY);
         if (tcc) {
             void *pf = dlsym(tcc, "TCCAccessPreflight");
@@ -185,6 +231,11 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
             typedef void (*MediaInitialize)(void (*)(BOOL));
             MediaInitialize initialize = (MediaInitialize)dlsym(media, "rctl_app_media_initialize");
             if (initialize) initialize(rctl_camera_tcc_set_active);
+            rctl_virtual_mic_process_fn process =
+                (rctl_virtual_mic_process_fn)dlsym(media, "rctl_virtual_mic_process");
+            atomic_store_explicit(&gRctlVirtualMicProcess, process, memory_order_release);
+            gRctlVirtualMicActivate =
+                (rctl_virtual_mic_activate_fn)dlsym(media, "rctl_virtual_mic_activate");
         }
     } @catch (id e) {}
 }

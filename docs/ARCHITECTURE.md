@@ -43,8 +43,8 @@ Six runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 |---|---|---|
 | **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
 | **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), WebSocket terminal `/ws/term`, relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
-| **rctlapp** (`app/`) | UIKit-filtered loader | supplies still-camera/TCC hooks and explicitly rejects SpringBoard before loading foreground media code |
-| **rctlappmedia** (`app/media/`) | manually loaded in ordinary UIKit apps | captures live video in the foreground app and replaces supported app microphone input with fresh browser PCM; app-side VideoToolbox sends bounded H.264 to rctld |
+| **rctlapp** (`app/`) | UIKit-filtered loader | supplies still-camera/TCC hooks, lazily installs the virtual-mic AudioUnit hook only in the active app, and explicitly rejects SpringBoard before loading foreground media code |
+| **rctlappmedia** (`app/media/`) | manually loaded in ordinary UIKit apps | captures live video and provides realtime-safe virtual-mic post-processing; app-side VideoToolbox sends bounded H.264 to rctld |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/`) | the controlling browser | React/Vite control app. Primary path is WebRTC (H.264 RTP track + DataChannels); `/stream` WebCodecs remains a local/fallback path. `web/legacy/` keeps the old vanilla client for reference only. |
 
@@ -89,7 +89,9 @@ previous volume and restore re-applies it.
 is decoded once in `rctld`. `/v1/talk_route` sends it to the existing speaker
 AudioQueue, a bounded loopback PCM bus consumed by the foreground calling app's
 RemoteIO/VoiceProcessingIO input, or both. Missing/stale PCM preserves the real
-microphone. See `docs/VIRTUAL_MIC.md`.
+microphone. The first app-route burst lazily activates the hook in the foreground
+app; no app audio function is intercepted during normal startup. See
+`docs/VIRTUAL_MIC.md`.
 
 **Photos/videos.** `rctld` reads visible Photos `ZASSET` metadata from the iOS
 database without modifying it, validates local originals below

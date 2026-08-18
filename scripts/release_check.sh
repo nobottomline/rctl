@@ -25,6 +25,7 @@ require() {
 
 require dpkg-deb
 require git
+require nm
 
 if [[ -z "${DEB}" ]]; then
   DEB="$(ls -t "${ROOT}"/packages/*.deb 2>/dev/null | head -1 || true)"
@@ -64,6 +65,15 @@ done
   fail "obsolete app media payload path is present"
 grep -q '/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib' \
   "${WORK}/pkg/DEBIAN/postinst" || fail "postinst does not sign rctlappmedia"
+strings "${WORK}/pkg/${APP_PAYLOAD}/rctlapp.dylib" | \
+  grep -F 'com.greatlove.rctl.vmic.active' >/dev/null || \
+  fail "rctlapp has no lazy virtual-mic activation hook"
+nm -gU "${WORK}/pkg/${APP_PAYLOAD}/rctlappmedia.dylib" | \
+  grep -F '_rctl_virtual_mic_activate' >/dev/null || \
+  fail "rctlappmedia has no virtual-mic activation entry point"
+if strings "${WORK}/pkg/${APP_PAYLOAD}/rctlappmedia.dylib" | grep -F 'MSHookFunction' >/dev/null; then
+  fail "rctlappmedia must not install Substrate hooks from the manually loaded image"
+fi
 strings "${WORK}/pkg/usr/local/bin/rctld" | \
   grep -F 'jetsam hard limit configured:' >/dev/null || \
   fail "rctld binary has no runtime jetsam limit configuration"

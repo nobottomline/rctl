@@ -103,7 +103,10 @@ export class MicTalk {
     // otherwise Safari hands back a 44.1kHz context and ensureGraph() would reject it.
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        // The destination calling app applies its own voice processing after
+        // injection. Browser AEC/NS/AGC here would process the signal twice and
+        // can erase non-speech audio before it ever reaches the iPad.
+        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       })
     } catch {
       this.stop()
