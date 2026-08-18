@@ -66,3 +66,8 @@ test-personalize:
 .PHONY: deps
 deps:
 	@third_party/webrtc/build-ios.sh
+
+.PHONY: test-camera-recorder
+test-camera-recorder:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/MpegTsRecorderTest.cpp core/net/MpegTsRecorder.cpp -o /tmp/rctl-camera-recorder-test
+	@/tmp/rctl-camera-recorder-test
