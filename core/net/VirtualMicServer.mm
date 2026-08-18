@@ -12,7 +12,7 @@
 #import <unistd.h>
 #import <vector>
 
-static const uint16_t kVirtualMicPort = 8082;
+static const uint16_t kVirtualMicPort = RCTL_VIRTUAL_MIC_PORT;
 static const size_t kMaxQueuedFrames = 8;
 static const size_t kMaxClients = 8;
 

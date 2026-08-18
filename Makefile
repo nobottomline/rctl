@@ -71,3 +71,22 @@ deps:
 test-camera-recorder:
 	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/MpegTsRecorderTest.cpp core/net/MpegTsRecorder.cpp -o /tmp/rctl-camera-recorder-test
 	@/tmp/rctl-camera-recorder-test
+
+.PHONY: test-media-library
+test-media-library:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Wno-deprecated-declarations -Icore \
+		-DRCTL_MEDIA_ROOT='"/tmp/rctl-media-library-test/root"' \
+		-DRCTL_MEDIA_CACHE_ROOT='"/tmp/rctl-media-library-test/cache"' \
+		tests/MediaLibraryTest.mm core/net/MediaLibrary.mm -lsqlite3 \
+		-framework Foundation -framework AVFoundation -framework ImageIO \
+		-framework CoreGraphics -framework CoreMedia -o /tmp/rctl-media-library-test-bin
+	@/tmp/rctl-media-library-test-bin
+
+.PHONY: test-virtual-mic
+test-virtual-mic:
+	@xcrun --sdk macosx clang++ -std=c++17 -DRCTL_VIRTUAL_MIC_PORT=38082 -Icore tests/VirtualMicServerTest.cpp \
+		core/net/VirtualMicServer.mm -o /tmp/rctl-virtual-mic-test
+	@/tmp/rctl-virtual-mic-test
+
+.PHONY: test
+test: test-camera-recorder test-media-library test-virtual-mic test-personalize

@@ -6,10 +6,19 @@
 #import <sqlite3.h>
 #import <sys/stat.h>
 
-static NSString *const kDeviceMediaRoot = @"/var/mobile/Media";
-static NSString *const kDCIMRoot = @"/var/mobile/Media/DCIM";
-static NSString *const kPhotosDatabase = @"/var/mobile/Media/PhotoData/Photos.sqlite";
-static NSString *const kThumbRoot = @"/var/mobile/Library/Caches/com.greatlove.rctl/media";
+#ifndef RCTL_MEDIA_ROOT
+#define RCTL_MEDIA_ROOT "/var/mobile/Media"
+#endif
+#ifndef RCTL_MEDIA_CACHE_ROOT
+#define RCTL_MEDIA_CACHE_ROOT "/var/mobile/Library/Caches/com.greatlove.rctl/media"
+#endif
+
+static NSString *device_media_root(void) { return [NSString stringWithUTF8String:RCTL_MEDIA_ROOT]; }
+static NSString *dcim_root(void) { return [device_media_root() stringByAppendingPathComponent:@"DCIM"]; }
+static NSString *photos_database(void) {
+    return [device_media_root() stringByAppendingPathComponent:@"PhotoData/Photos.sqlite"];
+}
+static NSString *thumb_root(void) { return [NSString stringWithUTF8String:RCTL_MEDIA_CACHE_ROOT]; }
 
 static dispatch_queue_t g_media_queue;
 static NSArray<NSDictionary *> *g_assets;
@@ -66,7 +75,7 @@ static NSString *media_kind(NSString *extension) {
 }
 
 static BOOL path_is_inside_media_root(NSString *path) {
-    NSString *root = kDeviceMediaRoot.stringByStandardizingPath;
+    NSString *root = device_media_root().stringByStandardizingPath;
     NSString *candidate = path.stringByStandardizingPath;
     return [candidate hasPrefix:[root stringByAppendingString:@"/"]];
 }
@@ -102,30 +111,36 @@ static void add_asset(NSMutableArray *assets, NSMutableDictionary *byID,
     [paths addObject:path];
 }
 
-static void load_photos_database(NSMutableArray *assets, NSMutableDictionary *byID,
-                                 NSMutableSet *paths) {
+static BOOL load_photos_database(NSMutableArray *assets, NSMutableDictionary *byID,
+                                 NSMutableSet *paths, NSMutableSet *knownPaths) {
     sqlite3 *database = NULL;
-    if (sqlite3_open_v2(kPhotosDatabase.fileSystemRepresentation, &database,
+    if (sqlite3_open_v2(photos_database().fileSystemRepresentation, &database,
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, NULL) != SQLITE_OK) {
         if (database) sqlite3_close(database);
-        return;
+        return NO;
     }
     sqlite3_busy_timeout(database, 250);
     const char *sql =
-        "SELECT ZDIRECTORY,ZFILENAME,ZKIND,ZDATECREATED,ZADDEDDATE,ZWIDTH,ZHEIGHT,ZDURATION "
-        "FROM ZASSET WHERE IFNULL(ZTRASHEDSTATE,0)=0 AND IFNULL(ZHIDDEN,0)=0 "
-        "AND IFNULL(ZVISIBILITYSTATE,0)=0 AND ZDIRECTORY IS NOT NULL AND ZFILENAME IS NOT NULL";
+        "SELECT ZDIRECTORY,ZFILENAME,ZKIND,ZDATECREATED,ZADDEDDATE,ZWIDTH,ZHEIGHT,ZDURATION,"
+        "IFNULL(ZTRASHEDSTATE,0),IFNULL(ZHIDDEN,0),IFNULL(ZVISIBILITYSTATE,0) "
+        "FROM ZASSET WHERE ZDIRECTORY IS NOT NULL AND ZFILENAME IS NOT NULL";
     sqlite3_stmt *statement = NULL;
+    BOOL complete = NO;
     if (sqlite3_prepare_v2(database, sql, -1, &statement, NULL) == SQLITE_OK) {
-        while (sqlite3_step(statement) == SQLITE_ROW) {
+        int step = SQLITE_ROW;
+        while ((step = sqlite3_step(statement)) == SQLITE_ROW) {
             @autoreleasepool {
                 const char *directoryBytes = (const char *)sqlite3_column_text(statement, 0);
                 const char *filenameBytes = (const char *)sqlite3_column_text(statement, 1);
                 if (!directoryBytes || !filenameBytes) continue;
                 NSString *directory = [NSString stringWithUTF8String:directoryBytes];
                 NSString *filename = [NSString stringWithUTF8String:filenameBytes];
-                NSString *path = [[kDeviceMediaRoot stringByAppendingPathComponent:directory]
+                NSString *path = [[device_media_root() stringByAppendingPathComponent:directory]
                                   stringByAppendingPathComponent:filename];
+                NSString *resolved = path.stringByResolvingSymlinksInPath.stringByStandardizingPath;
+                if (path_is_inside_media_root(resolved)) [knownPaths addObject:resolved];
+                if (sqlite3_column_int(statement, 8) != 0 || sqlite3_column_int(statement, 9) != 0 ||
+                    sqlite3_column_int(statement, 10) != 0) continue;
                 NSString *kind = sqlite3_column_int(statement, 2) == 1 ? @"video" : media_kind(filename.pathExtension);
                 if (!kind) kind = @"photo";
                 double timestamp = sqlite3_column_type(statement, 3) == SQLITE_NULL
@@ -137,17 +152,19 @@ static void load_photos_database(NSMutableArray *assets, NSMutableDictionary *by
                 if (asset) add_asset(assets, byID, paths, asset);
             }
         }
+        complete = step == SQLITE_DONE;
     }
     if (statement) sqlite3_finalize(statement);
     sqlite3_close(database);
+    return complete;
 }
 
 static void load_dcim_fallback(NSMutableArray *assets, NSMutableDictionary *byID,
-                               NSMutableSet *paths) {
+                               NSMutableSet *paths, NSSet *knownPaths) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *keys = @[NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey, NSURLFileSizeKey, NSURLContentModificationDateKey,
                       NSURLCreationDateKey, NSURLNameKey];
-    NSDirectoryEnumerator *it = [fm enumeratorAtURL:[NSURL fileURLWithPath:kDCIMRoot isDirectory:YES]
+    NSDirectoryEnumerator *it = [fm enumeratorAtURL:[NSURL fileURLWithPath:dcim_root() isDirectory:YES]
                          includingPropertiesForKeys:keys
                                             options:NSDirectoryEnumerationSkipsHiddenFiles
                                        errorHandler:^BOOL(NSURL *url, NSError *error) { (void)url; (void)error; return YES; }];
@@ -157,6 +174,8 @@ static void load_dcim_fallback(NSMutableArray *assets, NSMutableDictionary *byID
             if (![values[NSURLIsRegularFileKey] boolValue] || [values[NSURLIsSymbolicLinkKey] boolValue]) continue;
             NSString *kind = media_kind(url.pathExtension);
             if (!kind) continue;
+            NSString *resolved = url.path.stringByResolvingSymlinksInPath.stringByStandardizingPath;
+            if ([knownPaths containsObject:resolved]) continue;
             NSDate *date = values[NSURLCreationDateKey] ?: values[NSURLContentModificationDateKey] ?: [NSDate dateWithTimeIntervalSince1970:0];
             NSDictionary *asset = make_asset(url.path, values[NSURLNameKey] ?: url.lastPathComponent,
                                              kind, date, nil, nil, nil);
@@ -169,8 +188,9 @@ static void rebuild_assets(void) {
     NSMutableArray *assets = [NSMutableArray array];
     NSMutableDictionary *byID = [NSMutableDictionary dictionary];
     NSMutableSet *paths = [NSMutableSet set];
-    load_photos_database(assets, byID, paths);
-    load_dcim_fallback(assets, byID, paths);
+    NSMutableSet *knownPaths = [NSMutableSet set];
+    BOOL indexed = load_photos_database(assets, byID, paths, knownPaths);
+    if (indexed) load_dcim_fallback(assets, byID, paths, knownPaths);
     [assets sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         NSComparisonResult byDate = [b[@"created"] compare:a[@"created"]];
         return byDate == NSOrderedSame ? [a[@"path"] compare:b[@"path"]] : byDate;
@@ -221,9 +241,9 @@ static NSString *rendered_path(NSDictionary *asset, NSInteger maxPixel, double q
     NSString *path = asset[@"path"];
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
     long long stamp = (long long)[attrs[NSFileModificationDate] timeIntervalSince1970];
-    NSString *out = [kThumbRoot stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%lld-%@.jpg", asset[@"id"], stamp, tag]];
+    NSString *out = [thumb_root() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%lld-%@.jpg", asset[@"id"], stamp, tag]];
     if ([[NSFileManager defaultManager] fileExistsAtPath:out]) return out;
-    [[NSFileManager defaultManager] createDirectoryAtPath:kThumbRoot withIntermediateDirectories:YES
+    [[NSFileManager defaultManager] createDirectoryAtPath:thumb_root() withIntermediateDirectories:YES
                                                 attributes:@{NSFilePosixPermissions: @0700} error:nil];
     CGImageRef image = [asset[@"type"] isEqualToString:@"video"] ? video_frame(path, maxPixel) : photo_frame(path, maxPixel);
     if (!image) return nil;

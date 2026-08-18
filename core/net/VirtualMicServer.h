@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef RCTL_VIRTUAL_MIC_PORT
+#define RCTL_VIRTUAL_MIC_PORT 8082
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

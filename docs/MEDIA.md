@@ -12,11 +12,11 @@ non-deleted `ZASSET` rows. It never writes to the Photos database. Each database
 path is canonicalized and accepted only when it resolves to a regular,
 non-symlink file below `/var/mobile/Media`.
 
-A DCIM filesystem scan is merged as a fallback for a new capture that has not
-yet appeared in the database or for an unavailable schema. Results are cached
-for 15 seconds and sorted newest first. Hidden and Recently Deleted assets are
-not exposed. iCloud-only placeholders are omitted until iOS downloads their
-original file.
+A DCIM filesystem scan is merged only after a successful database read, for a
+new capture that has not appeared in `ZASSET` yet. An unavailable or incompatible
+database fails closed instead of risking disclosure of Hidden/Recently Deleted
+assets. Results are cached for 15 seconds and sorted newest first. iCloud-only
+placeholders are omitted until iOS downloads their original file.
 
 ## API
 

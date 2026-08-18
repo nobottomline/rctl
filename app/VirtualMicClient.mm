@@ -12,7 +12,9 @@
 #import <time.h>
 #import <unistd.h>
 
-static const uint16_t kVirtualMicPort = 8082;
+#import "net/VirtualMicServer.h"
+
+static const uint16_t kVirtualMicPort = RCTL_VIRTUAL_MIC_PORT;
 static const uint64_t kRingSamples = 48000 * 2;
 static std::atomic<int16_t> g_ring[kRingSamples];
 static_assert(std::atomic<int16_t>::is_always_lock_free, "virtual mic samples must stay realtime-safe");
