@@ -12,7 +12,6 @@
 #import <unistd.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <substrate.h>
-#import "CameraAgent.h"
 #include <stdatomic.h>
 
 // Mute the camera shutter for OUR snaps only. AVCaptureStillImageOutput plays a
@@ -166,6 +165,9 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
 
 %ctor {
     @try {
+        // This loader also matches SpringBoard through the broad UIKit filter.
+        // Never load foreground media code into that critical process.
+        if ([[NSProcessInfo processInfo].processName isEqualToString:@"SpringBoard"]) return;
         caplog(@"LOADED");
         CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.back"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
@@ -177,6 +179,12 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
             void *rq = dlsym(tcc, "TCCAccessRequest");
             if (rq) MSHookFunction(rq, (void *)rctl_TCCAccessRequest, (void **)&orig_TCCAccessRequest);
         }
-        rctl_camera_agent_initialize();
+        void *media = dlopen("/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib",
+                            RTLD_NOW | RTLD_LOCAL);
+        if (media) {
+            typedef void (*MediaInitialize)(void (*)(BOOL));
+            MediaInitialize initialize = (MediaInitialize)dlsym(media, "rctl_app_media_initialize");
+            if (initialize) initialize(rctl_camera_tcc_set_active);
+        }
     } @catch (id e) {}
 }

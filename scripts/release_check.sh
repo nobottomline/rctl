@@ -51,6 +51,20 @@ if find "${WORK}/pkg/var/mobile/Library/Preferences" -name 'com.greatlove.rctl.r
   fail "public .deb contains relay preference plist"
 fi
 
+APP_PAYLOAD="Library/MobileSubstrate/DynamicLibraries"
+for path in \
+  "${APP_PAYLOAD}/rctlapp.dylib" \
+  "${APP_PAYLOAD}/rctlapp.plist" \
+  "${APP_PAYLOAD}/rctlappmedia.dylib"; do
+  [[ -f "${WORK}/pkg/${path}" ]] || fail "public .deb is missing app payload: ${path}"
+done
+[[ ! -e "${WORK}/pkg/${APP_PAYLOAD}/rctlappmedia.plist" ]] || \
+  fail "rctlappmedia must be loaded by rctlapp, not injected by MobileSubstrate"
+[[ ! -e "${WORK}/pkg/usr/local/lib/rctl/app/rctlappmedia.dylib" ]] || \
+  fail "obsolete app media payload path is present"
+grep -q '/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib' \
+  "${WORK}/pkg/DEBIAN/postinst" || fail "postinst does not sign rctlappmedia"
+
 say "checking git-tracked secret paths"
 tracked_secret_paths="$(
   git -C "${ROOT}" ls-files \

@@ -6,6 +6,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 #include <arpa/inet.h>
 #include <dlfcn.h>
@@ -33,6 +34,11 @@ static _Atomic bool gCameraSyncInFlight;
 static int gCameraSocket = -1;
 static uint64_t gCameraSocketGeneration;
 static _Atomic int gCameraPendingFrames;
+static rctl_camera_tcc_callback gCameraTCCCallback;
+
+static void camera_set_tcc_active(BOOL active) {
+    if (gCameraTCCCallback) gCameraTCCCallback(active);
+}
 
 static uint64_t camera_hton64(uint64_t value) {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -124,11 +130,10 @@ static void camera_encoded(const uint8_t *data, size_t length, bool keyframe,
     });
 }
 
-@interface RCTLCameraFrameDelegate : NSObject
-@end
-
-@implementation RCTLCameraFrameDelegate
-- (void)captureOutput:(id)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(id)connection {
+static void camera_capture_output(id self, SEL command, id output,
+                                  CMSampleBufferRef sampleBuffer, id connection) {
+    (void)self;
+    (void)command;
     (void)output;
     (void)connection;
     if (!atomic_load(&gCameraRunning) || !sampleBuffer) return;
@@ -152,7 +157,25 @@ static void camera_encoded(const uint8_t *data, size_t length, bool keyframe,
     gCameraLastEncodedPTS = scaled.value;
     rctl_encoder_encode_pixel_buffer(gCameraEncoder, pixel, scaled.value);
 }
-@end
+
+static id camera_create_delegate(void) {
+    static Class delegateClass;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class created = objc_allocateClassPair([NSObject class],
+            "RCTLCameraFrameDelegate", 0);
+        if (created && class_addMethod(created,
+                @selector(captureOutput:didOutputSampleBuffer:fromConnection:),
+                (IMP)camera_capture_output, "v@:@@@")) {
+            objc_registerClassPair(created);
+            delegateClass = created;
+        } else {
+            if (created) objc_disposeClassPair(created);
+            delegateClass = objc_getClass("RCTLCameraFrameDelegate");
+        }
+    });
+    return delegateClass ? [delegateClass new] : nil;
+}
 
 static id camera_device_for_position(Class deviceClass, int position) {
     NSArray *devices = ((id (*)(id, SEL, id))objc_msgSend)((id)deviceClass,
@@ -195,13 +218,13 @@ static void camera_stop_locked(void) {
     gCameraDelegate = nil;
     atomic_store(&gCameraRunning, false);
     gCameraLastEncodedPTS = 0;
-    rctl_camera_tcc_set_active(NO);
+    camera_set_tcc_active(NO);
     dispatch_async(gCameraNetworkQueue, ^{ camera_close_socket(); });
 }
 
 static BOOL camera_start_locked(void) {
     camera_stop_locked();
-    rctl_camera_tcc_set_active(YES);
+    camera_set_tcc_active(YES);
     dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY);
     __block BOOL ready = NO;
     do {
@@ -247,7 +270,8 @@ static BOOL camera_start_locked(void) {
         if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddOutput:"), output)) break;
         ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"addOutput:"), output);
 
-        gCameraDelegate = [RCTLCameraFrameDelegate new];
+        gCameraDelegate = camera_create_delegate();
+        if (!gCameraDelegate) break;
         ((void (*)(id, SEL, id, dispatch_queue_t))objc_msgSend)(output,
             NSSelectorFromString(@"setSampleBufferDelegate:queue:"), gCameraDelegate, gCameraQueue);
         gCameraSession = session;
@@ -340,9 +364,10 @@ static void camera_darwin_keyframe(CFNotificationCenterRef center, void *observe
     dispatch_async(gCameraQueue, ^{ if (gCameraEncoder) rctl_encoder_request_keyframe(gCameraEncoder); });
 }
 
-void rctl_camera_agent_initialize(void) {
+void rctl_camera_agent_initialize(rctl_camera_tcc_callback tcc_callback) {
     NSString *process = [NSProcessInfo processInfo].processName;
     if ([process isEqualToString:@"SpringBoard"]) return;
+    gCameraTCCCallback = tcc_callback;
     gCameraQueue = dispatch_queue_create("com.greatlove.rctl.camera.capture", DISPATCH_QUEUE_SERIAL);
     gCameraNetworkQueue = dispatch_queue_create("com.greatlove.rctl.camera.network", DISPATCH_QUEUE_SERIAL);
     atomic_store(&gCameraPendingFrames, 0);

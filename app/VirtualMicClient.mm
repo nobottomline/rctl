@@ -5,6 +5,7 @@
 #import <cerrno>
 #import <dlfcn.h>
 #import <netinet/in.h>
+#import <new>
 #import <pthread.h>
 #import <substrate.h>
 #import <sys/socket.h>
@@ -16,7 +17,10 @@
 
 static const uint16_t kVirtualMicPort = RCTL_VIRTUAL_MIC_PORT;
 static const uint64_t kRingSamples = 48000 * 2;
-static std::atomic<int16_t> g_ring[kRingSamples];
+// Allocate only after the process filter has rejected SpringBoard. A namespace-
+// scope array of 96,000 C++ atomics runs initialization before any constructor
+// guard and can prevent later Substitute payloads from loading in SpringBoard.
+static std::atomic<int16_t> *g_ring = nullptr;
 static_assert(std::atomic<int16_t>::is_always_lock_free, "virtual mic samples must stay realtime-safe");
 static std::atomic<uint64_t> g_write{0};
 static std::atomic<uint64_t> g_read{0};
@@ -220,9 +224,13 @@ static OSStatus hooked_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,
     return status;
 }
 
-__attribute__((constructor)) static void install_virtual_mic(void) {
-    if ([[NSProcessInfo processInfo].processName isEqualToString:@"SpringBoard"]) return;
-    void *symbol = dlsym(RTLD_DEFAULT, "AudioUnitRender");
-    if (symbol) MSHookFunction(symbol, reinterpret_cast<void *>(hooked_render),
-                               reinterpret_cast<void **>(&g_original_render));
+extern "C" void rctl_virtual_mic_initialize(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        g_ring = new (std::nothrow) std::atomic<int16_t>[kRingSamples]();
+        if (!g_ring) return;
+        void *symbol = dlsym(RTLD_DEFAULT, "AudioUnitRender");
+        if (symbol) MSHookFunction(symbol, reinterpret_cast<void *>(hooked_render),
+                                   reinterpret_cast<void **>(&g_original_render));
+    });
 }

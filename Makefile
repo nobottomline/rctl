@@ -1,7 +1,8 @@
 # rctl — aggregate project. Builds every component into one Debian package:
 #   springboard/  -> rctlsbcap.dylib  (thin SpringBoard agent: capture/encode/inject)
 #   daemon/       -> rctld            (root daemon: transport + automation API)   [added in P2.5b]
-#   app/          -> rctlapp.dylib    (app-side media agent: camera + mic)
+#   app/          -> rctlapp.dylib    (small UIKit loader + still-camera hooks)
+#                 -> rctlappmedia.dylib (foreground live camera + virtual mic)
 #   audio/        -> rctlaudio.dylib  (inactive mediaserverd audio payload)
 # Extra payload (web client, LaunchDaemon plist) ships via layout/.
 #
@@ -41,6 +42,8 @@ after-stage::
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/var/mobile/rctl"$(ECHO_END)
 	$(ECHO_NOTHING)if [ ! -f web/dist/index.html ] || find web/src web/index.html web/package.json -newer web/dist/index.html 2>/dev/null | grep -q .; then echo "==> Building web client"; ( cd web && { [ -d node_modules ] || npm ci; } && npm run build ); fi$(ECHO_END)
 	$(ECHO_NOTHING)cp web/dist/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
+	$(ECHO_NOTHING)cp ".theos/obj/debug/rctlappmedia.dylib" \
+		"$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
 	$(ECHO_NOTHING)set -e; dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)

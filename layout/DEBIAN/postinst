@@ -7,6 +7,7 @@ set -e
 
 DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
 CAPLIB=/Library/MobileSubstrate/DynamicLibraries/rctlapp.dylib
+APPMEDIA=/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib
 DAEMON=/usr/local/bin/rctld
 PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
 AUDIOSRC=/usr/local/lib/rctl/audio/rctlaudio.dylib
@@ -43,6 +44,7 @@ ENT
 if command -v ldid >/dev/null 2>&1; then
     [ -f "$DYLIB" ]   && ldid -S "$DYLIB"   || true
     [ -f "$CAPLIB" ]  && ldid -S "$CAPLIB"  || true
+    [ -f "$APPMEDIA" ] && ldid -S "$APPMEDIA" || true
     [ -f "$DAEMON" ]  && ldid -S"$RCTLD_ENT" "$DAEMON"  || true
     [ -f "$AUDIOSRC" ] && ldid -S "$AUDIOSRC" || true
 fi
