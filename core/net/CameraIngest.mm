@@ -1,5 +1,6 @@
 #include "net/CameraIngest.h"
 #include "net/CameraProtocol.h"
+#include "net/MpegTsRecorder.h"
 #include "net/WebRTCBridge.h"
 
 #include <arpa/inet.h>
@@ -7,6 +8,7 @@
 #include <notify.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -26,6 +28,10 @@ static uint64_t g_camera_frames = 0;
 static uint64_t g_camera_bytes = 0;
 static uint64_t g_camera_last_frame_ms = 0;
 static char g_camera_owner[128] = {0};
+static pthread_mutex_t g_record_lock = PTHREAD_MUTEX_INITIALIZER;
+static rctl_ts_recorder *g_camera_recorder = NULL;
+static uint64_t g_record_last_bytes = 0;
+static uint64_t g_record_last_ms = 0;
 
 static uint64_t camera_now_ms(void) {
     struct timespec ts;
@@ -111,6 +117,18 @@ static void *camera_client_main(void *raw_fd) {
             if (current)
                 rctl_webrtc_push_camera_au(payload, length,
                     (flags & RCTL_CAMERA_FLAG_KEYFRAME) != 0, pts_us);
+            if (current) {
+                pthread_mutex_lock(&g_record_lock);
+                if (g_camera_recorder &&
+                    !rctl_ts_recorder_write(g_camera_recorder, payload, length,
+                        (flags & RCTL_CAMERA_FLAG_KEYFRAME) != 0, pts_us)) {
+                    g_record_last_bytes = rctl_ts_recorder_bytes(g_camera_recorder);
+                    g_record_last_ms = rctl_ts_recorder_duration_ms(g_camera_recorder);
+                    rctl_ts_recorder_close(g_camera_recorder);
+                    g_camera_recorder = NULL;
+                }
+                pthread_mutex_unlock(&g_record_lock);
+            }
         }
         free(payload);
         if (!greeted) break;
@@ -181,6 +199,7 @@ uint64_t rctl_camera_set_enabled(bool enabled, int position, int fps, int bitrat
     pthread_mutex_unlock(&g_camera_lock);
 
     if (changed) notify_post("com.greatlove.rctl.cam.sync");
+    if (!enabled) rctl_camera_record_stop();
     return generation;
 }
 
@@ -222,16 +241,69 @@ char *rctl_camera_status_json(void) {
     memcpy(owner, g_camera_owner, sizeof(owner));
     pthread_mutex_unlock(&g_camera_lock);
 
+    pthread_mutex_lock(&g_record_lock);
+    bool recording = g_camera_recorder != NULL;
+    uint64_t record_bytes = rctl_ts_recorder_bytes(g_camera_recorder);
+    uint64_t record_ms = rctl_ts_recorder_duration_ms(g_camera_recorder);
+    if (!recording) {
+        record_bytes = g_record_last_bytes;
+        record_ms = g_record_last_ms;
+    }
+    pthread_mutex_unlock(&g_record_lock);
+    if (!recording) {
+        struct stat st;
+        if (stat(RCTL_CAMERA_RECORD_PATH, &st) == 0) record_bytes = (uint64_t)st.st_size;
+    }
+
     uint64_t age = last ? camera_now_ms() - last : 0;
     const char *state = !enabled ? "off" : (last && age < 2500 ? "live" : "waiting_for_app");
-    char *json = (char *)malloc(512);
+    char *json = (char *)malloc(768);
     if (!json) return NULL;
-    snprintf(json, 512,
+    snprintf(json, 768,
              "{\"enabled\":%s,\"state\":\"%s\",\"position\":\"%s\",\"generation\":%llu,"
-             "\"fps\":%d,\"bitrate\":%d,\"owner\":\"%s\",\"frames\":%llu,\"bytes\":%llu,\"last_frame_ms\":%llu}",
+             "\"fps\":%d,\"bitrate\":%d,\"owner\":\"%s\",\"frames\":%llu,\"bytes\":%llu,\"last_frame_ms\":%llu,"
+             "\"recording\":%s,\"record_bytes\":%llu,\"record_ms\":%llu,\"record_path\":\"%s\"}",
              enabled ? "true" : "false", state, position == 2 ? "front" : "back",
              (unsigned long long)generation, fps, bitrate, owner,
              (unsigned long long)frames, (unsigned long long)bytes,
-             (unsigned long long)(last ? age : 0));
+             (unsigned long long)(last ? age : 0), recording ? "true" : "false",
+             (unsigned long long)record_bytes, (unsigned long long)record_ms,
+             RCTL_CAMERA_RECORD_PATH);
     return json;
+}
+
+bool rctl_camera_record_start(void) {
+    if (!rctl_camera_is_enabled()) return false;
+    mkdir("/var/mobile/Library/Caches/com.greatlove.rctl", 0755);
+    pthread_mutex_lock(&g_record_lock);
+    if (g_camera_recorder) rctl_ts_recorder_close(g_camera_recorder);
+    g_camera_recorder = rctl_ts_recorder_open(RCTL_CAMERA_RECORD_PATH);
+    bool ok = g_camera_recorder != NULL;
+    if (ok) {
+        g_record_last_bytes = 0;
+        g_record_last_ms = 0;
+    }
+    pthread_mutex_unlock(&g_record_lock);
+    return ok;
+}
+
+void rctl_camera_record_stop(void) {
+    pthread_mutex_lock(&g_record_lock);
+    rctl_ts_recorder *recorder = g_camera_recorder;
+    g_camera_recorder = NULL;
+    if (recorder) {
+        g_record_last_bytes = rctl_ts_recorder_bytes(recorder);
+        g_record_last_ms = rctl_ts_recorder_duration_ms(recorder);
+    }
+    pthread_mutex_unlock(&g_record_lock);
+    rctl_ts_recorder_close(recorder);
+}
+
+void rctl_camera_record_discard(void) {
+    rctl_camera_record_stop();
+    unlink(RCTL_CAMERA_RECORD_PATH);
+    pthread_mutex_lock(&g_record_lock);
+    g_record_last_bytes = 0;
+    g_record_last_ms = 0;
+    pthread_mutex_unlock(&g_record_lock);
 }

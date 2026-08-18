@@ -31,6 +31,7 @@ rctld_FILES = main.mm \
               ../core/net/Term.mm \
               ../core/net/WebRTCBridge.cpp \
               ../core/net/CameraIngest.mm \
+              ../core/net/MpegTsRecorder.cpp \
               ../core/ipc/Ipc.c
 rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctld_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP) -I$(DC)/include -I$(DC)/deps/json/single_include -I$(OPUS)/include

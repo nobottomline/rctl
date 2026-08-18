@@ -1365,6 +1365,18 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         return rctl_camera_status_json();
     } else if (!strcmp(path, "/v1/cam_status")) {
         return rctl_camera_status_json();
+    } else if (!strcmp(path, "/v1/cam_record")) {
+        char value[8];
+        if (get_param(query, "discard", value, sizeof(value)) && value[0] == '1') {
+            rctl_camera_record_discard();
+        } else if (get_param(query, "on", value, sizeof(value))) {
+            if (value[0] == '1' && !rctl_camera_record_start()) {
+                *status = 409;
+                return strdup("{\"error\":\"start live camera before recording\"}");
+            }
+            if (value[0] != '1') rctl_camera_record_stop();
+        }
+        return rctl_camera_status_json();
     } else if (!strcmp(path, "/v1/cam_agent_state")) {
         return rctl_camera_agent_state_json();
     } else if (!strcmp(path, "/v1/cam_upload")) {     // the in-app capturer POSTs its JPEG here
