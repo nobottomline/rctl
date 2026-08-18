@@ -19,14 +19,14 @@ AMFI bypass enable real touch/keyboard injection and camera-from-any-app.
 ```
   ┌─────────── iPad (jailbroken) ────────────────────────────┐
   │                                                          │
-  │  SpringBoard ──[rctlsbcap.dylib]──┐   every app ──[rctlapp.dylib]
-  │   screen capture + H.264 encode   │    camera capture in the
-  │   touch/key injection             │    FRONTMOST app
-  │   SB private-API actions          │         │ raw-socket POST
-  │   local output control            │         ▼
-  │         │ Unix socket IPC         │   ┌──────────────┐
-  │         ▼                         │   │ /v1/cam_upload│
-  │   rctld  (root daemon) ◄──────────┘   └──────────────┘
+  │  SpringBoard ──[rctlsbcap.dylib]──┐   UIKit apps ──[rctlapp loader]
+  │   screen capture + H.264 encode   │                  │ dlopen outside SB
+  │   touch/key injection             │                  ▼
+  │   SB private-API actions          │          [rctlappmedia.dylib]
+  │   local output control            │           camera in FRONTMOST app
+  │         │ Unix socket IPC         │                  │ loopback ingest
+  │         ▼                         │                  ▼
+  │   rctld  (root daemon) ◄──────────┴──────────────────┘
   │   HTTP :8080  (live /stream + REST /v1/*)              │
   │         ▲                                                │
   │         │ TCP 127.0.0.1:8079 PCM                         │
@@ -37,13 +37,14 @@ AMFI bypass enable real touch/keyboard injection and camera-from-any-app.
        Browser (`web/` control app): video, audio, input, files, console
 ```
 
-Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
+Six runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 
 | Component | Where it runs | What it does |
 |---|---|---|
 | **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
 | **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), WebSocket terminal `/ws/term`, relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
-| **rctlapp** (`app/`) | injected into **every** app | captures camera stills/live video in the foreground app and replaces supported app microphone input with fresh browser PCM; app-side VideoToolbox sends bounded H.264 to rctld |
+| **rctlapp** (`app/`) | UIKit-filtered loader | supplies still-camera/TCC hooks and explicitly rejects SpringBoard before loading foreground media code |
+| **rctlappmedia** (`app/media/`) | manually loaded in ordinary UIKit apps | captures live video in the foreground app and replaces supported app microphone input with fresh browser PCM; app-side VideoToolbox sends bounded H.264 to rctld |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/`) | the controlling browser | React/Vite control app. Primary path is WebRTC (H.264 RTP track + DataChannels); `/stream` WebCodecs remains a local/fallback path. `web/legacy/` keeps the old vanilla client for reference only. |
 
@@ -185,9 +186,11 @@ dylib into mediaserverd (`docs/mediaserverd-capture-classes.txt` is the class du
 SpringBoard never even reaches mediaserverd (its sandbox forbids it as a camera
 client).
 
-**The solution: capture IN the frontmost app.** `rctlapp` is injected into every app
-(`Filter.Bundles = com.apple.UIKit`). On a Darwin-notification pulse from rctld, the
-foreground-active app (a *valid* camera client) silently grabs a still with
+**The solution: capture IN the frontmost app.** `rctlapp` is injected into UIKit
+processes (`Filter.Bundles = com.apple.UIKit`). It returns before loading media in
+SpringBoard and manually opens the unfiltered `rctlappmedia` payload in ordinary
+apps. On a Darwin-notification pulse from rctld, the foreground-active app (a
+*valid* camera client) silently grabs a still with
 `AVCaptureStillImageOutput` (driven via the ObjC runtime to dodge the AVFoundation
 umbrella build issue), then ships it back. SpringBoard is explicitly excluded (it
 reports Active but can't capture and would race the real app for the device).
@@ -216,6 +219,15 @@ sends Annex-B H.264 to loopback port 8081. `rctld` forwards it through a dedicat
 camera WebRTC PeerConnection and may write the same access units to MPEG-TS. A
 30-second browser lease and five-second app heartbeat stop orphaned capture. See
 `docs/CAM.md` for protocol and validation details.
+
+**Why the split payload exists.** The UIKit bundle filter also reaches
+SpringBoard. Linking live camera, VideoToolbox and virtual-mic C++ state directly
+into that filtered dylib prevented later Substitute payloads from loading even
+when a constructor returned early. The filtered `rctlapp` is now deliberately
+small; `rctlappmedia.dylib` has no filter plist and is opened only after the
+process guard. Its camera delegate class is created through the Objective-C
+runtime to avoid an iOS 14 arm64e pointer-authentication crash during late
+`dlopen` of static class metadata.
 
 **Why not the daemon-side approaches:** a standalone helper (`rctlcam`, since
 removed) with `com.apple.private.tcc.allow` + an embedded usage-description got
