@@ -16,6 +16,8 @@
 #import <unistd.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <substrate.h>
+#import "CameraAgent.h"
+#include <stdatomic.h>
 
 // Mute the camera shutter for OUR snaps only. AVCaptureStillImageOutput plays a
 // system sound on capture; gRctlSnapping is set just around our captureStillImage
@@ -30,16 +32,17 @@ static BOOL gRctlSnapping = NO;
 // gRctlCapturing, so the host app's own camera-permission behaviour is untouched
 // the rest of the time. TCCAccessPreflight/Request live in the private TCC
 // framework, so we resolve + hook them via dlsym/MSHookFunction (see %ctor).
-static BOOL gRctlCapturing = NO;
+static _Atomic bool gRctlCapturing = false;
+void rctl_camera_tcc_set_active(BOOL active) { atomic_store(&gRctlCapturing, active); }
 static int (*orig_TCCAccessPreflight)(CFStringRef, CFDictionaryRef);
 static void (*orig_TCCAccessRequest)(CFStringRef, CFDictionaryRef, void (^)(BOOL));
 static int rctl_TCCAccessPreflight(CFStringRef service, CFDictionaryRef options) {
-    if (gRctlCapturing && service && CFStringCompare(service, CFSTR("kTCCServiceCamera"), 0) == kCFCompareEqualTo)
+    if (atomic_load(&gRctlCapturing) && service && CFStringCompare(service, CFSTR("kTCCServiceCamera"), 0) == kCFCompareEqualTo)
         return 0; // kTCCAccessPreflightGranted
     return orig_TCCAccessPreflight ? orig_TCCAccessPreflight(service, options) : 2;
 }
 static void rctl_TCCAccessRequest(CFStringRef service, CFDictionaryRef options, void (^completion)(BOOL)) {
-    if (gRctlCapturing && service && CFStringCompare(service, CFSTR("kTCCServiceCamera"), 0) == kCFCompareEqualTo) {
+    if (atomic_load(&gRctlCapturing) && service && CFStringCompare(service, CFSTR("kTCCServiceCamera"), 0) == kCFCompareEqualTo) {
         if (completion) completion(YES);
         return;
     }
@@ -92,8 +95,8 @@ static void rctl_capture(int position) {
         if ([pn isEqualToString:@"SpringBoard"]) return;
         if (!app || st != UIApplicationStateActive) { return; }   // only the frontmost app acts
         caplog([NSString stringWithFormat:@"FIRE pos=%d state=%ld", position, st]);
-        gRctlCapturing = YES;   // force-grant camera TCC just for this snap
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ gRctlCapturing = NO; });
+        atomic_store(&gRctlCapturing, true);   // force-grant camera TCC just for this snap
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ atomic_store(&gRctlCapturing, false); });
         dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY);
         Class CDev = NSClassFromString(@"AVCaptureDevice");
         Class CInput = NSClassFromString(@"AVCaptureDeviceInput");
@@ -251,5 +254,6 @@ static void mic_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
             void *rq = dlsym(tcc, "TCCAccessRequest");
             if (rq) MSHookFunction(rq, (void *)rctl_TCCAccessRequest, (void **)&orig_TCCAccessRequest);
         }
+        rctl_camera_agent_initialize();
     } @catch (id e) {}
 }

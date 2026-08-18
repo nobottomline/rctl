@@ -182,8 +182,8 @@ rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
     return e;
 }
 
-void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) {
-    if (!e || !surface) return;
+void rctl_encoder_encode_pixel_buffer(rctl_encoder *e, CVPixelBufferRef src, int64_t pts_us) {
+    if (!e || !src) return;
     // Self-heal a lost session (mediaserverd restarted/crashed -- e.g. enabling the
     // system-audio tweak). Silent retry each frame until the service is back; the
     // fresh session emits an IDR, so the video self-recovers within a few frames.
@@ -191,12 +191,6 @@ void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) 
         if (configure_session(e) != noErr || !e->session) return;
         e->frames_in = 0; __atomic_store_n(&e->frames_out, 0, __ATOMIC_RELAXED);
         fprintf(stderr, "[enc] H.264 session rebuilt after loss\n");
-    }
-
-    CVPixelBufferRef src = NULL;
-    if (CVPixelBufferCreateWithIOSurface(NULL, surface, NULL, &src) != kCVReturnSuccess || !src) {
-        fprintf(stderr, "[enc] CVPixelBuffer fail\n");
-        return;
     }
 
     CVPixelBufferRef frame = src; // what we hand to the encoder
@@ -235,6 +229,16 @@ void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) 
     }
 
     if (scaled) CVPixelBufferRelease(scaled);
+}
+
+void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us) {
+    if (!e || !surface) return;
+    CVPixelBufferRef src = NULL;
+    if (CVPixelBufferCreateWithIOSurface(NULL, surface, NULL, &src) != kCVReturnSuccess || !src) {
+        fprintf(stderr, "[enc] CVPixelBuffer fail\n");
+        return;
+    }
+    rctl_encoder_encode_pixel_buffer(e, src, pts_us);
     CVPixelBufferRelease(src);
 }
 

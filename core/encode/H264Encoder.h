@@ -1,6 +1,7 @@
 #pragma once
 
 #import <IOSurface/IOSurfaceRef.h>
+#import <CoreVideo/CoreVideo.h>
 #import <stddef.h>
 #import <stdint.h>
 #import <stdbool.h>
@@ -23,6 +24,11 @@ typedef struct rctl_encoder rctl_encoder;
 rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
                                   int fps, int bitrate_bps, rctl_nal_cb cb, void *ctx);
 void rctl_encoder_encode(rctl_encoder *e, IOSurfaceRef surface, int64_t pts_us);
+// Camera capture already produces a CVPixelBuffer. This avoids wrapping it in an
+// IOSurface and lets the same low-latency VideoToolbox configuration serve both
+// screen and foreground-app camera sources.
+void rctl_encoder_encode_pixel_buffer(rctl_encoder *e, CVPixelBufferRef pixel_buffer,
+                                      int64_t pts_us);
 void rctl_encoder_destroy(rctl_encoder *e);
 
 // Live, low-overhead controls (no session restart). Safe to call from a

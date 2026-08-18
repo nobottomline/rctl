@@ -7,8 +7,9 @@ ARCHS := arm64 arm64e
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = rctlapp
-rctlapp_FILES = rctlapp.xm
-rctlapp_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-rctlapp_FRAMEWORKS = UIKit Foundation CoreFoundation AudioToolbox
+rctlapp_FILES = rctlapp.xm CameraAgent.mm ../core/encode/H264Encoder.mm
+rctlapp_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
+rctlapp_FRAMEWORKS = UIKit Foundation CoreFoundation AudioToolbox AVFoundation \
+                     VideoToolbox CoreMedia CoreVideo IOSurface
 
 include $(THEOS)/makefiles/tweak.mk

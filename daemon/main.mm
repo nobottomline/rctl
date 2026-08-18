@@ -40,6 +40,7 @@
 #import "net/RelayClient.h"
 #import "ipc/Ipc.h"
 #import "net/WebRTCBridge.h"
+#import "net/CameraIngest.h"
 
 extern char **environ;
 
@@ -281,6 +282,7 @@ static bool audio_capture_set(bool on, char *err, size_t errsz);
 static int gSessionGen = 0;                     // bumped per transition (serialized on gAuto)
 static bool gStreamViewers = false;             // any /stream client
 static bool gWebrtcViewers = false;             // any WebRTC video channel
+static bool gCameraLive = false;                 // camera owns the hardware encoder budget
 static void send_active(bool on) {
     uint8_t b = on ? 1 : 0;
     send_to_sb(RCTL_MSG_ACTIVE, &b, 1);
@@ -289,7 +291,8 @@ static void send_active(bool on) {
 // Capture runs while ANY viewer watches -- /stream or WebRTC. Call on gAuto.
 static void apply_active(void) {
     int gen = ++gSessionGen;
-    if (gStreamViewers || gWebrtcViewers) send_active(true);
+    if (gCameraLive) send_active(false);
+    else if (gStreamViewers || gWebrtcViewers) send_active(true);
     else AFTER(4.0, ^{
         if (gen == gSessionGen) {
             send_active(false);
@@ -304,6 +307,9 @@ static void on_session(void *ctx, bool active) {
 static void on_webrtc_keyframe_request(void) {
     // The browser asked for an intra frame (RTCP PLI). Drive the SB encoder.
     dispatch_async(gAuto, ^{ send_to_sb(RCTL_MSG_KEYFRAME, NULL, 0); });
+}
+static void on_webrtc_camera_keyframe_request(void) {
+    notify_post("com.greatlove.rctl.cam.keyframe");
 }
 static void on_webrtc_viewers(bool any) {
     dispatch_async(gAuto, ^{
@@ -1341,6 +1347,26 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         float pitch = 0.45f, rate = 0.38f; char *sy = (char *)malloc(9 + tl);
         sy[0] = 1; memcpy(sy + 1, &pitch, 4); memcpy(sy + 5, &rate, 4); memcpy(sy + 9, text, tl);
         send_to_sb(RCTL_MSG_FX, sy, (uint32_t)(9 + tl)); free(sy);
+    } else if (!strcmp(path, "/v1/cam_live")) {
+        char onp[8];
+        if (!get_param(query, "on", onp, sizeof(onp)))
+            return rctl_camera_status_json();
+        bool on = onp[0] == '1';
+        char posp[16];
+        int position = get_param(query, "pos", posp, sizeof(posp)) &&
+                       (!strcmp(posp, "front") || !strcmp(posp, "2")) ? 2 : 1;
+        int fps = get_i(query, "fps", 10);
+        int bitrate = get_i(query, "bitrate", 1500000);
+        dispatch_sync(gAuto, ^{
+            gCameraLive = on;
+            apply_active();
+            rctl_camera_set_enabled(on, position, fps, bitrate);
+        });
+        return rctl_camera_status_json();
+    } else if (!strcmp(path, "/v1/cam_status")) {
+        return rctl_camera_status_json();
+    } else if (!strcmp(path, "/v1/cam_agent_state")) {
+        return rctl_camera_agent_state_json();
     } else if (!strcmp(path, "/v1/cam_upload")) {     // the in-app capturer POSTs its JPEG here
         if (body_len > 0) {
             FILE *f = fopen("/tmp/rctl_cam.jpg", "wb");
@@ -1392,6 +1418,10 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
             return j;
         }
     } else if (!strcmp(path, "/v1/camera")) {         // snap a photo IN the frontmost app
+        if (rctl_camera_is_enabled()) {
+            *status = 409;
+            return strdup("{\"error\":\"stop live camera before taking a still\"}");
+        }
         int pos = 1; char posp[16];                   // 1=back, 2=front
         if (get_param(query, "pos", posp, sizeof posp) && (!strcmp(posp, "front") || !strcmp(posp, "2"))) pos = 2;
         const char *out = "/tmp/rctl_cam.jpg";
@@ -1834,9 +1864,11 @@ int main(int argc, char **argv) {
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too
         rctl_webrtc_set_keyframe_cb(on_webrtc_keyframe_request); // browser PLI -> force a keyframe
+        rctl_webrtc_set_camera_keyframe_cb(on_webrtc_camera_keyframe_request);
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog("http listening on :8080");
+        if (!rctl_camera_ingest_start()) dlog("camera ingest start FAILED");
         audio_capture_set(false, NULL, 0);
 
         pthread_t t;
