@@ -9,7 +9,8 @@ include $(THEOS)/makefiles/common.mk
 LIBCPP := $(shell xcrun --sdk iphoneos --show-sdk-path)/usr/include/c++/v1
 
 TWEAK_NAME = rctlapp
-rctlapp_FILES = rctlapp.xm CameraAgent.mm VirtualMicClient.mm ../core/encode/H264Encoder.mm
+rctlapp_FILES = rctlapp.xm CameraAgent.mm VirtualMicClient.mm \
+                ../core/audio/VirtualMicDSP.cpp ../core/encode/H264Encoder.mm
 rctlapp_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctlapp_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP)
 rctlapp_FRAMEWORKS = UIKit Foundation CoreFoundation AudioToolbox AVFoundation \

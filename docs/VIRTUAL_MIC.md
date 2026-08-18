@@ -30,9 +30,11 @@ bus 1 for RemoteIO or VoiceProcessingIO. Other AudioUnits and buses are left
 untouched.
 
 The shim supports mono or multichannel, interleaved or non-interleaved Linear
-PCM in float32, signed int16, and signed int32/fixed-point formats. Incoming
-mono 48 kHz PCM is linearly resampled to the application's capture rate and
-copied to every requested channel.
+PCM in float32, signed int16, and signed int32/fixed-point formats. The
+allocation-free `core/audio/VirtualMicDSP` resamples incoming mono 48 kHz PCM to
+the application's capture rate and the app shim copies it to every requested
+channel. Its unit test covers resampling, underflow, backlog, and discontinuity
+behavior independently of the iOS hook.
 
 The audio callback never takes a mutex, allocates, opens a socket, or logs. A
 receiver thread owns networking and writes into a two-second atomic ring. The

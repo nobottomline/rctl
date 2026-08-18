@@ -2,7 +2,6 @@
 #import <Foundation/Foundation.h>
 #import <arpa/inet.h>
 #import <atomic>
-#import <cmath>
 #import <cerrno>
 #import <dlfcn.h>
 #import <netinet/in.h>
@@ -13,6 +12,7 @@
 #import <unistd.h>
 
 #import "net/VirtualMicServer.h"
+#import "audio/VirtualMicDSP.h"
 
 static const uint16_t kVirtualMicPort = RCTL_VIRTUAL_MIC_PORT;
 static const uint64_t kRingSamples = 48000 * 2;
@@ -171,6 +171,16 @@ static void write_sample(AudioBufferList *io, const AudioStreamBasicDescription 
     }
 }
 
+struct RenderContext {
+    AudioBufferList *buffers;
+    const AudioStreamBasicDescription *format;
+};
+
+static void render_sample(void *rawContext, uint32_t frame, int16_t sample) {
+    RenderContext *context = static_cast<RenderContext *>(rawContext);
+    write_sample(context->buffers, *context->format, frame, sample);
+}
+
 static void replace_input(AudioUnit unit, UInt32 bus, UInt32 frames, AudioBufferList *io) {
     if (!io || !io->mNumberBuffers || !frames) return;
     AudioStreamBasicDescription format = {};
@@ -183,28 +193,14 @@ static void replace_input(AudioUnit unit, UInt32 bus, UInt32 frames, AudioBuffer
                       (format.mBitsPerChannel == 16 || format.mBitsPerChannel == 32));
     if (!supported || monotonic_ms() - g_last_packet_ms.load(std::memory_order_acquire) > 600) return;
 
-    double ratio = 48000.0 / format.mSampleRate;
     uint64_t write = g_write.load(std::memory_order_acquire);
     uint64_t read = g_read.load(std::memory_order_relaxed);
-    uint64_t available = write - read;
-    uint64_t needed = static_cast<uint64_t>(ceil(static_cast<double>(frames) * ratio)) + 2;
-    if (available > 4800) { read = write - 2880; available = write - read; } // cap latency near 60 ms
-    if (available < needed) return; // preserve the real microphone on underflow
-
-    static thread_local double fraction = 0.0;
-    for (UInt32 frame = 0; frame < frames; frame++) {
-        double source = fraction + static_cast<double>(frame) * ratio;
-        uint64_t base = static_cast<uint64_t>(source);
-        double part = source - static_cast<double>(base);
-        int16_t a = g_ring[(read + base) % kRingSamples].load(std::memory_order_relaxed);
-        int16_t b = g_ring[(read + base + 1) % kRingSamples].load(std::memory_order_relaxed);
-        int16_t sample = static_cast<int16_t>(static_cast<double>(a) + (static_cast<double>(b) - a) * part);
-        write_sample(io, format, frame, sample);
-    }
-    double consumed = fraction + static_cast<double>(frames) * ratio;
-    uint64_t whole = static_cast<uint64_t>(consumed);
-    fraction = consumed - static_cast<double>(whole);
-    g_read.store(read + whole, std::memory_order_release);
+    uint64_t newRead = read;
+    RenderContext context = {io, &format};
+    static thread_local RCTLVirtualMicResampler resampler;
+    if (!resampler.render(g_ring, kRingSamples, write, read, 48000.0, format.mSampleRate,
+                          frames, 4800, 2880, render_sample, &context, &newRead)) return;
+    g_read.store(newRead, std::memory_order_release);
 }
 
 static OSStatus hooked_render(AudioUnit unit, AudioUnitRenderActionFlags *flags,

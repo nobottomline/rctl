@@ -87,6 +87,9 @@ test-virtual-mic:
 	@xcrun --sdk macosx clang++ -std=c++17 -DRCTL_VIRTUAL_MIC_PORT=38082 -Icore tests/VirtualMicServerTest.cpp \
 		core/net/VirtualMicServer.mm -o /tmp/rctl-virtual-mic-test
 	@/tmp/rctl-virtual-mic-test
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/VirtualMicDSPTest.cpp \
+		core/audio/VirtualMicDSP.cpp -o /tmp/rctl-virtual-mic-dsp-test
+	@/tmp/rctl-virtual-mic-dsp-test
 
 .PHONY: test
 test: test-camera-recorder test-media-library test-virtual-mic test-personalize
