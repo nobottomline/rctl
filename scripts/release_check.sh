@@ -64,6 +64,9 @@ done
   fail "obsolete app media payload path is present"
 grep -q '/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib' \
   "${WORK}/pkg/DEBIAN/postinst" || fail "postinst does not sign rctlappmedia"
+strings "${WORK}/pkg/usr/local/bin/rctld" | \
+  grep -F 'jetsam hard limit configured:' >/dev/null || \
+  fail "rctld binary has no runtime jetsam limit configuration"
 
 say "checking git-tracked secret paths"
 tracked_secret_paths="$(

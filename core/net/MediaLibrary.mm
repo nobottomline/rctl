@@ -304,14 +304,22 @@ char *rctl_media_handle(const char *path, const char *query, int *status,
     if (!strcmp(path, "/v1/media_asset") || !strcmp(path, "/v1/media_thumb") ||
         !strcmp(path, "/v1/media_preview")) {
         __block NSDictionary *asset = nil;
+        __block NSString *rendered = nil;
         NSString *identifier = query_value(query, @"id");
-        dispatch_sync(media_queue(), ^{ asset = [lookup_asset(identifier) copy]; });
+        BOOL preview = !strcmp(path, "/v1/media_preview");
+        dispatch_sync(media_queue(), ^{
+            asset = [lookup_asset(identifier) copy];
+            if (asset && strcmp(path, "/v1/media_asset")) {
+                // ImageIO and AVAssetImageGenerator have significant transient
+                // memory cost. Keep one renderer in flight regardless of how
+                // many thumbnail requests the browser opens concurrently.
+                rendered = rendered_path(asset, preview ? 2048 : 640, preview ? 0.88 : 0.72,
+                                         preview ? @"preview" : @"thumb");
+            }
+        });
         if (!asset) { *status = 404; return strdup("{\"error\":\"asset_not_found\"}"); }
         if (!strcmp(path, "/v1/media_asset")) return json_body(asset);
 
-        BOOL preview = !strcmp(path, "/v1/media_preview");
-        NSString *rendered = rendered_path(asset, preview ? 2048 : 640, preview ? 0.88 : 0.72,
-                                            preview ? @"preview" : @"thumb");
         if (!rendered) { *status = 415; return strdup("{\"error\":\"thumbnail_unavailable\"}"); }
         return read_binary(rendered, status, out_len, out_ctype);
     }

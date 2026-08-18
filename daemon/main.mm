@@ -46,6 +46,16 @@
 #import "net/VirtualMicServer.h"
 
 extern char **environ;
+extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
+                                    void *buffer, size_t buffer_size);
+
+// Private but stable Darwin SPI used by launchd itself. iOS 14 assigns a
+// third-party daemon a 6 MB fatal limit regardless of JetsamProperties in its
+// plist. Command 6 sets active/inactive fatal limits for this process in MB.
+// Keeping a hard ceiling protects the device while allowing WebRTC and one
+// serialized ImageIO/AVFoundation preview render to coexist.
+static constexpr uint32_t kMemorystatusSetJetsamTaskLimit = 6;
+static constexpr uint32_t kRctldMemoryLimitMB = 128;
 
 #define RCTL_AUDIO_PAYLOAD_DYLIB "/usr/local/lib/rctl/audio/rctlaudio.dylib"
 #define RCTL_AUDIO_PAYLOAD_PLIST "/usr/local/lib/rctl/audio/rctlaudio.plist"
@@ -63,6 +73,19 @@ static void respring_device(void) {
 static void dlog(const char *msg) {
     FILE *f = fopen("/tmp/rctld.log", "a");
     if (f) { fprintf(f, "[%ld pid=%d] %s\n", (long)time(NULL), getpid(), msg); fclose(f); }
+}
+
+static void configure_memory_limit(void) {
+    int result = memorystatus_control(kMemorystatusSetJetsamTaskLimit, getpid(),
+                                      kRctldMemoryLimitMB, nullptr, 0);
+    char message[96];
+    if (result == 0) {
+        snprintf(message, sizeof(message), "jetsam hard limit configured: %u MB",
+                 kRctldMemoryLimitMB);
+    } else {
+        snprintf(message, sizeof(message), "jetsam hard limit FAILED: errno=%d", errno);
+    }
+    dlog(message);
 }
 
 static uint64_t read_be64(const uint8_t *p) {
@@ -1890,6 +1913,7 @@ int main(int argc, char **argv) {
     }
 
     @autoreleasepool {
+        configure_memory_limit();
         dlog("rctld started");
         rctl_relay_start();
 

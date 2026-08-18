@@ -37,6 +37,17 @@ Generated images live under
 `/var/mobile/Library/Caches/com.greatlove.rctl/media` with a `0700` directory and
 `0600` files. Their cache key includes the original modification time.
 
+ImageIO and AVFoundation rendering is serialized on the media queue. iOS 14
+assigns third-party launch daemons a 6 MiB jetsam limit even when a larger
+`JetsamProperties` value is present in their plist, which is below rctld's
+normal WebRTC footprint. At startup rctld therefore applies a 128 MiB fatal task
+limit with `memorystatus_control`; startup logs must report
+`jetsam hard limit configured`. The hard ceiling protects the device, while
+serialization and per-request autorelease pools keep normal preview use well
+below it. Do not move rendering back onto concurrent HTTP threads or remove the
+runtime limit without physical-device stress testing uncached photo and video
+previews.
+
 ## Browser Behavior
 
 The Photos sheet supports photo/video filters, filename search, pagination,

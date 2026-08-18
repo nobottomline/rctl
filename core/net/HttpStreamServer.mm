@@ -613,7 +613,9 @@ static void handle_client(rctl_http_server *s, int fd) {
 struct rctl_conn { rctl_http_server *s; int fd; };
 static void *conn_thread(void *arg) {
     struct rctl_conn *c = (struct rctl_conn *)arg;
-    handle_client(c->s, c->fd);
+    @autoreleasepool {
+        handle_client(c->s, c->fd);
+    }
     free(c);
     return NULL;
 }
@@ -628,7 +630,12 @@ static void *accept_loop(void *arg) {
         c->s = s; c->fd = fd;
         pthread_t t;
         if (pthread_create(&t, NULL, conn_thread, c) == 0) pthread_detach(t);
-        else { handle_client(s, fd); free(c); }   // fall back to inline on failure
+        else {
+            @autoreleasepool {
+                handle_client(s, fd);
+            }
+            free(c);   // fall back to inline on failure
+        }
     }
     return NULL;
 }
