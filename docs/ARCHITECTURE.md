@@ -43,7 +43,7 @@ Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 |---|---|---|
 | **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
 | **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), WebSocket terminal `/ws/term`, relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
-| **rctlapp** (`app/`) | injected into **every** app | captures a camera still in the frontmost app on a Darwin-notification pulse; uploads the JPEG to the daemon over a raw loopback socket |
+| **rctlapp** (`app/`) | injected into **every** app | captures camera stills and live front/rear video in the foreground app; app-side VideoToolbox sends bounded H.264 to rctld |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/`) | the controlling browser | React/Vite control app. Primary path is WebRTC (H.264 RTP track + DataChannels); `/stream` WebCodecs remains a local/fallback path. `web/legacy/` keeps the old vanilla client for reference only. |
 
@@ -93,10 +93,10 @@ brightness/openurl/apps/files/say/sound/flash/banner/camera/script/audio_capture
 audio_output) — curl- and script-friendly, separate from the realtime plane,
 shares the IPC action path where SpringBoard context is required.
 
-**Camera → browser.** `/v1/camera?pos=` posts a Darwin notification; the **frontmost
-app** (via rctlapp) silently captures a still and POSTs it back over a raw loopback
-socket to `/v1/cam_upload`; rctld returns the JPEG. See §5 for why this convoluted
-path is necessary.
+**Camera → browser.** Stills use `/v1/camera?pos=` and a one-shot foreground-app
+JPEG upload. Live camera uses daemon-owned desired state, `AVCaptureVideoDataOutput`
+and VideoToolbox inside the foreground app, framed loopback ingest on :8081, and a
+dedicated H.264 WebRTC PeerConnection. See `docs/CAM.md`.
 
 **IPC.** Unix socket `/var/run/rctl-ipc.sock`, framing `[1B type][4B BE len][payload]`.
 Daemon listens (chmod 0777 so mobile-uid SpringBoard can connect); SB connects with
@@ -130,12 +130,11 @@ Auto-Lock setting (we no longer override it).
 
 **Camera from ANY open app (the big one — see §5).**
 
-**Future live camera and microphone.** The planned model is a roaming foreground
-capture session: `rctld` owns desired camera/mic state, while the currently active
-foreground app owns the actual `AVCaptureSession`. On app switches, the old app
-stops and the new foreground app resumes if desired state is still enabled. This
-keeps `cam`, `mic`, `screen`, and `sys_audio` as separate tracks. See
-`docs/CAM.md`.
+**Roaming live camera.** `rctld` owns desired state and a generation; the currently
+active foreground app owns `AVCaptureSession`. App switches transfer ownership,
+Home reports `waiting_for_app`, and a browser lease prevents orphaned capture.
+Camera RTP uses a separate PeerConnection because the iOS SRTP backend is kept to
+one media SSRC per connection. See `docs/CAM.md`.
 
 **System playback audio.** App audio is mixed inside mediaserverd, not SpringBoard
 or the root daemon. The working boundary is a mediaserverd payload that copies PCM
@@ -186,11 +185,9 @@ reports Active but can't capture and would race the real app for the device).
 1. **usage-description SIGABRT** — accessing the camera without an
    `NSCameraUsageDescription` aborts the process. Fix: `%hook NSBundle
    objectForInfoDictionaryKey:` returns a camera string for the main bundle.
-2. **TCC** — mediaserverd checks camera authorization server-side per audit token.
-   Fix: the `postinst` grants `kTCCServiceCamera` to **every installed app** via
-   `plutil -key CFBundleIdentifier` + `sqlite3 INSERT … access (…auth_value=2…)` +
-   `killall tccd`. (`defaults` is absent on-device; `plutil -key` works.) The
-   `prerm` revokes them on uninstall.
+2. **TCC** — the app agent gates private TCC preflight/request hooks only while an
+   rctl-owned capture session is active. Package scripts no longer insert or
+   delete camera rows in TCC.db; deleting broad rows could destroy user grants.
 3. **Sandbox + ATS** — a sandboxed App Store app can't write `/tmp` (outside its
    container) and ATS blocks `NSURLSession http://`. Fix: rctlapp POSTs the JPEG over
    a **raw loopback socket** (`connect 127.0.0.1:8080`, hand-written HTTP) — exempt
@@ -201,6 +198,13 @@ reports Active but can't capture and would race the real app for the device).
 
 **Limitation.** Works only while an *app* is foreground. On the home screen the
 frontmost "app" is SpringBoard, which can't capture — the user just opens any app.
+
+**Live path.** `/v1/cam_live` keeps desired state in `rctld`. The active app uses
+`AVCaptureVideoDataOutput`, encodes bounded 640x480 frames with VideoToolbox, and
+sends Annex-B H.264 to loopback port 8081. `rctld` forwards it through a dedicated
+camera WebRTC PeerConnection and may write the same access units to MPEG-TS. A
+30-second browser lease and five-second app heartbeat stop orphaned capture. See
+`docs/CAM.md` for protocol and validation details.
 
 **Why not the daemon-side approaches:** a standalone helper (`rctlcam`, since
 removed) with `com.apple.private.tcc.allow` + an embedded usage-description got
@@ -265,13 +269,12 @@ internet phase.
 
 ## 8. Security posture (honest)
 
-- **Camera TCC granted to all apps** = a real privacy reduction: any app (and any
-  tweak inside it) can use the camera without a prompt. Mitigations: capture still
-  requires the app to be foreground (mediaserverd), iOS 14 shows the camera-in-use
-  indicator, and the `prerm` revokes the grants on uninstall. TCC is per-process, so
-  there is no way to scope it to "only our code." A more private alternative would
-  grant on-demand and revoke after each shot, but that needs a `tccd` restart per
-  capture. Acceptable for a personal device; flag it for a product.
+- **Camera access hooks run inside UIKit apps** = a sensitive trust boundary.
+  They are gated to rctl capture lifetime; capture requires foreground state,
+  and iOS 14 shows the camera-in-use indicator. Outside that lifetime the hooks
+  return the original TCC result. Package scripts own no persistent TCC rows and
+  therefore delete none on uninstall. TCC is still per-process, so this boundary
+  must be revalidated for every supported jailbreak/iOS combination.
 - **`:8080` is unauthenticated.** Fine on a trusted LAN; **must** gain auth before
   internet exposure (see §6).
 - **The daemon is root** and exposes file read/write (`/v1/ls,pull,push,rm`), app

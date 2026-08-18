@@ -14,8 +14,8 @@ The control app now has two production-maintained transport paths:
 - Relay mode uses the Go relay for admin auth, enrollment, approval, device
   presence, signaling, HTTP tunnel, terminal tunnel, and TURN credential minting.
 - The low-latency media/control path is WebRTC via libdatachannel inside
-  `rctld`: H.264 over an RTP video track, with DataChannels for input, audio,
-  and file transfer.
+  `rctld`: screen and camera each use a dedicated H.264 RTP PeerConnection;
+  the screen connection also carries DataChannels for input, audio, and files.
 
 The old reliable relay stream still exists as compatibility/debug fallback:
 
@@ -77,13 +77,21 @@ WebCodecs decode.
 
 ## Channel Design
 
-The current design uses one RTP video track plus multiple DataChannels:
+The current design keeps one media SSRC per PeerConnection. The iOS
+libsrtp/mbedtls build previously dropped all RTP when a second media SSRC was
+added to the same connection, so camera is a second signaling session rather
+than a second m-line on the screen connection:
 
 ```text
 video
   RTP H.264 media track
   payload: VideoToolbox Annex-B access units packetized by libdatachannel
   recovery: NACK + debounced PLI -> forced keyframe
+
+camera
+  separate PeerConnection selected by ?media=camera
+  RTP H.264 from the foreground rctlapp VideoToolbox encoder
+  recovery: independent NACK + PLI
 
 control
   ordered: true
@@ -106,7 +114,8 @@ use the authenticated HTTP tunnel.
 
 ## Browser Decode Rules
 
-The browser should keep using WebCodecs, but it must become explicitly
+WebRTC H.264 is decoded natively by the browser's video pipeline. WebCodecs is
+kept for the HTTP `/stream` compatibility path, where it must remain explicitly
 latency-oriented:
 
 - Track `VideoDecoder.decodeQueueSize`.

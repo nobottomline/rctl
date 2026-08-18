@@ -13,7 +13,9 @@ authenticated relay access is in active development.
 ## Status
 
 Live screen streaming, real touch control, real iPad playback audio, files,
-camera stills, and a root PTY terminal work. A SpringBoard-injected agent
+camera stills, and a root PTY terminal work. Live front/rear camera streaming
+and device-side recording are implemented and awaiting final physical-device
+qualification. A SpringBoard-injected agent
 captures the display, hardware-encodes H.264 (VideoToolbox), and sends it to
 `rctld`. The browser control app uses WebRTC for the current low-latency path
 (H.264 RTP video track plus DataChannels for input/audio/files) and keeps the
@@ -43,7 +45,7 @@ rctl/
 ├── springboard/    # the injected agent (rctlsbcap): capture + encode + inject (thin)
 ├── daemon/         # rctld — root daemon (launchd KeepAlive): hosts the transport + relay
 ├── audio/          # rctlaudio — inactive mediaserverd system-audio payload
-├── app/            # rctlapp — frontmost-app camera still capture payload
+├── app/            # rctlapp — foreground-app still/live camera capture agent
 ├── web/            # canonical React/Vite control app; build output is web/dist/
 │   └── legacy/     #   old vanilla single-file client + vendor assets, reference only
 ├── relay/          # Go relay server + relay/web-admin admin SPA
@@ -102,7 +104,7 @@ shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
 
 1. **P1 — done.** Screen capture + hardware H.264 + browser stream over LAN.
 2. **P2 — done.** Real touch control through `IOHIDEvent`, correct in all orientations.
-3. **P2.5 — working.** Real system playback audio, camera stills, files, clipboard,
+3. **P2.5 — working.** Real system playback audio, camera still/live, files, clipboard,
    app launch, root terminal, and automation endpoints.
 4. **P3 — active.** Authenticated relay access with WebRTC media/control,
    relay-hosted control page, and TURN hardening.

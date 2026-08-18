@@ -1,200 +1,140 @@
-# Camera and Microphone Architecture Notes
+# Live Camera Architecture
 
-Goal: add live front/back camera streaming and microphone streaming without
-mixing them with the existing screen and system-playback-audio paths.
+`rctl` streams the front or rear camera from the active foreground app, sends
+H.264 to `rctld` over a bounded loopback ingest, and publishes it as a dedicated
+WebRTC RTP session. The daemon can record the same encoded stream directly to an
+MPEG-TS file without a second encoder.
 
-## Existing media tracks
+Source and package builds are complete. Physical iOS 14.4 validation is still
+required before this feature is release-qualified.
 
-Current working tracks:
+## Media ownership
 
-| Track | Source process | Owner | Notes |
+| Track | Capture process | Transport | Notes |
 |---|---|---|---|
-| `screen` | SpringBoard | `springboard/` | H.264 from the display framebuffer |
-| `sys_audio` | mediaserverd | `audio/` | PCM copied from supported playback paths, for YouTube/TikTok/app output |
-| `cam_still` | foreground app | `cap/` | one-shot front/back JPEG capture |
+| `screen` | SpringBoard (`rctlsbcap`) | H.264 RTP | display and remote input session |
+| `camera` | foreground app (`rctlapp`) | separate H.264 RTP PeerConnection | front or rear camera |
+| `sys_audio` | mediaserverd (`rctlaudio`) | Opus DataChannel | device playback mix |
+| `room-mic` | `rctld` RemoteIO | Opus DataChannel | experimental; currently unsafe |
 
-Target tracks:
+iOS/mediaserverd validates camera access against the foreground application.
+Camera capture from `rctld` or SpringBoard is rejected even with authorization,
+so `rctlapp` is injected into UIKit applications and only acts while its host is
+active. SpringBoard is explicitly excluded.
 
-| Track | Source process | Owner | Notes |
-|---|---|---|---|
-| `cam` | foreground app | future `cam/` or upgraded `cap/` | live front/back camera video |
-| `mic` | foreground app | future `cam/` or upgraded `cap/` | microphone input, separate from `sys_audio` |
-
-Do not merge `sys_audio` and `mic`. They are different products:
-
-- `sys_audio`: what the iPad is playing.
-- `mic`: what the iPad hears in the room.
-
-## Known iOS constraint
-
-Camera access is validated by iOS/mediaserverd against the foreground app. Prior
-daemon/SpringBoard camera attempts reached authorization but were rejected at
-hardware client validation. The current still-photo path works because `rctlapp`
-is injected into every UIKit app and only the active foreground app performs the
-capture.
-
-This means the first professional live-camera design should not start by
-reverse-engineering mediaserverd. The lower-risk path is to extend the existing
-foreground-app capture model.
-
-## Recommended model: roaming foreground capture
-
-`rctld` owns desired state. The active foreground app owns actual capture.
+## Data flow
 
 ```text
 browser
-  -> /v1/cam?on=1&pos=front
-  -> /v1/mic?on=1
-
+  |  /v1/cam_live desired state + 30s lease
+  |  camera signaling WebSocket (?media=camera)
+  v
 rctld
-  desired cam/mic state
-  current owner app pid/bundle
-  generation/session id
-  ingest sockets
-
-foreground app agent
-  starts capture when active and desired state is on
-  stops capture when resigning/backgrounding
-  new foreground app resumes capture automatically
+  |  desired state, generation, owner and status
+  |  127.0.0.1:8081 framed H.264 ingest
+  |  optional MPEG-TS writer
+  v
+foreground rctlapp
+  AVCaptureVideoDataOutput (640x480, default 10fps)
+  -> VideoToolbox H.264 (bounded three-frame network queue)
+  -> Annex-B access units over loopback TCP
 ```
 
-The goal is not to keep one `AVCaptureSession` alive across app switches. iOS may
-stop or invalidate the old session when the app leaves foreground. The product
-behavior should be:
+The camera uses a separate PeerConnection, not a second track on the screen
+PeerConnection. The current iOS libdatachannel/libsrtp build has previously
+dropped all media after adding a second SRTP SSRC. One H.264 media SSRC per
+PeerConnection preserves native RTP fragmentation, NACK, PLI and browser decode
+without reintroducing that failure.
 
-- app A active: camera stream is live from app A;
-- app switch starts: stream status becomes `reconnecting`;
-- app B becomes active: app B sees desired state and starts capture;
-- SpringBoard/home screen: status becomes `waiting_for_app`.
+## Roaming foreground session
 
-This is the most honest, robust model for current iOS constraints.
+`rctld` owns desired state and increments a generation whenever enabled state,
+position or encoding settings change. Every injected app observes the Darwin
+sync notification, but only the active foreground app starts capture.
 
-## Probe phase
+- App A active: App A owns capture and reports its bundle id in the ingest hello.
+- App switch: App A stops on `UIApplicationWillResignActiveNotification`.
+- App B active: App B reads daemon state and starts the current generation.
+- Home screen: no valid owner; status is `waiting_for_app`.
+- Orientation change: the owner rebuilds its capture/encoder so dimensions and
+  SPS/PPS match the new orientation.
+- Daemon restart/loss: agents poll state every five seconds and fail closed.
 
-Before product UI, run diagnostic probes on the current iPad/iOS 14.4:
+Only the newest ingest owner epoch is accepted. Late frames from a resigning app
+are discarded. Payloads are capped at 2 MiB.
 
-1. **Live video viability**
-   - Start `AVCaptureSession` inside the active app.
-   - Use `AVCaptureVideoDataOutput`.
-   - Count frames for 10, 30, and 120 seconds.
-   - Verify no host app crash.
+## Screen coexistence
 
-2. **Front/back switching**
-   - Start front camera.
-   - Stop cleanly.
-   - Start back camera.
-   - Verify no leaked sessions or camera lock.
+The target A12 device showed camera/mediaserverd work starving the screen
+VideoToolbox session. While live camera is enabled, `rctld` pauses the expensive
+screen capture/encoder but keeps the screen PeerConnection and DataChannels
+alive. Input, files and terminal therefore remain connected. Stopping camera
+restores screen capture and emits a fresh keyframe through the normal pipeline.
 
-3. **App lifecycle**
-   - Log `UIApplicationDidBecomeActiveNotification`.
-   - Log `UIApplicationWillResignActiveNotification`.
-   - Start stream, switch app, observe whether frames stop, callbacks continue,
-     or mediaserverd invalidates the session.
+This policy is conservative and should only be relaxed after device thermal,
+memory and simultaneous-encoder measurements prove it safe.
 
-4. **Roaming owner**
-   - Keep desired state in `rctld`.
-   - Active app asks `rctld` whether camera/mic should be running.
-   - New foreground app starts capture automatically.
-
-5. **Microphone viability**
-   - Add `AVCaptureAudioDataOutput`.
-   - Verify `kTCCServiceMicrophone` handling.
-   - Stream PCM as a separate `mic` track.
-   - Verify it does not affect `sys_audio`.
-
-6. **Performance**
-   - Test 5/10/15/30 fps.
-   - Measure frame drops, CPU, battery, and thermal behavior.
-   - Prefer stable lower fps over unstable high fps.
-
-## Transport choices
-
-MVP options:
-
-| Option | Pros | Cons | Recommendation |
-|---|---|---|---|
-| JPEG/MJPEG frames | simple, debuggable, easy browser rendering | bandwidth heavy, CPU heavy | good first probe |
-| H.264 inside app | efficient, aligns with screen stream | more code in injected app | product target |
-| raw frames to daemon | daemon centralizes encode | huge bandwidth over loopback, costly copies | avoid unless needed |
-| WebSocket ingest | easy session framing | more protocol work | good for browser-facing streams |
-| TCP ingest | simple from sandboxed apps | custom framing needed | good app-agent to daemon path |
-
-Recommended order:
-
-1. JPEG frame probe to prove live capture and app-switch behavior.
-2. H.264 app-side encoding once the lifecycle is proven.
-3. Later WebRTC tracks for internet/low-latency media.
-
-## Proposed module names
-
-Keep names short:
-
-- `cap/`: current still-camera agent.
-- `cam/`: future live camera/mic foreground agent, or rename/upgrade `cap/`
-  once still and live capture share one module.
-- `audio/`: system playback audio from mediaserverd.
-- `term/`: terminal concept/docs, code currently under `core/net/Term.*`.
-
-Endpoint names:
+## API
 
 ```text
-/v1/cam?on=1&pos=front
-/v1/cam?on=0
-/v1/cam_status
-/v1/mic?on=1
-/v1/mic?on=0
-/v1/mic_status
+GET /v1/cam_live?on=1&pos=back&fps=10&bitrate=1500000
+GET /v1/cam_live?on=1&pos=front&fps=10&bitrate=1500000
+GET /v1/cam_live?on=0
+GET /v1/cam_status?lease=1
+GET /v1/cam_record?on=1
+GET /v1/cam_record?on=0
+GET /v1/cam_record?discard=1
+GET /v1/cam_agent_state
 ```
 
-Ingest names:
+`cam_agent_state` is the small loopback state document consumed by injected app
+agents. `cam_status` reports `off`, `waiting_for_app`, or `live`, plus position,
+owner, frame counters and recording metadata.
+
+The browser renews a 30-second camera lease through `cam_status?lease=1`. If a
+tab closes, crashes, loses the relay, or is suspended long enough, the daemon
+stops camera and recording and resumes the screen. Capture is always off after a
+daemon restart.
+
+## Recording
+
+Recording reuses the Annex-B stream received by `rctld`; it does not create
+another VideoToolbox session. The daemon writes PAT/PMT, H.264 PES, PTS and PCR
+into:
 
 ```text
-/v1/cam_frame      diagnostic JPEG frame upload
-127.0.0.1:8081     future app-agent media ingest
+/var/mobile/Library/Caches/com.greatlove.rctl/camera-recording.ts
 ```
 
-## Status model
+The Console downloads it over the existing `files` DataChannel. MPEG-TS was
+chosen because it tolerates app-owner switches, new SPS/PPS and an interrupted
+recording without requiring a final MP4 index. A later remux/export layer may
+offer MP4 without changing capture or transport.
 
-Camera and mic status should be explicit:
+## Still photos
 
-```text
-off
-starting
-live
-reconnecting
-waiting_for_app
-unavailable
-error
-```
+`/v1/camera?pos=front|back` remains available for full-resolution JPEG stills.
+It is rejected with HTTP 409 while live camera is enabled so two foreground
+AVCapture sessions cannot race for the device.
 
-The browser should show these states instead of pretending the camera is always
-continuous across app switches.
+## Safety invariants
 
-## Safety rules
+- Never capture in SpringBoard or `rctld`.
+- Never encode or perform socket writes on an app's main thread.
+- Bound queued frames and drop under backpressure.
+- Stop on app resign, daemon loss, browser lease expiry and explicit disable.
+- Keep camera disabled by default.
+- Never log or audit frame contents.
+- Keep camera RTP independent from screen and audio transports.
 
-- Never run camera/mic capture in SpringBoard.
-- Do not block an app's main thread with frame encoding or socket writes.
-- Stop capture on app resign/background.
-- Use bounded queues and drop frames under backpressure.
-- Keep camera/mic disabled by default.
-- Keep `sys_audio`, `mic`, and `cam` as separate tracks in UI and protocol.
-- Log lifecycle/status, not private media contents.
+## Release validation
 
-## First implementation milestones
+Run `make test-camera-recorder` and `make package`, then verify on the target
+device:
 
-1. **Diagnostic live camera probe**
-   - Extend the current foreground-app agent with a diagnostic video-output path.
-   - Send low-rate JPEG frames to `rctld`.
-   - Add frame count/status logs.
-
-2. **Roaming camera session**
-   - Add daemon desired state.
-   - Active apps query/pick up desired state.
-   - Browser shows live/reconnecting/waiting status.
-
-3. **Microphone track**
-   - Add `AVCaptureAudioDataOutput` in the same foreground-agent lifecycle.
-   - Send PCM as a separate track.
-   - Verify app switching and TCC behavior.
-
-Only after these are stable should the camera path move to H.264/WebRTC.
+1. Rear and front video for 2, 10 and 30 minutes.
+2. Portrait/landscape rotation and repeated front/rear switching.
+3. App A -> App B roaming and Home-screen `waiting_for_app`.
+4. Browser close, relay loss and daemon restart fail closed within the lease.
+5. Recording across a camera switch; download and inspect with `ffprobe`/VLC.
+6. Screen recovery, terminal/files continuity, CPU, memory and thermal state.
