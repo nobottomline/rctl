@@ -24,6 +24,8 @@ Optional:
   DEVICE_NAME="iPad Air 3"
   OUT_DIR=personalized
   RCTL_RELAY_ENV=/path/to/relay.env
+  RELAY_2_URL=wss://backup.example.com/device
+  RELAY_2_ENROLL_TOKEN=<second-relay-token>
 
 Notes:
   - RELAY_URL must start with wss://.
@@ -73,6 +75,9 @@ load_env_file() {
       OUT_DIR)
         [[ -z "${OUT_DIR:-}" ]] && OUT_DIR="$value"
         ;;
+      RELAY_[2-9]_URL|RELAY_1[0-6]_URL|RELAY_[2-9]_ENROLL_TOKEN|RELAY_1[0-6]_ENROLL_TOKEN)
+        [[ -z "${!key:-}" ]] && printf -v "$key" '%s' "$value"
+        ;;
     esac
   done < "$file"
   return 0
@@ -106,6 +111,34 @@ if [[ "${#ENROLL_TOKEN}" -lt 32 ]]; then
   echo "error: ENROLL_TOKEN must be at least 32 characters" >&2
   exit 2
 fi
+
+relay_urls=("$RELAY_URL")
+relay_tokens=("$ENROLL_TOKEN")
+for ((idx = 2; idx <= 16; idx++)); do
+  url_key="RELAY_${idx}_URL"
+  token_key="RELAY_${idx}_ENROLL_TOKEN"
+  url="${!url_key:-}"
+  token="${!token_key:-}"
+  if [[ -z "$url" && -z "$token" ]]; then
+    continue
+  fi
+  if [[ "$url" != wss://* ]]; then
+    echo "error: ${url_key} must start with wss://" >&2
+    exit 2
+  fi
+  if [[ "${#token}" -lt 32 ]]; then
+    echo "error: ${token_key} must be at least 32 characters" >&2
+    exit 2
+  fi
+  for existing in "${relay_urls[@]}"; do
+    if [[ "$existing" == "$url" ]]; then
+      echo "error: duplicate relay URL: $url" >&2
+      exit 2
+    fi
+  done
+  relay_urls+=("$url")
+  relay_tokens+=("$token")
+done
 if ! command -v dpkg-deb >/dev/null 2>&1; then
   echo "error: dpkg-deb is required; install Theos packaging dependencies first" >&2
   exit 1
@@ -127,22 +160,37 @@ dpkg-deb -R "$BASE_DEB" "$WORK/pkg"
 CFG_DIR="$WORK/pkg/var/mobile/Library/Preferences"
 mkdir -p "$CFG_DIR"
 
-cat > "$CFG_DIR/com.greatlove.rctl.relay.plist" <<PLIST
+{
+cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>Enabled</key>
 	<true/>
-	<key>RelayURL</key>
-	<string>$(xml_escape "$RELAY_URL")</string>
-	<key>EnrollToken</key>
-	<string>$(xml_escape "$ENROLL_TOKEN")</string>
 	<key>DeviceName</key>
 	<string>$(xml_escape "$DEVICE_NAME")</string>
+	<key>Relays</key>
+	<array>
+PLIST
+for i in "${!relay_urls[@]}"; do
+cat <<PLIST
+		<dict>
+			<key>Enabled</key>
+			<true/>
+			<key>RelayURL</key>
+			<string>$(xml_escape "${relay_urls[$i]}")</string>
+			<key>EnrollToken</key>
+			<string>$(xml_escape "${relay_tokens[$i]}")</string>
+		</dict>
+PLIST
+done
+cat <<'PLIST'
+	</array>
 </dict>
 </plist>
 PLIST
+} > "$CFG_DIR/com.greatlove.rctl.relay.plist"
 chmod 0644 "$CFG_DIR/com.greatlove.rctl.relay.plist"
 
 BASE_NAME="$(basename "$BASE_DEB" .deb)"

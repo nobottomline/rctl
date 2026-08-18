@@ -42,6 +42,8 @@ static pthread_cond_t g_supervisor_cond = PTHREAD_COND_INITIALIZER;
 static BOOL g_supervisor_started = NO;
 static BOOL g_supervisor_stop = NO;
 static void *relay_supervisor_main(void *arg);
+static void relay_webrtc_send_routed(void *ctx, const char *json);
+static NSMutableArray *g_relay_clients;
 
 @interface RCTLRelayClient : NSObject
 @property(nonatomic, strong) NSURLSession *session;
@@ -53,6 +55,8 @@ static void *relay_supervisor_main(void *arg);
 @property(nonatomic, strong) NSMutableDictionary<NSString *, id> *streamSocketTasks;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, id> *termTasks;
 @property(nonatomic, copy) NSString *deviceID;
+@property(nonatomic, copy) NSString *relayURL;
+@property(nonatomic, copy) NSString *routePrefix;
 @property(nonatomic, assign) BOOL running;
 @property(nonatomic, assign) BOOL reconnectScheduled;
 @property(nonatomic, assign) NSInteger reconnectDelay;
@@ -62,29 +66,28 @@ static void *relay_supervisor_main(void *arg);
 @property(nonatomic, assign) uint32_t wakeAssertion;
 @property(nonatomic, assign) NSTimeInterval wakeAssertionAt;
 - (void)sendRawJSON:(NSString *)json;
+- (void)sendRoutedSignal:(NSString *)json;
+- (instancetype)initWithConfig:(NSDictionary *)config deviceID:(NSString *)deviceID;
 @end
 
 @implementation RCTLRelayClient
 
-+ (instancetype)shared {
-    static RCTLRelayClient *client;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        client = [[RCTLRelayClient alloc] init];
-    });
-    return client;
-}
-
-- (instancetype)init {
+- (instancetype)initWithConfig:(NSDictionary *)config deviceID:(NSString *)deviceID {
     self = [super init];
     if (!self) return nil;
-    _queue = dispatch_queue_create("com.greatlove.rctl.relay", DISPATCH_QUEUE_SERIAL);
+    NSString *url = [config[@"RelayURL"] isKindOfClass:[NSString class]] ? config[@"RelayURL"] : @"";
+    NSString *label = [NSString stringWithFormat:@"com.greatlove.rctl.relay.%@", relay_random_hex(4)];
+    _queue = dispatch_queue_create(label.UTF8String, DISPATCH_QUEUE_SERIAL);
     _streamIDs = [NSMutableDictionary dictionary];
     _streamTasks = [NSMutableDictionary dictionary];
     _streamSocketTasks = [NSMutableDictionary dictionary];
     _termTasks = [NSMutableDictionary dictionary];
     _reconnectDelay = 2;
     _reconnectScheduled = NO;
+    _config = [config mutableCopy];
+    _relayURL = [url copy];
+    _deviceID = [deviceID copy];
+    _routePrefix = [NSString stringWithFormat:@"%@:", relay_random_hex(8)];
     return self;
 }
 
@@ -102,9 +105,32 @@ static void *relay_supervisor_main(void *arg);
         relay_log(@"disabled: config plist missing");
         return nil;
     }
-    NSMutableDictionary *dict = [raw mutableCopy];
-    if (![dict[@"Enabled"] respondsToSelector:@selector(boolValue)] || ![dict[@"Enabled"] boolValue]) {
+    if (![raw[@"Enabled"] respondsToSelector:@selector(boolValue)] || ![raw[@"Enabled"] boolValue]) {
         relay_log(@"disabled: Enabled=false");
+        return nil;
+    }
+    NSDictionary *selected = nil;
+    NSArray *relays = [raw[@"Relays"] isKindOfClass:[NSArray class]] ? raw[@"Relays"] : nil;
+    if (relays) {
+        for (id item in relays) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSString *url = [item[@"RelayURL"] isKindOfClass:[NSString class]] ? item[@"RelayURL"] : nil;
+            if ([url isEqualToString:self.relayURL]) { selected = item; break; }
+        }
+    } else if ([raw[@"RelayURL"] isEqualToString:self.relayURL]) {
+        selected = raw;
+    }
+    if (!selected) {
+        relay_log(@"disabled: relay entry removed from config");
+        return nil;
+    }
+    NSMutableDictionary *dict = [selected mutableCopy];
+    if (![dict[@"DeviceName"] isKindOfClass:[NSString class]] &&
+        [raw[@"DeviceName"] isKindOfClass:[NSString class]]) {
+        dict[@"DeviceName"] = raw[@"DeviceName"];
+    }
+    if ([dict[@"Enabled"] respondsToSelector:@selector(boolValue)] && ![dict[@"Enabled"] boolValue]) {
+        relay_log(@"disabled: relay entry Enabled=false");
         return nil;
     }
     NSString *url = [dict[@"RelayURL"] isKindOfClass:[NSString class]] ? dict[@"RelayURL"] : nil;
@@ -117,13 +143,6 @@ static void *relay_supervisor_main(void *arg);
         relay_log(@"disabled: no usable DeviceSecret or EnrollToken");
         return nil;
     }
-    NSString *deviceID = [dict[@"DeviceID"] isKindOfClass:[NSString class]] ? dict[@"DeviceID"] : nil;
-    if (deviceID.length < 16) {
-        deviceID = relay_random_hex(16);
-        dict[@"DeviceID"] = deviceID;
-        [self saveConfig:dict];
-    }
-    self.deviceID = deviceID;
     return dict;
 }
 
@@ -135,10 +154,29 @@ static void *relay_supervisor_main(void *arg);
 }
 
 - (void)saveConfig:(NSDictionary *)dict {
-    NSString *dir = [RCTL_RELAY_CONFIG_PLIST stringByDeletingLastPathComponent];
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    if (![dict writeToFile:RCTL_RELAY_CONFIG_PLIST atomically:YES]) {
-        relay_log(@"failed to save relay config");
+    @synchronized ([RCTLRelayClient class]) {
+        NSDictionary *existing = [NSDictionary dictionaryWithContentsOfFile:RCTL_RELAY_CONFIG_PLIST];
+        NSMutableDictionary *root = [existing isKindOfClass:[NSDictionary class]] ? [existing mutableCopy] : [NSMutableDictionary dictionary];
+        NSArray *relays = [root[@"Relays"] isKindOfClass:[NSArray class]] ? root[@"Relays"] : nil;
+        if (relays) {
+            NSMutableArray *updated = [relays mutableCopy];
+            for (NSUInteger i = 0; i < updated.count; i++) {
+                NSDictionary *item = [updated[i] isKindOfClass:[NSDictionary class]] ? updated[i] : nil;
+                if ([item[@"RelayURL"] isEqualToString:self.relayURL]) {
+                    updated[i] = dict;
+                    break;
+                }
+            }
+            root[@"Relays"] = updated;
+        } else {
+            [root addEntriesFromDictionary:dict];
+        }
+        root[@"DeviceID"] = self.deviceID ?: @"";
+        NSString *dir = [RCTL_RELAY_CONFIG_PLIST stringByDeletingLastPathComponent];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        if (![root writeToFile:RCTL_RELAY_CONFIG_PLIST atomically:YES]) {
+            relay_log(@"failed to save relay config");
+        }
     }
 }
 
@@ -299,8 +337,21 @@ static void *relay_supervisor_main(void *arg);
     } else if ([type isEqualToString:@"ping"]) {
         [self sendJSON:@{@"type": @"pong"}];
     } else if ([type isEqualToString:@"webrtc_signal"]) {
-        NSString *raw = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        if (raw) rctl_webrtc_handle_signal([raw UTF8String]);
+        NSString *remoteID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : nil;
+        if (!remoteID.length) return;
+        NSString *internalID = [self.routePrefix stringByAppendingString:remoteID];
+        NSMutableDictionary *routed = [dict mutableCopy];
+        routed[@"id"] = internalID;
+        NSData *routedData = [NSJSONSerialization dataWithJSONObject:routed options:0 error:nil];
+        NSString *raw = [[NSString alloc] initWithData:routedData encoding:NSUTF8StringEncoding];
+        if ([dict[@"kind"] isEqualToString:@"open"]) {
+            rctl_webrtc_route_session(internalID.UTF8String, relay_webrtc_send_routed,
+                                      (__bridge void *)self);
+        }
+        if (raw) rctl_webrtc_handle_signal(raw.UTF8String);
+        if ([dict[@"kind"] isEqualToString:@"close"]) {
+            rctl_webrtc_unroute_session(internalID.UTF8String);
+        }
     } else if ([type isEqualToString:@"http_request"]) {
         [self handleHTTPRequest:dict];
     } else if ([type isEqualToString:@"stream_open"]) {
@@ -681,6 +732,20 @@ didReceiveResponse:(NSURLResponse *)response
     });
 }
 
+// WebRTC session ids are namespaced inside rctld so two independent relay
+// servers cannot collide. Strip this client's private prefix before returning
+// signaling to the relay that owns the browser session.
+- (void)sendRoutedSignal:(NSString *)json API_AVAILABLE(ios(13.0)) {
+    NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+    NSMutableDictionary *dict = [[NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil] mutableCopy];
+    NSString *internalID = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : nil;
+    if (!internalID.length || ![internalID hasPrefix:self.routePrefix]) return;
+    dict[@"id"] = [internalID substringFromIndex:self.routePrefix.length];
+    NSData *out = [NSJSONSerialization dataWithJSONObject:dict options:0 error:nil];
+    NSString *wire = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];
+    if (wire.length) [self sendRawJSON:wire];
+}
+
 - (void)sendJSON:(NSDictionary *)dict completion:(void (^)(void))completion API_AVAILABLE(ios(13.0)) {
     [self sendJSON:dict toWebSocketTask:self.task completion:completion];
 }
@@ -761,7 +826,7 @@ didReceiveResponse:(NSURLResponse *)response
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&g_supervisor_thread, &attr, relay_supervisor_main, (__bridge void *)self) != 0) {
+    if (pthread_create(&g_supervisor_thread, &attr, relay_supervisor_main, NULL) != 0) {
         pthread_mutex_lock(&g_supervisor_mutex);
         g_supervisor_started = NO;
         pthread_mutex_unlock(&g_supervisor_mutex);
@@ -861,7 +926,7 @@ didReceiveResponse:(NSURLResponse *)response
 @end
 
 static void *relay_supervisor_main(void *arg) {
-    RCTLRelayClient *client = (__bridge RCTLRelayClient *)arg;
+    (void)arg;
     pthread_setname_np("com.greatlove.rctl.relay.supervisor");
     while (1) {
         struct timespec rel = { .tv_sec = 12, .tv_nsec = 0 };
@@ -871,19 +936,74 @@ static void *relay_supervisor_main(void *arg) {
         pthread_mutex_unlock(&g_supervisor_mutex);
         if (stop) break;
         @autoreleasepool {
-            [client supervisorWake];
+            NSArray *clients = nil;
+            @synchronized ([RCTLRelayClient class]) {
+                clients = [g_relay_clients copy];
+            }
+            for (RCTLRelayClient *client in clients) [client supervisorWake];
         }
     }
     return NULL;
 }
 
-// libdatachannel produces a signaling envelope; ship it over the device socket.
-static void relay_webrtc_send(const char *json) {
-    if (!json) return;
-    [[RCTLRelayClient shared] sendRawJSON:[NSString stringWithUTF8String:json]];
+static void relay_webrtc_send_routed(void *ctx, const char *json) {
+    if (!ctx || !json) return;
+    RCTLRelayClient *client = (__bridge RCTLRelayClient *)ctx;
+    [client sendRoutedSignal:[NSString stringWithUTF8String:json]];
 }
 
 void rctl_relay_start(void) {
-    rctl_webrtc_set_sender(relay_webrtc_send);
-    [[RCTLRelayClient shared] start];
+    NSDictionary *raw = [NSDictionary dictionaryWithContentsOfFile:RCTL_RELAY_CONFIG_PLIST];
+    if (![raw isKindOfClass:[NSDictionary class]] ||
+        ![raw[@"Enabled"] respondsToSelector:@selector(boolValue)] || ![raw[@"Enabled"] boolValue]) {
+        relay_log(@"disabled: config plist missing or Enabled=false");
+        return;
+    }
+
+    NSMutableDictionary *root = [raw mutableCopy];
+    NSString *deviceID = [root[@"DeviceID"] isKindOfClass:[NSString class]] ? root[@"DeviceID"] : nil;
+    if (deviceID.length < 16) {
+        deviceID = relay_random_hex(16);
+        root[@"DeviceID"] = deviceID;
+        if (![root writeToFile:RCTL_RELAY_CONFIG_PLIST atomically:YES]) {
+            relay_log(@"disabled: failed to persist DeviceID");
+            return;
+        }
+    }
+
+    NSArray *configured = [root[@"Relays"] isKindOfClass:[NSArray class]] ? root[@"Relays"] : nil;
+    if (!configured) configured = @[root]; // legacy single-relay plist
+    NSMutableArray *clients = [NSMutableArray array];
+    NSMutableSet *urls = [NSMutableSet set];
+    for (id item in configured) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSMutableDictionary *entry = [item mutableCopy];
+        if (![entry[@"DeviceName"] isKindOfClass:[NSString class]] &&
+            [root[@"DeviceName"] isKindOfClass:[NSString class]]) {
+            entry[@"DeviceName"] = root[@"DeviceName"];
+        }
+        if ([entry[@"Enabled"] respondsToSelector:@selector(boolValue)] && ![entry[@"Enabled"] boolValue]) continue;
+        NSString *url = [entry[@"RelayURL"] isKindOfClass:[NSString class]] ? entry[@"RelayURL"] : nil;
+        NSString *secret = [entry[@"DeviceSecret"] isKindOfClass:[NSString class]] ? entry[@"DeviceSecret"] : nil;
+        NSString *enroll = [entry[@"EnrollToken"] isKindOfClass:[NSString class]] ? entry[@"EnrollToken"] : nil;
+        if (![url hasPrefix:@"wss://"] || (secret.length < 32 && enroll.length < 32) || [urls containsObject:url]) {
+            relay_log(@"skipping invalid or duplicate relay entry");
+            continue;
+        }
+        [urls addObject:url];
+        RCTLRelayClient *client = [[RCTLRelayClient alloc] initWithConfig:entry deviceID:deviceID];
+        if (client) [clients addObject:client];
+    }
+    if (!clients.count) {
+        relay_log(@"disabled: no usable relay entries");
+        return;
+    }
+    @synchronized ([RCTLRelayClient class]) {
+        g_relay_clients = clients;
+    }
+    // Every relay session installs an explicit namespaced sender route before the
+    // bridge creates its PeerConnection. There is intentionally no global sender.
+    rctl_webrtc_set_sender(NULL);
+    relay_log([NSString stringWithFormat:@"starting %lu relay connection(s)", (unsigned long)clients.count]);
+    for (RCTLRelayClient *client in clients) [client start];
 }

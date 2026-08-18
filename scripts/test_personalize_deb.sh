@@ -29,6 +29,7 @@ OUT="${WORK}/out"
 EXTRACTED="${WORK}/extracted"
 BASE_DEB="${WORK}/com.greatlove.rctl_0.0.0-test_iphoneos-arm.deb"
 TOKEN="enroll_test_1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJK"
+TOKEN2="enroll_test_ABCDEFGHIJKLMNOPQRSTUVWXYZ9876543210_secondary"
 RELAY_URL="wss://rctl.example.test/device?name=ipad&mode=relay"
 DEVICE_NAME="iPad <Air> & Friends"
 PLIST="var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist"
@@ -100,5 +101,26 @@ generated_from_env="$(
 )"
 dpkg-deb -R "${generated_from_env}" "${WORK}/from-env"
 grep -F '<string>iPad Air 3</string>' "${WORK}/from-env/${PLIST}" >/dev/null || fail "DEVICE_NAME with spaces was not parsed from relay.env"
+
+say "checking multiple independent relay entries"
+MULTI_ENV="${WORK}/relay-multi.env"
+cat >"${MULTI_ENV}" <<ENV
+RELAY_URL=wss://primary.example.test/device
+ENROLL_TOKEN=${TOKEN}
+RELAY_2_URL=wss://backup.example.test/device
+RELAY_2_ENROLL_TOKEN=${TOKEN2}
+DEVICE_NAME=Multi Relay iPad
+ENV
+generated_multi="$(
+  RCTL_RELAY_ENV="${MULTI_ENV}" \
+  OUT_DIR="${WORK}/out-multi" \
+  "${ROOT}/scripts/personalize_deb.sh" "${BASE_DEB}"
+)"
+dpkg-deb -R "${generated_multi}" "${WORK}/multi"
+multi_plist="${WORK}/multi/${PLIST}"
+[[ "$(grep -c '<key>RelayURL</key>' "${multi_plist}")" == "2" ]] || fail "multi-relay plist should contain two relay entries"
+grep -F '<string>wss://primary.example.test/device</string>' "${multi_plist}" >/dev/null || fail "primary relay missing"
+grep -F '<string>wss://backup.example.test/device</string>' "${multi_plist}" >/dev/null || fail "secondary relay missing"
+grep -F "<string>${TOKEN2}</string>" "${multi_plist}" >/dev/null || fail "secondary token missing"
 
 say "personalize deb test passed"
