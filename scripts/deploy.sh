@@ -50,7 +50,10 @@ probe_sb_ipc() {
 }
 
 # 1) Remove any existing install (clean respring clears the codesign cache).
-if [ -f "$RELAY_PREF" ] && grep -aq "DeviceSecret" "$RELAY_PREF"; then
+# Foundation may rewrite this plist in binary form after enrollment. Do not
+# inspect it with grep: binary plists can contain a valid DeviceSecret without a
+# searchable plaintext key. Preserve every non-empty dedicated relay config.
+if [ -s "$RELAY_PREF" ]; then
   cp "$RELAY_PREF" "$RELAY_PREF_BACKUP" 2>/dev/null || true
   chmod 0600 "$RELAY_PREF_BACKUP" 2>/dev/null || true
 fi
@@ -63,8 +66,10 @@ if dpkg -l | grep -q "$PKG"; then dpkg -r "$PKG" >/dev/null 2>&1 || true; sleep 
 BEFORE=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || true)
 CONN0=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || true)
 dpkg -i /tmp/rctl.deb 2>&1 | grep -iE "Setting up|error" || true
-if [ -f "$RELAY_PREF_BACKUP" ] && grep -aq "DeviceSecret" "$RELAY_PREF_BACKUP"; then
-  if [ ! -f "$RELAY_PREF" ] || ! grep -aq "DeviceSecret" "$RELAY_PREF"; then
+if [ -s "$RELAY_PREF_BACKUP" ]; then
+  # A personalized package may intentionally install a replacement config. It
+  # wins when non-empty; a public package installs none, so restore the backup.
+  if [ ! -s "$RELAY_PREF" ]; then
     cp "$RELAY_PREF_BACKUP" "$RELAY_PREF" 2>/dev/null || true
     chown mobile:mobile "$RELAY_PREF" 2>/dev/null || chown mobile:501 "$RELAY_PREF" 2>/dev/null || true
     chmod 0600 "$RELAY_PREF" 2>/dev/null || true
