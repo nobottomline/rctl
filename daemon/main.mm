@@ -1887,8 +1887,9 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog("http listening on :8080");
-        if (!rctl_camera_ingest_start()) dlog("camera ingest start FAILED");
         rctl_camera_set_expired_cb(on_camera_lease_expired);
+        if (!rctl_camera_ingest_start()) dlog("camera ingest start FAILED");
+        notify_post("com.greatlove.rctl.cam.sync"); // fail closed after a daemon restart
         audio_capture_set(false, NULL, 0);
 
         pthread_t t;

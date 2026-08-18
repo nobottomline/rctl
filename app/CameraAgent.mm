@@ -16,6 +16,7 @@
 
 static dispatch_queue_t gCameraQueue;
 static dispatch_queue_t gCameraNetworkQueue;
+static dispatch_source_t gCameraStateTimer;
 static id gCameraSession;
 static id gCameraOutput;
 static id gCameraDelegate;
@@ -27,7 +28,7 @@ static int gCameraBitrate = 1500000;
 static int gCameraPosition = 1;
 static uint64_t gCameraGeneration;
 static int64_t gCameraLastEncodedPTS;
-static BOOL gCameraRunning;
+static _Atomic bool gCameraRunning;
 static _Atomic bool gCameraSyncInFlight;
 static int gCameraSocket = -1;
 static uint64_t gCameraSocketGeneration;
@@ -75,6 +76,8 @@ static BOOL camera_send_message(uint8_t type, uint16_t flags, uint64_t pts_us,
             close(fd);
             return NO;
         }
+        struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         gCameraSocket = fd;
         gCameraSocketGeneration = generation;
 
@@ -128,7 +131,7 @@ static void camera_encoded(const uint8_t *data, size_t length, bool keyframe,
 - (void)captureOutput:(id)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(id)connection {
     (void)output;
     (void)connection;
-    if (!gCameraRunning || !sampleBuffer) return;
+    if (!atomic_load(&gCameraRunning) || !sampleBuffer) return;
     CVPixelBufferRef pixel = CMSampleBufferGetImageBuffer(sampleBuffer);
     if (!pixel) return;
     int width = (int)CVPixelBufferGetWidth(pixel);
@@ -190,7 +193,7 @@ static void camera_stop_locked(void) {
     gCameraSession = nil;
     gCameraOutput = nil;
     gCameraDelegate = nil;
-    gCameraRunning = NO;
+    atomic_store(&gCameraRunning, false);
     gCameraLastEncodedPTS = 0;
     rctl_camera_tcc_set_active(NO);
     dispatch_async(gCameraNetworkQueue, ^{ camera_close_socket(); });
@@ -210,6 +213,19 @@ static BOOL camera_start_locked(void) {
 
         id device = camera_device_for_position(deviceClass, gCameraPosition);
         if (!device) break;
+        NSError *configurationError = nil;
+        BOOL locked = ((BOOL (*)(id, SEL, NSError **))objc_msgSend)(device,
+            NSSelectorFromString(@"lockForConfiguration:"), &configurationError);
+        if (locked) {
+            CMTime frameDuration = CMTimeMake(1, gCameraFPS > 0 ? gCameraFPS : 10);
+            if ([device respondsToSelector:NSSelectorFromString(@"setActiveVideoMinFrameDuration:")])
+                ((void (*)(id, SEL, CMTime))objc_msgSend)(device,
+                    NSSelectorFromString(@"setActiveVideoMinFrameDuration:"), frameDuration);
+            if ([device respondsToSelector:NSSelectorFromString(@"setActiveVideoMaxFrameDuration:")])
+                ((void (*)(id, SEL, CMTime))objc_msgSend)(device,
+                    NSSelectorFromString(@"setActiveVideoMaxFrameDuration:"), frameDuration);
+            ((void (*)(id, SEL))objc_msgSend)(device, NSSelectorFromString(@"unlockForConfiguration"));
+        }
         NSError *error = nil;
         id input = ((id (*)(id, SEL, id, NSError **))objc_msgSend)((id)inputClass,
             NSSelectorFromString(@"deviceInputWithDevice:error:"), device, &error);
@@ -237,7 +253,7 @@ static BOOL camera_start_locked(void) {
         gCameraSession = session;
         gCameraOutput = output;
         camera_configure_connection(output);
-        gCameraRunning = YES;
+        atomic_store(&gCameraRunning, true);
         ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"startRunning"));
         ready = ((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"));
     } while (0);
@@ -257,6 +273,9 @@ static NSDictionary *camera_fetch_state(void) {
         close(fd);
         return nil;
     }
+    struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     const char *request = "GET /v1/cam_agent_state HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
     if (!camera_write_full(fd, request, strlen(request))) {
         close(fd);
@@ -295,10 +314,10 @@ void rctl_camera_agent_sync(void) {
             BOOL changed = generation != gCameraGeneration || position != gCameraPosition ||
                            fps != gCameraFPS || bitrate != gCameraBitrate;
             if (!enabled) {
-                if (gCameraRunning) camera_stop_locked();
+                if (atomic_load(&gCameraRunning)) camera_stop_locked();
                 return;
             }
-            if (!gCameraRunning || changed) {
+            if (!atomic_load(&gCameraRunning) || changed) {
                 gCameraGeneration = generation;
                 gCameraPosition = position;
                 gCameraFPS = fps > 0 ? fps : 10;
@@ -334,12 +353,12 @@ void rctl_camera_agent_initialize(void) {
         (void)note; rctl_camera_agent_sync();
     }];
     [notifications addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
-        (void)note; dispatch_async(gCameraQueue, ^{ if (gCameraRunning) camera_stop_locked(); });
+        (void)note; dispatch_async(gCameraQueue, ^{ if (atomic_load(&gCameraRunning)) camera_stop_locked(); });
     }];
     [notifications addObserverForName:UIApplicationDidChangeStatusBarOrientationNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
         (void)note;
         dispatch_async(gCameraQueue, ^{
-            if (gCameraRunning) camera_start_locked();
+            if (atomic_load(&gCameraRunning)) camera_start_locked();
         });
     }];
 
@@ -348,5 +367,14 @@ void rctl_camera_agent_initialize(void) {
         CFSTR("com.greatlove.rctl.cam.sync"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     CFNotificationCenterAddObserver(darwin, NULL, camera_darwin_keyframe,
         CFSTR("com.greatlove.rctl.cam.keyframe"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    gCameraStateTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    dispatch_source_set_timer(gCameraStateTimer,
+        dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
+        500 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(gCameraStateTimer, ^{
+        if (atomic_load(&gCameraRunning)) rctl_camera_agent_sync();
+    });
+    dispatch_resume(gCameraStateTimer);
     rctl_camera_agent_sync();
 }
