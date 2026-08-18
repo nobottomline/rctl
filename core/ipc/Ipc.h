@@ -29,7 +29,7 @@ enum {
     RCTL_MSG_OPENURL= 0x17,  // daemon->SB: open this URL
     RCTL_MSG_QUERY  = 0x18,  // daemon->SB: [4B BE reqid][1B qtype][payload], expects a REPLY
     RCTL_MSG_REPLY  = 0x19,  // SB->daemon: [4B BE reqid][payload]
-    RCTL_MSG_ACTIVE = 0x1A,  // daemon->SB: [1B active] run capture+keep-awake (1) or idle/sleep (0)
+    RCTL_MSG_ACTIVE = 0x1A,  // daemon->SB: [1B screen capture][1B keep-awake]; legacy 1B sets both
     RCTL_MSG_FX     = 0x1B,  // daemon->SB: [1B subtype][data] fun FX (1=say,2=sound,3=flash,4=banner)
     RCTL_MSG_BITRATE= 0x1C,  // daemon->SB: int32 live encode bitrate (no session restart)
     RCTL_MSG_KEYFRAME=0x1D,  // daemon->SB: force the next encoded frame to an IDR

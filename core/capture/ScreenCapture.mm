@@ -19,6 +19,9 @@ typedef void (*CARenderServerRenderDisplay_f)(uint32_t client, CFStringRef displ
 
 static CARenderServerRenderDisplay_f gRender = NULL;
 static CFStringRef gDisplayName = NULL;
+static uint32_t gPowerAssertionID = 0;
+static bool gIdleTimerStateSaved = false;
+static bool gPreviousIdleTimerDisabled = false;
 
 // Enumerate CADisplay displays and return the first usable name (usually "LCD").
 static NSString *pick_main_display_name(void) {
@@ -44,37 +47,61 @@ static void ensure_init(void) {
     });
 }
 
-static void set_idle_timer_disabled_on_main(void) {
+static void set_idle_timer_disabled_on_main(bool disabled) {
     UIApplication *app = [UIApplication sharedApplication];
     if (!app) return;
-    app.idleTimerDisabled = YES;
+    if (disabled) {
+        if (!gIdleTimerStateSaved) {
+            gPreviousIdleTimerDisabled = app.idleTimerDisabled;
+            gIdleTimerStateSaved = true;
+        }
+        app.idleTimerDisabled = YES;
+    } else if (gIdleTimerStateSaved) {
+        app.idleTimerDisabled = gPreviousIdleTimerDisabled;
+        gIdleTimerStateSaved = false;
+    }
 }
 
-static void set_idle_timer_disabled(void) {
+static void set_idle_timer_disabled(bool disabled) {
     if ([NSThread isMainThread]) {
-        set_idle_timer_disabled_on_main();
+        set_idle_timer_disabled_on_main(disabled);
     } else {
-        dispatch_async(dispatch_get_main_queue(), ^{ set_idle_timer_disabled_on_main(); });
+        dispatch_async(dispatch_get_main_queue(), ^{ set_idle_timer_disabled_on_main(disabled); });
     }
 }
 
 void rctl_capture_wake_display(void) {
-    set_idle_timer_disabled();
+    set_idle_timer_disabled(true);
 }
 
 void rctl_capture_undim(void) {
-    set_idle_timer_disabled();
+    set_idle_timer_disabled(true);
 }
 
-void rctl_capture_keep_awake(void) {
-    static uint32_t aid = 0;
-    if (aid) return; // already holding an assertion
+void rctl_capture_set_keep_awake(bool awake) {
     typedef int (*PMAssert_f)(CFStringRef type, uint32_t level, CFStringRef name, uint32_t *out);
+    typedef int (*PMRelease_f)(uint32_t assertion);
     dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
-    PMAssert_f f = (PMAssert_f)dlsym(RTLD_DEFAULT, "IOPMAssertionCreateWithName");
-    if (f) {
-        int r = f(CFSTR("PreventUserIdleDisplaySleep"), 255, CFSTR("rctl"), &aid);
-        fprintf(stderr, "[capture] keep_awake r=%d id=%u\n", r, aid);
+    if (awake) {
+        set_idle_timer_disabled(true);
+        if (gPowerAssertionID) return;
+        PMAssert_f create = (PMAssert_f)dlsym(RTLD_DEFAULT, "IOPMAssertionCreateWithName");
+        if (create) {
+            uint32_t assertion = 0;
+            int result = create(CFSTR("PreventUserIdleDisplaySleep"), 255,
+                                CFSTR("rctl remote session"), &assertion);
+            if (result == 0) gPowerAssertionID = assertion;
+            fprintf(stderr, "[capture] keep-awake acquire result=%d id=%u\n",
+                    result, assertion);
+        }
+    } else {
+        set_idle_timer_disabled(false);
+        if (!gPowerAssertionID) return;
+        PMRelease_f release = (PMRelease_f)dlsym(RTLD_DEFAULT, "IOPMAssertionRelease");
+        int result = release ? release(gPowerAssertionID) : -1;
+        fprintf(stderr, "[capture] keep-awake release result=%d id=%u\n",
+                result, gPowerAssertionID);
+        gPowerAssertionID = 0;
     }
 }
 

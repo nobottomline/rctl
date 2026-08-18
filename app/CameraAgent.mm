@@ -13,6 +13,7 @@
 #include <netinet/in.h>
 #include <stdatomic.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 static dispatch_queue_t gCameraQueue;
@@ -34,10 +35,38 @@ static _Atomic bool gCameraSyncInFlight;
 static int gCameraSocket = -1;
 static uint64_t gCameraSocketGeneration;
 static _Atomic int gCameraPendingFrames;
+static _Atomic uint64_t gCameraLastSampleMs;
+static _Atomic uint64_t gCameraLastEncodedMs;
+static _Atomic uint64_t gCameraLastDeliveredMs;
 static rctl_camera_tcc_callback gCameraTCCCallback;
+static BOOL gCameraIdleTimerStateSaved;
+static BOOL gCameraPreviousIdleTimerDisabled;
 
 static void camera_set_tcc_active(BOOL active) {
     if (gCameraTCCCallback) gCameraTCCCallback(active);
+}
+
+static void camera_set_idle_timer_disabled(BOOL disabled) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIApplication *application = [UIApplication sharedApplication];
+        if (!application) return;
+        if (disabled) {
+            if (!gCameraIdleTimerStateSaved) {
+                gCameraPreviousIdleTimerDisabled = application.idleTimerDisabled;
+                gCameraIdleTimerStateSaved = YES;
+            }
+            application.idleTimerDisabled = YES;
+        } else if (gCameraIdleTimerStateSaved) {
+            application.idleTimerDisabled = gCameraPreviousIdleTimerDisabled;
+            gCameraIdleTimerStateSaved = NO;
+        }
+    });
+}
+
+static uint64_t camera_now_ms(void) {
+    struct timespec time;
+    clock_gettime(CLOCK_MONOTONIC, &time);
+    return (uint64_t)time.tv_sec * 1000ULL + (uint64_t)time.tv_nsec / 1000000ULL;
 }
 
 static uint64_t camera_hton64(uint64_t value) {
@@ -121,11 +150,13 @@ static void camera_encoded(const uint8_t *data, size_t length, bool keyframe,
         return;
     }
     NSData *copy = [NSData dataWithBytes:data length:length];
+    atomic_store(&gCameraLastEncodedMs, camera_now_ms());
     dispatch_async(gCameraNetworkQueue, ^{
-        camera_send_message(RCTL_CAMERA_MSG_VIDEO,
+        if (camera_send_message(RCTL_CAMERA_MSG_VIDEO,
                             keyframe ? RCTL_CAMERA_FLAG_KEYFRAME : 0,
                             pts_us > 0 ? (uint64_t)pts_us : 0, generation,
-                            copy.bytes, (uint32_t)copy.length);
+                            copy.bytes, (uint32_t)copy.length))
+            atomic_store(&gCameraLastDeliveredMs, camera_now_ms());
         atomic_fetch_sub(&gCameraPendingFrames, 1);
     });
 }
@@ -137,6 +168,7 @@ static void camera_capture_output(id self, SEL command, id output,
     (void)output;
     (void)connection;
     if (!atomic_load(&gCameraRunning) || !sampleBuffer) return;
+    atomic_store(&gCameraLastSampleMs, camera_now_ms());
     CVPixelBufferRef pixel = CMSampleBufferGetImageBuffer(sampleBuffer);
     if (!pixel) return;
     int width = (int)CVPixelBufferGetWidth(pixel);
@@ -206,6 +238,7 @@ static void camera_configure_connection(id output) {
 }
 
 static void camera_stop_locked(void) {
+    atomic_store(&gCameraRunning, false);
     if (gCameraSession && [gCameraSession respondsToSelector:NSSelectorFromString(@"stopRunning")])
         ((void (*)(id, SEL))objc_msgSend)(gCameraSession, NSSelectorFromString(@"stopRunning"));
     if (gCameraOutput && [gCameraOutput respondsToSelector:NSSelectorFromString(@"setSampleBufferDelegate:queue:")])
@@ -216,9 +249,12 @@ static void camera_stop_locked(void) {
     gCameraSession = nil;
     gCameraOutput = nil;
     gCameraDelegate = nil;
-    atomic_store(&gCameraRunning, false);
     gCameraLastEncodedPTS = 0;
+    atomic_store(&gCameraLastSampleMs, 0);
+    atomic_store(&gCameraLastEncodedMs, 0);
+    atomic_store(&gCameraLastDeliveredMs, 0);
     camera_set_tcc_active(NO);
+    camera_set_idle_timer_disabled(NO);
     dispatch_async(gCameraNetworkQueue, ^{ camera_close_socket(); });
 }
 
@@ -277,7 +313,12 @@ static BOOL camera_start_locked(void) {
         gCameraSession = session;
         gCameraOutput = output;
         camera_configure_connection(output);
+        uint64_t now = camera_now_ms();
+        atomic_store(&gCameraLastSampleMs, now);
+        atomic_store(&gCameraLastEncodedMs, now);
+        atomic_store(&gCameraLastDeliveredMs, now);
         atomic_store(&gCameraRunning, true);
+        camera_set_idle_timer_disabled(YES);
         ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"startRunning"));
         ready = ((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"));
     } while (0);
@@ -337,6 +378,25 @@ void rctl_camera_agent_sync(void) {
             int bitrate = [state[@"bitrate"] intValue];
             BOOL changed = generation != gCameraGeneration || position != gCameraPosition ||
                            fps != gCameraFPS || bitrate != gCameraBitrate;
+            if (atomic_load(&gCameraRunning)) {
+                BOOL sessionRunning = gCameraSession &&
+                    ((BOOL (*)(id, SEL))objc_msgSend)(gCameraSession,
+                        NSSelectorFromString(@"isRunning"));
+                uint64_t now = camera_now_ms();
+                uint64_t sample = atomic_load(&gCameraLastSampleMs);
+                uint64_t encoded = atomic_load(&gCameraLastEncodedMs);
+                uint64_t delivered = atomic_load(&gCameraLastDeliveredMs);
+                BOOL stalled = !sessionRunning || !sample || !encoded || !delivered ||
+                    now - sample > 4000 || now - encoded > 5000 || now - delivered > 7000;
+                if (stalled) {
+                    NSLog(@"[rctl-camera] restarting stalled pipeline running=%d sample=%llums encoded=%llums delivered=%llums",
+                          sessionRunning,
+                          (unsigned long long)(sample ? now - sample : 0),
+                          (unsigned long long)(encoded ? now - encoded : 0),
+                          (unsigned long long)(delivered ? now - delivered : 0));
+                    camera_stop_locked();
+                }
+            }
             if (!enabled) {
                 if (atomic_load(&gCameraRunning)) camera_stop_locked();
                 return;

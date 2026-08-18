@@ -2,6 +2,7 @@
 
 #import <IOSurface/IOSurfaceRef.h>
 #import <stddef.h>
+#import <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,8 +19,9 @@ void rctl_capture_render(IOSurfaceRef dst);
 // Undim / wake the display so the render server composites a frame.
 void rctl_capture_wake_display(void);
 
-// Hold a power assertion to keep the display from idle-sleeping during a session.
-void rctl_capture_keep_awake(void);
+// Acquire/release the display idle-sleep assertion. Must follow the remote media
+// lifecycle so an ended session does not keep the device awake.
+void rctl_capture_set_keep_awake(bool awake);
 
 // Lightweight idle-timer reset (no delay) — call periodically to keep the screen on.
 void rctl_capture_undim(void);

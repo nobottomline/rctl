@@ -305,6 +305,7 @@ static void rctl_fx_banner(NSString *text, float secs) {
 // Keep the device awake and unlocked for remote use: reset SpringBoard's idle
 // timer (which drives auto-dim and auto-lock) and undim the display.
 static void rctl_keep_awake(void) {
+    rctl_capture_set_keep_awake(true);
     rctl_capture_undim();
 }
 
@@ -314,11 +315,12 @@ static dispatch_source_t gAwakeTimer = NULL;
 static id                gOrientObserver = nil;   // FBSOrientationObserver
 static rctl_ipc         *gIpc = NULL;             // connection to rctld
 static pthread_mutex_t   gIpcLock = PTHREAD_MUTEX_INITIALIZER;
-static bool              gActive = false;         // a viewer is connected -> run the pipeline
+static bool              gCaptureActive = false;  // screen encoder state
+static bool              gKeepAwake = false;      // independent display/lock state
 static int               gFps = 30;               // current encode settings (for (re)start)
 static double            gScale = 1.0;
 static int               gBitrate = 20000000;
-static void rctl_set_active(bool on);             // defined below; used by ipc_manager
+static void rctl_set_media_state(bool capture, bool awake); // defined below; used by ipc_manager
 
 static void put_be64(uint8_t *p, uint64_t v) {
     p[0] = (v >> 56) & 0xff; p[1] = (v >> 48) & 0xff;
@@ -509,7 +511,7 @@ static void rctl_open_url(NSString *urlStr) {
 static void reconfigure(int fps, double scale, int bitrate) {
     dispatch_async(dispatch_get_main_queue(), ^{
         gFps = fps; gScale = scale; gBitrate = bitrate;
-        if (gActive) {
+        if (gCaptureActive) {
             if (gSession) { rctl_session_stop(gSession); gSession = NULL; }
             gSession = rctl_session_start(fps, bitrate, scale, net_sink, NULL);
             NSLog(@"[rctl-sbcap] reconfigured fps=%d scale=%.2f br=%d", fps, scale, bitrate);
@@ -583,7 +585,11 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_KEYFRAME) {
                 dispatch_async(dispatch_get_main_queue(), ^{ if (gSession) rctl_session_request_keyframe(gSession); });
             } else if (type == RCTL_MSG_ACTIVE && len >= 1) {
-                rctl_set_active(buf[0] != 0);     // viewer connected (1) / gone (0)
+                // Two-byte state separates the expensive screen encoder from
+                // keep-awake. Legacy one-byte payloads apply the value to both.
+                bool capture = buf[0] != 0;
+                bool awake = len >= 2 ? buf[1] != 0 : capture;
+                rctl_set_media_state(capture, awake);
             } else if (type == RCTL_MSG_FX && len >= 1) {
                 uint8_t sub = buf[0]; const uint8_t *p = buf + 1; uint32_t pl = len - 1;
                 if (sub == 1 && pl >= 8) {            // SAY [float pitch][float rate][text]
@@ -651,27 +657,32 @@ static void stop_timer(__strong dispatch_source_t *t) {
     if (*t) { dispatch_source_cancel(*t); *t = nil; }
 }
 
-// Turn the capture+keep-awake machinery on/off with viewer presence. IDLE by
-// default: with nobody watching we run NOTHING — no capture, no encoder, no
-// idle-timer resets — so the device sleeps normally and the battery is spared.
-// The daemon flips us ACTIVE when the first /stream client connects and IDLE
-// when the last leaves: opening the viewer is itself the wake signal.
-static void rctl_set_active(bool on) {
+// Screen capture and keep-awake are independent. A live camera keeps its
+// foreground host active while the SpringBoard encoder stays off. With no remote
+// media session both are released so normal Auto-Lock and sleep resume.
+static void rctl_set_media_state(bool capture, bool awake) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (on == gActive) return;
-        gActive = on;
-        if (on) {
-            if (!gSession) gSession = rctl_session_start(gFps, gBitrate, gScale, net_sink, NULL);
-            start_awake_timer();
-            start_orient_timer();
-            rctl_keep_awake();                 // undim now so the viewer sees content immediately
-            NSLog(@"[rctl-sbcap] ACTIVE — capture + keep-awake on");
-        } else {
-            if (gSession) { rctl_session_stop(gSession); gSession = NULL; }
-            stop_timer(&gAwakeTimer);
-            stop_timer(&gOrientTimer);          // nothing left holding the device awake -> it sleeps
-            NSLog(@"[rctl-sbcap] IDLE — pipeline off, device may sleep");
+        if (capture != gCaptureActive) {
+            gCaptureActive = capture;
+            if (capture) {
+                if (!gSession) gSession = rctl_session_start(gFps, gBitrate, gScale, net_sink, NULL);
+                start_orient_timer();
+            } else {
+                if (gSession) { rctl_session_stop(gSession); gSession = NULL; }
+                stop_timer(&gOrientTimer);
+            }
         }
+        if (awake != gKeepAwake) {
+            gKeepAwake = awake;
+            if (awake) {
+                start_awake_timer();
+                rctl_keep_awake();
+            } else {
+                stop_timer(&gAwakeTimer);
+                rctl_capture_set_keep_awake(false);
+            }
+        }
+        NSLog(@"[rctl-sbcap] media state capture=%d awake=%d", capture, awake);
     });
 }
 
@@ -686,7 +697,7 @@ static void rctl_set_active(bool on) {
 
             // Prepare the orientation observer, but DON'T start capturing yet.
             // We stay IDLE (no capture, no keep-awake, device free to sleep) until
-            // the daemon reports a viewer is connected -> rctl_set_active(true).
+            // the daemon reports a remote media session.
             dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
             Class cls = NSClassFromString(@"FBSOrientationObserver");
             if (cls) gOrientObserver = ((id (*)(id, SEL))objc_msgSend)((id)cls, NSSelectorFromString(@"alloc"));

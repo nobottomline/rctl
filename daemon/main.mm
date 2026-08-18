@@ -41,6 +41,7 @@
 #import "ipc/Ipc.h"
 #import "net/WebRTCBridge.h"
 #import "net/CameraIngest.h"
+#import "net/MediaActivityPolicy.h"
 #import "net/MediaLibrary.h"
 #import "net/VirtualMicServer.h"
 
@@ -285,19 +286,25 @@ static int gSessionGen = 0;                     // bumped per transition (serial
 static bool gStreamViewers = false;             // any /stream client
 static bool gWebrtcViewers = false;             // any WebRTC video channel
 static bool gCameraLive = false;                 // camera owns the hardware encoder budget
-static void send_active(bool on) {
-    uint8_t b = on ? 1 : 0;
-    send_to_sb(RCTL_MSG_ACTIVE, &b, 1);
-    dlog(on ? "session ACTIVE -> SB" : "session IDLE -> SB");
+static void send_media_state(bool screen_capture, bool keep_awake) {
+    uint8_t state[2] = { screen_capture ? (uint8_t)1 : (uint8_t)0,
+                         keep_awake ? (uint8_t)1 : (uint8_t)0 };
+    send_to_sb(RCTL_MSG_ACTIVE, state, sizeof(state));
+    char message[64];
+    snprintf(message, sizeof(message), "media state -> SB capture=%d awake=%d",
+             screen_capture, keep_awake);
+    dlog(message);
 }
 // Capture runs while ANY viewer watches -- /stream or WebRTC. Call on gAuto.
 static void apply_active(void) {
     int gen = ++gSessionGen;
-    if (gCameraLive) send_active(false);
-    else if (gStreamViewers || gWebrtcViewers) send_active(true);
+    rctl_media_activity_state state = rctl_media_activity_policy(
+        gCameraLive, gStreamViewers, gWebrtcViewers);
+    if (state.screen_capture || state.keep_awake)
+        send_media_state(state.screen_capture, state.keep_awake);
     else AFTER(4.0, ^{
         if (gen == gSessionGen) {
-            send_active(false);
+            send_media_state(false, false);
             audio_capture_set(false, NULL, 0);
         }
     });
@@ -505,7 +512,7 @@ static void restart_mediaserverd(void) {
 static bool pause_video_for_media_restart(void) {
     bool resume = gHttp && rctl_http_has_clients(gHttp);
     if (resume) {
-        send_active(false);
+        send_media_state(false, true);
         usleep(350000);
     }
     return resume;
@@ -515,7 +522,7 @@ static void resume_video_after_media_restart(bool resume) {
     if (!resume) return;
     usleep(800000);
     rctl_http_signal_reset(gHttp);
-    send_active(true);
+    dispatch_async(gAuto, ^{ apply_active(); });
 }
 
 static bool touch_file(const char *path) {
@@ -1468,12 +1475,12 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         // the encoder and spikes CPU/memory, which on this device cascades into a frozen
         // stream + a dropped relay link. So pause the screen capture/encode for the snap,
         // then resume (a fresh session emits a keyframe, so the viewer recovers fast).
-        uint8_t cam_act = 0; send_to_sb(RCTL_MSG_ACTIVE, &cam_act, 1);
+        send_media_state(false, true);
         usleep(200000);                               // let the encoder + capture surface tear down
         notify_post(pos == 2 ? "com.greatlove.rctl.cam.front" : "com.greatlove.rctl.cam.back");
         struct stat st; int ready = 0;                // wait for the active app to produce the JPEG
         for (int i = 0; i < 70; i++) { usleep(50000); if (stat(out, &st) == 0 && st.st_size > 0) { ready = 1; break; } }
-        cam_act = 1; send_to_sb(RCTL_MSG_ACTIVE, &cam_act, 1);  // resume the stream regardless of outcome
+        dispatch_async(gAuto, ^{ apply_active(); });  // restore the actual viewer state
         if (!ready) { *status = 500; return strdup("{\"error\":\"no foreground app captured (open an app, grant camera)\"}"); }
         usleep(120000);                               // let the write settle before it's read
         char ndp[8];
@@ -1611,9 +1618,9 @@ static void *ipc_thread(void *unused) {
         if (!peer) { usleep(100000); continue; }
         dlog("SB connected");
         pthread_mutex_lock(&gSBLock); gSB = peer; pthread_mutex_unlock(&gSBLock);
-        // Sync the (re)connected SB agent to the current state: if a viewer is
-        // already watching (e.g. SB resprang mid-session) wake it; else stay idle.
-        send_active(rctl_http_has_clients(gHttp));
+        // Recompute both capture and keep-awake after a SpringBoard reconnect.
+        // This includes WebRTC-only and camera sessions, not just /stream users.
+        dispatch_async(gAuto, ^{ apply_active(); });
 
         uint8_t type; uint8_t *buf; uint32_t len;
         while (rctl_ipc_recv(peer, &type, &buf, &len)) {

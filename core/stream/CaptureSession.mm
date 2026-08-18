@@ -33,7 +33,6 @@ rctl_session *rctl_session_start(int fps, int bitrate, double scale, rctl_nal_cb
     if (fps <= 0) fps = 30;
     if (scale <= 0 || scale > 1.0) scale = 1.0;
     rctl_capture_wake_display();
-    rctl_capture_keep_awake(); // keep the display on for the whole session
 
     // Capture full screen at native resolution; the encoder GPU-downscales.
     size_t w = 0, h = 0;

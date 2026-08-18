@@ -75,6 +75,12 @@ test-camera-recorder:
 	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/MpegTsRecorderTest.cpp core/net/MpegTsRecorder.cpp -o /tmp/rctl-camera-recorder-test
 	@/tmp/rctl-camera-recorder-test
 
+.PHONY: test-media-activity
+test-media-activity:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/MediaActivityPolicyTest.cpp \
+		-o /tmp/rctl-media-activity-test
+	@/tmp/rctl-media-activity-test
+
 .PHONY: test-media-library
 test-media-library:
 	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Wno-deprecated-declarations -Icore \
@@ -95,4 +101,4 @@ test-virtual-mic:
 	@/tmp/rctl-virtual-mic-dsp-test
 
 .PHONY: test
-test: test-camera-recorder test-media-library test-virtual-mic test-personalize
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-personalize
