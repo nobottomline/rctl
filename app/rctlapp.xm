@@ -1,12 +1,8 @@
-// rctlapp — app-side media agent injected into every app. It brokers the daemon's
-// per-app media access from inside the FRONTMOST app (the only valid camera/mic
-// client). Camera: on a Darwin-notification pulse from rctld the active app grabs a
-// still, writes /tmp/rctl_cam.jpg, and pulses a "done" notification. AVFoundation is
-// driven via the runtime (dlopen'd lazily so we don't load it into every app); the
-// NSBundle hook supplies the camera usage string so the privacy check never aborts
-// the host app, and a gated TCC hook force-grants access just for our snap. The
-// microphone (listen + inject) lands here next, for the same reason: the active app
-// is where the mic actually lives.
+// rctlapp — app-side media agent injected into every UIKit app. The foreground app
+// owns still/live camera capture and sends media to rctld over loopback. A separate
+// AudioUnit hook replaces supported app microphone buffers with fresh browser PCM.
+// AVFoundation still capture is runtime-driven; scoped bundle/TCC hooks prevent a
+// host app without camera declarations or permission from aborting our capture.
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <dlfcn.h>

@@ -1,6 +1,6 @@
-# rctlapp — app-side media agent injected into every app (UIKit filter). Brokers
-# the daemon's per-app media access in the FRONTMOST app: camera stills today, the
-# microphone (listen + inject) next. Driven by Darwin notifications from rctld.
+# rctlapp — app-side media agent injected into every app (UIKit filter). Captures
+# foreground camera media and replaces supported app microphone input with fresh
+# browser PCM while Talk is active.
 TARGET := iphone:clang:14.5:14.0
 ARCHS := arm64 arm64e
 

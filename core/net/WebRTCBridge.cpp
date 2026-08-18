@@ -578,10 +578,9 @@ static void start_session(const std::string &id, const json &ice, bool camera) {
         if (g_files_dc && g_files_dc.get() == fptr) g_files_dc.reset();
     });
 
-    // Mic-in channel (Phase B.5): the browser sends Opus frames of its microphone;
-    // we decode + play them through the iPad speaker (intercom). Reliable+ordered
-    // (default) like the audio channel -- simple and proven; can switch to lossy
-    // for lower latency later.
+    // The browser sends Opus microphone frames on mic-in. Decode once and route
+    // PCM to the device speaker, app microphone input, or both. Reliable+ordered
+    // matches the other audio channels and preserves simple burst semantics.
     auto micIn = pc->createDataChannel("mic-in");
     sess->micIn = micIn;
     micIn->onMessage([](rtc::message_variant msg) {

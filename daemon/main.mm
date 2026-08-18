@@ -1727,8 +1727,8 @@ extern "C" void rctl_audio_boost_end(void) {
 // ---- Daemon-side mic capture (listen to the room ANYTIME) --------------------
 // The app-side tap only sees the mic while some app records it. To listen no matter
 // what's on screen, the daemon opens its OWN RemoteIO input and pulls the mic. The
-// session is PlayAndRecord + MixWithOthers so a game/YouTube keeps playing. (Phase A
-// probe: log the level; next step encodes Opus -> the room-mic channel.)
+// session is PlayAndRecord + MixWithOthers so a game/YouTube keeps playing. Captured
+// PCM feeds the room-mic Opus channel and optional device-side recording.
 // mic capture + recording state is declared earlier (before rest_handler).
 
 static void rctl_mic_session_record(void) {

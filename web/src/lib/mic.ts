@@ -1,6 +1,6 @@
 // Browser microphone -> Opus -> the "mic-in" WebRTC DataChannel (browser->device).
-// Phase B.5 intercom: the device decodes each Opus frame and plays it through the
-// iPad speaker. The same path will later feed the virtual-mic injection.
+// The device decodes each frame once and routes PCM to its speaker, the active
+// calling app's microphone input, or both.
 //
 // Capture is done with WebAudio (getUserMedia -> ScriptProcessor -> Float32 PCM)
 // rather than MediaStreamTrackProcessor, which is Chromium-only -- so Talk works in
