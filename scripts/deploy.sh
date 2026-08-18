@@ -44,6 +44,11 @@ DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
 RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
 RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
 
+probe_sb_ipc() {
+  command -v curl >/dev/null 2>&1 &&
+    curl -fsS --max-time 3 http://127.0.0.1:8080/v1/deviceinfo >/dev/null 2>&1
+}
+
 # 1) Remove any existing install (clean respring clears the codesign cache).
 if [ -f "$RELAY_PREF" ] && grep -aq "DeviceSecret" "$RELAY_PREF"; then
   cp "$RELAY_PREF" "$RELAY_PREF_BACKUP" 2>/dev/null || true
@@ -80,19 +85,20 @@ while [ "$i" -lt 30 ]; do
     killall -9 SpringBoard 2>/dev/null || true
     echo "DEPLOY=CRASHED — rolled back at ${i}s (dylib disabled)"; exit 1
   fi
-  if [ "$CONN" -gt "$CONN0" ]; then echo "DEPLOY=OK — SB connected at ${i}s"; exit 0; fi
+  if [ "$CONN" -gt "$CONN0" ] && probe_sb_ipc; then
+    echo "DEPLOY=OK — SpringBoard IPC verified at ${i}s"; exit 0
+  fi
 done
-# No crash AND no fresh "SB connected" line in the window. Usually benign -- the
-# tweak reconnected just before our baseline, or the daemon log lagged. Don't cry
-# failure: probe real liveness. ps (not pgrep -- absent on this device) + the [X]
-# trick so grep doesn't match itself.
-if ps -ax | grep -q "[S]pringBoard.app/SpringBoard" && ps -ax | grep -q "[r]ctld"; then
-  echo "DEPLOY=OK — SpringBoard + rctld alive after ${i}s (no fresh connect line; benign)"; exit 0
+# A connect log line or live processes are insufficient: a broken Substitute
+# payload can leave both processes alive while the command IPC is unavailable.
+if ps -ax | grep -q "[S]pringBoard.app/SpringBoard" &&
+   ps -ax | grep -q "[r]ctld" && probe_sb_ipc; then
+  echo "DEPLOY=OK — SpringBoard IPC verified after ${i}s"; exit 0
 fi
 # A render/media wedge (e.g. the daemon thrashing mediaserverd) shows NO crash
 # report and a respring can't clear it -- only a userspace reboot can, and that
 # kills this SSH session, so leave it to the operator rather than execute blind.
-echo "DEPLOY=SUSPECT — SB/rctld not confirmed alive after ${i}s."
+echo "DEPLOY=SUSPECT — SpringBoard IPC not verified after ${i}s."
 echo "  If the screen is black/stuck, recover WITHOUT losing the jailbreak:"
 echo "    ssh $HOST 'launchctl reboot userspace'"
 exit 2
