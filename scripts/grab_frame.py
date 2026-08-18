@@ -6,7 +6,7 @@
 #   python3 grab_frame.py <ip> <seconds> <out.h264>
 import socket, struct, sys, time
 
-ip   = sys.argv[1] if len(sys.argv) > 1 else "192.168.178.45"
+ip   = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 secs = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0
 out  = sys.argv[3] if len(sys.argv) > 3 else "/tmp/rctl_grab.h264"
 

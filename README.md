@@ -3,8 +3,8 @@
 `rctl` ("remote control") is a low-latency remote desktop stack for a
 **jailbroken iPad**: view the live screen, hear real device playback audio,
 inject real touches and keyboard input, transfer files, open a root terminal, and
-automate device actions from a browser or native client. LAN works today;
-authenticated relay access is in active development.
+automate device actions from a browser or native client. Direct LAN and
+authenticated self-hosted relay access are both implemented.
 
 > Why jailbreak: Apple's iPhone Mirroring needs iOS 18 + the same Apple ID + a Mac + the
 > same network. App Store apps (TeamViewer / AnyDesk / RustDesk) can only *view* an iOS
@@ -13,8 +13,9 @@ authenticated relay access is in active development.
 ## Status
 
 Live screen streaming, real touch control, real iPad playback audio, files,
-camera stills, and a root PTY terminal work. Live front/rear camera streaming
-and device-side recording are implemented and awaiting final physical-device
+Photos/video browsing, camera stills, and a root PTY terminal work. Live
+front/rear camera streaming, device-side recording, and browser-to-app virtual
+microphone injection are implemented and awaiting final physical-device
 qualification. A SpringBoard-injected agent
 captures the display, hardware-encodes H.264 (VideoToolbox), and sends it to
 `rctld`. The browser control app uses WebRTC for the current low-latency path
@@ -45,7 +46,7 @@ rctl/
 ├── springboard/    # the injected agent (rctlsbcap): capture + encode + inject (thin)
 ├── daemon/         # rctld — root daemon (launchd KeepAlive): hosts the transport + relay
 ├── audio/          # rctlaudio — inactive mediaserverd system-audio payload
-├── app/            # rctlapp — foreground-app still/live camera capture agent
+├── app/            # rctlapp — foreground camera and virtual-microphone agent
 ├── web/            # canonical React/Vite control app; build output is web/dist/
 │   └── legacy/     #   old vanilla single-file client + vendor assets, reference only
 ├── relay/          # Go relay server + relay/web-admin admin SPA
@@ -86,7 +87,7 @@ iproxy 2222:22 8080:8080 &
 
 make package install      # build .deb, copy it, dpkg -i, re-sign, respring
 # over Wi-Fi instead:
-THEOS_DEVICE_IP=greatlove THEOS_DEVICE_PORT=22 make package install
+THEOS_DEVICE_IP=<device-host> THEOS_DEVICE_PORT=22 make package install
 
 # then open http://localhost:8080/  (USB)  or  http://<ipad-ip>:8080/  (Wi-Fi) in Safari
 ```
@@ -97,14 +98,14 @@ shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
 
 > NOTE: the macOS `ldid` signature is rejected by on-device AMFI on arm64e, so
 > `postinst` re-signs installed binaries with the device's own `ldid`. The SSH
-> targets are defined in `~/.ssh/config` (`rctl-device` = USB tunnel,
-> `greatlove` = Wi-Fi).
+> targets can be defined in `~/.ssh/config` (`rctl-device` is the default USB
+> tunnel alias; choose a private alias for Wi-Fi).
 
 ## Roadmap
 
 1. **P1 — done.** Screen capture + hardware H.264 + browser stream over LAN.
 2. **P2 — done.** Real touch control through `IOHIDEvent`, correct in all orientations.
 3. **P2.5 — working.** Real system playback audio, camera still/live, files, clipboard,
-   app launch, root terminal, and automation endpoints.
+   Photos/video browser, app launch, root terminal, virtual mic, and automation endpoints.
 4. **P3 — active.** Authenticated relay access with WebRTC media/control,
    relay-hosted control page, and TURN hardening.

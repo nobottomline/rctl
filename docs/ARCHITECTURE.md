@@ -43,7 +43,7 @@ Five runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 |---|---|---|
 | **rctlsbcap** (`springboard/`) | injected into SpringBoard | screen capture → VideoToolbox H.264 → IPC; touch/key injection; SB private APIs (Control Center, Cover Sheet, launch, alert, toast, clipboard, brightness, FX speak/sound/flash/banner); orientation; idle/active gating |
 | **rctld** (`daemon/`) | root daemon (launchd KeepAlive) | HTTP server (chunked `/stream` + REST `/v1/*`), WebSocket terminal `/ws/term`, relays between browsers and SpringBoard over a local Unix socket; concurrent (thread-per-connection) |
-| **rctlapp** (`app/`) | injected into **every** app | captures camera stills and live front/rear video in the foreground app; app-side VideoToolbox sends bounded H.264 to rctld |
+| **rctlapp** (`app/`) | injected into **every** app | captures camera stills/live video in the foreground app and replaces supported app microphone input with fresh browser PCM; app-side VideoToolbox sends bounded H.264 to rctld |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/`) | the controlling browser | React/Vite control app. Primary path is WebRTC (H.264 RTP track + DataChannels); `/stream` WebCodecs remains a local/fallback path. `web/legacy/` keeps the old vanilla client for reference only. |
 
@@ -83,6 +83,17 @@ with Web Audio.
 **Device audio output.** `/v1/audio_output?device=1|0|status=1` controls whether
 the iPad itself stays audible while the browser receives audio. Muting saves the
 previous volume and restore re-applies it.
+
+**Browser microphone → device/app.** Browser Opus from the `mic-in` DataChannel
+is decoded once in `rctld`. `/v1/talk_route` sends it to the existing speaker
+AudioQueue, a bounded loopback PCM bus consumed by the foreground calling app's
+RemoteIO/VoiceProcessingIO input, or both. Missing/stale PCM preserves the real
+microphone. See `docs/VIRTUAL_MIC.md`.
+
+**Photos/videos.** `rctld` reads visible Photos `ZASSET` metadata from the iOS
+database without modifying it, validates local originals below
+`/var/mobile/Media`, and serves bounded JPEG thumbnails/previews. Original files
+use the P2P files DataChannel. See `docs/MEDIA.md`.
 
 **Terminal.** `/ws/term` upgrades to a WebSocket and bridges raw binary frames to
 a root PTY shell created with `forkpty()`. xterm.js in the browser handles ANSI
@@ -260,8 +271,8 @@ internet phase.
   `__strong` qualifier; forward-declare functions used before their definition.
 - **No `awk`/`seq`/`defaults`/`plutil -p`** on this device; `plutil -key`, `sqlite3`,
   `dpkg`, `ldid`, `cut` are present.
-- **Wi-Fi `greatlove` / 192.168.178.45 is reliable**; the USB iproxy tunnel (2222)
-  is flaky. Deploy with `RCTL_SSH=greatlove scripts/deploy.sh`.
+- A direct Wi-Fi SSH target can be more reliable than the USB iproxy tunnel.
+  Deploy with `RCTL_SSH=<device-host> scripts/deploy.sh` when appropriate.
 - After a deploy/respring the first camera capture can `http=000` for a few seconds
   while the device settles — retry.
 

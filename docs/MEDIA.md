@@ -1,0 +1,61 @@
+# Photos And Videos
+
+The control app provides a read-only Photos view for media whose original file
+is currently present on the device. It works in direct LAN mode and through the
+authenticated relay.
+
+## Library Index
+
+`core/net/MediaLibrary.mm` opens
+`/var/mobile/Media/PhotoData/Photos.sqlite` read-only and indexes visible,
+non-deleted `ZASSET` rows. It never writes to the Photos database. Each database
+path is canonicalized and accepted only when it resolves to a regular,
+non-symlink file below `/var/mobile/Media`.
+
+A DCIM filesystem scan is merged as a fallback for a new capture that has not
+yet appeared in the database or for an unavailable schema. Results are cached
+for 15 seconds and sorted newest first. Hidden and Recently Deleted assets are
+not exposed. iCloud-only placeholders are omitted until iOS downloads their
+original file.
+
+## API
+
+```text
+GET /v1/media?type=all|photo|video&q=&cursor=&limit=&refresh=1
+GET /v1/media_asset?id=<opaque-id>
+GET /v1/media_thumb?id=<opaque-id>
+GET /v1/media_preview?id=<opaque-id>
+```
+
+List pages are capped at 100 items. IDs are stable path hashes; callers cannot
+supply filesystem paths to thumbnail endpoints. Thumbnails are 640-pixel JPEGs
+and photo previews are 2048-pixel JPEGs, so HEIC assets work in browsers without
+native HEIC decoding. Video thumbnails use AVFoundation at a representative
+frame.
+
+Generated images live under
+`/var/mobile/Library/Caches/com.greatlove.rctl/media` with a `0700` directory and
+`0600` files. Their cache key includes the original modification time.
+
+## Browser Behavior
+
+The Photos sheet supports photo/video filters, filename search, pagination,
+responsive thumbnails, full-screen photo preview, video preview, and original
+download. Originals travel over the existing peer-to-peer `files` DataChannel,
+not through the relay HTTP body tunnel.
+
+Browser video playback currently materializes one Blob, so previews are limited
+to 250 MiB to avoid exhausting mobile-browser memory. Larger videos remain
+downloadable. A future large-video player should use a bounded streaming
+protocol and a browser-compatible fragmented MP4 path rather than increasing
+this limit.
+
+The gallery is read-only by design. Delete, edit, favorite, Hidden album, and
+forced iCloud download are outside the current release contract.
+
+## Qualification
+
+Test JPEG, HEIC, PNG, MOV, and MP4 assets; portrait and landscape orientation;
+duplicate filenames; an edited asset; an iCloud-only placeholder; Hidden and
+Recently Deleted; pagination above 100 assets; relay reconnect during original
+download; and a video above the preview limit.

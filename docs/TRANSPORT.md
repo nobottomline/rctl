@@ -101,7 +101,8 @@ control
 audio
   ordered: true
   reliable
-  payload: Opus frames
+  payload: Opus frames on independent app-audio, room-mic, and mic-in channels
+  direction: device->browser for listening; browser->device for Talk
 
 files
   ordered: true

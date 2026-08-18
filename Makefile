@@ -22,7 +22,7 @@ export TARGET = iphone:clang:14.5:14.0
 # SpringBoard at load; a clean remove + fresh install avoids it.
 
 # Default install target = the USB tunnel (see ~/.ssh/config Host rctl-device).
-# Override for Wi-Fi: THEOS_DEVICE_IP=greatlove THEOS_DEVICE_PORT=22 make package install
+# Override for Wi-Fi: THEOS_DEVICE_IP=<device-host> THEOS_DEVICE_PORT=22 make package install
 export THEOS_DEVICE_IP ?= rctl-device
 export THEOS_DEVICE_PORT ?= 2222
 
