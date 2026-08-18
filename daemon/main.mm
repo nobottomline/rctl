@@ -311,6 +311,12 @@ static void on_webrtc_keyframe_request(void) {
 static void on_webrtc_camera_keyframe_request(void) {
     notify_post("com.greatlove.rctl.cam.keyframe");
 }
+static void on_camera_lease_expired(void) {
+    dispatch_async(gAuto, ^{
+        gCameraLive = false;
+        apply_active();
+    });
+}
 static void on_webrtc_viewers(bool any) {
     dispatch_async(gAuto, ^{
         gWebrtcViewers = any;
@@ -1364,6 +1370,7 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         });
         return rctl_camera_status_json();
     } else if (!strcmp(path, "/v1/cam_status")) {
+        if (strstr(query, "lease=1")) rctl_camera_renew_lease();
         return rctl_camera_status_json();
     } else if (!strcmp(path, "/v1/cam_record")) {
         char value[8];
@@ -1881,6 +1888,7 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog("http listening on :8080");
         if (!rctl_camera_ingest_start()) dlog("camera ingest start FAILED");
+        rctl_camera_set_expired_cb(on_camera_lease_expired);
         audio_capture_set(false, NULL, 0);
 
         pthread_t t;

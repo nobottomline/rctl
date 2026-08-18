@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { Camera, Check, Circle, Copy, Download, SwitchCamera, X } from 'lucide-react'
 import { api, apiDo, apiJSON } from '../lib/rctl'
 import type { FileTransfer } from '../lib/files'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
+import { CameraTransport } from '../lib/camera'
 
 // Console: the rich, occasional device tooling. Device/Diagnostics (data-dense)
 // run full-width up top; the action tools flow in a 2-column masonry below, so
@@ -24,6 +25,16 @@ type RecordApi = {
   stop: () => void
   play: () => void
   stopPlay: () => void
+}
+type CameraStatus = {
+  enabled: boolean
+  state: 'off' | 'waiting_for_app' | 'live'
+  position: 'front' | 'back'
+  owner?: string
+  recording: boolean
+  record_bytes: number
+  record_ms: number
+  record_path: string
 }
 
 const enc = encodeURIComponent
@@ -358,6 +369,7 @@ function CameraCard({ transfer }: { transfer: FileTransfer }) {
   const [info, setInfo] = useState('')
   const [img, setImg] = useState<string | null>(null)
   const blobRef = useRef<Blob | null>(null)
+  const [livePosition, setLivePosition] = useState<'back' | 'front' | null>(null)
   const snap = async (pos: 'back' | 'front') => {
     setInfo('capturing…')
     setImg(null)
@@ -403,6 +415,9 @@ function CameraCard({ transfer }: { transfer: FileTransfer }) {
   return (
     <Card title="Camera">
       <div className="flex flex-wrap gap-1.5">
+        <Btn primary onClick={() => setLivePosition('back')}>
+          <Camera className="mr-1.5 size-3.5" /> Live
+        </Btn>
         <Btn onClick={() => snap('back')}>Rear</Btn>
         <Btn onClick={() => snap('front')}>Front</Btn>
         {img && (
@@ -413,8 +428,157 @@ function CameraCard({ transfer }: { transfer: FileTransfer }) {
       </div>
       {info && <div className="mt-2 text-[12px] text-muted">{info}</div>}
       {img && <img src={img} alt="camera" className="mt-2 w-full rounded-lg" />}
+      {livePosition && (
+        <CameraLiveView initialPosition={livePosition} transfer={transfer} onClose={() => setLivePosition(null)} />
+      )}
     </Card>
   )
+}
+
+function CameraLiveView({
+  initialPosition,
+  transfer,
+  onClose,
+}: {
+  initialPosition: 'back' | 'front'
+  transfer: FileTransfer
+  onClose: () => void
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const transportRef = useRef<CameraTransport | null>(null)
+  const [position, setPosition] = useState(initialPosition)
+  const [transportState, setTransportState] = useState('connecting')
+  const [status, setStatus] = useState<CameraStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const loadStatus = () => apiJSON<CameraStatus>('/v1/cam_status?lease=1').then((value) => value && setStatus(value))
+  useEffect(() => {
+    let cancelled = false
+    const start = async () => {
+      const response = await api(`/v1/cam_live?on=1&pos=${initialPosition}&fps=10&bitrate=1500000`)
+      if (!response.ok || cancelled) {
+        setTransportState('camera unavailable')
+        return
+      }
+      const value = (await response.json()) as CameraStatus
+      if (!cancelled) setStatus(value)
+      const video = videoRef.current
+      if (!video || cancelled) return
+      const transport = new CameraTransport(video, { onState: setTransportState })
+      transportRef.current = transport
+      transport.start()
+    }
+    start().catch(() => setTransportState('camera unavailable'))
+    const timer = window.setInterval(loadStatus, 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      transportRef.current?.stop()
+      apiDo('/v1/cam_live?on=0')
+    }
+  }, [initialPosition])
+
+  const switchPosition = async () => {
+    const next = position === 'back' ? 'front' : 'back'
+    setBusy(true)
+    const response = await api(`/v1/cam_live?on=1&pos=${next}&fps=10&bitrate=1500000`).catch(() => null)
+    setBusy(false)
+    if (response?.ok) {
+      setPosition(next)
+      loadStatus()
+    }
+  }
+  const toggleRecording = async () => {
+    setBusy(true)
+    const on = !status?.recording
+    const response = await api(`/v1/cam_record?on=${on ? 1 : 0}`).catch(() => null)
+    setBusy(false)
+    if (response?.ok) setStatus((await response.json()) as CameraStatus)
+  }
+  const saveRecording = async () => {
+    if (!status?.record_path || status.recording) return
+    setBusy(true)
+    try {
+      const blob = await transfer.fetch(status.record_path)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `rctl-camera-${Date.now()}.ts`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      setTransportState('recording download failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const stateLabel = status?.state === 'waiting_for_app'
+    ? 'Open an app on the iPad'
+    : status?.state === 'live'
+      ? `${position === 'front' ? 'Front' : 'Rear'} camera${status.owner ? ` · ${status.owner}` : ''}`
+      : transportState
+
+  return (
+    <div className="fixed inset-0 z-[70] flex flex-col bg-black text-white">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-white/10 px-3">
+        <Camera className="size-4" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{stateLabel}</span>
+        {status?.recording && (
+          <span className="flex items-center gap-1.5 font-mono text-[11px] text-red-300">
+            <span className="size-2 animate-pulse rounded-full bg-red-500" />
+            {formatCameraDuration(status.record_ms)}
+          </span>
+        )}
+        <button onClick={onClose} title="Close" aria-label="Close camera" className="grid size-8 place-items-center rounded-lg bg-white/10 active:bg-white/20">
+          <X className="size-4" />
+        </button>
+      </div>
+      <div className="relative min-h-0 flex-1 bg-black">
+        <video ref={videoRef} autoPlay playsInline muted className="size-full object-contain" />
+        {status?.state !== 'live' && (
+          <div className="absolute inset-0 grid place-items-center px-6 text-center text-[13px] text-white/60">{stateLabel}</div>
+        )}
+      </div>
+      <div className="flex min-h-16 shrink-0 items-center justify-center gap-3 border-t border-white/10 px-3 pb-[env(safe-area-inset-bottom)]">
+        <button
+          onClick={switchPosition}
+          disabled={busy}
+          title="Switch camera"
+          aria-label="Switch camera"
+          className="grid size-10 place-items-center rounded-full bg-white/12 disabled:opacity-40"
+        >
+          <SwitchCamera className="size-5" />
+        </button>
+        <button
+          onClick={toggleRecording}
+          disabled={busy || status?.state !== 'live'}
+          title={status?.recording ? 'Stop recording' : 'Start recording'}
+          aria-label={status?.recording ? 'Stop recording' : 'Start recording'}
+          className={cn(
+            'grid size-12 place-items-center rounded-full ring-2 ring-white/70 disabled:opacity-40',
+            status?.recording ? 'bg-red-500' : 'bg-white/10',
+          )}
+        >
+          {status?.recording ? <span className="size-4 rounded-sm bg-white" /> : <Circle className="size-7 fill-red-500 text-red-500" />}
+        </button>
+        <button
+          onClick={saveRecording}
+          disabled={busy || status?.recording || !status?.record_bytes}
+          title="Save recording"
+          aria-label="Save recording"
+          className="grid size-10 place-items-center rounded-full bg-white/12 disabled:opacity-30"
+        >
+          <Download className="size-5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function formatCameraDuration(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 function RecordCard({ record }: { record: RecordApi }) {

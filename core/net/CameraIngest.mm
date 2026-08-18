@@ -27,7 +27,9 @@ static uint64_t g_camera_owner_epoch = 0;
 static uint64_t g_camera_frames = 0;
 static uint64_t g_camera_bytes = 0;
 static uint64_t g_camera_last_frame_ms = 0;
+static uint64_t g_camera_lease_deadline_ms = 0;
 static char g_camera_owner[128] = {0};
+static void (*g_camera_expired_cb)(void) = NULL;
 static pthread_mutex_t g_record_lock = PTHREAD_MUTEX_INITIALIZER;
 static rctl_ts_recorder *g_camera_recorder = NULL;
 static uint64_t g_record_last_bytes = 0;
@@ -151,6 +153,27 @@ static void *camera_listener_main(void *raw_listener) {
     }
 }
 
+static void *camera_watchdog_main(void *) {
+    for (;;) {
+        sleep(2);
+        bool expired = false;
+        int position = 1, fps = 10, bitrate = 1500000;
+        void (*expired_cb)(void) = NULL;
+        pthread_mutex_lock(&g_camera_lock);
+        uint64_t now = camera_now_ms();
+        expired = g_camera_enabled && g_camera_lease_deadline_ms && now > g_camera_lease_deadline_ms;
+        position = g_camera_position;
+        fps = g_camera_fps;
+        bitrate = g_camera_bitrate;
+        expired_cb = g_camera_expired_cb;
+        pthread_mutex_unlock(&g_camera_lock);
+        if (expired) {
+            rctl_camera_set_enabled(false, position, fps, bitrate);
+            if (expired_cb) expired_cb();
+        }
+    }
+}
+
 bool rctl_camera_ingest_start(void) {
     int listener = socket(AF_INET, SOCK_STREAM, 0);
     if (listener < 0) return false;
@@ -172,7 +195,16 @@ bool rctl_camera_ingest_start(void) {
         return false;
     }
     pthread_detach(thread);
+    pthread_t watchdog;
+    if (pthread_create(&watchdog, NULL, camera_watchdog_main, NULL) == 0)
+        pthread_detach(watchdog);
     return true;
+}
+
+void rctl_camera_set_expired_cb(void (*callback)(void)) {
+    pthread_mutex_lock(&g_camera_lock);
+    g_camera_expired_cb = callback;
+    pthread_mutex_unlock(&g_camera_lock);
 }
 
 uint64_t rctl_camera_set_enabled(bool enabled, int position, int fps, int bitrate_bps) {
@@ -189,6 +221,7 @@ uint64_t rctl_camera_set_enabled(bool enabled, int position, int fps, int bitrat
     g_camera_position = position;
     g_camera_fps = fps;
     g_camera_bitrate = bitrate_bps;
+    g_camera_lease_deadline_ms = enabled ? camera_now_ms() + 30000 : 0;
     if (changed) {
         g_camera_generation++;
         g_camera_owner_epoch++;
@@ -201,6 +234,12 @@ uint64_t rctl_camera_set_enabled(bool enabled, int position, int fps, int bitrat
     if (changed) notify_post("com.greatlove.rctl.cam.sync");
     if (!enabled) rctl_camera_record_stop();
     return generation;
+}
+
+void rctl_camera_renew_lease(void) {
+    pthread_mutex_lock(&g_camera_lock);
+    if (g_camera_enabled) g_camera_lease_deadline_ms = camera_now_ms() + 30000;
+    pthread_mutex_unlock(&g_camera_lock);
 }
 
 bool rctl_camera_is_enabled(void) {
