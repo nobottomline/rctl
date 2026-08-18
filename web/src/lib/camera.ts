@@ -11,6 +11,7 @@ export class CameraTransport {
   private ws: WebSocket | null = null
   private stopped = true
   private retry = 0
+  private disconnectGrace = 0
   private generation = 0
 
   constructor(video: HTMLVideoElement, callbacks: CameraTransportCallbacks = {}) {
@@ -28,7 +29,9 @@ export class CameraTransport {
     this.stopped = true
     this.generation++
     if (this.retry) window.clearTimeout(this.retry)
+    if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
     this.retry = 0
+    this.disconnectGrace = 0
     this.ws?.close()
     this.pc?.close()
     this.ws = null
@@ -48,6 +51,8 @@ export class CameraTransport {
   private connect() {
     if (this.stopped) return
     const generation = ++this.generation
+    if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
+    this.disconnectGrace = 0
     this.ws?.close()
     this.pc?.close()
     this.callbacks.onState?.('connecting')
@@ -76,8 +81,24 @@ export class CameraTransport {
     }
     pc.onconnectionstatechange = () => {
       if (generation !== this.generation) return
-      if (pc.connectionState === 'failed') this.scheduleReconnect()
-      if (pc.connectionState === 'connected') this.callbacks.onState?.('connected')
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
+        this.disconnectGrace = 0
+        this.scheduleReconnect()
+      } else if (pc.connectionState === 'disconnected') {
+        if (!this.disconnectGrace) {
+          this.callbacks.onState?.('reconnecting')
+          this.disconnectGrace = window.setTimeout(() => {
+            this.disconnectGrace = 0
+            if (generation === this.generation && pc.connectionState === 'disconnected')
+              this.scheduleReconnect()
+          }, 4000)
+        }
+      } else if (pc.connectionState === 'connected') {
+        if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
+        this.disconnectGrace = 0
+        this.callbacks.onState?.('connected')
+      }
     }
 
     ws.onmessage = async (event) => {

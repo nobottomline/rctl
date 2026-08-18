@@ -469,10 +469,13 @@ function CameraLiveView({
       transport.start()
     }
     start().catch(() => setTransportState('camera unavailable'))
-    const timer = window.setInterval(loadStatus, 1000)
+    let pollTimer = window.setTimeout(async function poll() {
+      await loadStatus()
+      if (!cancelled) pollTimer = window.setTimeout(poll, 1000)
+    }, 1000)
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      window.clearTimeout(pollTimer)
       transportRef.current?.stop()
       apiDo('/v1/cam_live?on=0')
     }

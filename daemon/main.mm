@@ -314,7 +314,10 @@ static void on_webrtc_camera_keyframe_request(void) {
 static void on_camera_lease_expired(void) {
     dispatch_async(gAuto, ^{
         gCameraLive = false;
-        apply_active();
+        // Let the foreground app tear down AVCapture/VideoToolbox before asking
+        // SpringBoard to recreate its screen encoder. Re-enabling camera during
+        // the grace period cancels the resume through the state check.
+        AFTER(0.75, ^{ if (!gCameraLive) apply_active(); });
     });
 }
 static void on_webrtc_viewers(bool any) {
@@ -1364,9 +1367,15 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         int fps = get_i(query, "fps", 10);
         int bitrate = get_i(query, "bitrate", 1500000);
         dispatch_sync(gAuto, ^{
-            gCameraLive = on;
-            apply_active();
-            rctl_camera_set_enabled(on, position, fps, bitrate);
+            if (on) {
+                gCameraLive = true;
+                apply_active();
+                rctl_camera_set_enabled(true, position, fps, bitrate);
+            } else {
+                rctl_camera_set_enabled(false, position, fps, bitrate);
+                gCameraLive = false;
+                AFTER(0.75, ^{ if (!gCameraLive) apply_active(); });
+            }
         });
         return rctl_camera_status_json();
     } else if (!strcmp(path, "/v1/cam_status")) {

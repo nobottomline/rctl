@@ -373,7 +373,9 @@ void rctl_camera_agent_initialize(void) {
         dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
         500 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(gCameraStateTimer, ^{
-        if (atomic_load(&gCameraRunning)) rctl_camera_agent_sync();
+        UIApplication *application = [UIApplication sharedApplication];
+        if (application.applicationState == UIApplicationStateActive)
+            rctl_camera_agent_sync();
     });
     dispatch_resume(gCameraStateTimer);
     rctl_camera_agent_sync();
