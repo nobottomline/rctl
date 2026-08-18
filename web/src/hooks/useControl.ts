@@ -38,6 +38,7 @@ export function useControl(
   const micRef = useRef(new MicTalk())
   const roomMicRef = useRef(new AudioPlayer(3)) // the iPad's own mic, run a bit louder (raw input is quiet)
   const [talking, setTalking] = useState(false)
+  const [talkMode, setTalkMode] = useState<'speaker' | 'mic' | 'both'>('speaker')
   const [listeningMic, setListeningMic] = useState(false)
   const [micRec, setMicRec] = useState({ recording: false, seconds: 0, bytes: 0 })
   const recBlob = useRef<{ bytes: number; blob: Blob } | null>(null) // the fetched .m4a, cached for instant re-save
@@ -51,6 +52,17 @@ export function useControl(
   const [recMode, setRecMode] = useState<'idle' | 'recording' | 'paused' | 'playing'>('idle')
   const [macroLen, setMacroLen] = useState(0)
   const macroRef = useRef<MacroEvent[]>([])
+
+  useEffect(() => {
+    apiJSON<{ mode?: 'speaker' | 'mic' | 'both' }>('/v1/talk_route').then((response) => {
+      if (response?.mode) setTalkMode(response.mode)
+    })
+  }, [])
+
+  const changeTalkMode = async (mode: 'speaker' | 'mic' | 'both') => {
+    const response = await apiJSON<{ mode?: 'speaker' | 'mic' | 'both' }>(`/v1/talk_route?mode=${mode}`)
+    if (response?.mode) setTalkMode(response.mode)
+  }
 
   useEffect(() => {
     const stage = stageRef.current
@@ -344,6 +356,8 @@ export function useControl(
     talk: {
       supported: micSupported(),
       talking,
+      mode: talkMode,
+      setMode: changeTalkMode,
       start: () => micRef.current.start(),
       stop: () => micRef.current.stop(),
     },

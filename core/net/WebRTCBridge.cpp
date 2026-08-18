@@ -13,6 +13,7 @@
 // One libdatachannel PeerConnection per signaling session.
 
 #include "net/WebRTCBridge.h"
+#include "net/VirtualMicServer.h"
 #include "rtc/rtc.hpp"
 #include "nlohmann/json.hpp"
 #include <opus/opus.h>
@@ -250,10 +251,9 @@ static void destroy_session(std::shared_ptr<Session> dead) {
 }
 
 // ---- Mic intercom (Phase B.5) -------------------------------------------------
-// Browser mic -> Opus over the "mic-in" DataChannel -> here -> decode -> AudioQueue
-// -> iPad speaker. Validates the reverse audio path (browser -> device) that the
-// virtual-mic (Phase C) will reuse, routing the PCM into the mic input instead of
-// the speaker. Lazy-init on the first frame; mono 48k to match the browser encoder.
+// Browser mic -> Opus over the "mic-in" DataChannel -> decode once, then route to
+// the iPad speaker, the foreground app's virtual microphone, or both. Mono 48k
+// matches the browser encoder and the loopback PCM bus.
 extern "C" void rctl_audio_session_activate(void);  // defined in main.mm
 extern "C" void rctl_audio_boost_begin(void);       // defined in main.mm
 extern "C" void rctl_audio_boost_end(void);         // defined in main.mm
@@ -299,6 +299,26 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         g_micDec = opus_decoder_create(kMicRate, 1, &err);
         if (err != OPUS_OK) { g_micDec = nullptr; return; }
     }
+    auto now = std::chrono::steady_clock::now();
+    bool newBurst = g_micLast.time_since_epoch().count() == 0 ||
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - g_micLast).count() > 700;
+    if (newBurst) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
+    g_micLast = now;
+    int16_t pcm[5760];   // up to 120ms @ 48k mono
+    int frames = opus_decode(g_micDec, opus, (opus_int32)len, pcm, 5760, 0);
+    if (frames <= 0) return;
+
+    int route = rctl_vmic_route();
+    if (route == RCTL_TALK_VIRTUAL_MIC || route == RCTL_TALK_BOTH) rctl_vmic_push(pcm, frames);
+    if (route == RCTL_TALK_VIRTUAL_MIC) {
+        if (g_micBoosted) {
+            rctl_audio_boost_end();
+            if (g_micAQ) AudioQueueReset(g_micAQ);
+            g_micBoosted = false;
+        }
+        return;
+    }
+
     if (!g_micAQ) {
         AudioStreamBasicDescription a = {};
         a.mSampleRate = kMicRate;
@@ -318,20 +338,14 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         wlog("mic intercom: AudioQueue started (persistent)");
         if (!g_micWatchStarted) { std::thread(mic_watchdog).detach(); g_micWatchStarted = true; }
     }
-    // Burst start after idle: re-route + raise volume, flush stale audio, reset the
-    // decoder so a fresh browser Opus stream decodes cleanly.
+    // Burst start after idle: re-route + raise volume and flush stale speaker audio.
     if (!g_micBoosted) {
         rctl_audio_session_activate();
         rctl_audio_boost_begin();
         AudioQueueReset(g_micAQ);
-        opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
         g_micBoosted = true;
         wlog("mic intercom: talk burst start");
     }
-    g_micLast = std::chrono::steady_clock::now();
-    int16_t pcm[5760];   // up to 120ms @ 48k mono
-    int frames = opus_decode(g_micDec, opus, (opus_int32)len, pcm, 5760, 0);
-    if (frames <= 0) return;
     UInt32 bytes = (UInt32)frames * 2;
     AudioQueueBufferRef buf = nullptr;
     if (AudioQueueAllocateBuffer(g_micAQ, bytes, &buf) != noErr) return;

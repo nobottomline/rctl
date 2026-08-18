@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Headphones,
   House,
+  Images,
   Lock,
   Mic,
   MicOff,
@@ -51,6 +52,7 @@ export default function ControlCenter({
   onTheme,
   onTerminal,
   onFiles,
+  onMedia,
   onConsole,
   onSystem,
 }: {
@@ -59,6 +61,7 @@ export default function ControlCenter({
   onTheme: () => void
   onTerminal: () => void
   onFiles: () => void
+  onMedia: () => void
   onConsole: () => void
   onSystem: () => void
 }) {
@@ -115,6 +118,7 @@ export default function ControlCenter({
       <div className="flex gap-1.5 pt-0.5">
         <Launch icon={Wand2} label="Console" onClick={onConsole} />
         <Launch icon={Boxes} label="System" onClick={onSystem} />
+        <Launch icon={Images} label="Photos" onClick={onMedia} />
         <Launch icon={FolderOpen} label="Files" onClick={onFiles} />
         <Launch icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
       </div>
@@ -130,14 +134,34 @@ function fmtSize(b: number) {
 }
 
 // The iPad's own microphone: Listen (hear the room live), Record (the daemon keeps
-// recording to a file even after you leave — come back and Save it), and Talk (your
-// browser mic out the iPad speaker). The record control shows a live timer; Save
-// pulls the .m4a over the P2P files channel.
+// recording to a file even after you leave — come back and Save it), and Talk. Talk
+// can target the device speaker, an app's microphone input, or both. The record
+// control shows a live timer; Save pulls the .m4a over the P2P files channel.
 function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
   const r = ctl.micRecord
   return (
     <div>
       <Label>Microphone</Label>
+      {ctl.talk.supported && (
+        <div className="mb-1.5 grid grid-cols-3 rounded-lg bg-fg/6 p-1">
+          {([
+            ['speaker', 'Speaker'],
+            ['mic', 'App mic'],
+            ['both', 'Both'],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              onClick={() => ctl.talk.setMode(mode)}
+              className={cn(
+                'rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-colors',
+                ctl.talk.mode === mode ? 'bg-signal text-on-signal' : 'text-fg-dim active:bg-fg/10',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-1.5">
         <Key
           icon={Ear}

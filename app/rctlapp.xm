@@ -159,77 +159,6 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
     rctl_capture(pos);
 }
 
-// ---- Phase A mic probe -------------------------------------------------------
-// We don't yet know which AudioUnitRender (bus/scope) carries the mic inside the
-// app. Hook it (lazily, on mic.on), and while probing log each non-silent render's
-// format/bus/scope/peak to the daemon (the app sandbox can't write /tmp, so we POST
-// over the loopback like the camera does). The daemon log then reveals the tap point.
-static BOOL gMicProbe = NO;
-static OSStatus (*orig_AURender_app)(AudioUnit, AudioUnitRenderActionFlags *,
-                                     const AudioTimeStamp *, UInt32, UInt32, AudioBufferList *) = NULL;
-
-static void rctl_applog(const char *text) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return;
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET; a.sin_port = htons(8080); a.sin_addr.s_addr = htonl(0x7f000001);
-    if (connect(fd, (struct sockaddr *)&a, sizeof a) == 0) {
-        size_t tl = strlen(text);
-        char hdr[160];
-        int hn = snprintf(hdr, sizeof hdr,
-            "POST /v1/applog HTTP/1.1\r\nHost: x\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n", tl);
-        (void)write(fd, hdr, hn); (void)write(fd, text, tl);
-    }
-    close(fd);
-}
-static void rctl_applog_async(const char *line) {   // never block the realtime audio thread
-    NSString *s = [NSString stringWithUTF8String:line];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ rctl_applog(s.UTF8String); });
-}
-
-static OSStatus rctl_hook_AURender_app(AudioUnit unit, AudioUnitRenderActionFlags *flags,
-                                       const AudioTimeStamp *ts, UInt32 bus, UInt32 nframes,
-                                       AudioBufferList *io) {
-    OSStatus st = orig_AURender_app(unit, flags, ts, bus, nframes, io);
-    if (!gMicProbe || st != noErr || !io || io->mNumberBuffers == 0) return st;
-    static unsigned n = 0;
-    if ((++n & 0x1f) != 0) return st;   // ~1 in 32 to keep it light
-    AudioStreamBasicDescription fmt; UInt32 sz = sizeof fmt; const char *scope = "out";
-    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, bus, &fmt, &sz) != noErr || sz < sizeof fmt) {
-        scope = "in"; sz = sizeof fmt;
-        if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, bus, &fmt, &sz) != noErr) return st;
-    }
-    long peak = 0;
-    AudioBuffer *b = &io->mBuffers[0];
-    if (b->mData && b->mDataByteSize) {
-        if ((fmt.mFormatFlags & kAudioFormatFlagIsSignedInteger) && fmt.mBitsPerChannel == 16) {
-            const int16_t *s = (const int16_t *)b->mData; uint32_t c = b->mDataByteSize / 2;
-            for (uint32_t i = 0; i < c; i++) { int v = s[i] < 0 ? -s[i] : s[i]; if (v > peak) peak = v; }
-        } else if (fmt.mBitsPerChannel == 32) {
-            const float *fp = (const float *)b->mData; uint32_t c = b->mDataByteSize / 4;
-            for (uint32_t i = 0; i < c; i++) { float v = fp[i] < 0 ? -fp[i] : fp[i]; long iv = (long)(v * 32767.0f); if (iv > peak) peak = iv; }
-        }
-    }
-    char line[256];
-    snprintf(line, sizeof line, "MICPROBE proc=%s bus=%u nbuf=%u frames=%u rate=%.0f ch=%u bits=%u scope=%s peak=%ld",
-             [[[NSProcessInfo processInfo] processName] UTF8String] ?: "?", (unsigned)bus,
-             (unsigned)io->mNumberBuffers, (unsigned)nframes, fmt.mSampleRate,
-             (unsigned)fmt.mChannelsPerFrame, (unsigned)fmt.mBitsPerChannel, scope, peak);
-    rctl_applog_async(line);
-    return st;
-}
-
-static void mic_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const void *obj, CFDictionaryRef info) {
-    BOOL on = (CFStringCompare(name, CFSTR("com.greatlove.rctl.mic.on"), 0) == kCFCompareEqualTo);
-    gMicProbe = on;
-    if (on && !orig_AURender_app) {
-        void *sym = dlsym(RTLD_DEFAULT, "AudioUnitRender");
-        if (sym) { MSHookFunction(sym, (void *)rctl_hook_AURender_app, (void **)&orig_AURender_app);
-                   rctl_applog_async("MICPROBE hook installed"); }
-    }
-    rctl_applog_async(on ? "MICPROBE on" : "MICPROBE off");
-}
-
 // Supply NSCameraUsageDescription for the host app's main bundle so the camera
 // privacy check never SIGABRTs the app (apps without the key would otherwise crash).
 %hook NSBundle
@@ -245,8 +174,6 @@ static void mic_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
         CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.back"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.front"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
-        CFNotificationCenterAddObserver(nc, NULL, mic_cb, CFSTR("com.greatlove.rctl.mic.on"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
-        CFNotificationCenterAddObserver(nc, NULL, mic_cb, CFSTR("com.greatlove.rctl.mic.off"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         void *tcc = dlopen("/System/Library/PrivateFrameworks/TCC.framework/TCC", RTLD_LAZY);
         if (tcc) {
             void *pf = dlsym(tcc, "TCCAccessPreflight");

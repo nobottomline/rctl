@@ -41,6 +41,8 @@
 #import "ipc/Ipc.h"
 #import "net/WebRTCBridge.h"
 #import "net/CameraIngest.h"
+#import "net/MediaLibrary.h"
+#import "net/VirtualMicServer.h"
 
 extern char **environ;
 
@@ -1158,7 +1160,22 @@ static char *rctl_pkg_meta_json(const char *cid) {
 static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
-    if (!strcmp(path, "/v1/tap")) {
+    char *media = rctl_media_handle(path, query, status, out_len, out_ctype);
+    if (media) return media;
+    if (!strcmp(path, "/v1/talk_route")) {
+        char mode[16] = {0};
+        if (get_param(query, "mode", mode, sizeof(mode))) {
+            if (!strcmp(mode, "speaker")) rctl_vmic_set_route(RCTL_TALK_SPEAKER);
+            else if (!strcmp(mode, "mic")) rctl_vmic_set_route(RCTL_TALK_VIRTUAL_MIC);
+            else if (!strcmp(mode, "both")) rctl_vmic_set_route(RCTL_TALK_BOTH);
+            else { *status = 400; return strdup("{\"error\":\"mode must be speaker, mic, or both\"}"); }
+        }
+        const char *current = rctl_vmic_route() == RCTL_TALK_VIRTUAL_MIC ? "mic" :
+                              rctl_vmic_route() == RCTL_TALK_BOTH ? "both" : "speaker";
+        char response[64];
+        snprintf(response, sizeof(response), "{\"ok\":true,\"mode\":\"%s\"}", current);
+        return strdup(response);
+    } else if (!strcmp(path, "/v1/tap")) {
         schedule_tap(get_d(query,"x",0), get_d(query,"y",0), 0);
     } else if (!strcmp(path, "/v1/swipe")) {
         schedule_swipe(get_d(query,"x1",0), get_d(query,"y1",0), get_d(query,"x2",0), get_d(query,"y2",0), get_d(query,"ms",300), 0);
@@ -1399,14 +1416,6 @@ static char *rest_handler(void *ctx, const char *path, const char *query, const 
         if (body_len > 0) {
             FILE *f = fopen("/tmp/rctl_cam.jpg", "wb");
             if (f) { fwrite(body, 1, body_len, f); fclose(f); }
-        }
-        // -> default {"ok":true}
-    } else if (!strcmp(path, "/v1/applog")) {         // rctlapp is sandboxed (no /tmp); it ships diagnostics here
-        if (body && body_len > 0) {
-            char ln[480]; size_t n = (size_t)body_len < sizeof(ln) - 1 ? (size_t)body_len : sizeof(ln) - 1;
-            memcpy(ln, body, n); ln[n] = 0;
-            char tag[520]; snprintf(tag, sizeof tag, "[applog] %s", ln);
-            dlog(tag);
         }
         // -> default {"ok":true}
     } else if (!strcmp(path, "/v1/mic_capture")) {    // listen to the iPad mic ANYTIME (daemon-side RemoteIO capture)
@@ -1897,6 +1906,7 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog("http listening on :8080");
         rctl_camera_set_expired_cb(on_camera_lease_expired);
+        if (!rctl_vmic_server_start()) dlog("virtual mic server start FAILED");
         if (!rctl_camera_ingest_start()) dlog("camera ingest start FAILED");
         notify_post("com.greatlove.rctl.cam.sync"); // fail closed after a daemon restart
         audio_capture_set(false, NULL, 0);

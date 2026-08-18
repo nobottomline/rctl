@@ -8,8 +8,9 @@ import TerminalPanel from './components/TerminalPanel'
 import FilesPanel from './components/FilesPanel'
 import ConsolePanel from './components/ConsolePanel'
 import SystemPanel from './components/SystemPanel'
+import MediaPanel from './components/MediaPanel'
 
-type View = null | 'cc' | 'terminal' | 'files' | 'console' | 'system'
+type View = null | 'cc' | 'terminal' | 'files' | 'media' | 'console' | 'system'
 
 export default function App() {
   const stageRef = useRef<HTMLDivElement>(null)
@@ -68,12 +69,14 @@ export default function App() {
           onTheme={toggleTheme}
           onTerminal={() => setView('terminal')}
           onFiles={() => setView('files')}
+          onMedia={() => setView('media')}
           onConsole={() => setView('console')}
           onSystem={() => setView('system')}
         />
       )}
       {view === 'terminal' && <TerminalPanel onClose={() => setView(null)} />}
       {view === 'files' && <FilesPanel transfer={ctl.filesTransfer} onClose={() => setView(null)} />}
+      {view === 'media' && <MediaPanel transfer={ctl.filesTransfer} onClose={() => setView(null)} />}
       {view === 'console' && (
         <ConsolePanel
           onClose={() => setView(null)}

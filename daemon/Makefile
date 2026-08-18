@@ -32,6 +32,8 @@ rctld_FILES = main.mm \
               ../core/net/WebRTCBridge.cpp \
               ../core/net/CameraIngest.mm \
               ../core/net/MpegTsRecorder.cpp \
+              ../core/net/MediaLibrary.mm \
+              ../core/net/VirtualMicServer.mm \
               ../core/ipc/Ipc.c
 rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctld_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP) -I$(DC)/include -I$(DC)/deps/json/single_include -I$(OPUS)/include
@@ -41,8 +43,8 @@ rctld_LDFLAGS = $(DC)/build-ios/libdatachannel.a \
                 $(DC)/build-ios/deps/usrsctp/usrsctplib/libusrsctp.a \
                 $(MBED)/lib/libmbedtls.a $(MBED)/lib/libmbedx509.a $(MBED)/lib/libmbedcrypto.a \
                 $(OPUS)/lib/libopus.a \
-                -lc++
-rctld_FRAMEWORKS = Foundation IOKit AudioToolbox
+                -lc++ -lsqlite3
+rctld_FRAMEWORKS = Foundation IOKit AudioToolbox AVFoundation ImageIO CoreGraphics CoreMedia
 rctld_INSTALL_PATH = /usr/local/bin
 
 include $(THEOS)/makefiles/tool.mk
