@@ -133,12 +133,14 @@ foreground app. Coords are in the screen's FIXED (orientation-independent) space
 
 **Idle-by-default power saving.** Capture + encode + the keep-awake idle-timer ran
 24/7 from boot → the display never slept and the battery drained (80%→12% in ~6h
-idle). Fix: run the pipeline **only while a viewer is connected**. rctld fires a
-session callback on the `/stream` subscriber count crossing 0↔1; SB starts/stops
-capture, keep-awake, and the orientation timer. Opening the viewer is itself the
-wake signal (Wake-on-LAN / APNs pattern: cheap always-on listener, expensive media
-on demand). Whether the screen actually sleeps then depends on the device's iOS
-Auto-Lock setting (we no longer override it).
+idle). Fix: `rctld` sends independent screen-capture and keep-awake state. A screen
+viewer enables both. Live camera disables the competing SpringBoard encoder but
+keeps the display awake so iOS does not suspend the foreground camera owner. The
+camera owner also saves and disables its own UIKit idle timer, then restores it on
+stop; this is the authoritative Auto-Lock gate for a foreground AVCapture session.
+With no media consumer, SpringBoard releases its assertion and the app restores
+its prior state. Opening a viewer activates the media pipeline but does not bypass
+the iOS lock screen or passcode; idle remains the default.
 
 **Camera from ANY open app (the big one — see §5).**
 
@@ -166,12 +168,15 @@ with the UI).
 
 ## 4. Idle/active gating detail
 
-- IPC message `RCTL_MSG_ACTIVE [1B]` (daemon→SB).
+- IPC message `RCTL_MSG_ACTIVE [2B]` (daemon→SB): screen capture, then
+  keep-awake. SpringBoard accepts legacy one-byte payloads by applying the value
+  to both fields.
 - rctld `on_session(active)`: serialize on a GCD queue, debounce idle by 4s (no
-  thrash on refresh/Wi-Fi blip), and re-sync state to SB on (re)connect.
-- SB `rctl_set_active(on)`: start/stop the capture session, the keep-awake timer,
-  and the orientation timer. `%ctor` no longer starts them — idle until a viewer
-  connects.
+  thrash on refresh/Wi-Fi blip), derive media state from screen/WebRTC/camera
+  ownership, and re-sync state to SB on (re)connect.
+- SB `rctl_set_media_state(capture, awake)`: independently controls the capture
+  and orientation pipeline and the balanced keep-awake assertion/timer. `%ctor`
+  starts neither; the device remains idle until a media consumer connects.
 
 ---
 

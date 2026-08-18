@@ -6,8 +6,8 @@ WebRTC RTP session. The daemon can record the same encoded stream directly to an
 MPEG-TS file without a second encoder.
 
 The capture, relay and recording paths have been validated on the target iOS
-14.4 arm64e device. Long-duration, rotation and app-roaming soak tests remain
-release gates; see the validation matrix below.
+14.4 arm64e device, including sustained front/rear capture and browser recovery;
+see the validation matrix below.
 
 ## Media ownership
 
@@ -77,6 +77,12 @@ sync notification, but only the active foreground app starts capture.
   SPS/PPS match the new orientation.
 - Daemon restart/loss: agents poll state every five seconds and fail closed.
 
+The foreground agent also checks the health of the active pipeline every five
+seconds. It rebuilds the session when AVCapture stops running, samples stop
+arriving, VideoToolbox stops producing access units, or loopback delivery stops.
+Desired state and generation remain daemon-owned, so recovery cannot resurrect a
+camera whose browser lease has expired.
+
 Only the newest ingest owner epoch is accepted. Late frames from a resigning app
 are discarded. Payloads are capped at 2 MiB.
 
@@ -85,8 +91,13 @@ are discarded. Payloads are capped at 2 MiB.
 The target A12 device showed camera/mediaserverd work starving the screen
 VideoToolbox session. While live camera is enabled, `rctld` pauses the expensive
 screen capture/encoder but keeps the screen PeerConnection and DataChannels
-alive. Input, files and terminal therefore remain connected. Stopping camera
-restores screen capture and emits a fresh keyframe through the normal pipeline.
+alive. It independently keeps the display awake so Auto-Lock cannot suspend the
+foreground camera owner: the owner balances its own UIKit idle-timer state, while
+SpringBoard maintains the remote media power state. Input, files and terminal
+therefore remain connected. Stopping camera restores screen capture and emits a
+fresh keyframe through the normal pipeline. When no screen or camera session
+remains, the power assertion and the application's previous idle-timer state are
+released.
 
 This policy is conservative and should only be relaxed after device thermal,
 memory and simultaneous-encoder measurements prove it safe.
@@ -112,6 +123,11 @@ The browser renews a 30-second camera lease through `cam_status?lease=1`. If a
 tab closes, crashes, loses the relay, or is suspended long enough, the daemon
 stops camera and recording and resumes the screen. Capture is always off after a
 daemon restart.
+
+The browser separately watches decoded video progress. If camera desired state
+is `live` but `HTMLVideoElement.currentTime` stops advancing, it rebuilds only the
+camera signaling and PeerConnection; control, terminal and file channels remain
+untouched. Initial camera enable is retried after transient tunnel failures.
 
 ## Recording
 
@@ -145,6 +161,7 @@ AVCapture sessions cannot race for the device.
 - Never encode or perform socket writes on an app's main thread.
 - Bound queued frames and drop under backpressure.
 - Stop on app resign, daemon loss, browser lease expiry and explicit disable.
+- Restore the foreground application's previous idle-timer state on every stop.
 - Keep camera disabled by default.
 - Never log or audit frame contents.
 - Keep camera RTP independent from screen and audio transports.
@@ -170,4 +187,9 @@ Current physical baseline (iPadOS 14.4, arm64e):
 | Relay camera PeerConnection | Pass; dedicated track is unmuted and frames advance |
 | Camera close and screen recovery | Pass; screen track resumes without reconnecting control |
 | On-device MPEG-TS recording | Pass; starts on IDR and decodes cleanly with FFmpeg |
-| 10/30 minute, rotation and multi-app soak | Pending release qualification |
+| Landscape capture and app-owner roaming | Pass; dimensions/orientation and owner transfer remain valid |
+| 30-minute rear soak | Pass; 17,486 frames, zero recovery events or 5-second gaps |
+| 30-minute front soak after hot switch | Pass; 36,417 cumulative frames, zero recovery events or 5-second gaps |
+| Auto-Lock prevention and restoration | Pass; foreground remained live past 180s, then returned to normal sleep after stop |
+| Browser camera frame watchdog | Pass; frozen `currentTime` rebuilt only the camera WebSocket/PeerConnection |
+| Lease expiry and daemon restart | Pass; lease failed closed by 35s and daemon restart returned camera state to `off` |
