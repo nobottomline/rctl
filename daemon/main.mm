@@ -44,6 +44,7 @@
 #import "net/MediaActivityPolicy.h"
 #import "net/MediaLibrary.h"
 #import "net/VirtualMicServer.h"
+#import "privacy/IndicatorState.h"
 
 extern char **environ;
 extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
@@ -56,6 +57,20 @@ extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
 // serialized ImageIO/AVFoundation preview render to coexist.
 static constexpr uint32_t kMemorystatusSetJetsamTaskLimit = 6;
 static constexpr uint32_t kRctldMemoryLimitMB = 128;
+
+static int gMicIndicatorNotifyToken = -1;
+
+static void publish_mic_indicator_state(bool active) {
+    if (gMicIndicatorNotifyToken < 0 &&
+        notify_register_check(RCTL_MIC_INDICATOR_NOTIFICATION,
+                              &gMicIndicatorNotifyToken) != NOTIFY_STATUS_OK) {
+        gMicIndicatorNotifyToken = -1;
+        return;
+    }
+    uint64_t state = rctl_mic_indicator_state(active, getpid());
+    if (notify_set_state(gMicIndicatorNotifyToken, state) == NOTIFY_STATUS_OK)
+        notify_post(RCTL_MIC_INDICATOR_NOTIFICATION);
+}
 
 #define RCTL_AUDIO_PAYLOAD_DYLIB "/usr/local/lib/rctl/audio/rctlaudio.dylib"
 #define RCTL_AUDIO_PAYLOAD_PLIST "/usr/local/lib/rctl/audio/rctlaudio.plist"
@@ -1830,14 +1845,15 @@ static OSStatus rctl_mic_input_cb(void *ref, AudioUnitRenderActionFlags *flags, 
 
 static bool rctl_mic_capture_start(void) {
     if (g_micCapturing) return true;
+    publish_mic_indicator_state(true);
     rctl_mic_session_record();
     AudioComponentDescription d; memset(&d, 0, sizeof d);
     d.componentType = kAudioUnitType_Output;
     d.componentSubType = kAudioUnitSubType_RemoteIO;
     d.componentManufacturer = kAudioUnitManufacturer_Apple;
     AudioComponent comp = AudioComponentFindNext(NULL, &d);
-    if (!comp) { dlog("miccap: no RemoteIO component"); return false; }
-    if (AudioComponentInstanceNew(comp, &g_micUnit) != noErr || !g_micUnit) { dlog("miccap: instance new failed"); g_micUnit = NULL; return false; }
+    if (!comp) { dlog("miccap: no RemoteIO component"); publish_mic_indicator_state(false); return false; }
+    if (AudioComponentInstanceNew(comp, &g_micUnit) != noErr || !g_micUnit) { dlog("miccap: instance new failed"); g_micUnit = NULL; publish_mic_indicator_state(false); return false; }
     UInt32 one = 1, zero = 0;
     AudioUnitSetProperty(g_micUnit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &one, sizeof one);
     AudioUnitSetProperty(g_micUnit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &zero, sizeof zero);
@@ -1849,9 +1865,9 @@ static bool rctl_mic_capture_start(void) {
     AURenderCallbackStruct cb; cb.inputProc = rctl_mic_input_cb; cb.inputProcRefCon = NULL;
     AudioUnitSetProperty(g_micUnit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &cb, sizeof cb);
     OSStatus st = AudioUnitInitialize(g_micUnit);
-    if (st != noErr) { char l[80]; snprintf(l, sizeof l, "miccap: init failed %d", (int)st); dlog(l); AudioComponentInstanceDispose(g_micUnit); g_micUnit = NULL; return false; }
+    if (st != noErr) { char l[80]; snprintf(l, sizeof l, "miccap: init failed %d", (int)st); dlog(l); AudioComponentInstanceDispose(g_micUnit); g_micUnit = NULL; publish_mic_indicator_state(false); return false; }
     st = AudioOutputUnitStart(g_micUnit);
-    if (st != noErr) { char l[80]; snprintf(l, sizeof l, "miccap: start failed %d", (int)st); dlog(l); AudioUnitUninitialize(g_micUnit); AudioComponentInstanceDispose(g_micUnit); g_micUnit = NULL; return false; }
+    if (st != noErr) { char l[80]; snprintf(l, sizeof l, "miccap: start failed %d", (int)st); dlog(l); AudioUnitUninitialize(g_micUnit); AudioComponentInstanceDispose(g_micUnit); g_micUnit = NULL; publish_mic_indicator_state(false); return false; }
     g_micCapturing = true;
     dlog("miccap: started (daemon RemoteIO input)");
     return true;
@@ -1866,6 +1882,7 @@ static void rctl_mic_capture_stop(void) {
         g_micUnit = NULL;
     }
     g_micCapturing = false;
+    publish_mic_indicator_state(false);
     dlog("miccap: stopped");
 }
 
@@ -1928,6 +1945,7 @@ int main(int argc, char **argv) {
     }
 
     @autoreleasepool {
+        publish_mic_indicator_state(false);
         configure_memory_limit();
         dlog("rctld started");
         rctl_relay_start();

@@ -136,7 +136,9 @@ On iOS 14 home-button devices, UIKit renders the green camera dot through
 `rctlapp` loader suppresses installation of that view only while its atomic
 rctl-owned capture flag is active. Camera indicators for normal application use
 remain unchanged before and after an rctl still or live session; this does not
-disable system sensor accounting or TCC.
+disable system sensor accounting or TCC. The class and selector are resolved and
+hooked conditionally at runtime; an unsupported iOS version keeps the native
+indicator and camera capture continues normally.
 
 The status-bar item is an aggregate camera signal rather than an attributed rctl
 item. If the foreground host application uses the camera concurrently during an

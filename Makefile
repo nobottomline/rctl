@@ -81,6 +81,12 @@ test-media-activity:
 		-o /tmp/rctl-media-activity-test
 	@/tmp/rctl-media-activity-test
 
+.PHONY: test-privacy-indicator
+test-privacy-indicator:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/PrivacyIndicatorStateTest.cpp \
+		-o /tmp/rctl-privacy-indicator-test
+	@/tmp/rctl-privacy-indicator-test
+
 .PHONY: test-media-library
 test-media-library:
 	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Wno-deprecated-declarations -Icore \
@@ -101,4 +107,4 @@ test-virtual-mic:
 	@/tmp/rctl-virtual-mic-dsp-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-personalize
+test: test-camera-recorder test-media-activity test-privacy-indicator test-media-library test-virtual-mic test-personalize

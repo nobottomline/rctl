@@ -113,6 +113,28 @@ Modes exposed by the browser:
 When muting the iPad, the daemon saves the previous volume and restores it when
 device output is re-enabled.
 
+## Microphone privacy indicator
+
+The `Sound` section's `Listen` control captures playback audio in
+`mediaserverd`; it does not open the microphone. The separate `Microphone` section's
+`Listen` and `Record` controls use the daemon-owned RemoteIO input and normally
+produce iOS's orange microphone indicator.
+
+For rctl-owned room-microphone capture, `rctld` publishes a versionless 64-bit
+`notifyd` state containing an active bit and its current PID. SpringBoard filters
+only matching `rctld` entries from `STMediaStatusDomainData`'s active and muted
+audio-recording attribution sets. Camera and microphone attributions from every
+other PID remain visible. SpringBoard additionally verifies that the announced
+PID resolves to an executable ending in `/usr/local/bin/rctld`, including a
+possible jailbreak-root prefix. SystemStatus accounting is not disabled.
+
+The filter is deliberately fail-open. The daemon clears state on startup, every
+failed capture start and normal stop. SpringBoard checks private classes and
+selectors at runtime before hooking them; a changed or missing API, failed
+notification registration, stale daemon PID, or unsupported iOS release leaves
+the native indicator visible without affecting capture. This path must be
+runtime-qualified on each supported iOS family.
+
 ## Historical findings kept for reference
 
 The removed `audioprobe/` target was a diagnostic-only mediaserverd probe. It

@@ -7,6 +7,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
+#import <notify.h>
+#import <stdatomic.h>
+#import <substrate.h>
 #import <pthread.h>
 #import <string.h>
 #import <unistd.h>
@@ -15,7 +19,94 @@
 #import "capture/ScreenCapture.h"
 #import "input/TouchInjector.h"
 #import "ipc/Ipc.h"
+#import "privacy/IndicatorState.h"
 #import <sys/sysctl.h>
+
+static _Atomic uint64_t gRctlMicIndicatorState = 0;
+static int gRctlMicIndicatorNotifyToken = -1;
+static NSSet *(*gOriginalAudioRecordingAttributions)(id, SEL);
+static NSSet *(*gOriginalMutedAudioRecordingAttributions)(id, SEL);
+
+static bool rctl_is_daemon_pid(int pid) {
+    if (pid <= 1) return false;
+    typedef int (*ProcPIDPath)(int, void *, uint32_t);
+    static ProcPIDPath procPIDPath = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        procPIDPath = (ProcPIDPath)dlsym(RTLD_DEFAULT, "proc_pidpath");
+    });
+    if (!procPIDPath) return false;
+
+    char path[4096] = {0};
+    int result = procPIDPath(pid, path, sizeof(path));
+    static const char suffix[] = "/usr/local/bin/rctld";
+    size_t pathLength = strnlen(path, sizeof(path));
+    size_t suffixLength = sizeof(suffix) - 1;
+    return result > 0 && pathLength >= suffixLength &&
+           strcmp(path + pathLength - suffixLength, suffix) == 0;
+}
+
+static NSSet *rctl_filter_mic_attributions(NSSet *attributions) {
+    uint64_t state = atomic_load(&gRctlMicIndicatorState);
+    int daemonPID = rctl_mic_indicator_pid(state);
+    if (!rctl_is_daemon_pid(daemonPID) || attributions.count == 0) return attributions;
+
+    NSMutableSet *filtered = nil;
+    SEL pidSelector = NSSelectorFromString(@"pid");
+    for (id attribution in attributions) {
+        if (![attribution respondsToSelector:pidSelector]) continue;
+        int attributionPID = ((int (*)(id, SEL))objc_msgSend)(attribution, pidSelector);
+        if (!rctl_mic_indicator_matches(state, attributionPID)) continue;
+        if (!filtered) filtered = [attributions mutableCopy];
+        [filtered removeObject:attribution];
+    }
+    return filtered ? [filtered copy] : attributions;
+}
+
+static NSSet *rctl_audio_recording_attributions(id self, SEL command) {
+    return rctl_filter_mic_attributions(gOriginalAudioRecordingAttributions(self, command));
+}
+
+static NSSet *rctl_muted_audio_recording_attributions(id self, SEL command) {
+    return rctl_filter_mic_attributions(
+        gOriginalMutedAudioRecordingAttributions(self, command));
+}
+
+static void rctl_update_mic_indicator_state(int token) {
+    uint64_t state = 0;
+    if (notify_get_state(token, &state) != NOTIFY_STATUS_OK) state = 0;
+    atomic_store(&gRctlMicIndicatorState, state);
+}
+
+static void rctl_install_mic_indicator_filter(void) {
+    // Private SystemStatus APIs vary across iOS releases. Every lookup is
+    // conditional: an unknown release simply keeps Apple's indicator visible.
+    dlopen("/System/Library/PrivateFrameworks/SystemStatus.framework/SystemStatus",
+           RTLD_LAZY);
+    Class cls = NSClassFromString(@"STMediaStatusDomainData");
+    if (cls) {
+        SEL audio = NSSelectorFromString(@"audioRecordingAttributions");
+        if (class_getInstanceMethod(cls, audio)) {
+            MSHookMessageEx(cls, audio, (IMP)rctl_audio_recording_attributions,
+                            (IMP *)&gOriginalAudioRecordingAttributions);
+        }
+        SEL muted = NSSelectorFromString(@"mutedAudioRecordingAttributions");
+        if (class_getInstanceMethod(cls, muted)) {
+            MSHookMessageEx(cls, muted,
+                            (IMP)rctl_muted_audio_recording_attributions,
+                            (IMP *)&gOriginalMutedAudioRecordingAttributions);
+        }
+    }
+
+    int token = -1;
+    if (notify_register_dispatch(RCTL_MIC_INDICATOR_NOTIFICATION, &token,
+                                 dispatch_get_main_queue(), ^(int changedToken) {
+            rctl_update_mic_indicator_state(changedToken);
+        }) == NOTIFY_STATUS_OK) {
+        gRctlMicIndicatorNotifyToken = token;
+        rctl_update_mic_indicator_state(token);
+    }
+}
 
 // Edge system gestures (Control Center, Cover Sheet) can't be synthesized into
 // the right window via HID, so trigger them directly through SpringBoard's
@@ -750,6 +841,7 @@ static void rctl_set_media_state(bool capture, bool awake) {
     @autoreleasepool {
         if (![[[NSProcessInfo processInfo] processName] isEqualToString:@"SpringBoard"]) return;
         NSLog(@"[rctl-sbcap] loaded in SpringBoard");
+        rctl_install_mic_indicator_filter();
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             // Connect to the daemon (retrying) on a background thread.
