@@ -310,6 +310,11 @@ internet phase.
   TCC rows and therefore delete none on uninstall. TCC is still per-process, so
   this boundary must be revalidated for every supported jailbreak/iOS
   combination.
+- **Room-microphone indicator suppression is attribution-scoped.** SpringBoard
+  removes only active SystemStatus audio attributions whose PID matches the
+  current capturing `rctld` and whose executable path identifies that daemon;
+  another application's camera or microphone remains visible. Private API lookup
+  and `notifyd` synchronization fail open.
 - **`:8080` is unauthenticated.** Fine on a trusted LAN; **must** gain auth before
   internet exposure (see §6).
 - **The daemon is root** and exposes file read/write (`/v1/ls,pull,push,rm`), app
@@ -321,25 +326,13 @@ internet phase.
 
 ---
 
-## 9. iOS 17 / 18 porting considerations (future)
+## 9. Platform portability
 
-Plan: a used iPhone on a Dopamine-style (rootless) jailbreak. Expected work:
-- **Rootless paths:** binaries/dylibs/plists move under `/var/jb/...`. Update the
-  layout, the LaunchDaemon path, the MobileSubstrate dir, and any absolute paths.
-- **Injection layer:** ElleKit (Dopamine) instead of Substitute; the `%hook`/filter
-  model is the same, but verify selectors.
-- **Still capture API:** `AVCaptureStillImageOutput` is deprecated; on newer iOS use
-  `AVCapturePhotoOutput` with a (runtime-built) delegate, or `AVCaptureVideoDataOutput`
-  grabbing one sample buffer. The **frontmost-app capture technique is
-  version-independent** — only the capture call changes.
-- **TCC.db schema** and the camera codename may differ; re-verify the INSERT columns
-  and `kTCCServiceCamera`.
-- **Private APIs** (SpringBoard selectors, FBSOrientationObserver, the senderID flow,
-  CARenderServerRenderDisplay) shift between versions — expect a re-probe pass.
-- **arm64e / AMFI / entitlements:** the re-sign and entitlement story changes with
-  the jailbreak; on rootless, code signing and the trust cache work differently.
-- The architecture (3 tweaks + root daemon + web) ports cleanly; the device-specific
-  glue (paths, selectors, capture API) is what needs redoing.
+The current package remains qualified only for rootful iOS 14 with Substitute.
+Rootless packaging, newer private APIs and ElleKit require a separate build and
+runtime qualification lane; they are not a safe automatic fallback. The concrete
+compatibility matrix, path inventory and acceptance gates are in
+`docs/PORTABILITY.md`.
 
 ---
 
