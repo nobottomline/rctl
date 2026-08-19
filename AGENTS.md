@@ -51,8 +51,12 @@ The main ownership boundaries are:
 - Re-read shared files before editing and stage only task-owned paths.
 - Prefer the smallest complete change that uses existing component boundaries
   and helpers. Record material architectural decisions in the relevant document.
-- Do not push, publish, deploy to a VPS, mutate a physical device, or replace a
-  release artifact unless the user explicitly requests that delivery step.
+- Do not push, publish, deploy to a VPS, or replace a release artifact unless
+  the user explicitly requests that delivery step. The user has granted
+  standing authorization to deploy verified device-side changes to the
+  configured target iPad unless they explicitly opt out; use
+  `scripts/deploy.sh` with the operator-configured `RCTL_SSH`, and never
+  hard-code device addresses or aliases.
 - Device compilation is not runtime proof. Camera, audio, input, process
   lifecycle, and relay behavior require validation of the real execution path.
 
@@ -68,9 +72,10 @@ Run the narrowest relevant checks first, then broaden based on blast radius:
 - Relay smoke test: `./scripts/smoke_relay.sh`
 - Public package audit: `make release-check`
 
-Use `scripts/deploy.sh` for an explicitly authorized device deployment; do not
-use `make package install`. Follow the feature document for physical-device and
-browser validation. Report what was not exercised.
+Deploy verified device-side changes by default with `scripts/deploy.sh` and the
+operator-configured target unless the user explicitly says not to deploy; do
+not use `make package install`. Follow the feature document for physical-device
+and browser validation. Report what was not exercised.
 
 ## Commits
 
