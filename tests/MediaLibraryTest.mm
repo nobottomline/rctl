@@ -87,6 +87,7 @@ int main(void) {
         write_file(@"DCIM/100APPLE/CLOUD.MOV", @"local resource for cloud placeholder");
         write_file(@"DCIM/100APPLE/NEW.JPG", @"new capture");
         write_file(@"DCIM/100APPLE/UNINDEXED.MOV", @"new video");
+        write_file(@"DCIM/100APPLE/ANIMATED.GIF", @"animated image");
         NSString *outside = [kWork stringByAppendingPathComponent:@"outside/ESCAPE.JPG"];
         [files createDirectoryAtPath:outside.stringByDeletingLastPathComponent
           withIntermediateDirectories:YES attributes:nil error:nil];
@@ -101,14 +102,26 @@ int main(void) {
         NSDictionary *page = request(@"/v1/media", @"type=all&limit=100&refresh=1", 200);
         NSArray *items = page[@"items"];
         require([items isKindOfClass:[NSArray class]], @"list has no items array");
-        require([page[@"total"] integerValue] == 4,
+        require([page[@"total"] integerValue] == 5,
                 @"logical database assets plus new DCIM files expected");
 
         NSMutableSet *names = [NSMutableSet set];
         for (NSDictionary *item in items) [names addObject:item[@"name"] ?: @""];
         require([names isEqualToSet:[NSSet setWithArray:@[
-                    @"IMG_0001.JPG", @"VID_0002.MOV", @"NEW.JPG", @"UNINDEXED.MOV"]]],
+                    @"IMG_0001.JPG", @"VID_0002.MOV", @"NEW.JPG", @"UNINDEXED.MOV", @"ANIMATED.GIF"]]],
                 @"paired, hidden, deleted, cloud-only, traversal, or symlink asset leaked into the list");
+
+        NSDictionary *live = nil;
+        NSDictionary *animated = nil;
+        for (NSDictionary *candidate in items) {
+            if ([candidate[@"name"] isEqualToString:@"IMG_0001.JPG"]) live = candidate;
+            if ([candidate[@"name"] isEqualToString:@"ANIMATED.GIF"]) animated = candidate;
+        }
+        require([live[@"live"] boolValue], @"Live Photo was not marked as a compound asset");
+        require([live[@"motion_name"] isEqualToString:@"IMG_0001.MOV"],
+                @"Live Photo motion resource was not attached");
+        require([live[@"motion_size"] integerValue] > 0, @"Live Photo motion size was lost");
+        require([animated[@"animated"] boolValue], @"GIF was not marked as animated");
 
         NSDictionary *videoPage = request(@"/v1/media", @"type=video", 200);
         require([videoPage[@"total"] integerValue] == 2, @"video filter failed");

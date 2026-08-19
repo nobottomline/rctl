@@ -15,8 +15,9 @@ non-symlink file below `/var/mobile/Media`.
 A DCIM filesystem scan is merged only after a successful database read, for a
 new capture that has not appeared in `ZASSET` yet. Files sharing a directory and
 filename stem with any database asset are treated as resources of that logical
-asset, so a Live Photo's paired `.MOV` is not exposed as a duplicate zero-length
-video. This exclusion also covers Hidden and Recently Deleted database rows.
+asset. A visible Live Photo's paired `.MOV` is attached as its motion resource
+instead of being exposed as a duplicate zero-length video. Resources belonging
+to Hidden and Recently Deleted database rows remain excluded.
 An unavailable or incompatible database fails closed instead of risking
 disclosure of those assets. Results are cached for 15 seconds and sorted newest
 first. iCloud-only placeholders are omitted until iOS downloads their original
@@ -54,23 +55,34 @@ previews.
 
 ## Browser Behavior
 
-The Photos sheet supports photo/video filters, filename search, pagination,
-responsive thumbnails, full-screen photo preview, video preview, and original
-download. Originals travel over the existing peer-to-peer `files` DataChannel,
-not through the relay HTTP body tunnel.
+The Media sheet supports photo/video filters, filename search, pagination,
+responsive thumbnails, full-screen preview, and an explicit action menu on every
+tile. Download, Share, and original media playback travel over the existing
+peer-to-peer `files` DataChannel, not through the relay HTTP body tunnel. Copy
+Image converts the bounded JPEG preview to PNG for broad clipboard compatibility;
+browser image clipboard APIs require a secure context, so local plain HTTP keeps
+Download and Share as the available fallbacks.
 
-Browser video playback currently materializes one Blob, so previews are limited
-to 250 MiB to avoid exhausting mobile-browser memory. Larger videos remain
-downloadable. A future large-video player should use a bounded streaming
-protocol and a browser-compatible fragmented MP4 path rather than increasing
-this limit.
+GIF previews remain static until the user requests the original, then the browser
+renders the original animated file. A Live Photo remains one library item and
+offers its paired motion resource from the same viewer. Motion uses the original
+QuickTime codec: browsers that cannot decode that codec show an explicit error
+and retain Download Original rather than transcoding on the memory-constrained
+device.
+
+Browser video and Live Photo playback currently materializes one Blob, so motion
+previews are limited to 250 MiB. Animated image previews are limited to 50 MiB,
+and Web Share preparation to 100 MiB. Larger originals remain downloadable. A
+future large-media player should use a bounded streaming protocol and a
+browser-compatible fragmented MP4 path rather than increasing these limits.
 
 The gallery is read-only by design. Delete, edit, favorite, Hidden album, and
 forced iCloud download are outside the current release contract.
 
 ## Qualification
 
-Test JPEG, HEIC, PNG, MOV, and MP4 assets; portrait and landscape orientation;
-duplicate filenames; an edited asset; an iCloud-only placeholder; Hidden and
-Recently Deleted; pagination above 100 assets; relay reconnect during original
-download; and a video above the preview limit.
+Test JPEG, HEIC, PNG, animated GIF, Live Photo, MOV, and MP4 assets; portrait and
+landscape orientation; duplicate filenames; an edited asset; an iCloud-only
+placeholder; Hidden and Recently Deleted; pagination above 100 assets; Copy over
+HTTPS; Share on supported Safari/Chrome versions; relay reconnect during original
+download; an unsupported motion codec; and media above each preview limit.
