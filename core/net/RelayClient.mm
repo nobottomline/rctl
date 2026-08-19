@@ -645,10 +645,15 @@ didReceiveResponse:(NSURLResponse *)response
     }
     NSHTTPURLResponse *http = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
     NSInteger status = http ? http.statusCode : 200;
-    NSString *ctype = http.allHeaderFields[@"Content-Type"];
+    NSString *ctype = [http valueForHTTPHeaderField:@"Content-Type"];
+    NSString *disposition = [http valueForHTTPHeaderField:@"Content-Disposition"];
+    long long contentLength = response.expectedContentLength;
     dispatch_async(self.queue, ^{
         NSMutableDictionary *msg = [@{@"type": @"stream_start", @"id": streamID, @"status": @(status)} mutableCopy];
         if ([ctype isKindOfClass:[NSString class]] && ctype.length) msg[@"content_type"] = ctype;
+        if ([disposition isKindOfClass:[NSString class]] && disposition.length)
+            msg[@"content_disposition"] = disposition;
+        if (contentLength >= 0) msg[@"content_length"] = @(contentLength);
         id wsTask = nil;
         @synchronized (self.streamIDs) {
             wsTask = self.streamSocketTasks[streamID];

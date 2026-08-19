@@ -24,6 +24,20 @@ export function rctlPath(path: string): string {
   return path
 }
 
+export function fileDownloadURL(path: string): string {
+  const endpoint = `/v1/pull_stream?path=${encodeURIComponent(path)}`
+  return RELAY_MODE && STREAM_BASE ? STREAM_BASE + endpoint : endpoint
+}
+
+export function downloadFile(path: string, name: string): void {
+  const anchor = document.createElement('a')
+  anchor.href = fileDownloadURL(path)
+  anchor.download = name
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
 export function api(path: string, init?: RequestInit): Promise<Response> {
   return fetch(rctlPath(path), init)
 }

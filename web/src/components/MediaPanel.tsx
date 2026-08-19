@@ -14,7 +14,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { apiJSON, rctlPath } from '../lib/rctl'
+import { apiJSON, downloadFile, rctlPath } from '../lib/rctl'
 import { fmtSize, type FileTransfer } from '../lib/files'
 import { cn } from '../lib/cn'
 import { Sheet } from './Sheet'
@@ -115,7 +115,7 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
 
   const download = (asset: Asset) => {
     setMenu(null)
-    if (!transfer.download(asset.path, asset.name)) notify('The P2P file channel is unavailable or busy.')
+    downloadFile(asset.path, asset.name)
   }
 
   const copy = async (asset: Asset) => {

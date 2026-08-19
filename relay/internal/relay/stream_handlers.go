@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,13 +17,39 @@ type streamOpenRequest struct {
 }
 
 type streamTunnelEvent struct {
-	Type        string `json:"type"`
-	ID          string `json:"id"`
-	Status      int    `json:"status,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	Body        string `json:"body,omitempty"`
-	BodyBytes   []byte `json:"-"`
-	Error       string `json:"error,omitempty"`
+	Type               string `json:"type"`
+	ID                 string `json:"id"`
+	Status             int    `json:"status,omitempty"`
+	ContentType        string `json:"content_type,omitempty"`
+	ContentDisposition string `json:"content_disposition,omitempty"`
+	ContentLength      *int64 `json:"content_length,omitempty"`
+	Body               string `json:"body,omitempty"`
+	BodyBytes          []byte `json:"-"`
+	Error              string `json:"error,omitempty"`
+}
+
+func safeStreamHeader(value string) bool {
+	if len(value) == 0 || len(value) > 1024 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func applyStreamMetadata(header http.Header, event streamTunnelEvent) {
+	if safeStreamHeader(event.ContentType) {
+		header.Set("Content-Type", event.ContentType)
+	}
+	if safeStreamHeader(event.ContentDisposition) {
+		header.Set("Content-Disposition", event.ContentDisposition)
+	}
+	if event.ContentLength != nil && *event.ContentLength >= 0 {
+		header.Set("Content-Length", strconv.FormatInt(*event.ContentLength, 10))
+	}
 }
 
 func (s *server) handleTunnelStream(w http.ResponseWriter, r *http.Request) {
@@ -86,9 +113,7 @@ func (s *server) handleTunnelStream(w http.ResponseWriter, r *http.Request) {
 				if status < 100 || status > 599 {
 					status = http.StatusOK
 				}
-				if event.ContentType != "" {
-					w.Header().Set("Content-Type", event.ContentType)
-				}
+				applyStreamMetadata(w.Header(), event)
 				w.Header().Set("Cache-Control", "no-store")
 				w.WriteHeader(status)
 				if flusher != nil {

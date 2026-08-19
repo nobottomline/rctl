@@ -20,8 +20,7 @@ import {
   TriangleAlert,
   type LucideProps,
 } from 'lucide-react'
-import { api, apiDo, apiJSON } from '../lib/rctl'
-import { saveBlobToFile, type FileTransfer } from '../lib/files'
+import { api, apiDo, apiJSON, downloadFile } from '../lib/rctl'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 
@@ -142,7 +141,7 @@ function fallbackCopy(s: string) {
   ta.remove()
 }
 
-export default function SystemPanel({ onClose, transfer }: { onClose: () => void; transfer: FileTransfer }) {
+export default function SystemPanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('packages')
   const [q, setQ] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -212,20 +211,10 @@ export default function SystemPanel({ onClose, transfer }: { onClose: () => void
     await load('tweaks', true)
     setNeedRespring(true)
   }
-  const download = async (path: string) => {
+  const download = (path: string) => {
     setMenu(null)
     const name = baseName(path).trim() || 'file'
-    setNote(`Preparing ${name}…`)
-    try {
-      // Fetch over the P2P channel, then save in this click's async continuation so
-      // Safari (which blocks downloads outside a live user gesture) accepts it.
-      const blob = await transfer.fetch(path)
-      saveBlobToFile(blob, name)
-      setNote(`Saved ${name}`)
-    } catch {
-      setNote(`Couldn’t download ${name}`)
-    }
-    window.setTimeout(() => setNote(null), 2200)
+    downloadFile(path, name)
   }
   const copy = (text: string) => {
     setMenu(null)

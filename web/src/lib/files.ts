@@ -1,8 +1,7 @@
-// P2P file transfer over the WebRTC "files" DataChannel. It bypasses the relay
-// (so any size, no body cap) and is paced against SCTP bufferbloat: dumping a
-// whole file into the send buffer collapses usrsctp's congestion window, so we
-// cap in-flight bytes at 512KB. Wire protocol (mirrors the device/daemon side):
-//   download: send {op:get,path} -> recv {op:get_meta,name,size}, binary chunks,
+// P2P file transfer over the WebRTC "files" DataChannel. In-memory fetches are
+// reserved for bounded previews and browser-side processing; normal downloads
+// use the streaming HTTP tunnel in rctl.ts. Wire protocol (device/daemon mirror):
+//   fetch:    send {op:get,path} -> recv {op:get_meta,name,size}, binary chunks,
 //             {op:get_eof}
 //   upload:   send {op:put,path,size}, 64KB binary chunks, {op:put_eof}
 //             -> recv {op:put_ok}
@@ -30,10 +29,6 @@ export function saveBlobToFile(blob: Blob, name: string) {
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(u), 1500)
-}
-
-function saveBlob(parts: ArrayBuffer[], name: string) {
-  saveBlobToFile(new Blob(parts), name)
 }
 
 const CHUNK = 64 * 1024
@@ -92,15 +87,13 @@ export class FileTransfer {
       this.status(`↓ ${this.dl.name} 0%`, 'down')
     } else if (m.op === 'get_eof') {
       if (this.dl) {
-        const { parts, name } = this.dl
+        const { parts } = this.dl
         this.dl = null
         this.status('', 'idle')
         if (this.dlResolve) {
           this.dlResolve(new Blob(parts))
           this.dlResolve = null
           this.dlReject = null
-        } else {
-          saveBlob(parts, name)
         }
       }
     } else if (m.op === 'put_ok') {
@@ -117,13 +110,6 @@ export class FileTransfer {
       }
       this.status(`⚠ ${m.msg || 'error'}`, 'err')
     }
-  }
-
-  download(path: string, name: string): boolean {
-    if (!this.ready() || this.dl) return false
-    this.dl = { name: name || 'file', size: 0, got: 0, parts: [] } // provisional until get_meta
-    this.ch!.send(JSON.stringify({ op: 'get', path }))
-    return true
   }
 
   // Fetch a file into memory over the P2P channel (preview, not download). Used for

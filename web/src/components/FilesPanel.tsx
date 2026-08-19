@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, Download, File as FileIcon, Folder, RefreshCw, Trash2, Upload } from 'lucide-react'
-import { api, apiJSON } from '../lib/rctl'
-import { fmtSize, saveBlobToFile, type FileTransfer, type TransferStatus } from '../lib/files'
+import { api, apiJSON, downloadFile } from '../lib/rctl'
+import { fmtSize, type FileTransfer, type TransferStatus } from '../lib/files'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 
 // Filesystem browser backed by rctld (root): /v1/ls to list, /v1/rm to delete,
-// and the P2P "files" DataChannel for transfers of any size (/v1/pull & /v1/push
-// are small-file fallbacks). Presented as a Sheet (modal/bottom-sheet), themed.
+// bounded HTTP streaming for downloads, and the P2P "files" DataChannel for
+// uploads. Presented as a Sheet (modal/bottom-sheet), themed.
 type Entry = { name: string; dir: boolean; size: number }
 
 const enc = encodeURIComponent
@@ -46,24 +46,7 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const download = async (e: Entry) => {
-    const p = join(path, e.name)
-    try {
-      // Fetch over P2P (any size) then save in this click's async continuation --
-      // Safari only allows the download while the user gesture is still live.
-      const blob = await transfer.fetch(p)
-      saveBlobToFile(blob, e.name)
-      return
-    } catch {
-      /* channel busy/unavailable -> small-file HTTP fallback */
-    }
-    try {
-      const b = await (await api(`/v1/pull?path=${enc(p)}`)).blob()
-      saveBlobToFile(b, e.name)
-    } catch {
-      /* ignore */
-    }
-  }
+  const download = (e: Entry) => downloadFile(join(path, e.name), e.name)
 
   const del = async (e: Entry) => {
     await api(`/v1/rm?path=${enc(join(path, e.name))}`).catch(() => {})

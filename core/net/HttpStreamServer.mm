@@ -21,6 +21,7 @@
 #import <stdlib.h>
 #import <stdio.h>
 #import <math.h>
+#import <sys/stat.h>
 
 #define RCTL_MAX_CLIENTS 8
 #define RCTL_SUB_QUEUE_MAX 24      // per-subscriber queued frames before drop-to-latest
@@ -106,6 +107,119 @@ static char *read_file(const char *path, size_t *outLen) {
 static void send_data(int fd, const char *status, const char *ctype,
                       const void *body, size_t len);
 static void send_text(int fd, const char *status, const char *ctype, const char *body);
+static bool send_full(int fd, const void *buf, size_t len);
+
+static bool decode_query_value(const char *source, size_t source_len, char *out, size_t out_cap) {
+    if (!out_cap) return false;
+    size_t oi = 0;
+    for (size_t i = 0; i < source_len; i++) {
+        unsigned char value = (unsigned char)source[i];
+        if (value == '%') {
+            if (i + 2 >= source_len) return false;
+            char hex[3] = { source[i + 1], source[i + 2], 0 };
+            char *end = NULL;
+            long decoded = strtol(hex, &end, 16);
+            if (!end || *end || decoded <= 0 || decoded > 255) return false;
+            value = (unsigned char)decoded;
+            i += 2;
+        }
+        if (oi + 1 >= out_cap) return false;
+        out[oi++] = (char)value;
+    }
+    out[oi] = 0;
+    return oi > 0;
+}
+
+static bool pull_stream_path(const char *request, char *out, size_t out_cap) {
+    static const char prefix[] = "GET /v1/pull_stream?";
+    if (strncmp(request, prefix, sizeof(prefix) - 1) != 0) return false;
+    const char *target_end = strchr(request + sizeof(prefix) - 1, ' ');
+    if (!target_end) return false;
+    const char *query = request + sizeof(prefix) - 1;
+    while (query < target_end) {
+        const char *pair_end = (const char *)memchr(query, '&', (size_t)(target_end - query));
+        if (!pair_end) pair_end = target_end;
+        static const char key[] = "path=";
+        if ((size_t)(pair_end - query) >= sizeof(key) - 1 &&
+            memcmp(query, key, sizeof(key) - 1) == 0) {
+            return decode_query_value(query + sizeof(key) - 1,
+                                      (size_t)(pair_end - query - (sizeof(key) - 1)),
+                                      out, out_cap);
+        }
+        query = pair_end + (pair_end < target_end ? 1 : 0);
+    }
+    return false;
+}
+
+static void download_name(const char *path, char *out, size_t out_cap) {
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    size_t oi = 0;
+    for (; *base && oi + 1 < out_cap; base++) {
+        unsigned char c = (unsigned char)*base;
+        out[oi++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') ? (char)c : '_';
+    }
+    if (!oi && out_cap >= 9) { memcpy(out, "download", 8); oi = 8; }
+    out[oi] = 0;
+}
+
+static void stream_file_download(int fd, const char *request) {
+    char path[1024];
+    if (!pull_stream_path(request, path, sizeof(path))) {
+        send_text(fd, "400 Bad Request", "application/json", "{\"error\":\"invalid path\"}");
+        return;
+    }
+
+    int file_fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (file_fd < 0) {
+        send_text(fd, errno == ENOENT ? "404 Not Found" : "403 Forbidden",
+                  "application/json", "{\"error\":\"cannot open\"}");
+        return;
+    }
+    struct stat st;
+    if (fstat(file_fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0) {
+        close(file_fd);
+        send_text(fd, "400 Bad Request", "application/json", "{\"error\":\"not a regular file\"}");
+        return;
+    }
+
+    char name[192];
+    download_name(path, name, sizeof(name));
+    uint8_t *buffer = (uint8_t *)malloc(64 * 1024);
+    if (!buffer) {
+        close(file_fd);
+        send_text(fd, "500 Internal Server Error", "application/json", "{\"error\":\"out of memory\"}");
+        return;
+    }
+    struct timeval timeout = { 30, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    char header[896];
+    int header_len = snprintf(header, sizeof(header),
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+        "Content-Disposition: attachment; filename=\"%s\"\r\n"
+        "Content-Length: %lld\r\nCache-Control: no-store\r\n"
+        "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+        "Connection: close\r\n\r\n", name, (long long)st.st_size);
+    if (header_len <= 0 || header_len >= (int)sizeof(header) ||
+        !send_full(fd, header, (size_t)header_len)) {
+        free(buffer);
+        close(file_fd);
+        return;
+    }
+    for (;;) {
+        ssize_t count = read(file_fd, buffer, 64 * 1024);
+        if (count == 0) break;
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (!send_full(fd, buffer, (size_t)count)) break;
+    }
+    free(buffer);
+    close(file_fd);
+}
 
 static const char *kHtml = R"HTML(<!doctype html>
 <html><head><meta charset="utf-8">
@@ -436,7 +550,10 @@ static void handle_client(rctl_http_server *s, int fd) {
     if (n <= 0) { close(fd); return; }
     req[n] = 0;
 
-    if (strncmp(req, "GET /ws/term", 12) == 0) {
+    if (strncmp(req, "GET /v1/pull_stream?", 20) == 0) {
+        stream_file_download(fd, req);
+        close(fd);
+    } else if (strncmp(req, "GET /ws/term", 12) == 0) {
         rctl_term_handle_ws(fd, req);
     } else if (strncmp(req, "GET /ws/signal", 14) == 0) {
         rctl_signal_handle_ws(fd, req);
