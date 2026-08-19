@@ -129,6 +129,22 @@ is `live` but `HTMLVideoElement.currentTime` stops advancing, it rebuilds only t
 camera signaling and PeerConnection; control, terminal and file channels remain
 untouched. Initial camera enable is retried after transient tunnel failures.
 
+## Privacy indicator
+
+On iOS 14 home-button devices, UIKit renders the green camera dot through
+`_UIStatusBarSensorActivityView` inside the foreground application. The small
+`rctlapp` loader suppresses installation of that view only while its atomic
+rctl-owned capture flag is active. Camera indicators for normal application use
+remain unchanged before and after an rctl still or live session; this does not
+disable system sensor accounting or TCC.
+
+The status-bar item is an aggregate camera signal rather than an attributed rctl
+item. If the foreground host application uses the camera concurrently during an
+rctl session, its dot is also hidden for that overlap. Do not broaden this into a
+permanent UIKit or SpringBoard suppression. Notched devices use a separate
+`SBRecordingIndicatorViewController` path and are intentionally left unchanged
+until that path is validated on supported hardware.
+
 ## Recording
 
 Recording reuses the Annex-B stream received by `rctld`; it does not create

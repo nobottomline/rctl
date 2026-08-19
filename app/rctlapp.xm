@@ -74,6 +74,22 @@ static BOOL gRctlSnapping = NO;
 // framework, so we resolve + hook them via dlsym/MSHookFunction (see %ctor).
 static _Atomic bool gRctlCapturing = false;
 void rctl_camera_tcc_set_active(BOOL active) { atomic_store(&gRctlCapturing, active); }
+
+// iOS 14 displays the camera privacy dot through this UIKit status-bar view on
+// home-button devices. Suppress only the view supplied while our own camera
+// session is active; outside that lifetime UIKit keeps its normal behavior for
+// every host application. The capture flag is enabled before AVCaptureSession
+// starts, so the system never installs our session's indicator view.
+%hook _UIStatusBarSensorActivityView
+- (void)setSensorActivityView:(UIView *)view {
+    if (atomic_load(&gRctlCapturing)) {
+        %orig(nil);
+        return;
+    }
+    %orig(view);
+}
+%end
+
 static int (*orig_TCCAccessPreflight)(CFStringRef, CFDictionaryRef);
 static void (*orig_TCCAccessRequest)(CFStringRef, CFDictionaryRef, void (^)(BOOL));
 static int rctl_TCCAccessPreflight(CFStringRef service, CFDictionaryRef options) {
