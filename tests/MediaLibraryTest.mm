@@ -78,10 +78,15 @@ int main(void) {
         NSFileManager *files = [NSFileManager defaultManager];
         [files removeItemAtPath:kWork error:nil];
         write_file(@"DCIM/100APPLE/IMG_0001.JPG", @"photo");
+        write_file(@"DCIM/100APPLE/IMG_0001.MOV", @"live photo paired video");
         write_file(@"DCIM/100APPLE/VID_0002.MOV", @"video");
         write_file(@"DCIM/100APPLE/HIDDEN.JPG", @"hidden");
+        write_file(@"DCIM/100APPLE/HIDDEN.MOV", @"hidden live photo paired video");
         write_file(@"DCIM/100APPLE/DELETED.JPG", @"deleted");
+        write_file(@"DCIM/100APPLE/DELETED.MOV", @"deleted live photo paired video");
+        write_file(@"DCIM/100APPLE/CLOUD.MOV", @"local resource for cloud placeholder");
         write_file(@"DCIM/100APPLE/NEW.JPG", @"new capture");
+        write_file(@"DCIM/100APPLE/UNINDEXED.MOV", @"new video");
         NSString *outside = [kWork stringByAppendingPathComponent:@"outside/ESCAPE.JPG"];
         [files createDirectoryAtPath:outside.stringByDeletingLastPathComponent
           withIntermediateDirectories:YES attributes:nil error:nil];
@@ -96,16 +101,21 @@ int main(void) {
         NSDictionary *page = request(@"/v1/media", @"type=all&limit=100&refresh=1", 200);
         NSArray *items = page[@"items"];
         require([items isKindOfClass:[NSArray class]], @"list has no items array");
-        require([page[@"total"] integerValue] == 3, @"visible database assets plus new DCIM file expected");
+        require([page[@"total"] integerValue] == 4,
+                @"logical database assets plus new DCIM files expected");
 
         NSMutableSet *names = [NSMutableSet set];
         for (NSDictionary *item in items) [names addObject:item[@"name"] ?: @""];
-        require([names isEqualToSet:[NSSet setWithArray:@[@"IMG_0001.JPG", @"VID_0002.MOV", @"NEW.JPG"]]],
-                @"hidden, deleted, cloud-only, traversal, or symlink asset leaked into the list");
+        require([names isEqualToSet:[NSSet setWithArray:@[
+                    @"IMG_0001.JPG", @"VID_0002.MOV", @"NEW.JPG", @"UNINDEXED.MOV"]]],
+                @"paired, hidden, deleted, cloud-only, traversal, or symlink asset leaked into the list");
 
         NSDictionary *videoPage = request(@"/v1/media", @"type=video", 200);
-        require([videoPage[@"total"] integerValue] == 1, @"video filter failed");
-        NSDictionary *video = [videoPage[@"items"] firstObject];
+        require([videoPage[@"total"] integerValue] == 2, @"video filter failed");
+        NSDictionary *video = nil;
+        for (NSDictionary *candidate in videoPage[@"items"])
+            if ([candidate[@"name"] isEqualToString:@"VID_0002.MOV"]) video = candidate;
+        require(video != nil, @"indexed video was not returned");
         require([video[@"duration"] doubleValue] == 12.5, @"video duration metadata was lost");
         require([video[@"width"] integerValue] == 1920, @"video dimensions were lost");
 

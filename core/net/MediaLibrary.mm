@@ -60,6 +60,14 @@ static NSString *asset_id(NSString *path) {
     return [NSString stringWithFormat:@"%016llx", (unsigned long long)hash];
 }
 
+// Photos stores a Live Photo as one logical ZASSET plus image/video resources
+// with the same directory and filename stem. The DCIM fallback must not publish
+// those resources as separate assets.
+static NSString *logical_asset_key(NSString *path) {
+    if (!path.length) return nil;
+    return path.stringByDeletingPathExtension.lowercaseString;
+}
+
 static NSString *media_kind(NSString *extension) {
     static NSSet *photos;
     static NSSet *videos;
@@ -112,7 +120,8 @@ static void add_asset(NSMutableArray *assets, NSMutableDictionary *byID,
 }
 
 static BOOL load_photos_database(NSMutableArray *assets, NSMutableDictionary *byID,
-                                 NSMutableSet *paths, NSMutableSet *knownPaths) {
+                                 NSMutableSet *paths, NSMutableSet *knownPaths,
+                                 NSMutableSet *knownLogicalAssets) {
     sqlite3 *database = NULL;
     if (sqlite3_open_v2(photos_database().fileSystemRepresentation, &database,
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, NULL) != SQLITE_OK) {
@@ -138,7 +147,11 @@ static BOOL load_photos_database(NSMutableArray *assets, NSMutableDictionary *by
                 NSString *path = [[device_media_root() stringByAppendingPathComponent:directory]
                                   stringByAppendingPathComponent:filename];
                 NSString *resolved = path.stringByResolvingSymlinksInPath.stringByStandardizingPath;
-                if (path_is_inside_media_root(resolved)) [knownPaths addObject:resolved];
+                if (path_is_inside_media_root(resolved)) {
+                    [knownPaths addObject:resolved];
+                    NSString *logicalKey = logical_asset_key(resolved);
+                    if (logicalKey) [knownLogicalAssets addObject:logicalKey];
+                }
                 if (sqlite3_column_int(statement, 8) != 0 || sqlite3_column_int(statement, 9) != 0 ||
                     sqlite3_column_int(statement, 10) != 0) continue;
                 NSString *kind = sqlite3_column_int(statement, 2) == 1 ? @"video" : media_kind(filename.pathExtension);
@@ -160,7 +173,8 @@ static BOOL load_photos_database(NSMutableArray *assets, NSMutableDictionary *by
 }
 
 static void load_dcim_fallback(NSMutableArray *assets, NSMutableDictionary *byID,
-                               NSMutableSet *paths, NSSet *knownPaths) {
+                               NSMutableSet *paths, NSSet *knownPaths,
+                               NSSet *knownLogicalAssets) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *keys = @[NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey, NSURLFileSizeKey, NSURLContentModificationDateKey,
                       NSURLCreationDateKey, NSURLNameKey];
@@ -176,6 +190,8 @@ static void load_dcim_fallback(NSMutableArray *assets, NSMutableDictionary *byID
             if (!kind) continue;
             NSString *resolved = url.path.stringByResolvingSymlinksInPath.stringByStandardizingPath;
             if ([knownPaths containsObject:resolved]) continue;
+            NSString *logicalKey = logical_asset_key(resolved);
+            if (logicalKey && [knownLogicalAssets containsObject:logicalKey]) continue;
             NSDate *date = values[NSURLCreationDateKey] ?: values[NSURLContentModificationDateKey] ?: [NSDate dateWithTimeIntervalSince1970:0];
             NSDictionary *asset = make_asset(url.path, values[NSURLNameKey] ?: url.lastPathComponent,
                                              kind, date, nil, nil, nil);
@@ -189,8 +205,9 @@ static void rebuild_assets(void) {
     NSMutableDictionary *byID = [NSMutableDictionary dictionary];
     NSMutableSet *paths = [NSMutableSet set];
     NSMutableSet *knownPaths = [NSMutableSet set];
-    BOOL indexed = load_photos_database(assets, byID, paths, knownPaths);
-    if (indexed) load_dcim_fallback(assets, byID, paths, knownPaths);
+    NSMutableSet *knownLogicalAssets = [NSMutableSet set];
+    BOOL indexed = load_photos_database(assets, byID, paths, knownPaths, knownLogicalAssets);
+    if (indexed) load_dcim_fallback(assets, byID, paths, knownPaths, knownLogicalAssets);
     [assets sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         NSComparisonResult byDate = [b[@"created"] compare:a[@"created"]];
         return byDate == NSOrderedSame ? [a[@"path"] compare:b[@"path"]] : byDate;

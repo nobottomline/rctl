@@ -13,10 +13,14 @@ path is canonicalized and accepted only when it resolves to a regular,
 non-symlink file below `/var/mobile/Media`.
 
 A DCIM filesystem scan is merged only after a successful database read, for a
-new capture that has not appeared in `ZASSET` yet. An unavailable or incompatible
-database fails closed instead of risking disclosure of Hidden/Recently Deleted
-assets. Results are cached for 15 seconds and sorted newest first. iCloud-only
-placeholders are omitted until iOS downloads their original file.
+new capture that has not appeared in `ZASSET` yet. Files sharing a directory and
+filename stem with any database asset are treated as resources of that logical
+asset, so a Live Photo's paired `.MOV` is not exposed as a duplicate zero-length
+video. This exclusion also covers Hidden and Recently Deleted database rows.
+An unavailable or incompatible database fails closed instead of risking
+disclosure of those assets. Results are cached for 15 seconds and sorted newest
+first. iCloud-only placeholders are omitted until iOS downloads their original
+file.
 
 ## API
 

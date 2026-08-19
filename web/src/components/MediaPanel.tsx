@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Download, Film, Image as ImageIcon, LoaderCircle, Play, RefreshCw, Search, X } from 'lucide-react'
 import { apiJSON, rctlPath } from '../lib/rctl'
 import { fmtSize, type FileTransfer } from '../lib/files'
@@ -39,13 +39,16 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<Asset | null>(null)
   const [generation, setGeneration] = useState(0)
+  const requestSequence = useRef(0)
 
   const load = async (cursor = 0, refresh = false) => {
+    const request = ++requestSequence.current
     setBusy(true)
     const params = new URLSearchParams({ type: kind, cursor: String(cursor), limit: String(PAGE_SIZE) })
     if (query.trim()) params.set('q', query.trim())
     if (refresh) params.set('refresh', '1')
     const page = await apiJSON<Page>(`/v1/media?${params}`)
+    if (request !== requestSequence.current) return
     if (page) {
       setItems((old) => (cursor ? [...old, ...page.items] : page.items))
       setTotal(page.total)
@@ -61,9 +64,15 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
 
   useEffect(() => {
     const timer = window.setTimeout(() => load(0), query ? 250 : 0)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      requestSequence.current += 1
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, query])
+
+  const title = kind === 'all' ? 'Media' : kind === 'photo' ? 'Photos' : 'Videos'
+  const emptyLabel = kind === 'photo' ? 'No photos found' : kind === 'video' ? 'No videos found' : 'No media found'
 
   const toolbar = (
     <div className="flex items-center gap-2">
@@ -103,11 +112,11 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
 
   return (
     <>
-      <Sheet title={<span>Photos <span className="ml-1 font-mono text-[11px] font-normal text-muted">{total}</span></span>} onClose={onClose} toolbar={toolbar} wide>
+      <Sheet title={<span>{title} <span className="ml-1 font-mono text-[11px] font-normal text-muted">{total}</span></span>} onClose={onClose} toolbar={toolbar} wide>
         {busy && items.length === 0 ? (
           <Empty><LoaderCircle className="size-5 animate-spin" />Loading library</Empty>
         ) : items.length === 0 ? (
-          <Empty><ImageIcon className="size-5" />No media found</Empty>
+          <Empty><ImageIcon className="size-5" />{emptyLabel}</Empty>
         ) : (
           <div className="grid grid-cols-3 gap-px bg-line p-px sm:grid-cols-5 md:grid-cols-6">
             {items.map((asset) => (
@@ -126,7 +135,7 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
                 {asset.type === 'video' && (
                   <span className="absolute bottom-1 right-1 flex h-6 items-center gap-1 rounded-md bg-black/70 px-1.5 text-[10px] font-medium text-white ring-1 ring-white/15">
                     <Play className="size-2.5 fill-current" />
-                    {fmtDuration(asset.duration)}
+                    {asset.duration && asset.duration > 0 ? fmtDuration(asset.duration) : 'Video'}
                   </span>
                 )}
               </button>
