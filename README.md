@@ -19,8 +19,10 @@ microphone injection are implemented and awaiting final physical-device
 qualification. A SpringBoard-injected agent
 captures the display, hardware-encodes H.264 (VideoToolbox), and sends it to
 `rctld`. The browser control app uses WebRTC for the current low-latency path
-(H.264 RTP video track plus DataChannels for input/audio/files) and keeps the
-local `/stream` WebCodecs path as compatibility fallback.
+(H.264 RTP video track plus DataChannels for input/audio and bounded file
+operations) and keeps the local `/stream` WebCodecs path as compatibility
+fallback. Large downloads use a separate bounded HTTP stream locally and
+through the authenticated relay tunnel.
 
 ## Target device
 
@@ -67,8 +69,9 @@ browser audio capture is enabled.
 - **Primary browser app:** `web/` (React/Vite). `make package` stages
   `web/dist/index.html` as `/var/mobile/rctl/index.html`.
 - **Primary live transport:** WebRTC via **libdatachannel** in `rctld`: H.264 RTP
-  video track, reliable DataChannels for control/audio/files, relay signaling,
-  and optional STUN/TURN for NAT traversal.
+  video track, reliable DataChannels for control/audio/bounded file operations,
+  relay signaling, and optional STUN/TURN for NAT traversal. Large downloads
+  use the relay's authenticated streaming tunnel instead of browser memory.
 - **Compatibility fallback:** local `/stream` over HTTP chunked H.264 decoded
   with WebCodecs. The relay stream tunnel is kept for smoke/debug fallback, not
   as the preferred internet video path.
@@ -78,21 +81,25 @@ browser audio capture is enabled.
 
 ## Build & deploy
 
-Requires Theos (`$THEOS`) and the iOS 14.5 SDK on macOS. The whole project is a Theos
-aggregate package — build and install everything as a real `.deb` with one command:
+Requires Theos (`$THEOS`) and the iOS 14.5 SDK on macOS. Deploy through the
+watchdog script, which builds a `.deb`, performs the required remove-and-fresh-
+install sequence, preserves relay configuration, and verifies SpringBoard IPC:
 
 ```sh
-# Default target is the USB tunnel — start it first:
+# Default SSH target is the rctl-device USB-tunnel alias. Start forwarding first:
 iproxy 2222:22 8080:8080 &
+scripts/deploy.sh
 
-make package install      # build .deb, copy it, dpkg -i, re-sign, respring
-# over Wi-Fi instead:
-THEOS_DEVICE_IP=<device-host> THEOS_DEVICE_PORT=22 make package install
+# Over Wi-Fi, use a private host from ~/.ssh/config:
+RCTL_SSH=<device-alias> scripts/deploy.sh
 
 # then open http://localhost:8080/  (USB)  or  http://<ipad-ip>:8080/  (Wi-Fi) in Safari
 ```
 
-`make package` alone just builds `./packages/*.deb`. The package installs the agent to
+Do not use `make package install`: upgrading injected binaries in place can leave
+stale kernel code-signing state on arm64e. `make package FINALPACKAGE=0` only
+builds a debug artifact under `./packages/`; `scripts/deploy.sh` is the supported
+device delivery path. The package installs the agent to
 `/Library/MobileSubstrate/DynamicLibraries/` and the web client to `/var/mobile/rctl/`,
 shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
 
@@ -105,7 +112,8 @@ shows up in Cydia as `com.greatlove.rctl`, and uninstalls cleanly.
 
 1. **P1 — done.** Screen capture + hardware H.264 + browser stream over LAN.
 2. **P2 — done.** Real touch control through `IOHIDEvent`, correct in all orientations.
-3. **P2.5 — working.** Real system playback audio, camera still/live, files, clipboard,
-   Photos/video browser, app launch, root terminal, virtual mic, and automation endpoints.
-4. **P3 — active.** Authenticated relay access with WebRTC media/control,
-   relay-hosted control page, and TURN hardening.
+3. **P2.5 — implemented, qualifying.** Real system playback audio, camera still/live,
+   files, clipboard, Photos/video browser, app launch, root terminal, virtual mic,
+   and automation endpoints.
+4. **P3 — implemented, hardening.** Authenticated self-hosted relay, WebRTC
+   media/control, relay-hosted control page, bounded downloads, and TURN fallback.

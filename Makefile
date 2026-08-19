@@ -9,10 +9,10 @@
 #   make deps              build the pinned iOS WebRTC static libs (run once, first)
 #   make package           build the .deb into ./packages/
 #   make package-relay     build a private relay-enabled .deb into ./personalized/
-#   make package install   ... and install it over SSH (USB tunnel: see below)
+#   scripts/deploy.sh      build and safely install over SSH (USB tunnel by default)
 #
 # Install over the USB tunnel (iproxy 2222:22):
-#   THEOS_DEVICE_IP=localhost THEOS_DEVICE_PORT=2222 make package install
+#   scripts/deploy.sh
 
 export ARCHS = arm64 arm64e
 export TARGET = iphone:clang:14.5:14.0
@@ -23,7 +23,7 @@ export TARGET = iphone:clang:14.5:14.0
 # SpringBoard at load; a clean remove + fresh install avoids it.
 
 # Default install target = the USB tunnel (see ~/.ssh/config Host rctl-device).
-# Override for Wi-Fi: THEOS_DEVICE_IP=<device-host> THEOS_DEVICE_PORT=22 make package install
+# Override for Wi-Fi with an SSH config alias: RCTL_SSH=<device-alias> scripts/deploy.sh
 export THEOS_DEVICE_IP ?= rctl-device
 export THEOS_DEVICE_PORT ?= 2222
 

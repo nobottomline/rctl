@@ -325,12 +325,22 @@ LAN stream at `http://127.0.0.1:8080/{local_path...}` using a streaming
 `stream_end` messages back to the relay. If the browser disconnects, the relay
 sends `stream_cancel` so the device closes the local stream.
 
-This stream tunnel is a compatibility and debug path. It is reliable and
-TCP-based, so it is not the preferred production transport for internet video.
+The same tunnel carries large file downloads from
+`/v1/pull_stream?path=...`. The device opens the file once, validates it as a
+regular file, and forwards it with a fixed 64 KiB read buffer. `rctld` pauses the
+local `NSURLSession` while each relay WebSocket chunk is in flight; the relay
+then streams each chunk directly to the HTTP response. `Content-Length` and a
+sanitized `Content-Disposition` are propagated only after header validation, so
+the browser download manager can write incrementally without a whole-file
+allocation in the device, relay, or control page.
+
+For video, this stream tunnel is a compatibility and debug path. It is reliable
+and TCP-based, so it is not the preferred production transport for internet video.
 The current low-latency path is WebRTC via `libdatachannel` in `rctld`:
-H.264 RTP video track plus DataChannels for input/audio/files. The Go relay is
-kept for auth, signaling, TURN coordination, HTTP/terminal fallback, and admin
-operations. See `docs/TRANSPORT.md` before working on video latency.
+H.264 RTP video track plus DataChannels for input/audio/bounded file operations.
+The Go relay is kept for auth, signaling, TURN coordination, large-download
+streaming, HTTP/terminal fallback, and admin operations. See `docs/TRANSPORT.md`
+before working on video latency.
 
 The local LAN/USB server remains independent. Installing a relay-enabled package
 does not disable or replace `http://<ipad-ip>:8080` or `http://localhost:8080`

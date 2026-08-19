@@ -61,8 +61,11 @@ previews.
 
 The Media sheet supports photo/video filters, filename search, pagination,
 responsive thumbnails, full-screen preview, and an explicit action menu on every
-tile. Download, Share, and original media playback travel over the existing
-peer-to-peer `files` DataChannel, not through the relay HTTP body tunnel. Copy
+tile. Download uses `/v1/pull_stream`, which writes incrementally to the browser
+download manager locally or through the authenticated relay stream tunnel. It
+does not materialize the original in `rctld` or a browser `Blob`. Share and
+original media playback use the peer-to-peer `files` DataChannel because those
+browser APIs require an in-memory object. Copy
 Image converts the bounded JPEG preview to PNG for broad clipboard compatibility;
 browser image clipboard APIs require a secure context, so local plain HTTP keeps
 Download and Share as the available fallbacks.
@@ -95,9 +98,10 @@ cached index before the browser refreshes.
 
 Browser video and Live Photo playback currently materializes one Blob, so motion
 previews are limited to 250 MiB. Animated image previews are limited to 50 MiB,
-and Web Share preparation to 100 MiB. Larger originals remain downloadable. A
-future large-media player should use a bounded streaming protocol and a
-browser-compatible fragmented MP4 path rather than increasing these limits.
+and Web Share preparation to 100 MiB. Larger originals remain downloadable
+through the bounded stream. A future large-media player should consume a
+seekable bounded protocol and browser-compatible fragmented MP4 path rather
+than increasing these limits.
 
 Edit, favorite, Hidden album browsing, permanent deletion, Recently Deleted
 browsing, and forced iCloud download are outside the current release contract.

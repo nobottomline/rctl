@@ -95,8 +95,9 @@ app; no app audio function is intercepted during normal startup. See
 
 **Photos/videos.** `rctld` reads visible Photos `ZASSET` metadata from the iOS
 database without modifying it, validates local originals below
-`/var/mobile/Media`, and serves bounded JPEG thumbnails/previews. Original files
-use the P2P files DataChannel. Confirmed deletion resolves an opaque asset ID to
+`/var/mobile/Media`, and serves bounded JPEG thumbnails/previews. Downloads use
+the bounded HTTP stream; bounded preview/share operations use the P2P files
+DataChannel. Confirmed deletion resolves an opaque asset ID to
 its indexed Photos UUID and delegates one PhotoKit transaction to SpringBoard;
 neither the daemon nor browser deletes files or writes Photos.sqlite. See
 `docs/MEDIA.md`.
@@ -246,23 +247,22 @@ validation — confirming the capturer must be a real foreground app.
 
 ---
 
-## 6. Internet access (P3, the north star) — roadmap
+## 6. Internet access (P3, implemented)
 
-Goal: control the iPad from anywhere, low latency, behind any NAT, self-contained.
+The personalized package keeps an outbound authenticated device connection to
+the self-hosted Go relay. The relay owns enrollment, approval, browser sessions,
+admin access, signaling, HTTP/terminal fallback, rate limits, and TLS termination.
+No inbound port or public address is required on the iPad.
 
-| Approach | Latency | Effort | Notes |
-|---|---|---|---|
-| **Relay via VPS** | medium | low | daemon holds an *outbound* tunnel to a cheap VPS; browser connects to the VPS; it forwards. Reuses our HTTP. Works behind any NAT. Doubles as the always-reachable channel for a sleeping device (APNs pattern). |
-| **WebRTC** (libdatachannel / libwebrtc) | lowest (P2P) | high | cross-compile under arm64e iOS 14 + a TURN server (coturn) + signaling. libdatachannel is lighter than full libwebrtc. |
+The primary remote media path is WebRTC through `libdatachannel`: H.264 RTP for
+screen/camera and reliable DataChannels for control and audio, with STUN/TURN for
+NAT traversal. Large file downloads use the authenticated relay stream tunnel;
+normal REST calls use the bounded HTTP request/response tunnel. See `RELAY.md`
+and `TRANSPORT.md` for protocol and deployment invariants.
 
-**Recommendation:** ship the **relay first** (a tiny Go/Node relay on a $5 VPS + a
-reverse tunnel from rctld), get internet working fast, then evolve the media path to
-WebRTC if latency demands it, keeping the relay for signaling. "Ship, then optimize."
-
-**Prerequisite: auth.** Today `:8080` has no authentication (LAN-only is the
-implicit boundary). Before exposing anything to the internet, add a token/password
-gate (and ideally TLS, or rely on the relay's TLS). This is non-negotiable for the
-internet phase.
+The local `:8080` service remains intentionally independent and unauthenticated
+for LAN/USB operation. It must never be exposed directly to the public internet;
+internet clients terminate TLS and authenticate at the relay.
 
 ---
 
@@ -331,9 +331,9 @@ compatibility matrix, path inventory and acceptance gates are in
 
 ## 10. Known limitations / TODO
 
-- Internet access (relay → WebRTC) — not started (§6).
-- Auth on `:8080` — required before internet (§6, §8).
-- WebSocket realtime channel — deferred; chunked HTTP + REST works today.
+- Relay/WebRTC are implemented but still require release qualification across
+  direct, STUN, and forced-TURN paths (§6).
+- Local `:8080` has no authentication by design; bind/firewall policy must keep
+  it on trusted LAN/USB networks (§6, §8).
 - Camera works only with an app foreground (§5).
 - Settings/PreferenceBundle — deferred ("we don't know what they'll be yet").
-- A README at the repo root would help newcomers; this file is the deep reference.

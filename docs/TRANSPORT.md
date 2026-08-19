@@ -15,12 +15,16 @@ The control app now has two production-maintained transport paths:
   presence, signaling, HTTP tunnel, terminal tunnel, and TURN credential minting.
 - The low-latency media/control path is WebRTC via libdatachannel inside
   `rctld`: screen and camera each use a dedicated H.264 RTP PeerConnection;
-  the screen connection also carries DataChannels for input, audio, and files.
+  the screen connection also carries DataChannels for input, audio, and bounded
+  file operations.
 
-The old reliable relay stream still exists as compatibility/debug fallback:
+For video, the reliable relay stream remains a compatibility/debug fallback;
+the same bounded tunnel is the production path for large downloads:
 
 - Device control/API calls can go through `/proxy/devices/{id}/...`.
 - Fallback video can use `/stream/devices/{id}/stream`.
+- Large downloads use `/stream/devices/{id}/v1/pull_stream?...` so each hop
+  remains bounded and the browser download manager owns the destination file.
 - Terminal has its own relay tunnel at `/term/devices/{id}`.
 
 Reliable ordered TCP remains the wrong default for realtime screen video over
@@ -68,7 +72,8 @@ Realtime media/control is WebRTC:
 - NAT traversal: STUN first, TURN via `coturn` for networks where direct UDP
   fails.
 - Video: H.264 RTP media track.
-- Control/audio/files: reliable DataChannels.
+- Control/audio/bounded file operations: reliable DataChannels.
+- Large downloads: bounded HTTP stream, tunneled through the relay when remote.
 
 Do not use full `libwebrtc` unless `libdatachannel` proves impossible on the
 jailbroken iOS target. `libwebrtc` is far larger, harder to cross-compile, and
@@ -137,7 +142,7 @@ For the WebRTC path it currently:
 - creates one `libdatachannel` PeerConnection per signaling session;
 - sends encoded access units on the H.264 RTP track;
 - accepts control input on the `control` DataChannel;
-- exposes audio and file transfer on separate DataChannels;
+- exposes audio and bounded file operations on separate DataChannels;
 - keep local LAN HTTP mode unchanged.
 
 The `.deb` installed on a device must continue to work locally even when relay
@@ -180,5 +185,5 @@ The reliable relay video stream is a compatibility fallback, not the final
 internet architecture.
 
 The active internet architecture is WebRTC via `libdatachannel`: H.264 over an
-RTP media track, control/audio/files over DataChannels, and the Go relay as the
-auth/signaling/TURN coordination plane.
+RTP media track, control/audio/bounded file operations over DataChannels, and
+the Go relay as the auth/signaling/TURN and large-download streaming plane.
