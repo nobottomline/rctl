@@ -131,21 +131,11 @@ untouched. Initial camera enable is retried after transient tunnel failures.
 
 ## Privacy indicator
 
-On iOS 14 home-button devices, UIKit renders the green camera dot through
-`_UIStatusBarSensorActivityView` inside the foreground application. The small
-`rctlapp` loader suppresses installation of that view only while its atomic
-rctl-owned capture flag is active. Camera indicators for normal application use
-remain unchanged before and after an rctl still or live session; this does not
-disable system sensor accounting or TCC. The class and selector are resolved and
-hooked conditionally at runtime; an unsupported iOS version keeps the native
-indicator and camera capture continues normally.
-
-The status-bar item is an aggregate camera signal rather than an attributed rctl
-item. If the foreground host application uses the camera concurrently during an
-rctl session, its dot is also hidden for that overlap. Do not broaden this into a
-permanent UIKit or SpringBoard suppression. Notched devices use a separate
-`SBRecordingIndicatorViewController` path and are intentionally left unchanged
-until that path is validated on supported hardware.
+Live and still camera capture intentionally preserves the native iOS privacy
+indicator. It is part of the device's security boundary and must remain visible
+whenever camera hardware is active. Camera capture does not depend on the
+indicator implementation, so UIKit changes across iOS versions cannot break the
+media pipeline.
 
 ## Recording
 
@@ -157,10 +147,12 @@ into:
 /var/mobile/Library/Caches/com.greatlove.rctl/camera-recording.ts
 ```
 
-The Console downloads it over the existing `files` DataChannel. MPEG-TS was
-chosen because it tolerates app-owner switches, new SPS/PPS and an interrupted
-recording without requiring a final MP4 index. A later remux/export layer may
-offer MP4 without changing capture or transport.
+The Console downloads it over the existing `files` DataChannel. MPEG-TS is the
+durable on-device format because it tolerates app-owner switches, new SPS/PPS
+and an interrupted recording without requiring a final MP4 index. Each H.264
+access unit includes an AUD NAL so the browser can losslessly transmux the file
+to fragmented MP4. The user receives an `.mp4`; no second encode or quality loss
+is introduced.
 
 A new recording ignores delta frames until the first keyframe and requests an
 immediate IDR from the foreground encoder. The file therefore starts with the

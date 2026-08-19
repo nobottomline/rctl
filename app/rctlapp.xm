@@ -76,28 +76,6 @@ static BOOL gRctlSnapping = NO;
 static _Atomic bool gRctlCapturing = false;
 void rctl_camera_tcc_set_active(BOOL active) { atomic_store(&gRctlCapturing, active); }
 
-// iOS 14 displays the camera privacy dot through this UIKit status-bar view on
-// home-button devices. Suppress only the view supplied while our own camera
-// session is active; outside that lifetime UIKit keeps its normal behavior for
-// every host application. The capture flag is enabled before AVCaptureSession
-// starts, so the system never installs our session's indicator view.
-static void (*gOriginalSetSensorActivityView)(id, SEL, UIView *);
-static void rctl_set_sensor_activity_view(id self, SEL command, UIView *view) {
-    if (atomic_load(&gRctlCapturing)) {
-        gOriginalSetSensorActivityView(self, command, nil);
-        return;
-    }
-    gOriginalSetSensorActivityView(self, command, view);
-}
-
-static void rctl_install_camera_indicator_hook(void) {
-    Class cls = NSClassFromString(@"_UIStatusBarSensorActivityView");
-    SEL selector = NSSelectorFromString(@"setSensorActivityView:");
-    if (!cls || !class_getInstanceMethod(cls, selector)) return;
-    MSHookMessageEx(cls, selector, (IMP)rctl_set_sensor_activity_view,
-                    (IMP *)&gOriginalSetSensorActivityView);
-}
-
 static int (*orig_TCCAccessPreflight)(CFStringRef, CFDictionaryRef);
 static void (*orig_TCCAccessRequest)(CFStringRef, CFDictionaryRef, void (^)(BOOL));
 static int rctl_TCCAccessPreflight(CFStringRef service, CFDictionaryRef options) {
@@ -237,7 +215,6 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
         // This loader also matches SpringBoard through the broad UIKit filter.
         // Never load foreground media code into that critical process.
         if ([[NSProcessInfo processInfo].processName isEqualToString:@"SpringBoard"]) return;
-        rctl_install_camera_indicator_hook();
         caplog(@"LOADED");
         CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.back"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);

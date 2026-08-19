@@ -96,11 +96,18 @@ static void encode_pcr(uint8_t out[6], uint64_t base) {
 
 static bool write_pes(rctl_ts_recorder *recorder, const uint8_t *payload,
                       size_t payload_length, bool keyframe, uint64_t pts_90k) {
-    std::vector<uint8_t> pes(14 + payload_length);
+    // VideoToolbox's Annex-B output has no access-unit delimiters. Add one so
+    // standards-compliant TS consumers can recover frame boundaries and the
+    // durable recording can be losslessly transmuxed to MP4 in the browser.
+    static const uint8_t kAccessUnitDelimiter[] = {0, 0, 0, 1, 0x09, 0xf0};
+    std::vector<uint8_t> pes(14 + sizeof(kAccessUnitDelimiter) + payload_length);
     uint8_t header[14] = {0x00, 0x00, 0x01, 0xe0, 0x00, 0x00, 0x80, 0x80, 0x05};
     encode_pts(header + 9, pts_90k);
     memcpy(pes.data(), header, sizeof(header));
-    memcpy(pes.data() + sizeof(header), payload, payload_length);
+    memcpy(pes.data() + sizeof(header), kAccessUnitDelimiter,
+           sizeof(kAccessUnitDelimiter));
+    memcpy(pes.data() + sizeof(header) + sizeof(kAccessUnitDelimiter), payload,
+           payload_length);
 
     size_t offset = 0;
     bool first = true;

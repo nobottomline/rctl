@@ -61,9 +61,8 @@ touch injection, camera ownership, TCC behavior and audio session setup need an
 explicit version adapter or a startup capability result; silently assuming the
 iOS 14 ABI is not acceptable.
 
-The green camera-dot hook follows this rule. The room-microphone filter also
-matches SystemStatus attribution by daemon PID, so an API mismatch leaves the
-orange dot visible and does not suppress another process's indicator.
+Camera and microphone privacy indicators are not hooked. They remain visible on
+every supported iOS version whenever the corresponding sensor is active.
 
 ## Qualification matrix
 
@@ -75,8 +74,7 @@ For each supported iOS/jailbreak pair, validate on a physical device:
 4. Screen H.264, input sender ID, orientation and lock/unlock recovery.
 5. Front/rear still and live camera, app roaming, recording and lease cleanup.
 6. Playback Listen, room-microphone Listen/Record, Talk and audio-session recovery.
-7. Privacy indicators: rctl-owned suppression, unrelated app visibility and
-   fail-open behavior with each optional hook disabled.
+7. Native privacy indicators for live/still camera and room-microphone capture.
 8. Terminal, files, Photos, package/tweak inspection and path containment.
 9. Public-package secret audit and personalized relay upgrade continuity.
 10. Idle, memory, thermal and 30-minute media soak tests.

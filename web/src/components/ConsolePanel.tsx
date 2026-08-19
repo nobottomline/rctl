@@ -5,6 +5,7 @@ import type { FileTransfer } from '../lib/files'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 import { CameraTransport } from '../lib/camera'
+import { cameraRecordingToMp4 } from '../lib/cameraRecording'
 
 // Console: the rich, occasional device tooling. Device/Diagnostics (data-dense)
 // run full-width up top; the action tools flow in a 2-column masonry below, so
@@ -547,11 +548,12 @@ function CameraLiveView({
     if (!status?.record_path || status.recording) return
     setBusy(true)
     try {
-      const blob = await transfer.fetch(status.record_path)
-      const url = URL.createObjectURL(blob)
+      const recording = await transfer.fetch(status.record_path)
+      const mp4 = await cameraRecordingToMp4(recording)
+      const url = URL.createObjectURL(mp4)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `rctl-camera-${Date.now()}.ts`
+      anchor.download = `rctl-camera-${Date.now()}.mp4`
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch {

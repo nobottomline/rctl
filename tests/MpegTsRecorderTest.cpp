@@ -46,7 +46,7 @@ int main() {
     require(size > 0 && size % 188 == 0, "188-byte packet alignment");
     require((uint64_t)size == expected_bytes, "reported byte count");
 
-    bool pat = false, pmt = false, video = false;
+    bool pat = false, pmt = false, video = false, aud = false;
     uint8_t packet[188];
     while (fread(packet, 1, sizeof(packet), file) == sizeof(packet)) {
         require(packet[0] == 0x47, "sync byte");
@@ -54,10 +54,18 @@ int main() {
         pat |= pid == 0;
         pmt |= pid == 0x100;
         video |= pid == 0x101;
+        for (size_t i = 0; pid == 0x101 && i + 5 < sizeof(packet); ++i) {
+            if (packet[i] == 0 && packet[i + 1] == 0 && packet[i + 2] == 0 &&
+                packet[i + 3] == 1 && packet[i + 4] == 0x09 &&
+                packet[i + 5] == 0xf0) {
+                aud = true;
+            }
+        }
     }
     fclose(file);
     unlink(path);
     require(pat && pmt && video, "PAT/PMT/H.264 PIDs");
+    require(aud, "H.264 access unit delimiter");
     puts("mpeg-ts recorder test passed");
     return 0;
 }

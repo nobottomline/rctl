@@ -303,18 +303,11 @@ internet phase.
 ## 8. Security posture (honest)
 
 - **Camera access hooks run inside UIKit apps** = a sensitive trust boundary.
-  They are gated to rctl capture lifetime; capture requires foreground state,
-  and the iOS 14 home-button status-bar indicator is suppressed only while the
-  rctl-owned capture flag is active. Outside that lifetime the status-bar and TCC
-  hooks preserve UIKit's original behavior. Package scripts own no persistent
-  TCC rows and therefore delete none on uninstall. TCC is still per-process, so
-  this boundary must be revalidated for every supported jailbreak/iOS
-  combination.
-- **Room-microphone indicator suppression is attribution-scoped.** SpringBoard
-  removes only active SystemStatus audio attributions whose PID matches the
-  current capturing `rctld` and whose executable path identifies that daemon;
-  another application's camera or microphone remains visible. Private API lookup
-  and `notifyd` synchronization fail open.
+  They are gated to rctl capture lifetime and capture requires foreground state.
+  Native iOS camera and microphone privacy indicators remain enabled. Package
+  scripts own no persistent TCC rows and therefore delete none on uninstall. TCC
+  is still per-process, so this boundary must be revalidated for every supported
+  jailbreak/iOS combination.
 - **`:8080` is unauthenticated.** Fine on a trusted LAN; **must** gain auth before
   internet exposure (see §6).
 - **The daemon is root** and exposes file read/write (`/v1/ls,pull,push,rm`), app
