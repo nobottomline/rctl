@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   Share2,
+  Trash2,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -34,6 +35,7 @@ type Asset = {
   motion_path?: string
   motion_name?: string
   motion_size?: number
+  deletable?: boolean
 }
 type Page = { items: Asset[]; total: number; next: number | null }
 type Menu = { asset: Asset; x: number; y: number }
@@ -102,6 +104,8 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
   const [generation, setGeneration] = useState(0)
   const [menu, setMenu] = useState<Menu | null>(null)
   const [note, setNote] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState<Asset | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const requestSequence = useRef(0)
 
   const notify = (message: string) => {
@@ -149,6 +153,38 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
   }
 
   const openMenu = (asset: Asset, x: number, y: number) => setMenu({ asset, x, y })
+
+  const askDelete = (asset: Asset) => {
+    setMenu(null)
+    if (asset.deletable) setConfirmDelete(asset)
+  }
+
+  const remove = async () => {
+    if (!confirmDelete || deleting) return
+    setDeleting(true)
+    const id = encodeURIComponent(confirmDelete.id)
+    const request = { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    const authorization = await apiJSON<{ token: string }>(`/v1/media_delete_token?id=${id}`, {
+      ...request,
+      body: '{}',
+    })
+    const result = authorization?.token
+      ? await apiJSON<{ ok: boolean }>(`/v1/media_delete?id=${id}`, {
+          ...request,
+          body: JSON.stringify({ token: authorization.token }),
+        })
+      : null
+    setDeleting(false)
+    if (!result?.ok) {
+      notify('The item could not be moved to Recently Deleted.')
+      return
+    }
+    const removedID = confirmDelete.id
+    setConfirmDelete(null)
+    if (selected?.id === removedID) setSelected(null)
+    notify('Moved to Recently Deleted')
+    await load(0, true)
+  }
 
   const load = async (cursor = 0, refresh = false) => {
     const request = ++requestSequence.current
@@ -295,6 +331,7 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
           onDownload={download}
           onCopy={copy}
           onShare={share}
+          onDelete={askDelete}
         />
       )}
       {selected && (
@@ -305,6 +342,15 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
           onDownload={download}
           onCopy={copy}
           onShare={share}
+          onDelete={askDelete}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmMediaDelete
+          asset={confirmDelete}
+          busy={deleting}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={remove}
         />
       )}
       {note && (
@@ -324,12 +370,14 @@ function MediaMenu({
   onDownload,
   onCopy,
   onShare,
+  onDelete,
 }: {
   menu: Menu
   onClose: () => void
   onDownload: (asset: Asset) => void
   onCopy: (asset: Asset) => void
   onShare: (asset: Asset) => void
+  onDelete: (asset: Asset) => void
 }) {
   const width = 216
   const left = Math.max(8, Math.min(menu.x - width, window.innerWidth - width - 8))
@@ -344,16 +392,32 @@ function MediaMenu({
         <MediaMenuItem icon={Download} label="Download original" onClick={() => onDownload(menu.asset)} />
         {menu.asset.type === 'photo' && <MediaMenuItem icon={Copy} label="Copy image" onClick={() => onCopy(menu.asset)} />}
         <MediaMenuItem icon={Share2} label="Share…" onClick={() => onShare(menu.asset)} />
+        {menu.asset.deletable && (
+          <MediaMenuItem icon={Trash2} label="Delete…" danger onClick={() => onDelete(menu.asset)} />
+        )}
       </div>
     </>
   )
 }
 
-function MediaMenuItem({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
+function MediaMenuItem({
+  icon: Icon,
+  label,
+  onClick,
+  danger = false,
+}: {
+  icon: LucideIcon
+  label: string
+  onClick: () => void
+  danger?: boolean
+}) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] text-fg transition-colors hover:bg-fg/8 active:bg-fg/12"
+      className={cn(
+        'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors',
+        danger ? 'text-red-500 hover:bg-red-500/10 active:bg-red-500/15' : 'text-fg hover:bg-fg/8 active:bg-fg/12',
+      )}
     >
       <Icon className="size-4 shrink-0" />
       {label}
@@ -368,6 +432,7 @@ function MediaViewer({
   onDownload,
   onCopy,
   onShare,
+  onDelete,
 }: {
   asset: Asset
   transfer: FileTransfer
@@ -375,6 +440,7 @@ function MediaViewer({
   onDownload: (asset: Asset) => void
   onCopy: (asset: Asset) => void
   onShare: (asset: Asset) => void
+  onDelete: (asset: Asset) => void
 }) {
   const [loaded, setLoaded] = useState<{ url: string; kind: 'image' | 'video' } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -426,6 +492,11 @@ function MediaViewer({
         <button onClick={() => onDownload(asset)} title="Download original" aria-label="Download original" className="grid size-8 place-items-center rounded-lg bg-white/10 text-white/80 active:bg-white/20">
           <Download className="size-4" />
         </button>
+        {asset.deletable && (
+          <button onClick={() => onDelete(asset)} title="Delete" aria-label="Delete" className="grid size-8 place-items-center rounded-lg bg-red-500/15 text-red-400 active:bg-red-500/25">
+            <Trash2 className="size-4" />
+          </button>
+        )}
         <button onClick={onClose} aria-label="Close preview" className="grid size-8 place-items-center rounded-lg bg-white/10 text-white/80 active:bg-white/20">
           <X className="size-4" />
         </button>
@@ -471,6 +542,49 @@ function MediaViewer({
           </div>
         )}
         {error && <div className="absolute bottom-5 max-w-md rounded-lg bg-danger/90 px-3 py-2 text-center text-[12px] text-white">{error}</div>}
+      </div>
+    </div>
+  )
+}
+
+function ConfirmMediaDelete({
+  asset,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  asset: Asset
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[65] flex items-center justify-center p-5">
+      <button className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel delete" onClick={onCancel} />
+      <div className="relative z-10 w-full max-w-sm rounded-lg bg-elevated p-4 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2">
+        <div className="mb-1 flex items-center gap-2">
+          <Trash2 className="size-4 text-red-500" />
+          <h2 className="min-w-0 truncate text-[14px] font-semibold">Delete {asset.name}?</h2>
+        </div>
+        <p className="mb-4 text-[12px] leading-relaxed text-muted">
+          This moves the {asset.live ? 'Live Photo and its motion resource' : asset.type === 'video' ? 'video' : 'photo'} to Recently Deleted on the iPad. It can be recovered there until Photos removes it permanently.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg bg-fg/8 px-3 py-1.5 text-[12px] font-medium text-fg-dim active:bg-fg/15 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-lg bg-red-500 px-3 py-1.5 text-[12px] font-semibold text-white active:opacity-80 disabled:opacity-60"
+          >
+            {busy ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
       </div>
     </div>
   )

@@ -373,6 +373,57 @@ static NSString *rctl_get_clipboard(void) {  // call on the main thread
     return [UIPasteboard generalPasteboard].string ?: @"";
 }
 
+static NSString *rctl_media_delete_result(BOOL ok, NSString *error) {
+    NSDictionary *value = ok ? @{@"ok": @YES} : @{@"ok": @NO, @"error": error ?: @"photo_library_failed"};
+    NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
+    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"{\"ok\":false,\"error\":\"json_failed\"}";
+}
+
+// PhotoKit owns all database, iCloud, album, and paired-resource bookkeeping.
+// Never unlink DCIM resources or modify Photos.sqlite directly. SpringBoard is
+// the system Photos client; rctld only passes a UUID already resolved from the
+// current visible ZASSET index after a one-time browser confirmation token.
+static NSString *rctl_delete_media_asset(NSString *uuid) {
+    if (uuid.length < 8 || uuid.length > 128 ||
+        [uuid rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:
+            @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-"] invertedSet]].location != NSNotFound)
+        return rctl_media_delete_result(NO, @"invalid_asset_identifier");
+    @try {
+        dlopen("/System/Library/Frameworks/Photos.framework/Photos", RTLD_LAZY);
+        Class Asset = NSClassFromString(@"PHAsset");
+        Class Library = NSClassFromString(@"PHPhotoLibrary");
+        Class Change = NSClassFromString(@"PHAssetChangeRequest");
+        if (!Asset || !Library || !Change)
+            return rctl_media_delete_result(NO, @"photo_library_unavailable");
+        SEL fetchSelector = NSSelectorFromString(@"fetchAssetsWithLocalIdentifiers:options:");
+        NSString *localIdentifier = [uuid stringByAppendingString:@"/L0/001"];
+        id assets = ((id (*)(id, SEL, id, id))objc_msgSend)((id)Asset, fetchSelector,
+                                                            @[localIdentifier], nil);
+        if (((NSUInteger (*)(id, SEL))objc_msgSend)(assets, NSSelectorFromString(@"count")) == 0) {
+            assets = ((id (*)(id, SEL, id, id))objc_msgSend)((id)Asset, fetchSelector, @[uuid], nil);
+        }
+        if (((NSUInteger (*)(id, SEL))objc_msgSend)(assets, NSSelectorFromString(@"count")) != 1)
+            return rctl_media_delete_result(NO, @"asset_not_found");
+        id asset = ((id (*)(id, SEL))objc_msgSend)(assets, NSSelectorFromString(@"firstObject"));
+        if (!((BOOL (*)(id, SEL, NSInteger))objc_msgSend)(asset,
+              NSSelectorFromString(@"canPerformEditOperation:"), 1))
+            return rctl_media_delete_result(NO, @"asset_not_deletable");
+        NSError *error = nil;
+        id library = ((id (*)(id, SEL))objc_msgSend)((id)Library,
+                                                     NSSelectorFromString(@"sharedPhotoLibrary"));
+        dispatch_block_t changes = ^{
+            ((void (*)(id, SEL, id))objc_msgSend)((id)Change,
+                                                  NSSelectorFromString(@"deleteAssets:"), @[asset]);
+        };
+        BOOL deleted = ((BOOL (*)(id, SEL, id, NSError **))objc_msgSend)(library,
+            NSSelectorFromString(@"performChangesAndWait:error:"), changes, &error);
+        return rctl_media_delete_result(deleted, deleted ? nil : @"photo_library_rejected");
+    } @catch (NSException *exception) {
+        (void)exception;
+        return rctl_media_delete_result(NO, @"photo_library_exception");
+    }
+}
+
 // MobileGestalt for identity fields (UDID, serial, IMEI, model id, CPU arch).
 // Private, but SpringBoard has the access and this is the user's own jailbroken
 // device. Returns nil for missing/non-string keys (e.g. no IMEI on a Wi-Fi iPad).
@@ -564,6 +615,15 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_QUERY && len >= 5) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 uint8_t qtype = buf[4];
+                if (qtype == RCTL_Q_MEDIA_DELETE) {
+                    NSString *uuid = [[NSString alloc] initWithBytes:buf + 5 length:len - 5
+                                                            encoding:NSUTF8StringEncoding] ?: @"";
+                    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                        send_reply(reqid, rctl_delete_media_asset(uuid));
+                    });
+                    free(buf);
+                    continue;
+                }
                 dispatch_async(dispatch_get_main_queue(), ^{
                     NSString *r;
                     if (qtype == RCTL_Q_SCREENSHOT) {

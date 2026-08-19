@@ -178,6 +178,11 @@ static char *sb_query(uint8_t qtype, const char *payload, uint32_t plen, double 
     return result;
 }
 
+static char *delete_media_asset(const char *uuid) {
+    if (!uuid) return NULL;
+    return sb_query(RCTL_Q_MEDIA_DELETE, uuid, (uint32_t)strlen(uuid), 8.0);
+}
+
 static void on_input(void *ctx, int phase, int finger, double nx, double ny) {
     rctl_ipc_input m = { (int32_t)phase, (int32_t)finger, nx, ny };
     send_to_sb(RCTL_MSG_INPUT, &m, sizeof m);
@@ -1187,10 +1192,16 @@ static char *rctl_pkg_meta_json(const char *cid) {
     return out;
 }
 
-static char *rest_handler(void *ctx, const char *path, const char *query, const char *body,
+static char *rest_handler(void *ctx, const char *method, const char *content_type,
+                          const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
-    char *media = rctl_media_handle(path, query, status, out_len, out_ctype);
+    if ((!strcmp(path, "/v1/media_delete_token") || !strcmp(path, "/v1/media_delete")) &&
+        (strcmp(method, "POST") || strcmp(content_type, "application/json"))) {
+        *status = 403;
+        return strdup("{\"error\":\"post_application_json_required\"}");
+    }
+    char *media = rctl_media_handle(path, query, body, body_len, status, out_len, out_ctype);
     if (media) return media;
     if (!strcmp(path, "/v1/talk_route")) {
         char mode[16] = {0};
@@ -1932,6 +1943,7 @@ int main(int argc, char **argv) {
         rctl_http_set_key(gHttp, on_key, NULL);
         rctl_http_set_reconfigure(gHttp, on_reconfigure, NULL);
         gAuto = dispatch_queue_create("com.greatlove.rctl.auto", DISPATCH_QUEUE_SERIAL);
+        rctl_media_set_delete_callback(delete_media_asset);
         rctl_http_set_rest(gHttp, rest_handler, NULL);
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too

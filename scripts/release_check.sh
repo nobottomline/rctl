@@ -77,6 +77,12 @@ fi
 strings "${WORK}/pkg/usr/local/bin/rctld" | \
   grep -F 'jetsam hard limit configured:' >/dev/null || \
   fail "rctld binary has no runtime jetsam limit configuration"
+strings "${WORK}/pkg/usr/local/bin/rctld" | \
+  grep -F '/v1/media_delete_token' >/dev/null || \
+  fail "rctld has no confirmed media-delete endpoint"
+strings "${WORK}/pkg/${APP_PAYLOAD}/rctlsbcap.dylib" | \
+  grep -F 'PHPhotoLibrary' >/dev/null || \
+  fail "SpringBoard payload has no PhotoKit media-delete owner"
 
 say "checking git-tracked secret paths"
 tracked_secret_paths="$(

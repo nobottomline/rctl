@@ -20,6 +20,6 @@ rctlsbcap_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 # dodge the AVFoundation umbrella's camera/simd module-build failure.
 rctlsbcap_FRAMEWORKS = Foundation UIKit IOSurface CoreGraphics ImageIO \
                        VideoToolbox CoreMedia CoreVideo QuartzCore \
-                       AVFoundation AudioToolbox
+                       AVFoundation AudioToolbox Photos
 
 include $(THEOS)/makefiles/tweak.mk

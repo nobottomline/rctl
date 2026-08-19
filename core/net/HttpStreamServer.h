@@ -51,16 +51,18 @@ typedef void (*rctl_key_cb)(void *ctx, int page, int usage, int down);
 void rctl_http_set_key(rctl_http_server *s, rctl_key_cb cb, void *ctx);
 
 // Register a handler for the REST automation API (any "/v1/..." request). Gets the
-// path ("/v1/tap"), the raw query string (after '?', may be ""), the request body
-// (POST, may be "") and its byte length `body_len` (for binary uploads — `body`
-// may contain NULs). Returns a malloc'd response body (server frees it) and sets
+// HTTP method, normalized Content-Type, path ("/v1/tap"), raw query string (after
+// '?', may be ""), request body (POST, may be "") and its byte length `body_len`
+// (for binary uploads — `body` may contain NULs). Returns a malloc'd response body
+// (server frees it) and sets
 // *status (e.g. 200, 400, 404). Return NULL to send an empty 200.
 //   *out_ctype — set this to send a raw binary response: exactly *out_len bytes
 //                with this Content-Type (e.g. "application/octet-stream"). If left
 //                NULL, resp is treated as a NUL-terminated JSON string (strlen).
 //   *out_len   — byte count for the binary response (used only when out_ctype set).
-typedef char *(*rctl_rest_cb)(void *ctx, const char *path, const char *query,
-                              const char *body, int body_len, int *status,
+typedef char *(*rctl_rest_cb)(void *ctx, const char *method, const char *content_type,
+                              const char *path, const char *query, const char *body,
+                              int body_len, int *status,
                               int *out_len, const char **out_ctype);
 void rctl_http_set_rest(rctl_http_server *s, rctl_rest_cb cb, void *ctx);
 

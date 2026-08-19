@@ -4,6 +4,7 @@
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
 #import <sqlite3.h>
+#import <stdlib.h>
 #import <sys/stat.h>
 
 #ifndef RCTL_MEDIA_ROOT
@@ -23,7 +24,12 @@ static NSString *thumb_root(void) { return [NSString stringWithUTF8String:RCTL_M
 static dispatch_queue_t g_media_queue;
 static NSArray<NSDictionary *> *g_assets;
 static NSDictionary<NSString *, NSDictionary *> *g_assets_by_id;
+static NSDictionary<NSString *, NSString *> *g_delete_uuid_by_id;
 static NSTimeInterval g_scanned_at;
+static NSString *g_delete_id;
+static NSString *g_delete_token;
+static NSTimeInterval g_delete_expires;
+static rctl_media_delete_callback g_delete_callback;
 
 static dispatch_queue_t media_queue(void) {
     static dispatch_once_t once;
@@ -51,6 +57,36 @@ static char *json_body(id object) {
     memcpy(out, data.bytes, data.length);
     out[data.length] = 0;
     return out;
+}
+
+static NSDictionary *json_request(const char *body, int body_len) {
+    if (!body || body_len <= 0 || body_len > 4096) return nil;
+    NSData *data = [NSData dataWithBytes:body length:(NSUInteger)body_len];
+    id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [value isKindOfClass:[NSDictionary class]] ? value : nil;
+}
+
+void rctl_media_set_delete_callback(rctl_media_delete_callback callback) {
+    g_delete_callback = callback;
+}
+
+static NSString *random_token(void) {
+    uint8_t bytes[16];
+    arc4random_buf(bytes, sizeof(bytes));
+    NSMutableString *token = [NSMutableString stringWithCapacity:sizeof(bytes) * 2];
+    for (uint8_t byte : bytes) [token appendFormat:@"%02x", byte];
+    return token;
+}
+
+static BOOL constant_time_equal(NSString *a, NSString *b) {
+    NSData *left = [a dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *right = [b dataUsingEncoding:NSUTF8StringEncoding];
+    if (left.length != right.length || !left.length) return NO;
+    const uint8_t *x = static_cast<const uint8_t *>(left.bytes);
+    const uint8_t *y = static_cast<const uint8_t *>(right.bytes);
+    uint8_t difference = 0;
+    for (NSUInteger i = 0; i < left.length; i++) difference |= x[i] ^ y[i];
+    return difference == 0;
 }
 
 static NSString *asset_id(NSString *path) {
@@ -124,7 +160,8 @@ static void add_asset(NSMutableArray *assets, NSMutableDictionary *byID,
 static BOOL load_photos_database(NSMutableArray *assets, NSMutableDictionary *byID,
                                  NSMutableSet *paths, NSMutableSet *knownPaths,
                                  NSMutableSet *knownLogicalAssets,
-                                 NSMutableDictionary *visibleLogicalAssets) {
+                                 NSMutableDictionary *visibleLogicalAssets,
+                                 NSMutableDictionary *deleteUUIDs) {
     sqlite3 *database = NULL;
     if (sqlite3_open_v2(photos_database().fileSystemRepresentation, &database,
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, NULL) != SQLITE_OK) {
@@ -134,11 +171,21 @@ static BOOL load_photos_database(NSMutableArray *assets, NSMutableDictionary *by
     sqlite3_busy_timeout(database, 250);
     const char *sql =
         "SELECT ZDIRECTORY,ZFILENAME,ZKIND,ZDATECREATED,ZADDEDDATE,ZWIDTH,ZHEIGHT,ZDURATION,"
-        "IFNULL(ZTRASHEDSTATE,0),IFNULL(ZHIDDEN,0),IFNULL(ZVISIBILITYSTATE,0) "
+        "IFNULL(ZTRASHEDSTATE,0),IFNULL(ZHIDDEN,0),IFNULL(ZVISIBILITYSTATE,0),ZUUID "
+        "FROM ZASSET WHERE ZDIRECTORY IS NOT NULL AND ZFILENAME IS NOT NULL";
+    const char *sqlWithoutUUID =
+        "SELECT ZDIRECTORY,ZFILENAME,ZKIND,ZDATECREATED,ZADDEDDATE,ZWIDTH,ZHEIGHT,ZDURATION,"
+        "IFNULL(ZTRASHEDSTATE,0),IFNULL(ZHIDDEN,0),IFNULL(ZVISIBILITYSTATE,0),NULL "
         "FROM ZASSET WHERE ZDIRECTORY IS NOT NULL AND ZFILENAME IS NOT NULL";
     sqlite3_stmt *statement = NULL;
     BOOL complete = NO;
-    if (sqlite3_prepare_v2(database, sql, -1, &statement, NULL) == SQLITE_OK) {
+    int prepared = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
+    if (prepared != SQLITE_OK) {
+        if (statement) sqlite3_finalize(statement);
+        statement = NULL;
+        prepared = sqlite3_prepare_v2(database, sqlWithoutUUID, -1, &statement, NULL);
+    }
+    if (prepared == SQLITE_OK) {
         int step = SQLITE_ROW;
         while ((step = sqlite3_step(statement)) == SQLITE_ROW) {
             @autoreleasepool {
@@ -166,6 +213,12 @@ static BOOL load_photos_database(NSMutableArray *assets, NSMutableDictionary *by
                     @(sqlite3_column_int64(statement, 5)), @(sqlite3_column_int64(statement, 6)),
                     @(sqlite3_column_double(statement, 7)));
                 if (asset) {
+                    const char *uuidBytes = (const char *)sqlite3_column_text(statement, 11);
+                    NSString *uuid = uuidBytes ? [NSString stringWithUTF8String:uuidBytes] : nil;
+                    if (uuid.length) {
+                        asset[@"deletable"] = @YES;
+                        deleteUUIDs[asset[@"id"]] = uuid;
+                    }
                     add_asset(assets, byID, paths, asset);
                     NSString *logicalKey = logical_asset_key(asset[@"path"]);
                     if (logicalKey) visibleLogicalAssets[logicalKey] = asset;
@@ -225,8 +278,9 @@ static void rebuild_assets(void) {
     NSMutableSet *knownPaths = [NSMutableSet set];
     NSMutableSet *knownLogicalAssets = [NSMutableSet set];
     NSMutableDictionary *visibleLogicalAssets = [NSMutableDictionary dictionary];
+    NSMutableDictionary *deleteUUIDs = [NSMutableDictionary dictionary];
     BOOL indexed = load_photos_database(assets, byID, paths, knownPaths, knownLogicalAssets,
-                                        visibleLogicalAssets);
+                                        visibleLogicalAssets, deleteUUIDs);
     if (indexed) load_dcim_fallback(assets, byID, paths, knownPaths, knownLogicalAssets,
                                     visibleLogicalAssets);
     [assets sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
@@ -235,6 +289,7 @@ static void rebuild_assets(void) {
     }];
     g_assets = [assets copy];
     g_assets_by_id = [byID copy];
+    g_delete_uuid_by_id = [deleteUUIDs copy];
     g_scanned_at = [NSDate timeIntervalSinceReferenceDate];
 }
 
@@ -311,9 +366,63 @@ static char *read_binary(NSString *path, int *status, int *out_len, const char *
     return out;
 }
 
-char *rctl_media_handle(const char *path, const char *query, int *status,
-                        int *out_len, const char **out_ctype) {
+char *rctl_media_handle(const char *path, const char *query, const char *body,
+                        int body_len, int *status, int *out_len,
+                        const char **out_ctype) {
     if (!path || strncmp(path, "/v1/media", 9) != 0) return NULL;
+    if (!strcmp(path, "/v1/media_delete_token")) {
+        __block NSString *token = nil;
+        NSString *identifier = query_value(query, @"id");
+        dispatch_sync(media_queue(), ^{
+            NSDictionary *asset = lookup_asset(identifier);
+            if (!asset || !g_delete_uuid_by_id[identifier]) return;
+            g_delete_id = [identifier copy];
+            g_delete_token = random_token();
+            g_delete_expires = [NSDate timeIntervalSinceReferenceDate] + 30.0;
+            token = [g_delete_token copy];
+        });
+        if (!token) { *status = 404; return strdup("{\"error\":\"asset_not_deletable\"}"); }
+        return json_body(@{@"token": token, @"expires_in": @30});
+    }
+    if (!strcmp(path, "/v1/media_delete")) {
+        NSString *identifier = query_value(query, @"id");
+        NSString *token = json_request(body, body_len)[@"token"];
+        if (![token isKindOfClass:[NSString class]]) token = nil;
+        __block NSString *uuid = nil;
+        dispatch_sync(media_queue(), ^{
+            NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+            if (now <= g_delete_expires && [identifier isEqualToString:g_delete_id] &&
+                constant_time_equal(token, g_delete_token)) {
+                uuid = [g_delete_uuid_by_id[identifier] copy];
+                g_delete_id = nil;
+                g_delete_token = nil;
+                g_delete_expires = 0;
+            }
+        });
+        if (!uuid) { *status = 409; return strdup("{\"error\":\"invalid_or_expired_delete_token\"}"); }
+        rctl_media_delete_callback callback = g_delete_callback;
+        if (!callback) { *status = 503; return strdup("{\"error\":\"photo_library_unavailable\"}"); }
+        char *response = callback(uuid.UTF8String);
+        if (!response) { *status = 503; return strdup("{\"error\":\"springboard_unavailable\"}"); }
+        NSData *data = [NSData dataWithBytes:response length:strlen(response)];
+        NSDictionary *result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![result isKindOfClass:[NSDictionary class]]) {
+            free(response);
+            *status = 502;
+            return strdup("{\"error\":\"invalid_photo_library_reply\"}");
+        }
+        if (![result[@"ok"] boolValue]) {
+            *status = 409;
+            return response;
+        }
+        dispatch_sync(media_queue(), ^{
+            g_assets = nil;
+            g_assets_by_id = nil;
+            g_delete_uuid_by_id = nil;
+            g_scanned_at = 0;
+        });
+        return response;
+    }
     if (!strcmp(path, "/v1/media")) {
         __block char *result = NULL;
         dispatch_sync(media_queue(), ^{

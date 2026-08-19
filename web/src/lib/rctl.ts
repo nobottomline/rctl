@@ -29,9 +29,9 @@ export function api(path: string, init?: RequestInit): Promise<Response> {
 }
 
 // JSON GET helper (returns null on any failure -- callers stay simple).
-export async function apiJSON<T = unknown>(path: string): Promise<T | null> {
+export async function apiJSON<T = unknown>(path: string, init?: RequestInit): Promise<T | null> {
   try {
-    const r = await api(path)
+    const r = await api(path, init)
     if (!r.ok) return null
     return (await r.json()) as T
   } catch {

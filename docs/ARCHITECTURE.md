@@ -96,7 +96,10 @@ app; no app audio function is intercepted during normal startup. See
 **Photos/videos.** `rctld` reads visible Photos `ZASSET` metadata from the iOS
 database without modifying it, validates local originals below
 `/var/mobile/Media`, and serves bounded JPEG thumbnails/previews. Original files
-use the P2P files DataChannel. See `docs/MEDIA.md`.
+use the P2P files DataChannel. Confirmed deletion resolves an opaque asset ID to
+its indexed Photos UUID and delegates one PhotoKit transaction to SpringBoard;
+neither the daemon nor browser deletes files or writes Photos.sqlite. See
+`docs/MEDIA.md`.
 
 **Terminal.** `/ws/term` upgrades to a WebSocket and bridges raw binary frames to
 a root PTY shell created with `forkpty()`. xterm.js in the browser handles ANSI

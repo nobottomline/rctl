@@ -10,6 +10,12 @@
 
 static NSString *const kRoot = @"/tmp/rctl-media-library-test/root";
 static NSString *const kWork = @"/tmp/rctl-media-library-test";
+static NSString *gDeletedUUID;
+
+static char *delete_asset(const char *uuid) {
+    gDeletedUUID = uuid ? [NSString stringWithUTF8String:uuid] : nil;
+    return strdup("{\"ok\":true}");
+}
 
 static void require(BOOL condition, NSString *message) {
     if (condition) return;
@@ -17,11 +23,15 @@ static void require(BOOL condition, NSString *message) {
     exit(1);
 }
 
-static NSDictionary *request(NSString *path, NSString *query, int expectedStatus) {
+static NSDictionary *requestWithBody(NSString *path, NSString *query, NSString *requestBody,
+                                     int expectedStatus) {
     int status = 200;
     int length = 0;
     const char *contentType = NULL;
-    char *body = rctl_media_handle(path.UTF8String, query.UTF8String, &status, &length, &contentType);
+    NSData *requestData = [requestBody dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    char *body = rctl_media_handle(path.UTF8String, query.UTF8String,
+                                   static_cast<const char *>(requestData.bytes), (int)requestData.length,
+                                   &status, &length, &contentType);
     require(body != NULL, [NSString stringWithFormat:@"%@ was not handled", path]);
     require(status == expectedStatus,
             [NSString stringWithFormat:@"%@ returned %d, expected %d", path, status, expectedStatus]);
@@ -30,6 +40,10 @@ static NSDictionary *request(NSString *path, NSString *query, int expectedStatus
     id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     require([value isKindOfClass:[NSDictionary class]], [NSString stringWithFormat:@"%@ returned invalid JSON", path]);
     return value;
+}
+
+static NSDictionary *request(NSString *path, NSString *query, int expectedStatus) {
+    return requestWithBody(path, query, @"", expectedStatus);
 }
 
 static void write_file(NSString *relative, NSString *contents) {
@@ -49,13 +63,13 @@ static void create_database(void) {
     const char *schema =
         "CREATE TABLE ZASSET (ZDIRECTORY TEXT,ZFILENAME TEXT,ZKIND INTEGER,ZDATECREATED REAL,"
         "ZADDEDDATE REAL,ZWIDTH INTEGER,ZHEIGHT INTEGER,ZDURATION REAL,ZTRASHEDSTATE INTEGER,"
-        "ZHIDDEN INTEGER,ZVISIBILITYSTATE INTEGER);"
-        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','IMG_0001.JPG',0,100,100,4032,3024,0,0,0,0);"
-        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','VID_0002.MOV',1,200,200,1920,1080,12.5,0,0,0);"
-        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','HIDDEN.JPG',0,300,300,1,1,0,0,1,0);"
-        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','DELETED.JPG',0,400,400,1,1,0,1,0,0);"
-        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','CLOUD.JPG',0,500,500,1,1,0,0,0,0);"
-        "INSERT INTO ZASSET VALUES('../outside','ESCAPE.JPG',0,600,600,1,1,0,0,0,0);";
+        "ZHIDDEN INTEGER,ZVISIBILITYSTATE INTEGER,ZUUID TEXT);"
+        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','IMG_0001.JPG',0,100,100,4032,3024,0,0,0,0,'PHOTO-UUID');"
+        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','VID_0002.MOV',1,200,200,1920,1080,12.5,0,0,0,'VIDEO-UUID');"
+        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','HIDDEN.JPG',0,300,300,1,1,0,0,1,0,'HIDDEN-UUID');"
+        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','DELETED.JPG',0,400,400,1,1,0,1,0,0,'DELETED-UUID');"
+        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','CLOUD.JPG',0,500,500,1,1,0,0,0,0,'CLOUD-UUID');"
+        "INSERT INTO ZASSET VALUES('../outside','ESCAPE.JPG',0,600,600,1,1,0,0,0,0,'ESCAPE-UUID');";
     char *error = NULL;
     int result = sqlite3_exec(database, schema, NULL, NULL, &error);
     NSString *message = error ? [NSString stringWithUTF8String:error] : @"schema setup failed";
@@ -70,6 +84,21 @@ static void make_database_incompatible(void) {
     require(sqlite3_open(path.fileSystemRepresentation, &database) == SQLITE_OK, @"could not reopen Photos.sqlite");
     require(sqlite3_exec(database, "DROP TABLE ZASSET; CREATE TABLE ZASSET (Z_PK INTEGER);",
                          NULL, NULL, NULL) == SQLITE_OK, @"could not create incompatible schema");
+    sqlite3_close(database);
+}
+
+static void make_database_without_uuid(void) {
+    NSString *path = [kRoot stringByAppendingPathComponent:@"PhotoData/Photos.sqlite"];
+    sqlite3 *database = NULL;
+    require(sqlite3_open(path.fileSystemRepresentation, &database) == SQLITE_OK, @"could not reopen Photos.sqlite");
+    const char *schema =
+        "DROP TABLE ZASSET;"
+        "CREATE TABLE ZASSET (ZDIRECTORY TEXT,ZFILENAME TEXT,ZKIND INTEGER,ZDATECREATED REAL,"
+        "ZADDEDDATE REAL,ZWIDTH INTEGER,ZHEIGHT INTEGER,ZDURATION REAL,ZTRASHEDSTATE INTEGER,"
+        "ZHIDDEN INTEGER,ZVISIBILITYSTATE INTEGER);"
+        "INSERT INTO ZASSET VALUES('DCIM/100APPLE','IMG_0001.JPG',0,100,100,4032,3024,0,0,0,0);";
+    require(sqlite3_exec(database, schema, NULL, NULL, NULL) == SQLITE_OK,
+            @"could not create UUID-less schema");
     sqlite3_close(database);
 }
 
@@ -122,6 +151,34 @@ int main(void) {
                 @"Live Photo motion resource was not attached");
         require([live[@"motion_size"] integerValue] > 0, @"Live Photo motion size was lost");
         require([animated[@"animated"] boolValue], @"GIF was not marked as animated");
+        require([live[@"deletable"] boolValue], @"database asset was not marked deletable");
+        require(![animated[@"deletable"] boolValue], @"unindexed fallback asset became deletable");
+
+        NSDictionary *deleteToken = requestWithBody(@"/v1/media_delete_token",
+            [NSString stringWithFormat:@"id=%@", live[@"id"]], @"{}", 200);
+        NSString *token = deleteToken[@"token"];
+        require(token.length == 32, @"delete token is not 128-bit hex");
+        NSData *tokenJSON = [NSJSONSerialization dataWithJSONObject:@{@"token": token} options:0 error:nil];
+        NSString *tokenBody = [[NSString alloc] initWithData:tokenJSON encoding:NSUTF8StringEncoding];
+        requestWithBody(@"/v1/media_delete", [NSString stringWithFormat:@"id=%@", live[@"id"]],
+                        tokenBody, 503);
+
+        rctl_media_set_delete_callback(delete_asset);
+        deleteToken = requestWithBody(@"/v1/media_delete_token",
+            [NSString stringWithFormat:@"id=%@", live[@"id"]], @"{}", 200);
+        token = deleteToken[@"token"];
+        requestWithBody(@"/v1/media_delete", [NSString stringWithFormat:@"id=%@", live[@"id"]],
+                        @"{\"token\":\"wrong\"}", 409);
+        tokenJSON = [NSJSONSerialization dataWithJSONObject:@{@"token": token} options:0 error:nil];
+        tokenBody = [[NSString alloc] initWithData:tokenJSON encoding:NSUTF8StringEncoding];
+        NSDictionary *deleted = requestWithBody(@"/v1/media_delete",
+            [NSString stringWithFormat:@"id=%@", live[@"id"]], tokenBody, 200);
+        require([deleted[@"ok"] boolValue], @"confirmed delete did not succeed");
+        require([gDeletedUUID isEqualToString:@"PHOTO-UUID"], @"opaque id resolved to the wrong Photos UUID");
+        requestWithBody(@"/v1/media_delete", [NSString stringWithFormat:@"id=%@", live[@"id"]],
+                        tokenBody, 409);
+        requestWithBody(@"/v1/media_delete_token",
+                        [NSString stringWithFormat:@"id=%@", animated[@"id"]], @"{}", 404);
 
         NSDictionary *videoPage = request(@"/v1/media", @"type=video", 200);
         require([videoPage[@"total"] integerValue] == 2, @"video filter failed");
@@ -143,13 +200,22 @@ int main(void) {
         int unrelatedStatus = 200;
         int unrelatedLength = 0;
         const char *unrelatedType = NULL;
-        require(rctl_media_handle("/v1/not_media", "", &unrelatedStatus, &unrelatedLength,
-                                  &unrelatedType) == NULL, @"unrelated endpoint was intercepted");
+        require(rctl_media_handle("/v1/not_media", "", "", 0, &unrelatedStatus,
+                                  &unrelatedLength, &unrelatedType) == NULL,
+                @"unrelated endpoint was intercepted");
 
         make_database_incompatible();
         NSDictionary *closed = request(@"/v1/media", @"refresh=1", 200);
         require([closed[@"total"] integerValue] == 0,
                 @"incompatible Photos schema did not fail closed before DCIM fallback");
+
+        make_database_without_uuid();
+        NSDictionary *compatible = request(@"/v1/media", @"refresh=1", 200);
+        NSDictionary *uuidless = nil;
+        for (NSDictionary *candidate in compatible[@"items"])
+            if ([candidate[@"name"] isEqualToString:@"IMG_0001.JPG"]) uuidless = candidate;
+        require(uuidless != nil, @"UUID-less Photos schema disabled read-only browsing");
+        require(![uuidless[@"deletable"] boolValue], @"UUID-less asset became deletable");
 
         [files removeItemAtPath:kWork error:nil];
         printf("media library test passed\n");

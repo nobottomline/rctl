@@ -538,6 +538,7 @@ static void handle_client(rctl_http_server *s, int fd) {
         // does the action and returns a JSON body. Parse path + query without
         // clobbering the buffer (we still need it to find the POST body).
         bool isPost = (req[0] == 'P');
+        const char *method = isPost ? "POST" : "GET";
         const char *target = req + (isPost ? 5 : 4);   // skip "POST " / "GET "
         char tbuf[1024]; size_t ti = 0;
         while (target[ti] && target[ti] != ' ' && ti < sizeof(tbuf) - 1) { tbuf[ti] = target[ti]; ti++; }
@@ -549,6 +550,18 @@ static void handle_client(rctl_http_server *s, int fd) {
         // Cap at 64 MB — large enough for file uploads, bounded against abuse.
         char *bodybuf = NULL; const char *body = ""; int body_len = 0;
         char *hdr_end = strstr(req, "\r\n\r\n");
+        char content_type[96] = {0};
+        char *ct = strstr(req, "\r\nContent-Type:");
+        if (ct && (!hdr_end || ct < hdr_end)) {
+            ct += 15;
+            while (*ct == ' ' || *ct == '\t') ct++;
+            size_t ci = 0;
+            while (ct[ci] && ct[ci] != '\r' && ct[ci] != ';' && ci < sizeof(content_type) - 1) {
+                content_type[ci] = ct[ci];
+                ci++;
+            }
+            content_type[ci] = 0;
+        }
         if (isPost && hdr_end) {
             char *cl = strstr(req, "Content-Length:");
             int clen = cl ? atoi(cl + 15) : 0;
@@ -566,9 +579,16 @@ static void handle_client(rctl_http_server *s, int fd) {
         rctl_rest_cb cb = s->rest_cb; void *cx = s->rest_ctx;
         pthread_mutex_unlock(&s->mtx);
         int status = 200, out_len = 0; const char *out_ctype = NULL;
-        char *resp = cb ? cb(cx, path, query, body, body_len, &status, &out_len, &out_ctype) : NULL;
+        char *resp = cb ? cb(cx, method, content_type, path, query, body, body_len,
+                             &status, &out_len, &out_ctype) : NULL;
         const char *line = status == 400 ? "400 Bad Request" :
+                           status == 403 ? "403 Forbidden" :
                            status == 404 ? "404 Not Found" :
+                           status == 409 ? "409 Conflict" :
+                           status == 415 ? "415 Unsupported Media Type" :
+                           status == 502 ? "502 Bad Gateway" :
+                           status == 503 ? "503 Service Unavailable" :
+                           status == 504 ? "504 Gateway Timeout" :
                            status == 500 ? "500 Internal Server Error" : "200 OK";
         if (out_ctype)   // explicit content-type => send exactly out_len raw bytes (may be 0)
             send_data(fd, line, out_ctype, resp ? resp : "", out_len);
