@@ -88,6 +88,21 @@ environment variables, the SQLite volume, restarts, and port binding. The
 relay is still a normal Go binary; advanced users can run it directly under
 systemd.
 
+## Versions and updates
+
+The device hello advertises daemon/browser versions, protocol major/minor, and
+feature flags. Relay stores that snapshot and the admin panel warns about legacy
+or incompatible devices. Missing protocol metadata from pre-negotiation builds
+is temporarily treated as protocol major 1 so the relay can be upgraded first;
+future explicit major mismatches are rejected without consuming an enrollment
+token.
+
+One-click device updates are optional. Set
+`RCTL_RELAY_UPDATE_MANIFEST_URL` only after publishing a catalog signed by the
+public key pinned in the package. The admin update action remains hidden when it
+is unset. See `docs/UPDATES.md` for release generation, rollback invariants, and
+the device verification sequence.
+
 ## VPS Deployment
 
 ### Recommended Docker Deployment

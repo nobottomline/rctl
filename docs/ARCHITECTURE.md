@@ -37,7 +37,7 @@ AMFI bypass enable real touch/keyboard injection and camera-from-any-app.
        Browser (`web/` control app): video, audio, input, files, console
 ```
 
-Six runtime parts ship in one `.deb` (`com.greatlove.rctl`):
+Seven runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 
 | Component | Where it runs | What it does |
 |---|---|---|
@@ -47,6 +47,7 @@ Six runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 | **rctlappmedia** (`app/media/`) | manually loaded in ordinary UIKit apps | captures live video and provides realtime-safe virtual-mic post-processing; app-side VideoToolbox sends bounded H.264 to rctld |
 | **rctlaudio** (`audio/`) | inactive payload for mediaserverd | activated only during `/v1/audio_capture`; copies system playback PCM from supported AudioQueue/AudioUnit paths and forwards it to rctld |
 | **web** (`web/`) | the controlling browser | React/Vite control app. Primary path is WebRTC (H.264 RTP track + DataChannels); `/stream` WebCodecs remains a local/fallback path. `web/legacy/` keeps the old vanilla client for reference only. |
+| **rctl-updater** (`updater/`) | detached root process only during an update | verifies the signed release catalog and target/rollback packages, performs clean reinstall, preserves relay identity, verifies daemon/SpringBoard/relay health, and rolls back under an external watchdog. See `docs/UPDATES.md`. |
 
 `core/` holds the shared C/C++/ObjC modules (capture, encode, stream, net, input,
 ipc) so rctlsbcap, rctld, and the media payloads don't duplicate code. `layout/`
@@ -113,6 +114,17 @@ colors, cursor movement, Ctrl-C, and resize. See `docs/TERMINAL.md`.
 brightness/openurl/apps/files/say/sound/flash/banner/camera/script/audio_capture/
 audio_output) — curl- and script-friendly, separate from the realtime plane,
 shares the IPC action path where SpringBoard context is required.
+
+**Compatibility.** `/v1/capabilities` reports daemon/browser versions, protocol
+major/minor, and stable feature flags. The relay includes the same metadata in
+the authenticated device hello and admin API. Version and minor differences are
+warnings; only a protocol-major mismatch rejects a connection.
+
+**Destructive actions.** File deletion, package removal, tweak toggles, respring,
+and update start require `POST application/json` plus a short-lived one-time token
+bound to the exact action and normalized target. System/package databases, rctl
+runtime and identity, the rctl package, and Debian `Essential: yes` packages are
+protected independently of the browser UI.
 
 **Camera → browser.** Stills use `/v1/camera?pos=` and a one-shot foreground-app
 JPEG upload. Live camera uses daemon-owned desired state, `AVCaptureVideoDataOutput`
