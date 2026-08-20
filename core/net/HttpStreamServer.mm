@@ -22,6 +22,7 @@
 #import <stdio.h>
 #import <math.h>
 #import <sys/stat.h>
+#import <time.h>
 
 #define RCTL_MAX_CLIENTS 8
 #define RCTL_SUB_QUEUE_MAX 24      // per-subscriber queued frames before drop-to-latest
@@ -78,6 +79,7 @@ struct rctl_http_server {
     uint64_t audio_test_pts_us;
     double audio_test_phase;
     bool was_active;               // last-notified state (a /stream client present)
+    time_t control_client_log_at;  // rate-limit missing-package diagnostics
     volatile bool running;
 };
 
@@ -220,102 +222,6 @@ static void stream_file_download(int fd, const char *request) {
     free(buffer);
     close(file_fd);
 }
-
-static const char *kHtml = R"HTML(<!doctype html>
-<html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>rctl</title>
-<style>
-  html,body{margin:0;height:100%;background:#000;color:#ddd;
-    font-family:-apple-system,system-ui,sans-serif;overflow:hidden;
-    -webkit-user-select:none;user-select:none}
-  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
-  canvas{transform-origin:center center}
-  #hud{position:fixed;top:6px;left:8px;font-size:11px;opacity:.55;z-index:10}
-  #bar{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);z-index:10;
-    display:flex;gap:6px;background:rgba(20,20,22,.55);padding:6px;border-radius:11px;
-    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
-  #bar button{background:#2b2b2f;color:#eee;border:0;border-radius:8px;padding:7px 11px;font-size:12px}
-  #bar button.on{background:#3478f6}
-</style></head>
-<body>
-<div id="hud">rctl: connecting…</div>
-<div id="stage"><canvas id="c"></canvas></div>
-<div id="bar">
-  <button data-q="hq" class="on">High</button>
-  <button data-q="bal">Balanced</button>
-  <button data-q="lat">Low latency</button>
-</div>
-<script>
-const hud=document.getElementById('hud'),canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
-let dec=null,frames=0,started=false,orient=1,codec='avc1.640033';
-const DEG={1:0,2:180,3:-90,4:90};
-function applyOrient(){
-  const deg=DEG[orient]||0,cw=canvas.width||1,ch=canvas.height||1;
-  const r90=(deg===90||deg===-90);
-  const bbW=r90?ch:cw,bbH=r90?cw:ch;
-  const sc=Math.min(innerWidth/bbW,innerHeight/bbH);
-  canvas.style.transform=`rotate(${deg}deg) scale(${sc})`;
-}
-addEventListener('resize',applyOrient);
-function codecFromAU(au){
-  for(let i=0;i+8<au.length;i++){
-    if(au[i]===0&&au[i+1]===0&&au[i+2]===0&&au[i+3]===1&&(au[i+4]&0x1f)===7){
-      return 'avc1.'+[au[i+5],au[i+6],au[i+7]].map(x=>x.toString(16).padStart(2,'0')).join('');
-    }
-  }
-  return null;
-}
-function ptsFromPayload(data){
-  const hi=(data[0]*16777216)+(data[1]<<16)+(data[2]<<8)+data[3];
-  const lo=((data[4]<<24)>>>0)+(data[5]<<16)+(data[6]<<8)+data[7];
-  return hi*4294967296+lo;
-}
-function mkdec(){
-  if(dec){try{dec.close()}catch(e){}}
-  dec=new VideoDecoder({
-    output:f=>{const rs=(canvas.width!==f.displayWidth||canvas.height!==f.displayHeight);
-      if(rs){canvas.width=f.displayWidth;canvas.height=f.displayHeight;}
-      ctx.drawImage(f,0,0);f.close();frames++;if(rs)applyOrient();},
-    error:e=>{hud.textContent='decoder error: '+e.message;started=false;dec=null;}
-  });
-  dec.configure({codec,optimizeForLatency:true});
-}
-setInterval(()=>{hud.textContent=`rctl — ${frames}f ${canvas.width}x${canvas.height} o=${orient} ${codec}`;},1000);
-document.querySelectorAll('#bar button').forEach(b=>b.onclick=()=>{
-  const q={hq:'scale=1.0&fps=30&bitrate=24000000',
-           bal:'scale=0.75&fps=45&bitrate=14000000',
-           lat:'scale=0.6&fps=60&bitrate=8000000'}[b.dataset.q];
-  fetch('/config?'+q);
-  document.querySelectorAll('#bar button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
-});
-(async()=>{
-  let resp;try{resp=await fetch('/stream');}catch(e){hud.textContent='fetch failed: '+e;return;}
-  const reader=resp.body.getReader();let buf=new Uint8Array(0);
-  for(;;){
-    const r=await reader.read();if(r.done){hud.textContent='stream ended';break;}
-    const nb=new Uint8Array(buf.length+r.value.length);nb.set(buf,0);nb.set(r.value,buf.length);buf=nb;
-    for(;;){
-      if(buf.length<5)break;
-      const type=buf[0];
-      const len=((buf[1]<<24)>>>0)+(buf[2]<<16)+(buf[3]<<8)+buf[4];
-      if(buf.length<5+len)break;
-      const data=buf.slice(5,5+len);buf=buf.subarray(5+len);
-      if(type===2){if(data.length>=1){orient=data[0];applyOrient();}continue;}
-      if(type===3){started=false;if(dec){try{dec.close()}catch(e){}}dec=null;continue;}
-      if(type!==0&&type!==1)continue;
-      if(data.length<8)continue;
-      const pts=ptsFromPayload(data),au=data.slice(8);
-      const key=(type===1);
-      if(!started){if(!key)continue;const cs=codecFromAU(au);if(cs)codec=cs;mkdec();started=true;}
-      try{
-        dec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:pts,data:au}));
-      }catch(e){hud.textContent='decode err: '+e.message;}
-    }
-  }
-})();
-</script></body></html>
-)HTML";
 
 static bool send_full(int fd, const void *buf, size_t len) {
     const uint8_t *p = (const uint8_t *)buf;
@@ -528,7 +434,6 @@ static void send_data(int fd, const char *status, const char *ctype,
     char hdr[640];
     int n = snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
         "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
         "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; "
@@ -542,6 +447,22 @@ static void send_data(int fd, const char *status, const char *ctype,
 }
 static void send_text(int fd, const char *status, const char *ctype, const char *body) {
     send_data(fd, status, ctype, body, strlen(body));
+}
+
+static void log_control_client_unavailable(rctl_http_server *s) {
+    time_t now = time(NULL);
+    bool should_log = false;
+    pthread_mutex_lock(&s->mtx);
+    if (s->control_client_log_at == 0 || now < s->control_client_log_at ||
+        now - s->control_client_log_at >= 60) {
+        s->control_client_log_at = now;
+        should_log = true;
+    }
+    pthread_mutex_unlock(&s->mtx);
+    if (should_log) {
+        fprintf(stderr, "[http] control client unavailable: required file "
+                        "/var/mobile/rctl/index.html is missing, empty, or unreadable\n");
+    }
 }
 
 static void handle_client(rctl_http_server *s, int fd) {
@@ -701,6 +622,7 @@ static void handle_client(rctl_http_server *s, int fd) {
         const char *line = status == 400 ? "400 Bad Request" :
                            status == 403 ? "403 Forbidden" :
                            status == 404 ? "404 Not Found" :
+                           status == 405 ? "405 Method Not Allowed" :
                            status == 409 ? "409 Conflict" :
                            status == 415 ? "415 Unsupported Media Type" :
                            status == 502 ? "502 Bad Gateway" :
@@ -735,8 +657,13 @@ static void handle_client(rctl_http_server *s, int fd) {
         char *html = read_file("/var/mobile/rctl/index.html", &hlen);
         // send_data with the real length, not strlen: the inlined web bundle can
         // contain NUL bytes (embedded WASM) that would truncate a strlen() send.
-        if (html) send_data(fd, "200 OK", "text/html; charset=utf-8", html, hlen);
-        else send_text(fd, "200 OK", "text/html; charset=utf-8", kHtml);
+        if (html) {
+            send_data(fd, "200 OK", "text/html; charset=utf-8", html, hlen);
+        } else {
+            log_control_client_unavailable(s);
+            send_text(fd, "503 Service Unavailable", "text/plain; charset=utf-8",
+                      "Control client unavailable\n");
+        }
         free(html);
         close(fd);
     } else {

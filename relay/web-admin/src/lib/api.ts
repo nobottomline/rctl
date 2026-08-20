@@ -56,6 +56,18 @@ interface Ok {
   ok: boolean
 }
 
+async function respringDevice(id: string): Promise<unknown> {
+  const base = `/proxy/devices/${encodeURIComponent(id)}`
+  const confirmation = await request<{ token: string }>(`${base}/v1/confirmation`, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'respring', target: 'SpringBoard' }),
+  })
+  return request<unknown>(`${base}/v1/respring`, {
+    method: 'POST',
+    body: JSON.stringify({ token: confirmation.token }),
+  })
+}
+
 export const api = {
   login: (secret: string) =>
     request<Ok>('/api/admin/login', { method: 'POST', body: JSON.stringify({ secret }) }),
@@ -66,8 +78,7 @@ export const api = {
     request<DeviceInfo>(`/proxy/devices/${encodeURIComponent(id)}/v1/deviceinfo`),
   diagnostics: (id: string) =>
     request<DiagnosticsResponse>(`/proxy/devices/${encodeURIComponent(id)}/v1/diagnostics`),
-  respringDevice: (id: string) =>
-    request<unknown>(`/proxy/devices/${encodeURIComponent(id)}/v1/respring`, { method: 'POST' }),
+  respringDevice,
 
   status: () => request<RelayStatus>('/api/admin/status'),
   audit: (limit = 100) => request<AuditResponse>(`/api/admin/audit?limit=${limit}`),

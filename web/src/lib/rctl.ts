@@ -42,6 +42,36 @@ export function api(path: string, init?: RequestInit): Promise<Response> {
   return fetch(rctlPath(path), init)
 }
 
+export type DestructiveAction = 'file_delete' | 'package_remove' | 'tweak_toggle' | 'respring'
+
+export async function destructiveToken(action: DestructiveAction, target: string): Promise<string> {
+  const response = await api('/v1/confirmation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, target }),
+  })
+  const json = (await response.json().catch(() => null)) as { token?: string; error?: string } | null
+  if (!response.ok || !json?.token) throw new Error(json?.error || 'confirmation_rejected')
+  return json.token
+}
+
+export async function destructivePost<T>(
+  path: string,
+  action: DestructiveAction,
+  target: string,
+  body: Record<string, unknown> = {},
+): Promise<T> {
+  const token = await destructiveToken(action, target)
+  const response = await api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, token }),
+  })
+  const json = (await response.json().catch(() => null)) as (T & { error?: string }) | null
+  if (!response.ok || !json) throw new Error(json?.error || 'destructive_action_failed')
+  return json
+}
+
 // JSON GET helper (returns null on any failure -- callers stay simple).
 export async function apiJSON<T = unknown>(path: string, init?: RequestInit): Promise<T | null> {
   try {

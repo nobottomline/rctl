@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Camera, Check, Circle, Copy, Download, SwitchCamera, X } from 'lucide-react'
-import { api, apiDo, apiJSON } from '../lib/rctl'
+import { api, apiDo, apiJSON, destructivePost } from '../lib/rctl'
 import type { FileTransfer } from '../lib/files'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
@@ -726,7 +726,7 @@ function RespringCard() {
     <Card title="Device control">
       <Btn
         onClick={() => {
-          if (confirm('Respring the device?')) api('/v1/respring', { method: 'POST' }).catch(() => {})
+          if (confirm('Respring the device?')) destructivePost('/v1/respring', 'respring', 'SpringBoard').catch(() => {})
         }}
       >
         Respring

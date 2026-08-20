@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, Download, File as FileIcon, Folder, RefreshCw, Trash2, Upload } from 'lucide-react'
-import { api, apiJSON, downloadFile } from '../lib/rctl'
+import { api, apiJSON, destructivePost, downloadFile } from '../lib/rctl'
 import { fmtSize, type FileTransfer, type TransferStatus } from '../lib/files'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
@@ -18,6 +18,9 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<TransferStatus>({ text: '', kind: 'idle' })
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const pathRef = useRef('/')
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -48,9 +51,19 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
 
   const download = (e: Entry) => downloadFile(join(path, e.name), e.name)
 
-  const del = async (e: Entry) => {
-    await api(`/v1/rm?path=${enc(join(path, e.name))}`).catch(() => {})
-    load(path)
+  const del = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      await destructivePost<{ ok?: boolean }>('/v1/rm', 'file_delete', deleteTarget, { path: deleteTarget })
+      setDeleteTarget(null)
+      await load(pathRef.current)
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'delete_failed')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const onPick = async () => {
@@ -122,14 +135,77 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
                   <Download className="size-4" />
                 </RowBtn>
               )}
-              <RowBtn onClick={() => del(e)} title="Delete" danger>
+              <RowBtn
+                onClick={() => {
+                  setDeleteError('')
+                  setDeleteTarget(join(path, e.name))
+                }}
+                title="Delete"
+                danger
+              >
                 <Trash2 className="size-4" />
               </RowBtn>
             </div>
           ))}
         </div>
       )}
+      {deleteTarget && (
+        <DeleteDialog
+          path={deleteTarget}
+          busy={deleting}
+          error={deleteError}
+          onCancel={() => !deleting && setDeleteTarget(null)}
+          onConfirm={del}
+        />
+      )}
     </Sheet>
+  )
+}
+
+function DeleteDialog({
+  path,
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  path: string
+  busy: boolean
+  error: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-5" role="dialog" aria-modal="true">
+      <button className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel" onClick={onCancel} />
+      <div className="relative z-10 w-full max-w-md rounded-lg bg-elevated p-4 text-fg shadow-2xl ring-1 ring-line-2">
+        <div className="mb-2 flex items-center gap-2">
+          <Trash2 className="size-4 shrink-0 text-danger" />
+          <h2 className="text-[14px] font-semibold">Delete this item?</h2>
+        </div>
+        <p className="text-[12px] leading-relaxed text-muted">This permanently removes the selected item from the device.</p>
+        <code className="my-3 block max-h-28 overflow-auto break-all rounded bg-black/20 p-2 font-mono text-[11px] leading-relaxed text-fg-dim">
+          {path}
+        </code>
+        {error && <p className="mb-3 font-mono text-[11px] text-danger">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg bg-fg/8 px-3 py-1.5 text-[12px] font-medium text-fg-dim disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-lg bg-danger px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-60"
+          >
+            {busy ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

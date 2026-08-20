@@ -20,7 +20,7 @@ import {
   TriangleAlert,
   type LucideProps,
 } from 'lucide-react'
-import { api, apiDo, apiJSON, downloadFile } from '../lib/rctl'
+import { apiJSON, destructivePost, downloadFile } from '../lib/rctl'
 import { Sheet } from './Sheet'
 import { cn } from '../lib/cn'
 
@@ -207,7 +207,10 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
   // ---- actions ----
   const toggleTweak = async (t: Tweak) => {
     setMenu(null)
-    await api(`/v1/tweak_toggle?path=${enc(t.path)}&on=${t.enabled ? 0 : 1}`).catch(() => {})
+    await destructivePost('/v1/tweak_toggle', 'tweak_toggle', t.path, {
+      path: t.path,
+      enabled: !t.enabled,
+    }).catch((error) => setNote(error instanceof Error ? error.message : 'Could not change tweak state'))
     await load('tweaks', true)
     setNeedRespring(true)
   }
@@ -233,7 +236,12 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
   const doUninstall = async () => {
     if (!confirm) return
     setRemoving(true)
-    const j = await apiJSON<{ ok: boolean; output: string }>(`/v1/pkg_remove?id=${enc(confirm.id)}`)
+    let j: { ok: boolean; output: string } | null = null
+    try {
+      j = await destructivePost('/v1/pkg_remove', 'package_remove', confirm.id, { id: confirm.id })
+    } catch (error) {
+      j = { ok: false, output: error instanceof Error ? error.message : 'Package removal rejected' }
+    }
     setRemoving(false)
     const target = confirm
     setConfirm(null)
@@ -241,10 +249,12 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
     if (j && !j.ok) setNote(j.output?.trim() || `Could not remove ${target.name}`)
     else setNeedRespring(true)
   }
-  const doRespring = () => {
+  const doRespring = async () => {
     setNeedRespring(false)
     setNote('Respringing…')
-    apiDo('/v1/respring')
+    await destructivePost('/v1/respring', 'respring', 'SpringBoard').catch((error) =>
+      setNote(error instanceof Error ? error.message : 'Respring rejected'),
+    )
     window.setTimeout(() => setNote(null), 3000)
   }
 

@@ -42,6 +42,7 @@ after-stage::
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/var/mobile/rctl"$(ECHO_END)
 	$(ECHO_NOTHING)if [ ! -f web/dist/index.html ] || find web/src web/index.html web/package.json -newer web/dist/index.html 2>/dev/null | grep -q .; then echo "==> Building web client"; ( cd web && { [ -d node_modules ] || npm ci; } && npm run build ); fi$(ECHO_END)
 	$(ECHO_NOTHING)cp web/dist/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
+	$(ECHO_NOTHING)test -s "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html" || { echo "error: required control client is missing or empty" >&2; exit 1; }$(ECHO_END)
 	$(ECHO_NOTHING)cp ".theos/obj/debug/rctlappmedia.dylib" \
 		"$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
@@ -101,4 +102,11 @@ test-virtual-mic:
 	@/tmp/rctl-virtual-mic-dsp-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-personalize
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-destructive-actions test-personalize
+
+.PHONY: test-destructive-actions
+test-destructive-actions:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore \
+		tests/DestructiveActionsTest.mm core/security/DestructiveActions.mm \
+		-framework Foundation -o /tmp/rctl-destructive-actions-test
+	@/tmp/rctl-destructive-actions-test

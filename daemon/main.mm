@@ -44,6 +44,7 @@
 #import "net/MediaActivityPolicy.h"
 #import "net/MediaLibrary.h"
 #import "net/VirtualMicServer.h"
+#import "security/DestructiveActions.h"
 
 extern char **environ;
 extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
@@ -1124,18 +1125,75 @@ static char *rctl_pkg_files_json(const char *id) {
 // Uninstall a package via dpkg -r (id is pre-validated by rctl_safe_id). Captures
 // dpkg's output + exit status for the UI; a respring usually follows.
 static char *rctl_pkg_remove(const char *id) {
-    char cmd[320];
-    snprintf(cmd, sizeof cmd, "dpkg -r %s 2>&1", id);
-    FILE *p = popen(cmd, "r");
-    if (!p) return strdup("{\"ok\":false,\"output\":\"could not run dpkg\"}");
+    int pipes[2];
+    if (pipe(pipes) != 0) return strdup("{\"ok\":false,\"output\":\"could not create output pipe\"}");
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, pipes[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, pipes[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, pipes[0]);
+    posix_spawn_file_actions_addclose(&actions, pipes[1]);
+    pid_t pid = -1;
+    char *argv[] = {(char *)"dpkg", (char *)"-r", (char *)id, NULL};
+    int spawn_rc = posix_spawn(&pid, "/usr/bin/dpkg", &actions, NULL, argv, environ);
+    if (spawn_rc == ENOENT) spawn_rc = posix_spawn(&pid, "/bin/dpkg", &actions, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(pipes[1]);
+    if (spawn_rc != 0) {
+        close(pipes[0]);
+        return strdup("{\"ok\":false,\"output\":\"could not run dpkg\"}");
+    }
     NSMutableData *buf = [NSMutableData data];
     char chunk[1024]; size_t n;
-    while ((n = fread(chunk, 1, sizeof chunk, p)) > 0) [buf appendBytes:chunk length:n];
-    int rc = pclose(p);
+    while ((n = read(pipes[0], chunk, sizeof chunk)) > 0) {
+        if (buf.length < (1 << 20)) {
+            size_t remaining = (1 << 20) - buf.length;
+            [buf appendBytes:chunk length:MIN(n, remaining)];
+        }
+    }
+    close(pipes[0]);
+    int wait_status = 0;
+    while (waitpid(pid, &wait_status, 0) < 0 && errno == EINTR) {}
+    bool ok = WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0;
     NSString *outs = [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding] ?: @"";
-    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"ok": @(rc == 0), @"output": outs } options:0 error:nil];
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{ @"ok": @(ok), @"output": outs } options:0 error:nil];
     char *r = (char *)malloc(jd.length + 1); memcpy(r, jd.bytes, jd.length); r[jd.length] = 0;
     return r;
+}
+
+static NSDictionary *rctl_json_object(const char *body, int body_len) {
+    if (!body || body_len <= 0) return nil;
+    NSData *data = [NSData dataWithBytes:body length:(NSUInteger)body_len];
+    id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [value isKindOfClass:[NSDictionary class]] ? value : nil;
+}
+
+static char *rctl_json_error(const char *message) {
+    NSString *value = [NSString stringWithUTF8String:message ?: "request_rejected"] ?: @"request_rejected";
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"error": value} options:0 error:nil];
+    char *result = (char *)malloc(data.length + 1);
+    memcpy(result, data.bytes, data.length); result[data.length] = 0;
+    return result;
+}
+
+static bool rctl_require_destructive_post(const char *method, const char *content_type,
+                                          int *status, char **response) {
+    if (!strcmp(method, "POST") && !strcmp(content_type, "application/json")) return true;
+    *status = !strcmp(method, "POST") ? 415 : 405;
+    *response = rctl_json_error("post_application_json_required");
+    return false;
+}
+
+static bool rctl_confirm_destructive(NSDictionary *json, const char *action,
+                                     NSString *target, int *status, char **response) {
+    NSString *token = [json[@"token"] isKindOfClass:[NSString class]] ? json[@"token"] : nil;
+    char reason[128] = {};
+    if (!target || !rctl_destructive_consume(action, target.UTF8String, token.UTF8String,
+                                              status, reason, sizeof(reason))) {
+        *response = rctl_json_error(reason[0] ? reason : "confirmation_required");
+        return false;
+    }
+    return true;
 }
 
 static char *rctl_pkg_meta_json(const char *cid) {
@@ -1196,6 +1254,13 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
                           const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
+    const bool destructive = !strcmp(path, "/v1/confirmation") || !strcmp(path, "/v1/rm") ||
+                             !strcmp(path, "/v1/pkg_remove") || !strcmp(path, "/v1/tweak_toggle") ||
+                             !strcmp(path, "/v1/respring");
+    if (destructive) {
+        char *error = NULL;
+        if (!rctl_require_destructive_post(method, content_type, status, &error)) return error;
+    }
     if ((!strcmp(path, "/v1/media_delete_token") || !strcmp(path, "/v1/media_delete")) &&
         (strcmp(method, "POST") || strcmp(content_type, "application/json"))) {
         *status = 403;
@@ -1203,7 +1268,13 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
     }
     char *media = rctl_media_handle(path, query, body, body_len, status, out_len, out_ctype);
     if (media) return media;
-    if (!strcmp(path, "/v1/talk_route")) {
+    if (!strcmp(path, "/v1/confirmation")) {
+        NSDictionary *json = rctl_json_object(body, body_len);
+        NSString *action = [json[@"action"] isKindOfClass:[NSString class]] ? json[@"action"] : nil;
+        NSString *target = [json[@"target"] isKindOfClass:[NSString class]] ? json[@"target"] : nil;
+        if (!action || !target) { *status = 400; return rctl_json_error("action_and_target_required"); }
+        return rctl_destructive_issue(action.UTF8String, target.UTF8String, status);
+    } else if (!strcmp(path, "/v1/talk_route")) {
         char mode[16] = {0};
         if (get_param(query, "mode", mode, sizeof(mode))) {
             if (!strcmp(mode, "speaker")) rctl_vmic_set_route(RCTL_TALK_SPEAKER);
@@ -1249,6 +1320,9 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         url_decode(raw, text, sizeof text);
         send_to_sb(RCTL_MSG_TOAST, text, (uint32_t)strlen(text));
     } else if (!strcmp(path, "/v1/respring")) {
+        NSDictionary *json = rctl_json_object(body, body_len);
+        char *error = NULL;
+        if (!rctl_confirm_destructive(json, "respring", @"SpringBoard", status, &error)) return error;
         // Restart SpringBoard (we're root). Delay so the HTTP reply goes out first.
         AFTER(0.2, ^{ respring_device(); });
     } else if (!strcmp(path, "/v1/brightness")) {
@@ -1309,10 +1383,17 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         if (dl) return dl;
         *status = 500; return strdup("{\"error\":\"dylibs failed\"}");
     } else if (!strcmp(path, "/v1/tweak_toggle")) {   // enable/disable a tweak (rename +/- .disabled)
-        char raw[1024], pth[1024]; int on = get_i(query, "on", 0);
-        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
-        url_decode(raw, pth, sizeof pth);
-        char *r = rctl_tweak_toggle(pth, on);
+        NSDictionary *json = rctl_json_object(body, body_len);
+        NSString *target = [json[@"path"] isKindOfClass:[NSString class]] ? json[@"path"] : nil;
+        NSNumber *enabled = [json[@"enabled"] isKindOfClass:[NSNumber class]] ? json[@"enabled"] : nil;
+        if (!target || !enabled) { *status = 400; return rctl_json_error("path_and_enabled_required"); }
+        char *error = NULL;
+        if (!rctl_confirm_destructive(json, "tweak_toggle", target, status, &error)) return error;
+        char normalized[PATH_MAX];
+        if (!rctl_destructive_normalize_path(target.fileSystemRepresentation, normalized, sizeof(normalized))) {
+            *status = 400; return rctl_json_error("invalid_tweak_path");
+        }
+        char *r = rctl_tweak_toggle(normalized, enabled.boolValue ? 1 : 0);
         if (r) return r;
         *status = 400; return strdup("{\"error\":\"not a tweak path\"}");
     } else if (!strcmp(path, "/v1/owner")) {          // which package owns a file
@@ -1325,9 +1406,12 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         if (!get_param(query, "id", id, sizeof id) || !rctl_safe_id(id)) { *status = 400; return strdup("{\"error\":\"bad id\"}"); }
         return rctl_pkg_files_json(id);
     } else if (!strcmp(path, "/v1/pkg_remove")) {     // dpkg -r <id>
-        char id[256];
-        if (!get_param(query, "id", id, sizeof id) || !rctl_safe_id(id)) { *status = 400; return strdup("{\"error\":\"bad id\"}"); }
-        return rctl_pkg_remove(id);
+        NSDictionary *json = rctl_json_object(body, body_len);
+        NSString *packageID = [json[@"id"] isKindOfClass:[NSString class]] ? json[@"id"] : nil;
+        if (!packageID || !rctl_safe_id(packageID.UTF8String)) { *status = 400; return rctl_json_error("bad_id"); }
+        char *error = NULL;
+        if (!rctl_confirm_destructive(json, "package_remove", packageID, status, &error)) return error;
+        return rctl_pkg_remove(packageID.UTF8String);
     } else if (!strcmp(path, "/v1/pkg_meta")) {       // rich repo metadata (depiction/icon) from apt lists
         char id[256];
         if (!get_param(query, "id", id, sizeof id) || !rctl_safe_id(id)) { *status = 400; return strdup("{\"error\":\"bad id\"}"); }
@@ -1373,11 +1457,25 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         char out[96]; snprintf(out, sizeof out, "{\"ok\":true,\"bytes\":%d}", body_len);
         return strdup(out);
     } else if (!strcmp(path, "/v1/rm")) {
-        char raw[1024], target[1024];
-        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
-        url_decode(raw, target, sizeof target);
-        struct stat st;
-        int rc = (stat(target, &st) == 0 && S_ISDIR(st.st_mode)) ? rmdir(target) : unlink(target);
+        NSDictionary *json = rctl_json_object(body, body_len);
+        NSString *requested = [json[@"path"] isKindOfClass:[NSString class]] ? json[@"path"] : nil;
+        if (!requested) { *status = 400; return rctl_json_error("path_required"); }
+        char *error = NULL;
+        if (!rctl_confirm_destructive(json, "file_delete", requested, status, &error)) return error;
+        char target[PATH_MAX];
+        if (!rctl_destructive_normalize_path(requested.fileSystemRepresentation, target, sizeof(target))) {
+            *status = 400; return rctl_json_error("invalid_path");
+        }
+        NSString *normalized = [NSString stringWithUTF8String:target];
+        NSString *parent = normalized.stringByDeletingLastPathComponent;
+        NSString *name = normalized.lastPathComponent;
+        int parent_fd = open(parent.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        struct stat st = {};
+        int rc = -1;
+        if (parent_fd >= 0 && fstatat(parent_fd, name.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+            rc = unlinkat(parent_fd, name.fileSystemRepresentation, S_ISDIR(st.st_mode) ? AT_REMOVEDIR : 0);
+        }
+        if (parent_fd >= 0) close(parent_fd);
         if (rc != 0) { *status = 500; return strdup("{\"error\":\"delete failed\"}"); }
     } else if (!strcmp(path, "/v1/say")) {            // FX: speak text aloud
         char raw[2048], text[2048];

@@ -26,6 +26,7 @@ LIBCPP := $(shell xcrun --sdk iphoneos --show-sdk-path)/usr/include/c++/v1
 
 TOOL_NAME = rctld
 rctld_FILES = main.mm \
+              ../core/security/DestructiveActions.mm \
               ../core/net/RelayClient.mm \
               ../core/net/HttpStreamServer.mm \
               ../core/net/Term.mm \
