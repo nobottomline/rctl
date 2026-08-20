@@ -17,6 +17,15 @@ AUDIO_CAPTURE_MARKER=/tmp/rctl-audio-capture
 AUDIO_TONE_MARKER=/tmp/rctl-audio-tone
 RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
 RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
+WEB_CLIENT=/var/mobile/rctl/index.html
+
+# A package without the canonical control client is incomplete. Fail before
+# signing, loading daemons, or respringing instead of silently serving a stale
+# embedded fallback from rctld.
+if [ ! -s "$WEB_CLIENT" ]; then
+    echo "rctl: required control client is missing or empty: $WEB_CLIENT" >&2
+    exit 1
+fi
 
 # The app-side media agent was renamed rctlcap -> rctlapp; remove any stale copy
 # so the old and new dylibs don't both inject (double hooks) on an in-place upgrade.

@@ -43,6 +43,14 @@ esac
 say "checking public package artifact"
 dpkg-deb -R "${DEB}" "${WORK}/pkg"
 
+CONTROL_CLIENT="var/mobile/rctl/index.html"
+[[ -s "${WORK}/pkg/${CONTROL_CLIENT}" ]] || \
+  fail "public .deb is missing the non-empty control client: ${CONTROL_CLIENT}"
+grep -F 'WEB_CLIENT=/var/mobile/rctl/index.html' "${WORK}/pkg/DEBIAN/postinst" >/dev/null || \
+  fail "postinst does not validate the required control client"
+grep -F '[ ! -s "$WEB_CLIENT" ]' "${WORK}/pkg/DEBIAN/postinst" >/dev/null || \
+  fail "postinst control-client validation does not reject empty files"
+
 RELAY_PLIST="var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist"
 if [[ -e "${WORK}/pkg/${RELAY_PLIST}" ]]; then
   fail "public .deb contains relay config plist: ${RELAY_PLIST}"

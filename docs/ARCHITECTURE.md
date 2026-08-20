@@ -52,6 +52,9 @@ Six runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 ipc) so rctlsbcap, rctld, and the media payloads don't duplicate code. `layout/`
 is the static package payload (LaunchDaemon plist and maintainer scripts);
 `Makefile` stages `web/dist/index.html` into `/var/mobile/rctl/index.html`.
+That non-empty file is a required package artifact: staging, `postinst`, and the
+public release audit validate it. `rctld` returns `503` and logs a diagnostic if
+it is unavailable at runtime; there is no embedded legacy control-page fallback.
 `relay/web-admin` is a separate admin SPA embedded into
 `relay/internal/relay/webdist`; it is not the device control UI. `docs/` holds
 these notes + the mediaserverd class dump.
