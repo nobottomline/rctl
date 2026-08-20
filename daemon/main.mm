@@ -45,6 +45,7 @@
 #import "net/MediaLibrary.h"
 #import "net/VirtualMicServer.h"
 #import "security/DestructiveActions.h"
+#import "protocol/Capabilities.h"
 
 extern char **environ;
 extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
@@ -1268,7 +1269,12 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
     }
     char *media = rctl_media_handle(path, query, body, body_len, status, out_len, out_ctype);
     if (media) return media;
-    if (!strcmp(path, "/v1/confirmation")) {
+    if (!strcmp(path, "/v1/capabilities")) {
+        NSData *data = [NSJSONSerialization dataWithJSONObject:rctl_device_capabilities() options:0 error:nil];
+        char *result = (char *)malloc(data.length + 1);
+        memcpy(result, data.bytes, data.length); result[data.length] = 0;
+        return result;
+    } else if (!strcmp(path, "/v1/confirmation")) {
         NSDictionary *json = rctl_json_object(body, body_len);
         NSString *action = [json[@"action"] isKindOfClass:[NSString class]] ? json[@"action"] : nil;
         NSString *target = [json[@"target"] isKindOfClass:[NSString class]] ? json[@"target"] : nil;

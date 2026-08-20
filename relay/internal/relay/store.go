@@ -69,6 +69,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 		// User-Agent, so touch capability is the only signal that tells an iPad apart.
 		`ALTER TABLE sessions ADD COLUMN touch_points INTEGER`,
 		`ALTER TABLE audit_log ADD COLUMN session_id TEXT`,
+		`ALTER TABLE devices ADD COLUMN daemon_version TEXT`,
+		`ALTER TABLE devices ADD COLUMN browser_version TEXT`,
+		`ALTER TABLE devices ADD COLUMN protocol_major INTEGER`,
+		`ALTER TABLE devices ADD COLUMN protocol_minor INTEGER`,
+		`ALTER TABLE devices ADD COLUMN capabilities_json TEXT`,
+		`ALTER TABLE devices ADD COLUMN compatibility_error TEXT`,
 	} {
 		if _, e := s.db.ExecContext(ctx, stmt); e != nil &&
 			!strings.Contains(e.Error(), "duplicate column") {

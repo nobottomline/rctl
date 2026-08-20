@@ -101,6 +101,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin", s.handleAdminRoot)
 	mux.Handle("GET /admin/{path...}", s.handleAdminAssets())
 	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("GET /v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("POST /api/admin/login", s.withRateLimit("login", s.cfg.LoginLimit, s.handleAdminLogin))
 	mux.HandleFunc("POST /api/admin/logout", s.withAdmin(s.handleAdminLogout))
 	mux.HandleFunc("GET /api/admin/status", s.withAdmin(s.handleStatus))

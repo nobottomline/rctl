@@ -24,6 +24,9 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":         Version,
+		"protocol_major":  protocolMajor,
+		"protocol_minor":  protocolMinor,
+		"features":        relayFeatures,
 		"go_version":      runtime.Version(),
 		"started_at":      s.startedAt.Unix(),
 		"uptime_seconds":  int64(time.Since(s.startedAt).Seconds()),

@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   ShieldQuestion,
   Trash2,
+  TriangleAlert,
   type LucideProps,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -57,6 +58,8 @@ export type DevicesPanelProps = {
 export function DevicesPanel({ devices, loading, busyId, audit, onAction }: DevicesPanelProps) {
   const online = devices.filter((d) => d.online).length
   const pending = devices.filter((d) => d.status === 'pending').length
+  const incompatible = devices.filter((d) => !d.compatible).length
+  const legacy = devices.filter((d) => d.legacy_protocol).length
   const [detail, setDetail] = useState<Device | null>(null)
 
   function run(key: ActionKey, device: Device) {
@@ -84,6 +87,18 @@ export function DevicesPanel({ devices, loading, busyId, audit, onAction }: Devi
         <div className="flex items-center gap-2.5 border-b border-line/70 bg-signal/8 px-5 py-2.5 text-[13px] font-medium text-signal">
           <ShieldQuestion className="size-4 shrink-0" />
           {pending} device{pending === 1 ? '' : 's'} awaiting approval
+        </div>
+      )}
+      {incompatible > 0 && (
+        <div className="flex items-center gap-2.5 border-b border-danger/25 bg-danger/10 px-5 py-2.5 text-[13px] font-medium text-danger">
+          <TriangleAlert className="size-4 shrink-0" />
+          {incompatible} device{incompatible === 1 ? '' : 's'} rejected: incompatible protocol major
+        </div>
+      )}
+      {legacy > 0 && incompatible === 0 && (
+        <div className="flex items-center gap-2.5 border-b border-amber-500/25 bg-amber-500/10 px-5 py-2.5 text-[13px] font-medium text-amber-500">
+          <TriangleAlert className="size-4 shrink-0" />
+          {legacy} device{legacy === 1 ? '' : 's'} still uses the legacy compatibility bridge
         </div>
       )}
       {loading && devices.length === 0 ? (
@@ -124,7 +139,7 @@ function DeviceRow({
   run: (key: ActionKey, device: Device) => void
 }) {
   const acts = actionsFor(device)
-  const canOpen = device.online && device.status === 'approved'
+  const canOpen = device.online && device.status === 'approved' && device.compatible
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
@@ -161,6 +176,9 @@ function DeviceRow({
             <OnlineDot online={device.online} />
           </div>
           <StatusBadge status={device.status} />
+          {!device.compatible && (
+            <TriangleAlert className="size-4 shrink-0 text-danger" aria-label="Incompatible protocol" />
+          )}
           <div className="hidden text-right md:block">
             <div className="text-[12.5px] text-fg-dim tnum">{fmtRel(device.updated_at)}</div>
             <div className="text-[11px] text-faint">updated</div>

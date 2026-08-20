@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+import { readFileSync } from 'node:fs'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
@@ -29,10 +30,18 @@ function stripOpusDynEncode() {
   }
 }
 
+const control = readFileSync(new URL('../control', import.meta.url), 'utf8')
+const productVersion = control.match(/^Version:\s*(\S+)/m)?.[1] || 'dev'
+
 export default defineConfig({
   base: './',
   plugins: [stripOpusDynEncode(), react(), tailwindcss(), viteSingleFile()],
   build: { outDir: 'dist', emptyOutDir: true, assetsInlineLimit: 100000000, cssCodeSplit: false },
   // Force ASCII output so no stray non-ASCII byte can corrupt the inlined HTML.
   esbuild: { charset: 'ascii' },
+  define: {
+    __RCTL_BROWSER_VERSION__: JSON.stringify(productVersion),
+    __RCTL_PROTOCOL_MAJOR__: '1',
+    __RCTL_PROTOCOL_MINOR__: '0',
+  },
 })

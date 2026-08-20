@@ -35,7 +35,7 @@ export function DeviceDetailModal({
   const [copied, setCopied] = useState(false)
   const [showDiag, setShowDiag] = useState(false)
 
-  const reachable = !!device && device.online && device.status === 'approved'
+  const reachable = !!device && device.online && device.status === 'approved' && device.compatible
 
   const load = useCallback((d: Device) => {
     setInfo(null)
@@ -154,6 +154,22 @@ export function DeviceDetailModal({
                 <DetailField label="Approved" value={device.approved_at ? fmtAbs(device.approved_at) : '—'} />
                 <DetailField label="Last seen" value={device.last_seen_at ? fmtRel(device.last_seen_at) : '—'} />
                 <DetailField label="Updated" value={fmtRel(device.updated_at)} />
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Compatibility">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                <DetailField label="Daemon" value={device.daemon_version || 'legacy'} />
+                <DetailField label="Browser bundle" value={device.browser_version || 'legacy'} />
+                <DetailField
+                  label="Protocol"
+                  value={device.protocol_major != null ? `${device.protocol_major}.${device.protocol_minor ?? 0}` : 'unknown'}
+                />
+                <DetailField label="Features" value={String(device.features?.length ?? 0)} />
+                <DetailField
+                  label="Status"
+                  value={device.compatible ? (device.legacy_protocol ? 'Legacy bridge' : 'Compatible') : 'Incompatible'}
+                />
               </div>
             </DetailSection>
 

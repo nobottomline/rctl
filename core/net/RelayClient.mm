@@ -1,5 +1,6 @@
 #import "net/RelayClient.h"
 #import "net/WebRTCBridge.h"
+#import "protocol/Capabilities.h"
 #import <Foundation/Foundation.h>
 #import <stdlib.h>
 #import <time.h>
@@ -269,7 +270,15 @@ static NSMutableArray *g_relay_clients;
 
 - (void)sendHello API_AVAILABLE(ios(13.0)) {
     NSString *name = [self.config[@"DeviceName"] isKindOfClass:[NSString class]] ? self.config[@"DeviceName"] : @"rctl device";
-    NSDictionary *hello = @{@"type": @"hello", @"device_id": self.deviceID ?: @"", @"device_name": name};
+    NSDictionary *hello = @{
+        @"type": @"hello",
+        @"device_id": self.deviceID ?: @"",
+        @"device_name": name,
+        @"daemon_version": @RCTL_VERSION,
+        @"browser_version": @RCTL_VERSION,
+        @"protocol": @{@"major": @(RCTL_PROTOCOL_MAJOR), @"minor": @(RCTL_PROTOCOL_MINOR)},
+        @"features": rctl_device_feature_names(),
+    };
     NSData *data = [NSJSONSerialization dataWithJSONObject:hello options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     id message = [self webSocketMessageWithString:json];
@@ -320,6 +329,14 @@ static NSMutableArray *g_relay_clients;
     self.lastActivityAt = [NSDate timeIntervalSinceReferenceDate];
 
     if ([type isEqualToString:@"hello_ack"]) {
+        NSDictionary *protocol = [dict[@"protocol"] isKindOfClass:[NSDictionary class]] ? dict[@"protocol"] : nil;
+        NSNumber *major = [protocol[@"major"] isKindOfClass:[NSNumber class]] ? protocol[@"major"] : nil;
+        if (major && major.integerValue != RCTL_PROTOCOL_MAJOR) {
+            relay_log([NSString stringWithFormat:@"protocol major incompatible: device=%d relay=%ld",
+                       RCTL_PROTOCOL_MAJOR, (long)major.integerValue]);
+            [self scheduleReconnect];
+            return;
+        }
         NSString *status = [dict[@"status"] isKindOfClass:[NSString class]] ? dict[@"status"] : @"unknown";
         self.reconnectDelay = 2;
         [self releaseWakeAssertion];

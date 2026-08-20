@@ -9,6 +9,7 @@ import FilesPanel from './components/FilesPanel'
 import ConsolePanel from './components/ConsolePanel'
 import SystemPanel from './components/SystemPanel'
 import MediaPanel from './components/MediaPanel'
+import CompatibilityBanner from './components/CompatibilityBanner'
 
 type View = null | 'cc' | 'terminal' | 'files' | 'media' | 'console' | 'system'
 
@@ -46,6 +47,7 @@ export default function App() {
         {ctl.statsOn && ctl.stats ? `${ctl.stats.fps}fps · ${ctl.stats.res}` : ctl.status}
       </button>
       {ctl.statsOn && ctl.stats && <StatsOverlay s={ctl.stats} />}
+      <CompatibilityBanner />
 
       <RecordHud record={ctl.record} />
 

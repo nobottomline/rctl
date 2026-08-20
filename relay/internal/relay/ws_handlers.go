@@ -14,14 +14,19 @@ import (
 )
 
 type deviceConn struct {
-	id   string
-	name string
-	ws   *websocket.Conn
+	id             string
+	name           string
+	daemonVersion  string
+	browserVersion string
+	protocolMajor  int
+	protocolMinor  int
+	features       []string
+	ws             *websocket.Conn
 
-	mu            sync.Mutex
-	writeMu       sync.Mutex
-	viewer        *websocket.Conn
-	lastRecvAt    time.Time // last time any frame arrived from the device (liveness)
+	mu             sync.Mutex
+	writeMu        sync.Mutex
+	viewer         *websocket.Conn
+	lastRecvAt     time.Time // last time any frame arrived from the device (liveness)
 	pendingHTTP    map[string]chan httpTunnelResponse
 	pendingHTTPBuf map[string]*strings.Builder // accumulates a chunked http response body (base64) by request id
 	pendingStream  map[string]chan streamTunnelEvent
@@ -43,9 +48,16 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 	defer ws.Close(websocket.StatusInternalError, "server error")
 
 	var hello struct {
-		Type       string `json:"type"`
-		DeviceID   string `json:"device_id"`
-		DeviceName string `json:"device_name"`
+		Type           string `json:"type"`
+		DeviceID       string `json:"device_id"`
+		DeviceName     string `json:"device_name"`
+		DaemonVersion  string `json:"daemon_version"`
+		BrowserVersion string `json:"browser_version"`
+		Protocol       struct {
+			Major int `json:"major"`
+			Minor int `json:"minor"`
+		} `json:"protocol"`
+		Features []string `json:"features"`
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -54,6 +66,44 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hello.DeviceName = normalizeDeviceName(hello.DeviceName)
+	if len(hello.DaemonVersion) > 64 || len(hello.BrowserVersion) > 64 || len(hello.Features) > 128 {
+		ws.Close(websocket.StatusUnsupportedData, "invalid capabilities")
+		return
+	}
+	legacyProtocol := hello.Protocol.Major == 0
+	if legacyProtocol {
+		// Rolling-upgrade bridge for daemon builds that predate negotiation. They
+		// spoke protocol 1; this lets operators upgrade the relay first.
+		hello.Protocol.Major = protocolMajor
+	}
+	cleanFeatures := make([]string, 0, len(hello.Features))
+	for _, feature := range hello.Features {
+		feature = strings.TrimSpace(feature)
+		if feature != "" && len(feature) <= 96 {
+			cleanFeatures = append(cleanFeatures, feature)
+		}
+	}
+	hello.Features = cleanFeatures
+	capabilitiesJSON, _ := json.Marshal(hello.Features)
+	if !protocolCompatible(hello.Protocol.Major) {
+		// Never consume a one-time enrollment token for a daemon this relay cannot
+		// serve. For already-approved devices the secret identifies the DB row, so
+		// the admin panel can surface the incompatibility without trusting DeviceID.
+		deviceID, secretErr := s.authenticateDeviceSecret(r.Context(), token)
+		if secretErr == nil {
+			_, _ = s.db.ExecContext(r.Context(), `
+UPDATE devices
+SET daemon_version=?, browser_version=?, protocol_major=?, protocol_minor=?,
+    capabilities_json=?, compatibility_error='protocol_major_mismatch', updated_at=?
+WHERE id=?`, hello.DaemonVersion, hello.BrowserVersion, hello.Protocol.Major,
+				hello.Protocol.Minor, string(capabilitiesJSON), time.Now().Unix(), deviceID)
+		}
+		s.audit(r, "device_protocol_rejected", "claimed_device_id", hello.DeviceID,
+			"device_protocol_major", hello.Protocol.Major, "relay_protocol_major", protocolMajor,
+			"authenticated", secretErr == nil)
+		ws.Close(websocket.StatusPolicyViolation, "protocol major incompatible")
+		return
+	}
 
 	deviceID, status, err := s.authenticateDevice(r, token, hello.DeviceID, hello.DeviceName)
 	if err != nil {
@@ -62,11 +112,22 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		ws.Close(websocket.StatusPolicyViolation, "auth rejected")
 		return
 	}
+	_, _ = s.db.ExecContext(r.Context(), `
+UPDATE devices
+SET daemon_version=?, browser_version=?, protocol_major=?, protocol_minor=?,
+    capabilities_json=?, compatibility_error=?, updated_at=?
+WHERE id=?`, hello.DaemonVersion, hello.BrowserVersion, hello.Protocol.Major,
+		hello.Protocol.Minor, string(capabilitiesJSON), "", time.Now().Unix(), deviceID)
 
 	dc := &deviceConn{
-		id:            deviceID,
-		name:          hello.DeviceName,
-		ws:            ws,
+		id:             deviceID,
+		name:           hello.DeviceName,
+		daemonVersion:  hello.DaemonVersion,
+		browserVersion: hello.BrowserVersion,
+		protocolMajor:  hello.Protocol.Major,
+		protocolMinor:  hello.Protocol.Minor,
+		features:       append([]string(nil), hello.Features...),
+		ws:             ws,
 		lastRecvAt:     time.Now(),
 		pendingHTTP:    make(map[string]chan httpTunnelResponse),
 		pendingHTTPBuf: make(map[string]*strings.Builder),
@@ -78,7 +139,13 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 	defer s.unregisterDevice(deviceID, dc)
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
-	_ = wsjsonWrite(r.Context(), ws, map[string]any{"type": "hello_ack", "device_id": deviceID, "status": status})
+	_ = wsjsonWrite(r.Context(), ws, map[string]any{
+		"type": "hello_ack", "device_id": deviceID, "status": status,
+		"relay_version":   Version,
+		"protocol":        map[string]int{"major": protocolMajor, "minor": protocolMinor},
+		"features":        relayFeatures,
+		"legacy_protocol": legacyProtocol,
+	})
 	s.audit(r, "device_connected", "device_id", deviceID, "status", status)
 	s.log.Info("device connected", "device_id", deviceID, "status", status)
 	hbCtx, hbCancel := context.WithCancel(r.Context())

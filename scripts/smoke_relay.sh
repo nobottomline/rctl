@@ -105,9 +105,13 @@ func main() {
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
 	writeJSON(ctx, ws, map[string]any{
-		"type":        "hello",
-		"device_id":   deviceID,
-		"device_name": "Smoke Device",
+		"type":            "hello",
+		"device_id":       deviceID,
+		"device_name":     "Smoke Device",
+		"daemon_version":  "smoke",
+		"browser_version": "smoke",
+		"protocol":        map[string]any{"major": 1, "minor": 0},
+		"features":        []string{"capability.negotiation"},
 	})
 
 	for {

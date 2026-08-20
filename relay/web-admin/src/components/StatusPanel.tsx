@@ -7,6 +7,8 @@ export function StatusPanel({ status }: { status: RelayStatus | null }) {
   const stats: { label: string; value: string }[] = [
     { label: 'Devices online', value: `${status.devices_online} / ${status.devices_total}` },
     { label: 'Admin sessions', value: String(status.sessions) },
+    { label: 'Relay version', value: status.version },
+    { label: 'Protocol', value: `${status.protocol_major}.${status.protocol_minor}` },
   ]
   return (
     <Panel title="Relay" subtitle={`up ${fmtUptime(status.uptime_seconds)}`}>

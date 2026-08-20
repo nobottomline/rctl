@@ -12,6 +12,14 @@ export interface Device {
   last_seen_at?: number
   approved_at?: number
   revoked_at?: number
+  daemon_version?: string
+  browser_version?: string
+  protocol_major?: number
+  protocol_minor?: number
+  features: string[]
+  compatible: boolean
+  compatibility_error?: string
+  legacy_protocol?: boolean
 }
 
 export interface Session {
@@ -124,4 +132,7 @@ export interface RelayStatus {
   goroutines: number
   mem_alloc_bytes: number
   mem_sys_bytes: number
+  protocol_major: number
+  protocol_minor: number
+  features: string[]
 }

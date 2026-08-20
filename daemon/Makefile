@@ -26,6 +26,7 @@ LIBCPP := $(shell xcrun --sdk iphoneos --show-sdk-path)/usr/include/c++/v1
 
 TOOL_NAME = rctld
 rctld_FILES = main.mm \
+              ../core/protocol/Capabilities.mm \
               ../core/security/DestructiveActions.mm \
               ../core/net/RelayClient.mm \
               ../core/net/HttpStreamServer.mm \
@@ -36,7 +37,8 @@ rctld_FILES = main.mm \
               ../core/net/MediaLibrary.mm \
               ../core/net/VirtualMicServer.mm \
               ../core/ipc/Ipc.c
-rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
+RCTL_PRODUCT_VERSION := $(shell awk '/^Version:/{print $$2; exit}' ../control)
+rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations -DRCTL_VERSION='"$(RCTL_PRODUCT_VERSION)"'
 rctld_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP) -I$(DC)/include -I$(DC)/deps/json/single_include -I$(OPUS)/include
 rctld_LDFLAGS = $(DC)/build-ios/libdatachannel.a \
                 $(DC)/build-ios/deps/libsrtp/libsrtp2.a \

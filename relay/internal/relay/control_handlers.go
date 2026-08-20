@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"html"
 	"net/http"
 	"os"
@@ -39,6 +40,9 @@ window.RCTL_STREAM_BASE="` + html.EscapeString(streamBase) + `";
 window.RCTL_TERM_WS_BASE="` + html.EscapeString(termBase) + `";
 window.RCTL_RELAY_DEVICE_ID="` + html.EscapeString(deviceID) + `";
 window.RCTL_WEBRTC=` + webrtc + `;
+window.RCTL_RELAY_VERSION="` + html.EscapeString(Version) + `";
+window.RCTL_RELAY_PROTOCOL_MAJOR=` + fmt.Sprint(protocolMajor) + `;
+window.RCTL_RELAY_PROTOCOL_MINOR=` + fmt.Sprint(protocolMinor) + `;
 </script>
 `
 	page := strings.Replace(string(raw), "<head>", "<head>"+inject, 1)

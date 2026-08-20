@@ -3,6 +3,7 @@ package relay
 import (
 	"crypto/subtle"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -387,6 +388,8 @@ func (s *server) handleDeleteEnrollment(w http.ResponseWriter, r *http.Request) 
 func (s *server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `
 SELECT id, name, status, created_at, updated_at, last_seen_at, approved_at, revoked_at
+     , daemon_version, browser_version, protocol_major, protocol_minor
+     , capabilities_json, compatibility_error
 FROM devices
 ORDER BY updated_at DESC`)
 	if err != nil {
@@ -396,21 +399,32 @@ ORDER BY updated_at DESC`)
 	defer rows.Close()
 
 	type device struct {
-		ID         string `json:"id"`
-		Name       string `json:"name"`
-		Status     string `json:"status"`
-		Online     bool   `json:"online"`
-		CreatedAt  int64  `json:"created_at"`
-		UpdatedAt  int64  `json:"updated_at"`
-		LastSeenAt *int64 `json:"last_seen_at,omitempty"`
-		ApprovedAt *int64 `json:"approved_at,omitempty"`
-		RevokedAt  *int64 `json:"revoked_at,omitempty"`
+		ID                 string   `json:"id"`
+		Name               string   `json:"name"`
+		Status             string   `json:"status"`
+		Online             bool     `json:"online"`
+		CreatedAt          int64    `json:"created_at"`
+		UpdatedAt          int64    `json:"updated_at"`
+		LastSeenAt         *int64   `json:"last_seen_at,omitempty"`
+		ApprovedAt         *int64   `json:"approved_at,omitempty"`
+		RevokedAt          *int64   `json:"revoked_at,omitempty"`
+		DaemonVersion      string   `json:"daemon_version,omitempty"`
+		BrowserVersion     string   `json:"browser_version,omitempty"`
+		ProtocolMajor      *int     `json:"protocol_major,omitempty"`
+		ProtocolMinor      *int     `json:"protocol_minor,omitempty"`
+		Features           []string `json:"features"`
+		Compatible         bool     `json:"compatible"`
+		CompatibilityError string   `json:"compatibility_error,omitempty"`
+		LegacyProtocol     bool     `json:"legacy_protocol,omitempty"`
 	}
 	out := []device{}
 	for rows.Next() {
 		var d device
-		var last, approved, revoked sql.NullInt64
-		if err := rows.Scan(&d.ID, &d.Name, &d.Status, &d.CreatedAt, &d.UpdatedAt, &last, &approved, &revoked); err != nil {
+		var last, approved, revoked, protocolMajorValue, protocolMinorValue sql.NullInt64
+		var daemonVersion, browserVersion, capabilitiesJSON, compatibilityError sql.NullString
+		if err := rows.Scan(&d.ID, &d.Name, &d.Status, &d.CreatedAt, &d.UpdatedAt,
+			&last, &approved, &revoked, &daemonVersion, &browserVersion,
+			&protocolMajorValue, &protocolMinorValue, &capabilitiesJSON, &compatibilityError); err != nil {
 			writeErr(w, http.StatusInternalServerError, "device_scan_failed")
 			return
 		}
@@ -423,6 +437,24 @@ ORDER BY updated_at DESC`)
 		if revoked.Valid {
 			d.RevokedAt = &revoked.Int64
 		}
+		d.DaemonVersion = daemonVersion.String
+		d.BrowserVersion = browserVersion.String
+		if protocolMajorValue.Valid {
+			major := int(protocolMajorValue.Int64)
+			d.ProtocolMajor = &major
+		}
+		if protocolMinorValue.Valid {
+			minor := int(protocolMinorValue.Int64)
+			d.ProtocolMinor = &minor
+		}
+		d.Features = []string{}
+		if capabilitiesJSON.Valid {
+			_ = json.Unmarshal([]byte(capabilitiesJSON.String), &d.Features)
+		}
+		d.CompatibilityError = compatibilityError.String
+		d.Compatible = d.CompatibilityError == "" &&
+			(!protocolMajorValue.Valid || protocolCompatible(int(protocolMajorValue.Int64)))
+		d.LegacyProtocol = protocolMajorValue.Valid && d.DaemonVersion == "" && len(d.Features) == 0
 		d.Online = s.isDeviceOnline(d.ID)
 		out = append(out, d)
 	}
