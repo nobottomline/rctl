@@ -46,8 +46,27 @@ Configure the relay only after all URLs are live:
 RCTL_RELAY_UPDATE_MANIFEST_URL=https://releases.example.com/rctl/0.3.1/update-manifest.json
 ```
 
+A separate release subdomain is optional. For small self-hosted deployments,
+serve a dedicated path from the existing TLS relay domain and place this
+location before the catch-all relay proxy:
+
+```nginx
+location ^~ /rctl-updates/ {
+    alias /var/www/rctl-updates/;
+    autoindex off;
+    limit_except GET HEAD { deny all; }
+    add_header Cache-Control "no-store" always;
+}
+```
+
+Keep the directory and files root-owned and world-readable (`0755`/`0644`), and
+publish the signed manifest last with an atomic rename. Never place the signing
+private key in this directory or on the relay host.
+
 An installed version absent from the signed catalog is not updateable. This is
 intentional: proceeding without a verified rollback package is forbidden.
+Unset `RCTL_RELAY_UPDATE_MANIFEST_URL` after the fleet reaches the target so the
+admin action remains hidden until a newer signed catalog is published.
 
 ## Runtime transaction
 
@@ -67,9 +86,10 @@ intentional: proceeding without a verified rollback package is forbidden.
    Upgrade-in-place is deliberately not used because loaded jailbreak dylibs can
    retain stale code-signing state.
 7. It restores the relay plist and verifies all of the following before commit:
-   target daemon version and protocol via `/v1/capabilities`, SpringBoard IPC via
-   `/v1/deviceinfo`, and at least one relay connection via `/v1/relay_status` when
-   a paired relay was present before the update.
+   exact Debian package version from dpkg, live daemon semantic version and
+   protocol via `/v1/capabilities`, SpringBoard IPC via `/v1/deviceinfo`, and at
+   least one relay connection via `/v1/relay_status` when a paired relay was
+   present before the update.
 8. Any install error, failed verification, parent exit, stale heartbeat, or
    watchdog deadline triggers the same clean remove/install flow with the
    verified previous package.

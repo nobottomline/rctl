@@ -459,6 +459,14 @@ static NSDictionary *localJSON(NSString *path) {
     return [value isKindOfClass:NSDictionary.class] ? value : nil;
 }
 
+static BOOL daemonVersionMatchesPackage(NSString *runningVersion, NSString *packageVersion) {
+    if (!runningVersion.length || !packageVersion.length) return NO;
+    if ([runningVersion isEqualToString:packageVersion]) return YES;
+    NSRange revision = [packageVersion rangeOfString:@"-" options:NSBackwardsSearch];
+    if (revision.location == NSNotFound) return NO;
+    return [runningVersion isEqualToString:[packageVersion substringToIndex:revision.location]];
+}
+
 static BOOL verifyRuntime(NSString *version, BOOL expectRelay, NSTimeInterval timeout,
                           NSString *heartbeat) {
     const NSTimeInterval deadline = NSDate.timeIntervalSinceReferenceDate + timeout;
@@ -467,7 +475,8 @@ static BOOL verifyRuntime(NSString *version, BOOL expectRelay, NSTimeInterval ti
         NSDictionary *capabilities = localJSON(@"/v1/capabilities");
         NSString *runningVersion = [capabilities[@"daemon"] isKindOfClass:NSDictionary.class] ? capabilities[@"daemon"][@"version"] : nil;
         NSNumber *major = [capabilities[@"protocol"] isKindOfClass:NSDictionary.class] ? capabilities[@"protocol"][@"major"] : nil;
-        BOOL daemonOK = [runningVersion isEqualToString:version] && major.integerValue == 1;
+        BOOL daemonOK = [installedVersion() isEqualToString:version] &&
+                        daemonVersionMatchesPackage(runningVersion, version) && major.integerValue == 1;
         BOOL springBoardOK = localJSON(@"/v1/deviceinfo") != nil;
         BOOL relayOK = !expectRelay;
         if (expectRelay) {
