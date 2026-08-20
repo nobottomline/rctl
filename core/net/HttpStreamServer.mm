@@ -619,7 +619,8 @@ static void handle_client(rctl_http_server *s, int fd) {
         int status = 200, out_len = 0; const char *out_ctype = NULL;
         char *resp = cb ? cb(cx, method, content_type, path, query, body, body_len,
                              &status, &out_len, &out_ctype) : NULL;
-        const char *line = status == 400 ? "400 Bad Request" :
+        const char *line = status == 202 ? "202 Accepted" :
+                           status == 400 ? "400 Bad Request" :
                            status == 403 ? "403 Forbidden" :
                            status == 404 ? "404 Not Found" :
                            status == 405 ? "405 Method Not Allowed" :

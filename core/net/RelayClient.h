@@ -9,6 +9,9 @@ extern "C" {
 // is missing or disabled.
 void rctl_relay_start(void);
 
+// Malloc-owned JSON: configured/connected relay counts for updater verification.
+char *rctl_relay_status_json(void);
+
 #ifdef __cplusplus
 }
 #endif

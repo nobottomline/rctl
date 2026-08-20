@@ -14,6 +14,7 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
             @"media.library",
             @"terminal.pty",
             @"destructive.confirmation",
+            @"update.transactional",
         ];
     });
     return features;

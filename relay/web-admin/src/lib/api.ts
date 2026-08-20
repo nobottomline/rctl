@@ -12,6 +12,7 @@ import type {
   RelayStatus,
   RevokeResult,
   SessionsResponse,
+  UpdateStatus,
 } from '../types'
 
 interface EnrollmentsResponse {
@@ -79,6 +80,12 @@ export const api = {
   diagnostics: (id: string) =>
     request<DiagnosticsResponse>(`/proxy/devices/${encodeURIComponent(id)}/v1/diagnostics`),
   respringDevice,
+  updateDevice: (id: string) =>
+    request<{ accepted: boolean; job_id: string }>(`/api/admin/devices/${encodeURIComponent(id)}/update`, {
+      method: 'POST',
+    }),
+  updateStatus: (id: string) =>
+    request<UpdateStatus>(`/proxy/devices/${encodeURIComponent(id)}/v1/update_status`),
 
   status: () => request<RelayStatus>('/api/admin/status'),
   audit: (limit = 100) => request<AuditResponse>(`/api/admin/audit?limit=${limit}`),

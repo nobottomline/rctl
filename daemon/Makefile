@@ -28,6 +28,7 @@ TOOL_NAME = rctld
 rctld_FILES = main.mm \
               ../core/protocol/Capabilities.mm \
               ../core/security/DestructiveActions.mm \
+              ../core/update/UpdateLauncher.mm \
               ../core/net/RelayClient.mm \
               ../core/net/HttpStreamServer.mm \
               ../core/net/Term.mm \

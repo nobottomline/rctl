@@ -84,6 +84,17 @@ bool normalize_target(const char *action, const char *target, char *out,
         strcpy(out, target);
         return true;
     }
+    if (!strcmp(action, "device_update")) {
+        NSString *value = [NSString stringWithUTF8String:target];
+        NSURLComponents *parts = [NSURLComponents componentsWithString:value];
+        if (![parts.scheme.lowercaseString isEqualToString:@"https"] || !parts.host.length ||
+            parts.user.length || parts.password.length || parts.fragment.length || strlen(target) >= out_len) {
+            set_reason(reason, reason_len, "manifest_url_must_be_https");
+            return false;
+        }
+        strcpy(out, target);
+        return true;
+    }
     set_reason(reason, reason_len, "unsupported_action");
     return false;
 }
@@ -213,6 +224,7 @@ bool rctl_destructive_package_allowed(const char *package_id,
 }
 
 char *rctl_destructive_issue(const char *action, const char *target, int *status) {
+    if (status) *status = 200;
     char normalized[PATH_MAX] = {};
     char reason[96] = {};
     if (!normalize_target(action, target, normalized, sizeof(normalized), reason, sizeof(reason))) {

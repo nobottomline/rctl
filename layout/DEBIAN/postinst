@@ -9,6 +9,7 @@ DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
 CAPLIB=/Library/MobileSubstrate/DynamicLibraries/rctlapp.dylib
 APPMEDIA=/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib
 DAEMON=/usr/local/bin/rctld
+UPDATER=/usr/local/libexec/rctl-updater
 PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
 AUDIOSRC=/usr/local/lib/rctl/audio/rctlaudio.dylib
 AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
@@ -55,14 +56,16 @@ if command -v ldid >/dev/null 2>&1; then
     [ -f "$CAPLIB" ]  && ldid -S "$CAPLIB"  || true
     [ -f "$APPMEDIA" ] && ldid -S "$APPMEDIA" || true
     [ -f "$DAEMON" ]  && ldid -S"$RCTLD_ENT" "$DAEMON"  || true
+    [ -f "$UPDATER" ] && ldid -S "$UPDATER" || true
     [ -f "$AUDIOSRC" ] && ldid -S "$AUDIOSRC" || true
 fi
 
 # dpkg packages built on macOS can preserve the builder's uid/gid. launchd is
 # strict about daemon plists, so normalize ownership on-device before loading.
-chown root:wheel "$PLIST" "$DAEMON" 2>/dev/null || chown root:0 "$PLIST" "$DAEMON" 2>/dev/null || true
+chown root:wheel "$PLIST" "$DAEMON" "$UPDATER" 2>/dev/null || chown root:0 "$PLIST" "$DAEMON" "$UPDATER" 2>/dev/null || true
 chmod 0644 "$PLIST" 2>/dev/null || true
 chmod 0755 "$DAEMON" 2>/dev/null || true
+chmod 0755 "$UPDATER" 2>/dev/null || true
 
 # Personalized relay packages contain an enrollment token, but an already paired
 # device has a stronger persistent DeviceSecret. Preserve that secret across

@@ -46,6 +46,7 @@
 #import "net/VirtualMicServer.h"
 #import "security/DestructiveActions.h"
 #import "protocol/Capabilities.h"
+#import "update/UpdateLauncher.h"
 
 extern char **environ;
 extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
@@ -1257,7 +1258,7 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
     *status = 200;
     const bool destructive = !strcmp(path, "/v1/confirmation") || !strcmp(path, "/v1/rm") ||
                              !strcmp(path, "/v1/pkg_remove") || !strcmp(path, "/v1/tweak_toggle") ||
-                             !strcmp(path, "/v1/respring");
+                             !strcmp(path, "/v1/respring") || !strcmp(path, "/v1/update");
     if (destructive) {
         char *error = NULL;
         if (!rctl_require_destructive_post(method, content_type, status, &error)) return error;
@@ -1274,6 +1275,17 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         char *result = (char *)malloc(data.length + 1);
         memcpy(result, data.bytes, data.length); result[data.length] = 0;
         return result;
+    } else if (!strcmp(path, "/v1/relay_status")) {
+        return rctl_relay_status_json();
+    } else if (!strcmp(path, "/v1/update_status")) {
+        return rctl_update_status();
+    } else if (!strcmp(path, "/v1/update")) {
+        NSDictionary *json = rctl_json_object(body, body_len);
+        NSString *manifest = [json[@"manifest_url"] isKindOfClass:[NSString class]] ? json[@"manifest_url"] : nil;
+        if (!manifest) { *status = 400; return rctl_json_error("manifest_url_required"); }
+        char *error = NULL;
+        if (!rctl_confirm_destructive(json, "device_update", manifest, status, &error)) return error;
+        return rctl_update_launch(manifest.UTF8String, status);
     } else if (!strcmp(path, "/v1/confirmation")) {
         NSDictionary *json = rctl_json_object(body, body_len);
         NSString *action = [json[@"action"] isKindOfClass:[NSString class]] ? json[@"action"] : nil;

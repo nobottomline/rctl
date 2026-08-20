@@ -14,6 +14,7 @@ var relayFeatures = []string{
 	"webrtc.signaling",
 	"admin.audit",
 	"capability.negotiation",
+	"update.orchestration",
 }
 
 func protocolCompatible(major int) bool {

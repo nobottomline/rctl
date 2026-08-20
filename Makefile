@@ -32,6 +32,7 @@ include $(THEOS)/makefiles/common.mk
 SUBPROJECTS += springboard
 SUBPROJECTS += daemon
 SUBPROJECTS += app
+SUBPROJECTS += updater
 
 include $(THEOS)/makefiles/aggregate.mk
 

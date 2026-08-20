@@ -46,6 +46,13 @@ int main(void) {
                                         &statusCode, reason, sizeof(reason)));
         assert(!rctl_destructive_consume("respring", "SpringBoard", token.UTF8String,
                                          &statusCode, reason, sizeof(reason)));
+
+        char *updateIssued = rctl_destructive_issue("device_update", "https://releases.example/update.json", &statusCode);
+        assert(statusCode == 200);
+        free(updateIssued);
+        char *badUpdate = rctl_destructive_issue("device_update", "http://releases.example/update.json", &statusCode);
+        assert(statusCode == 403);
+        free(badUpdate);
     }
     puts("DestructiveActionsTest passed");
     return 0;

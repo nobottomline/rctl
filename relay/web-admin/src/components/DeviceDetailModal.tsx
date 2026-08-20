@@ -19,7 +19,7 @@ import { OnlineDot, StatusBadge } from './ui/Status'
 import { DetailSection, DetailField } from './ui/Detail'
 import { api, controlURL } from '../lib/api'
 import { fmtAbs, fmtRel } from '../lib/format'
-import type { AuditEntry, Device, DeviceInfo, DiagnosticsResponse } from '../types'
+import type { AuditEntry, Device, DeviceInfo, DiagnosticsResponse, UpdateStatus } from '../types'
 
 export function DeviceDetailModal({
   device,
@@ -34,11 +34,13 @@ export function DeviceDetailModal({
   const [err, setErr] = useState('')
   const [copied, setCopied] = useState(false)
   const [showDiag, setShowDiag] = useState(false)
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
 
   const reachable = !!device && device.online && device.status === 'approved' && device.compatible
 
   const load = useCallback((d: Device) => {
     setInfo(null)
+    setUpdate(null)
     setErr('')
     if (!(d.online && d.status === 'approved')) return
     setLoading(true)
@@ -46,6 +48,7 @@ export function DeviceDetailModal({
       .deviceInfo(d.id)
       .then(setInfo, (e) => setErr(e instanceof Error ? e.message : 'unreachable'))
       .finally(() => setLoading(false))
+    api.updateStatus(d.id).then(setUpdate, () => {})
   }, [])
 
   useEffect(() => {
@@ -172,6 +175,17 @@ export function DeviceDetailModal({
                 />
               </div>
             </DetailSection>
+
+            {update && update.phase !== 'idle' && (
+              <DetailSection title="Last update">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                  <DetailField label="Phase" value={update.phase.replaceAll('_', ' ')} />
+                  <DetailField label="Target" value={update.to_version || '—'} />
+                  <DetailField label="Previous" value={update.from_version || '—'} />
+                  <DetailField label="Result" value={update.message || (update.terminal ? 'Finished' : 'In progress')} />
+                </div>
+              </DetailSection>
+            )}
 
             <div className="flex justify-end gap-2.5 pt-1">
               <Button variant="secondary" onClick={() => onOpenChange(false)}>

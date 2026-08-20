@@ -135,4 +135,15 @@ export interface RelayStatus {
   protocol_major: number
   protocol_minor: number
   features: string[]
+  update_configured: boolean
+}
+
+export interface UpdateStatus {
+  job_id?: string
+  phase: string
+  message?: string
+  from_version?: string
+  to_version?: string
+  terminal: boolean
+  updated_at?: number
 }

@@ -111,7 +111,7 @@ func main() {
 		"daemon_version":  "smoke",
 		"browser_version": "smoke",
 		"protocol":        map[string]any{"major": 1, "minor": 0},
-		"features":        []string{"capability.negotiation"},
+		"features":        []string{"capability.negotiation", "update.transactional"},
 	})
 
 	for {
@@ -127,12 +127,23 @@ func main() {
 		case "http_request":
 			id, _ := msg["id"].(string)
 			path, _ := msg["path"].(string)
-			body := base64.StdEncoding.EncodeToString([]byte("tunnel-ok:" + path))
+			responseBody := []byte("tunnel-ok:" + path)
+			status := 200
+			contentType := "text/plain; charset=utf-8"
+			if path == "/v1/confirmation" {
+				responseBody = []byte(`{"token":"smoke-confirmation-token"}`)
+				contentType = "application/json"
+			} else if path == "/v1/update" {
+				responseBody = []byte(`{"accepted":true,"job_id":"smoke-update-job"}`)
+				status = 202
+				contentType = "application/json"
+			}
+			body := base64.StdEncoding.EncodeToString(responseBody)
 			writeJSON(ctx, ws, map[string]any{
 				"type":         "http_response",
 				"id":           id,
-				"status":       200,
-				"content_type": "text/plain; charset=utf-8",
+				"status":       status,
+				"content_type": contentType,
 				"body":         body,
 			})
 		case "stream_open":
@@ -272,6 +283,7 @@ RCTL_RELAY_ADMIN_SECRET="admin-secret-0123456789abcdef" \
 RCTL_RELAY_SESSION_SECRET="session-secret-0123456789abcdef0123456789" \
 RCTL_RELAY_TUNNEL_TIMEOUT=5s \
 RCTL_RELAY_STREAM_START_TIMEOUT=5s \
+RCTL_RELAY_UPDATE_MANIFEST_URL="https://releases.example.test/update-manifest.json" \
 "${WORK}/rctl-relay" >"${WORK}/relay.log" 2>&1 &
 RELAY_PID="$!"
 
@@ -333,6 +345,11 @@ say "checking HTTP tunnel"
 curl -fsS -b "${WORK}/admin.cookies" \
   "${BASE_URL}/proxy/devices/smoke-device/v1/info?x=1" >"${WORK}/proxy.txt"
 grep -q '^tunnel-ok:/v1/info?x=1$' "${WORK}/proxy.txt"
+
+say "checking one-click update orchestration"
+curl -fsS -b "${WORK}/admin.cookies" -X POST \
+  "${BASE_URL}/api/admin/devices/smoke-device/update" >"${WORK}/update.json"
+grep -q '"job_id":"smoke-update-job"' "${WORK}/update.json"
 
 say "checking stream tunnel"
 curl -fsS -b "${WORK}/admin.cookies" \

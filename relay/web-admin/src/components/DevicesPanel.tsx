@@ -5,6 +5,7 @@ import {
   Ban,
   Check,
   Copy,
+  Download,
   ExternalLink,
   Info,
   MonitorSmartphone,
@@ -25,7 +26,7 @@ import { fmtRel, shortId } from '../lib/format'
 import { cn } from '../lib/cn'
 import type { AuditEntry, Device } from '../types'
 
-export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete' | 'details'
+export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete' | 'details' | 'update'
 
 interface Action {
   key: ActionKey
@@ -35,13 +36,21 @@ interface Action {
   accent?: boolean
 }
 
-function actionsFor(device: Device): Action[] {
+function actionsFor(device: Device, updateConfigured: boolean): Action[] {
   const list: Action[] = []
   list.push({ key: 'details', label: 'View details', icon: Info })
   if (device.status === 'pending')
     list.push({ key: 'approve', label: 'Approve device', icon: Check })
   if (device.status === 'approved')
     list.push({ key: 'revoke', label: 'Revoke access', icon: Ban })
+  if (
+    device.status === 'approved' &&
+    device.online &&
+    device.compatible &&
+    device.features.includes('update.transactional') &&
+    updateConfigured
+  )
+    list.push({ key: 'update', label: 'Update device…', icon: Download, accent: true })
   list.push({ key: 'copy', label: 'Copy device ID', icon: Copy })
   list.push({ key: 'delete', label: 'Delete device', icon: Trash2, danger: true })
   return list
@@ -52,10 +61,11 @@ export type DevicesPanelProps = {
   loading: boolean
   busyId: string
   audit?: AuditEntry[]
+  updateConfigured: boolean
   onAction: (key: ActionKey, device: Device) => void
 }
 
-export function DevicesPanel({ devices, loading, busyId, audit, onAction }: DevicesPanelProps) {
+export function DevicesPanel({ devices, loading, busyId, audit, updateConfigured, onAction }: DevicesPanelProps) {
   const online = devices.filter((d) => d.online).length
   const pending = devices.filter((d) => d.status === 'pending').length
   const incompatible = devices.filter((d) => !d.compatible).length
@@ -117,7 +127,7 @@ export function DevicesPanel({ devices, loading, busyId, audit, onAction }: Devi
                 transition={{ duration: 0.25, delay: Math.min(i * 0.025, 0.2) }}
                 className="overflow-hidden"
               >
-                <DeviceRow device={d} busy={busyId === d.id} run={run} />
+                <DeviceRow device={d} busy={busyId === d.id} updateConfigured={updateConfigured} run={run} />
               </motion.li>
             ))}
           </AnimatePresence>
@@ -132,13 +142,15 @@ export function DevicesPanel({ devices, loading, busyId, audit, onAction }: Devi
 function DeviceRow({
   device,
   busy,
+  updateConfigured,
   run,
 }: {
   device: Device
   busy: boolean
+  updateConfigured: boolean
   run: (key: ActionKey, device: Device) => void
 }) {
-  const acts = actionsFor(device)
+  const acts = actionsFor(device, updateConfigured)
   const canOpen = device.online && device.status === 'approved' && device.compatible
   return (
     <ContextMenu.Root>

@@ -59,6 +59,7 @@ static NSMutableArray *g_relay_clients;
 @property(nonatomic, copy) NSString *relayURL;
 @property(nonatomic, copy) NSString *routePrefix;
 @property(nonatomic, assign) BOOL running;
+@property(nonatomic, assign) BOOL connected;
 @property(nonatomic, assign) BOOL reconnectScheduled;
 @property(nonatomic, assign) NSInteger reconnectDelay;
 @property(nonatomic, assign) NSInteger connGen;
@@ -214,6 +215,7 @@ static NSMutableArray *g_relay_clients;
 }
 
 - (void)resetTransport {
+    self.connected = NO;
     self.connGen++;
     if (@available(iOS 13.0, *)) {
         [self.task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
@@ -338,6 +340,7 @@ static NSMutableArray *g_relay_clients;
             return;
         }
         NSString *status = [dict[@"status"] isKindOfClass:[NSString class]] ? dict[@"status"] : @"unknown";
+        self.connected = YES;
         self.reconnectDelay = 2;
         [self releaseWakeAssertion];
         relay_log([NSString stringWithFormat:@"connected status=%@", status]);
@@ -1028,4 +1031,24 @@ void rctl_relay_start(void) {
     rctl_webrtc_set_sender(NULL);
     relay_log([NSString stringWithFormat:@"starting %lu relay connection(s)", (unsigned long)clients.count]);
     for (RCTLRelayClient *client in clients) [client start];
+}
+
+char *rctl_relay_status_json(void) {
+    NSArray *clients = nil;
+    @synchronized ([RCTLRelayClient class]) {
+        clients = [g_relay_clients copy] ?: @[];
+    }
+    NSUInteger connected = 0;
+    NSMutableArray *entries = [NSMutableArray arrayWithCapacity:clients.count];
+    for (RCTLRelayClient *client in clients) {
+        BOOL online = client.connected;
+        if (online) connected++;
+        [entries addObject:@{@"url": client.relayURL ?: @"", @"connected": @(online)}];
+    }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{
+        @"configured": @(clients.count), @"connected": @(connected), @"relays": entries,
+    } options:0 error:nil];
+    char *result = (char *)malloc(data.length + 1);
+    memcpy(result, data.bytes, data.length); result[data.length] = 0;
+    return result;
 }

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"errors"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ type config struct {
 	TunnelTimeout      time.Duration
 	TunnelMaxBody      int64
 	StreamStartTimeout time.Duration
+	UpdateManifestURL  string
 	LoginLimit         rateLimitConfig
 	AdminLimit         rateLimitConfig
 	DeviceLimit        rateLimitConfig
@@ -40,14 +42,14 @@ type config struct {
 
 func loadConfig() (config, error) {
 	cfg := config{
-		ListenAddr:         getenv("RCTL_RELAY_LISTEN", ":8080"),
-		PublicURL:          getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080"),
-		DatabasePath:       getenv("RCTL_RELAY_DB", "./data/rctl-relay.db"),
-		WebDir:             getenv("RCTL_RELAY_WEB_DIR", "../web/dist"),
-		AdminSecret:        os.Getenv("RCTL_RELAY_ADMIN_SECRET"),
-		SessionSecret:      os.Getenv("RCTL_RELAY_SESSION_SECRET"),
-		AllowInsecure:      getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),
-		TrustProxyHeaders:  getenvBool("RCTL_RELAY_TRUST_PROXY_HEADERS", false),
+		ListenAddr:        getenv("RCTL_RELAY_LISTEN", ":8080"),
+		PublicURL:         getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080"),
+		DatabasePath:      getenv("RCTL_RELAY_DB", "./data/rctl-relay.db"),
+		WebDir:            getenv("RCTL_RELAY_WEB_DIR", "../web/dist"),
+		AdminSecret:       os.Getenv("RCTL_RELAY_ADMIN_SECRET"),
+		SessionSecret:     os.Getenv("RCTL_RELAY_SESSION_SECRET"),
+		AllowInsecure:     getenvBool("RCTL_RELAY_ALLOW_INSECURE", false),
+		TrustProxyHeaders: getenvBool("RCTL_RELAY_TRUST_PROXY_HEADERS", false),
 		// Number of trusted reverse proxies in front of the relay. The client IP is
 		// taken this many hops from the RIGHT of X-Forwarded-For (the rightmost entry
 		// is the one our own edge proxy appended); entries further left are
@@ -66,6 +68,7 @@ func loadConfig() (config, error) {
 		TunnelTimeout:      getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 45*time.Second),
 		TunnelMaxBody:      getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
 		StreamStartTimeout: getenvDuration("RCTL_RELAY_STREAM_START_TIMEOUT", 20*time.Second),
+		UpdateManifestURL:  os.Getenv("RCTL_RELAY_UPDATE_MANIFEST_URL"),
 		LoginLimit:         loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
 		AdminLimit:         loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
 		DeviceLimit:        loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
@@ -86,6 +89,13 @@ func loadConfig() (config, error) {
 	}
 	if !cfg.AllowInsecure && !strings.HasPrefix(cfg.PublicURL, "https://") {
 		return cfg, errors.New("RCTL_RELAY_PUBLIC_URL must be https:// in production; set RCTL_RELAY_ALLOW_INSECURE=1 only for local testing")
+	}
+	if cfg.UpdateManifestURL != "" {
+		manifestURL, err := url.Parse(cfg.UpdateManifestURL)
+		if err != nil || manifestURL.Scheme != "https" || manifestURL.Host == "" ||
+			manifestURL.User != nil || manifestURL.Fragment != "" {
+			return cfg, errors.New("RCTL_RELAY_UPDATE_MANIFEST_URL must be HTTPS without credentials or fragment")
+		}
 	}
 	return cfg, nil
 }

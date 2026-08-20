@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Ban, Trash2 } from 'lucide-react'
+import { Ban, Download, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { LoginScreen } from './components/LoginScreen'
 import { Shell } from './components/Shell'
@@ -24,7 +24,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false)
   const [busyId, setBusyId] = useState('')
   const [confirmAction, setConfirmAction] = useState<{
-    kind: 'revoke' | 'delete'
+    kind: 'revoke' | 'delete' | 'update'
     device: Device
   } | null>(null)
   const [actingConfirm, setActingConfirm] = useState(false)
@@ -118,7 +118,7 @@ export default function App() {
 
   async function handleAction(key: ActionKey, device: Device) {
     // Destructive actions go through a confirmation step.
-    if (key === 'delete' || key === 'revoke') {
+    if (key === 'delete' || key === 'revoke' || key === 'update') {
       setConfirmAction({ kind: key, device })
       return
     }
@@ -141,7 +141,10 @@ export default function App() {
     const { kind, device } = confirmAction
     setActingConfirm(true)
     try {
-      if (kind === 'delete') {
+      if (kind === 'update') {
+        const result = await api.updateDevice(device.id)
+        toast.success(`Update started (${result.job_id.slice(0, 8)})`)
+      } else if (kind === 'delete') {
         await api.deleteDevice(device.id)
         toast.success(`${device.name} deleted`)
       } else {
@@ -219,6 +222,7 @@ export default function App() {
             loading={loading}
             busyId={busyId}
             audit={audit}
+            updateConfigured={status?.update_configured ?? false}
             onAction={handleAction}
           />
           <ActivityPanel entries={audit} sessions={sessions} />
@@ -242,12 +246,20 @@ export default function App() {
       <Modal
         open={!!confirmAction}
         onOpenChange={(o) => !o && setConfirmAction(null)}
-        title={confirmAction?.kind === 'delete' ? 'Delete device?' : 'Revoke device access?'}
+        title={
+          confirmAction?.kind === 'delete'
+            ? 'Delete device?'
+            : confirmAction?.kind === 'update'
+              ? 'Update device?'
+              : 'Revoke device access?'
+        }
         description={
           confirmAction
             ? confirmAction.kind === 'delete'
               ? `“${confirmAction.device.name}” will be removed from the relay. If it reconnects it will need a fresh enrollment.`
-              : `“${confirmAction.device.name}” will be disconnected and blocked from the relay. A revoked device can’t be re-approved — restoring it needs a fresh enrollment.`
+              : confirmAction.kind === 'update'
+                ? `“${confirmAction.device.name}” will download a signed release, preserve its relay identity, reinstall cleanly, and roll back automatically if verification fails.`
+                : `“${confirmAction.device.name}” will be disconnected and blocked from the relay. A revoked device can’t be re-approved — restoring it needs a fresh enrollment.`
             : ''
         }
       >
@@ -255,8 +267,13 @@ export default function App() {
           <Button variant="secondary" onClick={() => setConfirmAction(null)}>
             Cancel
           </Button>
-          <Button variant="danger-solid" loading={actingConfirm} onClick={doConfirm}>
-            {confirmAction?.kind === 'delete' ? (
+          <Button variant={confirmAction?.kind === 'update' ? 'primary' : 'danger-solid'} loading={actingConfirm} onClick={doConfirm}>
+            {confirmAction?.kind === 'update' ? (
+              <>
+                <Download className="size-4" />
+                Start update
+              </>
+            ) : confirmAction?.kind === 'delete' ? (
               <>
                 <Trash2 className="size-4" />
                 Delete device

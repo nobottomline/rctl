@@ -118,6 +118,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/devices/{id}/approve", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleApproveDevice)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeDevice)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/delete", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleDeleteDevice)))
+	mux.HandleFunc("POST /api/admin/devices/{id}/update", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleUpdateDevice)))
 	mux.HandleFunc("GET /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
 	mux.HandleFunc("POST /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))
 	mux.HandleFunc("PUT /proxy/devices/{id}/{path...}", s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, s.handleTunnelHTTP)))

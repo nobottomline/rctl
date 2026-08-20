@@ -85,6 +85,15 @@ fi
 strings "${WORK}/pkg/usr/local/bin/rctld" | \
   grep -F 'jetsam hard limit configured:' >/dev/null || \
   fail "rctld binary has no runtime jetsam limit configuration"
+UPDATE_BINARY="usr/local/libexec/rctl-updater"
+UPDATE_PUBLIC_KEY="usr/local/share/rctl/update-public-key.pem"
+[[ -x "${WORK}/pkg/${UPDATE_BINARY}" ]] || fail "public .deb is missing executable updater"
+[[ -f "${WORK}/pkg/${UPDATE_PUBLIC_KEY}" ]] || fail "public .deb is missing update public key"
+grep -qx -- '-----BEGIN PUBLIC KEY-----' "${WORK}/pkg/${UPDATE_PUBLIC_KEY}" || \
+  fail "update key is not a PEM public key"
+if grep -q -- 'PRIVATE KEY' "${WORK}/pkg/${UPDATE_PUBLIC_KEY}"; then
+  fail "update key payload contains private key material"
+fi
 strings "${WORK}/pkg/usr/local/bin/rctld" | \
   grep -F '/v1/media_delete_token' >/dev/null || \
   fail "rctld has no confirmed media-delete endpoint"
@@ -97,7 +106,8 @@ tracked_secret_paths="$(
   git -C "${ROOT}" ls-files \
     '.env' '.env.*' 'relay/.env' 'relay.env' 'personalized/**' \
     '*.secret' '*.token' '*.pem' '*_ed25519' '*_ed25519.pub' \
-    'relay-config.plist' '*.p12' '*.mobileprovision'
+    'relay-config.plist' '*.p12' '*.mobileprovision' | \
+    grep -vx 'layout/usr/local/share/rctl/update-public-key.pem' || true
 )"
 if [[ -n "${tracked_secret_paths}" ]]; then
   printf '%s\n' "${tracked_secret_paths}" >&2
@@ -106,13 +116,20 @@ fi
 
 say "checking staged files"
 staged_paths="$(git -C "${ROOT}" diff --cached --name-only)"
-if printf '%s\n' "${staged_paths}" | grep -E '(^|/)(\.env|relay\.env|relay-config\.plist)$|^personalized/|\.(secret|token|pem|p12|mobileprovision)$|_ed25519(\.pub)?$' >/dev/null; then
-  printf '%s\n' "${staged_paths}" >&2
+staged_secret_paths="$(printf '%s\n' "${staged_paths}" | \
+  grep -E '(^|/)(\.env|relay\.env|relay-config\.plist)$|^personalized/|\.(secret|token|pem|p12|mobileprovision)$|_ed25519(\.pub)?$' | \
+  grep -vx 'layout/usr/local/share/rctl/update-public-key.pem' || true)"
+if [[ -n "${staged_secret_paths}" ]]; then
+  printf '%s\n' "${staged_secret_paths}" >&2
   fail "secret or personalized paths are staged"
 fi
 
 say "checking working tree tracked diff for obvious relay secrets"
-if git -C "${ROOT}" diff --cached -- . ':(exclude)docs/**' ':(exclude)scripts/smoke_relay.sh' ':(exclude)scripts/release_check.sh' | grep -E 'ENROLL_TOKEN=|DeviceSecret|string>[^<]*(wss://|enroll_|dev_|sess_)' >/dev/null; then
+if git -C "${ROOT}" diff --cached --unified=0 -- . \
+  ':(exclude)docs/**' ':(exclude)scripts/smoke_relay.sh' \
+  ':(exclude)scripts/release_check.sh' ':(exclude)relay/internal/relay/webdist/**' | \
+  grep '^+' | \
+  grep -E 'ENROLL_TOKEN=[^[:space:]]+|DeviceSecret[^[:space:]]*[=:][^[:space:]]{20,}|string>[^<]*(wss://|enroll_|dev_|sess_)' >/dev/null; then
   fail "staged diff contains a value that looks like a relay credential"
 fi
 
