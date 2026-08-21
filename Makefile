@@ -47,7 +47,7 @@ after-stage::
 	$(ECHO_NOTHING)set -e; dylib=".theos/obj/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib=".theos/obj/debug/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib="app/.theos/obj/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib="app/.theos/obj/debug/rctlappmedia.dylib"; test -f "$$dylib" || { echo "error: required rctlappmedia library is missing" >&2; exit 1; }; cp "$$dylib" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
-	$(ECHO_NOTHING)set -e; dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
+	$(ECHO_NOTHING)set -e; dylib=".theos/obj/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; test -f "$$dylib" || { echo "error: required rctlaudio library is missing" >&2; exit 1; }; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)cp audio/rctlaudio.plist "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.plist"$(ECHO_END)
 
 .PHONY: package-relay
