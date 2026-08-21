@@ -157,6 +157,23 @@ package release gate, and absence of qualification host data or relay secrets.
 API readback confirmed the repository was returned to private immediately after
 the workflow.
 
+An independent Sigstore verification then enforced the exact draft workflow,
+tag ref, source commit, repository identity, GitHub-hosted runner, and SHA-256
+subject for all seven release assets. The OCI index provenance bundle was
+retrieved by digest from the GitHub Attestations API and passed the same policy
+against GitHub's trusted root without pulling the private image.
+
+That post-build audit also found that qualification schema 1 could pass without
+explicit evidence for certificate renewal, idempotent bootstrap, doctor,
+authenticated package personalization, successful relay upgrade, or device
+update and watchdog rollback. Commit `80021ff` replaces it with strict schema 2,
+defines minimum evidence semantics for every check, and tests that every schema
+field is represented in the mandatory failed-check set. The earlier draft is
+therefore superseded and must not be published; a new exact-commit CI and draft
+assembly are required before external qualification resumes. Registry-hosted
+SBOM inspection still requires read access to, or anonymous visibility for, the
+GHCR package.
+
 ### Still required before a supported public release
 
 1. Make the GHCR package anonymously readable and qualify anonymous amd64 and
