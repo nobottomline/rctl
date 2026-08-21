@@ -90,6 +90,7 @@ binary. A manual download-and-verify path is documented beside the one-liner.
 
 ```text
 rctl-setup install       preflight, plan, confirm, apply, verify
+rctl-setup preflight     read-only fresh-host and configuration checks
 rctl-setup doctor        read-only deployment and public-path diagnostics
 rctl-setup upgrade       backup, pull pinned release, apply, verify, rollback
 rctl-setup backup        consistent database/config/TLS metadata archive
