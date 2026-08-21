@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Qualified release candidate: tag `v0.3.0` at `9b648fb`. This record may receive
+Qualified release candidate: tag `v0.3.0` at `c45b0c4`. This record may receive
 post-qualification documentation commits after that immutable candidate. No
 stable release was published.
 
@@ -145,34 +145,33 @@ stable release was published.
 ### Hosted workflow status
 
 The repository was temporarily made public for qualification because the
-private-repository Actions allowance was exhausted. Exact-commit CI passed for
-`9b648fb`: Go tests, vet, reachable-vulnerability scan, actionlint, both web
-builds, multi-platform setup cross-build, container build, and container smoke
-test all succeeded. The tag-bound draft workflow then built and attested the
-multi-architecture OCI image, rebuilt the iOS package and four Linux binaries,
-restored the expected executable modes, validated the complete release set, and
-created an unpublished draft with seven expected assets. An independent local
-download verified every `SHA256SUMS` entry, ELF architectures, the public
-package release gate, and absence of qualification host data or relay secrets.
-API readback confirmed the repository was returned to private immediately after
-the workflow.
-
-An independent Sigstore verification then enforced the exact draft workflow,
-tag ref, source commit, repository identity, GitHub-hosted runner, and SHA-256
-subject for all seven release assets. The OCI index provenance bundle was
-retrieved by digest from the GitHub Attestations API and passed the same policy
-against GitHub's trusted root without pulling the private image.
-
-That post-build audit also found that qualification schema 1 could pass without
+private-repository Actions allowance was exhausted. The first exact-commit CI
+and draft assembly at `9b648fb` passed, including all build, package, checksum,
+provenance, and container smoke-test jobs. Independent verification of that
+draft then found that qualification schema 1 could pass without
 explicit evidence for certificate renewal, idempotent bootstrap, doctor,
 authenticated package personalization, successful relay upgrade, or device
 update and watchdog rollback. Commit `80021ff` replaces it with strict schema 2,
 defines minimum evidence semantics for every check, and tests that every schema
-field is represented in the mandatory failed-check set. The earlier draft is
-therefore superseded and must not be published; a new exact-commit CI and draft
-assembly are required before external qualification resumes. Registry-hosted
-SBOM inspection still requires read access to, or anonymous visibility for, the
-GHCR package.
+field is represented in the mandatory failed-check set. The schema 1 draft was
+deleted before publication.
+
+Exact-commit CI then passed again for schema 2 candidate `c45b0c4`: Go tests,
+vet, reachable-vulnerability scan, actionlint, both web builds, setup
+cross-build, container build, and container smoke test all succeeded. Its
+tag-bound workflow rebuilt and attested the multi-architecture OCI image, iOS
+package, four Linux binaries, and complete seven-file draft release set. An
+independent download verified every checksum, ELF architecture, public-package
+gate, and absence of qualification host data or relay secrets.
+
+Sigstore verification enforced the exact draft workflow, tag ref, source
+commit, repository identity, GitHub-hosted runner, and SHA-256 subject for all
+seven schema 2 draft assets. The new OCI index provenance bundle was retrieved
+by digest from the GitHub Attestations API and passed the same policy against
+GitHub's trusted root with an isolated empty Docker credential configuration.
+API readback confirmed the repository was returned to private immediately after
+the workflow. Registry-hosted SBOM inspection still requires read access to, or
+anonymous visibility for, the GHCR package.
 
 ### Still required before a supported public release
 
