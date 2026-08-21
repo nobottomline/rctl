@@ -38,6 +38,7 @@ func TestRenderDedicatedBundleIsPinnedAndDoesNotExposeRelayPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := make(map[string]File)
+	paths := DefaultPaths()
 	for _, file := range bundle.Files {
 		files[file.Path] = file
 		if file.Secret && file.Mode != 0o600 {
@@ -45,7 +46,7 @@ func TestRenderDedicatedBundleIsPinnedAndDoesNotExposeRelayPort(t *testing.T) {
 		}
 	}
 	var compose map[string]any
-	if err := json.Unmarshal(files[ComposePath].Content, &compose); err != nil {
+	if err := json.Unmarshal(files[paths.Compose].Content, &compose); err != nil {
 		t.Fatal(err)
 	}
 	services := compose["services"].(map[string]any)
@@ -59,14 +60,14 @@ func TestRenderDedicatedBundleIsPinnedAndDoesNotExposeRelayPort(t *testing.T) {
 			t.Errorf("service %s uses mutable image %q", name, image)
 		}
 	}
-	env := string(files[RelayEnvPath].Content)
+	env := string(files[paths.RelayEnv].Content)
 	if !strings.Contains(env, "RCTL_RELAY_ENABLE_WEBRTC=1\n") || !strings.Contains(env, "RCTL_RELAY_TRUST_PROXY_HEADERS=1\n") {
 		t.Fatal("relay production invariants are missing")
 	}
-	if !strings.Contains(string(files[CoturnPath].Content), "static-auth-secret="+secrets.TURN) {
+	if !strings.Contains(string(files[paths.Coturn].Content), "static-auth-secret="+secrets.TURN) {
 		t.Fatal("TURN and relay secrets do not match")
 	}
-	if strings.Contains(string(files[CaddyfilePath].Content), secrets.Admin) {
+	if strings.Contains(string(files[paths.Caddyfile].Content), secrets.Admin) {
 		t.Fatal("admin secret leaked into public proxy configuration")
 	}
 }
@@ -81,7 +82,7 @@ func TestRenderDedicatedBundleCanDisableTURN(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, file := range bundle.Files {
-		if file.Path == CoturnPath {
+		if file.Path == DefaultPaths().Coturn {
 			t.Fatal("TURN config rendered while disabled")
 		}
 	}

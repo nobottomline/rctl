@@ -15,13 +15,6 @@ import (
 	"strings"
 )
 
-const (
-	RelayEnvPath  = "/etc/rctl/relay.env"
-	ComposePath   = "/opt/rctl/compose.json"
-	CaddyfilePath = "/opt/rctl/Caddyfile"
-	CoturnPath    = "/etc/rctl/turnserver.conf"
-)
-
 type Secrets struct {
 	Admin   string
 	Session string
@@ -68,6 +61,10 @@ func randomToken(source io.Reader, size int) (string, error) {
 }
 
 func RenderDedicatedBundle(cfg Config, secrets Secrets) (Bundle, error) {
+	return RenderDedicatedBundleAt(cfg, secrets, DefaultPaths())
+}
+
+func RenderDedicatedBundleAt(cfg Config, secrets Secrets, paths Paths) (Bundle, error) {
 	if err := cfg.Validate(); err != nil {
 		return Bundle{}, err
 	}
@@ -119,17 +116,17 @@ func RenderDedicatedBundle(cfg Config, secrets Secrets) (Bundle, error) {
 		env["RCTL_RELAY_TURN_TTL"] = "1h"
 	}
 
-	compose, err := renderCompose(cfg)
+	compose, err := renderCompose(cfg, paths)
 	if err != nil {
 		return Bundle{}, err
 	}
 	files := []File{
-		{Path: RelayEnvPath, Mode: 0o600, Content: renderEnv(env), Secret: true},
-		{Path: ComposePath, Mode: 0o644, Content: compose},
-		{Path: CaddyfilePath, Mode: 0o644, Content: renderCaddyfile(origin, cfg.ACMEEmail)},
+		{Path: paths.RelayEnv, Mode: 0o600, Content: renderEnv(env), Secret: true},
+		{Path: paths.Compose, Mode: 0o644, Content: compose},
+		{Path: paths.Caddyfile, Mode: 0o644, Content: renderCaddyfile(origin, cfg.ACMEEmail)},
 	}
 	if cfg.EnableTURN {
-		files = append(files, File{Path: CoturnPath, Mode: 0o600, Content: renderCoturn(cfg, host, secrets.TURN), Secret: true})
+		files = append(files, File{Path: paths.Coturn, Mode: 0o600, Content: renderCoturn(cfg, host, secrets.TURN), Secret: true})
 	}
 	return Bundle{Files: files, Secrets: secrets}, nil
 }
@@ -147,7 +144,7 @@ func renderEnv(values map[string]string) []byte {
 	return []byte(out.String())
 }
 
-func renderCompose(cfg Config) ([]byte, error) {
+func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 	type logging struct {
 		Driver  string            `json:"driver"`
 		Options map[string]string `json:"options"`
@@ -155,8 +152,8 @@ func renderCompose(cfg Config) ([]byte, error) {
 	boundedLogs := logging{Driver: "json-file", Options: map[string]string{"max-file": "3", "max-size": "10m"}}
 	services := map[string]any{
 		"relay": map[string]any{
-			"image": cfg.RelayImage, "restart": "unless-stopped", "env_file": []string{RelayEnvPath},
-			"volumes": []string{"/var/lib/rctl/relay:/data"}, "networks": []string{"backend"},
+			"image": cfg.RelayImage, "restart": "unless-stopped", "env_file": []string{paths.RelayEnv},
+			"volumes": []string{paths.RelayDataDir + ":/data"}, "networks": []string{"backend"},
 			"read_only": true, "tmpfs": []string{"/tmp:size=64m,mode=1777"}, "cap_drop": []string{"ALL"},
 			"security_opt": []string{"no-new-privileges:true"}, "stop_grace_period": "20s", "logging": boundedLogs,
 			"healthcheck": map[string]any{"test": []string{"CMD", "/usr/local/bin/rctl-relay", "healthcheck", "http://127.0.0.1:8080/healthz"}, "interval": "15s", "timeout": "5s", "retries": 4, "start_period": "10s"},
@@ -164,7 +161,7 @@ func renderCompose(cfg Config) ([]byte, error) {
 		"caddy": map[string]any{
 			"image": cfg.CaddyImage, "restart": "unless-stopped", "depends_on": map[string]any{"relay": map[string]string{"condition": "service_healthy"}},
 			"ports":    []string{"80:80", "443:443", "443:443/udp"},
-			"volumes":  []string{CaddyfilePath + ":/etc/caddy/Caddyfile:ro", "/var/lib/rctl/caddy/data:/data", "/var/lib/rctl/caddy/config:/config"},
+			"volumes":  []string{paths.Caddyfile + ":/etc/caddy/Caddyfile:ro", paths.CaddyDataDir + ":/data", paths.CaddyConfDir + ":/config"},
 			"networks": []string{"edge", "backend"}, "read_only": true, "tmpfs": []string{"/tmp:size=64m,mode=1777"},
 			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs,
 		},
@@ -172,7 +169,7 @@ func renderCompose(cfg Config) ([]byte, error) {
 	if cfg.EnableTURN {
 		services["coturn"] = map[string]any{
 			"image": cfg.CoturnImage, "restart": "unless-stopped", "network_mode": "host", "read_only": true,
-			"volumes": []string{CoturnPath + ":/etc/coturn/turnserver.conf:ro"},
+			"volumes": []string{paths.Coturn + ":/etc/coturn/turnserver.conf:ro"},
 			"command": []string{"-c", "/etc/coturn/turnserver.conf"}, "tmpfs": []string{"/tmp:size=32m,mode=1777"},
 			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs,
 		}
