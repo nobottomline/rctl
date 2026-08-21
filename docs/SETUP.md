@@ -423,4 +423,5 @@ Before public release, all of the following must pass:
    restart, device update, relay upgrade/rollback, backup/restore, and uninstall.
 
 The public documentation may call the setup supported only after these gates are
-recorded with exact versions and any untested limitations.
+recorded with exact versions and any untested limitations. Current evidence and
+remaining blockers are tracked in `docs/SETUP-QUALIFICATION.md`.
