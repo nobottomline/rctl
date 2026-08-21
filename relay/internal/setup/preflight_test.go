@@ -77,6 +77,15 @@ func TestPreflightPassesHealthyHost(t *testing.T) {
 	if report.Failed() {
 		t.Fatalf("unexpected failure: %#v", report.Checks)
 	}
+	foundBoundary := false
+	for _, check := range report.Checks {
+		if check.ID == "public_firewall" && check.Severity == Warn && strings.Contains(check.Detail, "UDP 49160-49260") {
+			foundBoundary = true
+		}
+	}
+	if !foundBoundary {
+		t.Fatalf("missing cloud firewall boundary warning: %#v", report.Checks)
+	}
 }
 
 func TestPreflightReportsAllIndependentFailures(t *testing.T) {

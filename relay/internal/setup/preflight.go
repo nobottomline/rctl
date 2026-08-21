@@ -105,12 +105,12 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 
 	if cfg.Profile == ProfileContainer {
 		if output, err := p.Probe.Command(ctx, "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
-			add("docker", Fail, "Docker daemon is unavailable", commandDetail(output, err))
+			add("docker", Fail, "Docker daemon is unavailable", commandDetail(output, err)+"; install Docker Engine, start it, and rerun this command")
 		} else {
 			add("docker", Pass, "Docker daemon is available", output)
 		}
 		if output, err := p.Probe.Command(ctx, "docker", "compose", "version", "--short"); err != nil {
-			add("compose", Fail, "Docker Compose v2 is unavailable", commandDetail(output, err))
+			add("compose", Fail, "Docker Compose v2 is unavailable", commandDetail(output, err)+"; install the Docker Compose v2 plugin and rerun this command")
 		} else {
 			add("compose", Pass, "Docker Compose v2 is available", output)
 		}
@@ -173,6 +173,11 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 			add("turn_relay_ports", Pass, "TURN relay UDP range is available", "49160-49260")
 		}
 	}
+	publicPorts := "TCP 80/443"
+	if cfg.EnableTURN {
+		publicPorts += ", TCP/UDP 3478, and UDP 49160-49260"
+	}
+	add("public_firewall", Warn, "Cloud firewall reachability needs external verification", "allow "+publicPorts+" to this VPS; local socket checks cannot inspect provider security groups or upstream NAT")
 
 	if output, err := p.Probe.Command(ctx, "timedatectl", "show", "--property=NTPSynchronized", "--value"); err != nil {
 		add("clock", Warn, "Clock synchronization could not be confirmed", commandDetail(output, err))
