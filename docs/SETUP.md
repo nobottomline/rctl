@@ -265,38 +265,47 @@ profile before it is advertised by the wizard.
 
 Preflight is read-only and reports every failed gate before making changes:
 
-- supported Linux distribution, kernel, CPU and available disk/memory;
+- supported Linux distribution, CPU and available disk/memory;
 - effective root/sudo capability and a usable TTY when interactive;
 - container runtime and Compose versions for the container profile;
 - hostname syntax and final HTTPS origin;
 - `A` and `AAAA` answers, including stale IPv6 records;
 - whether the answers plausibly identify this host;
 - ownership of 80/443 and required TURN ports;
-- firewall state without modifying SSH access;
+- local availability of required TCP/UDP listeners without modifying firewall
+  or SSH policy;
 - clock synchronization, because TLS and signed metadata depend on time;
-- conflicting prior rctl files, containers, volumes, or partial transactions.
+- conflicting prior rctl files, Compose containers/networks, or partial
+  transactions.
 
 An inside-the-VPS check cannot prove a cloud-provider security group is open.
 That limitation must be explicit. ACME issuance plus a public-origin health
 request provide the final reachability evidence.
 
-Apply uses a transaction directory and an operation journal:
+Fresh apply uses in-memory candidates, atomic file replacement, a redacted
+operation journal, and the separate crash-recovery checkpoint:
 
 1. Acquire a global setup lock.
 2. Generate secrets from the kernel CSPRNG and write them mode 0600.
-3. Render all candidate files in the transaction directory.
-4. Validate Compose and proxy configuration before installation.
-5. Save hashes and backups for every pre-existing file that will be changed.
-6. Install candidates atomically and start services.
-7. Verify local health, trusted public TLS, admin login, WebSocket routing,
-   database persistence across a restart, and TURN allocation.
+3. Render all candidates and structurally validate configuration and the public
+   device package before creating deployment paths.
+4. Reject every pre-existing unowned deployment path; fresh install never
+   overwrites an existing file.
+5. Install each candidate through fsync plus atomic rename, then validate
+   Compose and Caddy before starting services.
+6. Pull digest-pinned images and start the dedicated stack.
+7. Verify local service health, trusted public TLS, admin login, WebSocket
+   routing, database persistence across a restart, and local coturn health. A
+   real external TURN allocation remains a clean-VPS/browser acceptance gate.
 8. Commit an ownership manifest only after verification succeeds.
-9. On failure, restore prior files and services; preserve a redacted journal.
+9. On failure, stop the partial stack, remove fresh owned paths, and preserve a
+   redacted journal. Upgrade/reconfigure uses the verified backup transaction
+   documented above rather than the fresh-install path.
 
-The ownership manifest records paths, modes, non-secret hashes, deployment
-profile, release version/digest, service names, ports, and volume names. Upgrade
-and uninstall refuse to remove unowned or unexpectedly modified paths without
-an explicit operator decision.
+The ownership manifest records paths, modes, secret classification, hashes,
+deployment configuration, and release version. Immutable Compose content owns
+the service, port, network, and bind-mount definition. Upgrade and uninstall
+refuse to replace or remove unexpectedly modified owned paths.
 
 ## Filesystem and secret model
 
@@ -304,14 +313,13 @@ Default native host paths are:
 
 ```text
 /etc/rctl/relay.env             root:root 0600
-/etc/rctl/setup.json            root:root 0600 (no plaintext secrets)
-/opt/rctl/compose.yaml          root:root 0644
+/opt/rctl/compose.json          root:root 0644
 /opt/rctl/Caddyfile             root:root 0644
 /opt/rctl/rctl-public.deb       root:root 0644 (verified LAN-only release)
 /var/lib/rctl/                  root-owned persistent data root
 /var/lib/rctl/relay/            SQLite data
 /var/lib/rctl/caddy/            TLS state
-/var/lib/rctl/coturn/           TURN state when needed
+/var/lib/rctl/setup/ownership.json  root:root 0600 ownership/config manifest
 /var/backups/rctl/              root-only lifecycle backups
 /var/log/rctl-setup/            redacted setup journals
 /var/log/rctl-setup/recovery.json  root-only crash-recovery checkpoint
@@ -371,10 +379,11 @@ device updater preserves the personalized relay plist and `DeviceSecret`. A
 personalized package is therefore needed once per device enrollment, not for
 every release.
 
-Backups are encrypted when exported off-host. A local backup may remain
-root-only, but the command warns that it includes relay identity and session
-state. Restore validates archive ownership, schema version, checksums, free
-space, and target deployment identity before stopping services.
+There is currently no off-host export command. Local backups remain root-only
+and include relay identity, TLS state, and sessions; operators must encrypt the
+entire backup before copying it off-host. Restore validates archive ownership,
+schema version, modes, checksums, aggregate size, and target deployment identity
+before stopping services.
 
 ## Failure and edge-case policy
 

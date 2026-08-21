@@ -114,6 +114,22 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 		} else {
 			add("compose", Pass, "Docker Compose v2 is available", output)
 		}
+		for _, probe := range []struct {
+			id, object string
+			args       []string
+		}{
+			{"existing_containers", "containers", []string{"ps", "--all", "--filter", "label=com.docker.compose.project=rctl", "--format", "{{.ID}}"}},
+			{"existing_networks", "networks", []string{"network", "ls", "--filter", "label=com.docker.compose.project=rctl", "--format", "{{.ID}}"}},
+		} {
+			output, err := p.Probe.Command(ctx, "docker", probe.args...)
+			if err != nil {
+				add(probe.id, Fail, "Existing Docker state could not be inspected", commandDetail(output, err))
+			} else if strings.TrimSpace(output) != "" {
+				add(probe.id, Fail, "Unowned rctl Docker "+probe.object+" already exist", "remove or reconcile the prior deployment before fresh install")
+			} else {
+				add(probe.id, Pass, "No unowned rctl Docker "+probe.object+" exist", "")
+			}
+		}
 	}
 
 	for _, item := range []struct {

@@ -37,13 +37,27 @@ func passingProbe() fakeProber {
 		platform: Platform{OS: "linux", Arch: "amd64", Distro: "ubuntu", Root: true, Memory: 2 << 30, Disk: 20 << 30},
 		dns:      []net.IP{net.ParseIP("8.8.8.8")},
 		commands: map[string]string{
-			"docker version --format {{.Server.Version}}":         "27.1.0",
-			"docker compose version --short":                      "2.29.0",
-			"timedatectl show --property=NTPSynchronized --value": "yes",
+			"docker version --format {{.Server.Version}}":                                       "27.1.0",
+			"docker compose version --short":                                                    "2.29.0",
+			"docker ps --all --filter label=com.docker.compose.project=rctl --format {{.ID}}":   "",
+			"docker network ls --filter label=com.docker.compose.project=rctl --format {{.ID}}": "",
+			"timedatectl show --property=NTPSynchronized --value":                               "yes",
 		},
 		ports: map[string]error{},
 		paths: map[string]bool{},
 	}
+}
+
+func TestPreflightRejectsUnownedComposeRuntime(t *testing.T) {
+	probe := passingProbe()
+	probe.commands["docker ps --all --filter label=com.docker.compose.project=rctl --format {{.ID}}"] = "deadbeef"
+	report := (Preflight{Probe: probe}).Run(context.Background(), validConfig())
+	for _, check := range report.Checks {
+		if check.ID == "existing_containers" && check.Severity == Fail {
+			return
+		}
+	}
+	t.Fatalf("missing existing container failure: %#v", report.Checks)
 }
 
 func TestPreflightRejectsDNSPointingAwayFromTURNAddress(t *testing.T) {
