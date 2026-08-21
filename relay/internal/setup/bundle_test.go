@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -55,10 +56,19 @@ func TestRenderDedicatedBundleIsPinnedAndDoesNotExposeRelayPort(t *testing.T) {
 		t.Fatal("relay service must not publish its HTTP port")
 	}
 	for name, raw := range services {
-		image := raw.(map[string]any)["image"].(string)
+		service := raw.(map[string]any)
+		image := service["image"].(string)
 		if !strings.Contains(image, "@sha256:") {
 			t.Errorf("service %s uses mutable image %q", name, image)
 		}
+		if _, ok := service["pids_limit"]; !ok {
+			t.Errorf("service %s has no process limit", name)
+		}
+	}
+	coturn := services["coturn"].(map[string]any)
+	health := coturn["healthcheck"].(map[string]any)
+	if !strings.Contains(fmt.Sprint(health["test"]), "turnutils_stunclient") {
+		t.Fatal("coturn does not have a STUN health check")
 	}
 	env := string(files[paths.RelayEnv].Content)
 	if !strings.Contains(env, "RCTL_RELAY_ENABLE_WEBRTC=1\n") || !strings.Contains(env, "RCTL_RELAY_TRUST_PROXY_HEADERS=1\n") {

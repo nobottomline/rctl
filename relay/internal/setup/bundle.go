@@ -155,7 +155,7 @@ func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 			"image": cfg.RelayImage, "restart": "unless-stopped", "env_file": []string{paths.RelayEnv},
 			"volumes": []string{paths.RelayDataDir + ":/data"}, "networks": []string{"backend"},
 			"read_only": true, "tmpfs": []string{"/tmp:size=64m,mode=1777"}, "cap_drop": []string{"ALL"},
-			"security_opt": []string{"no-new-privileges:true"}, "stop_grace_period": "20s", "logging": boundedLogs,
+			"security_opt": []string{"no-new-privileges:true"}, "stop_grace_period": "20s", "logging": boundedLogs, "pids_limit": 256, "init": true,
 			"healthcheck": map[string]any{"test": []string{"CMD", "/usr/local/bin/rctl-relay", "healthcheck", "http://127.0.0.1:8080/healthz"}, "interval": "15s", "timeout": "5s", "retries": 4, "start_period": "10s"},
 		},
 		"caddy": map[string]any{
@@ -163,7 +163,7 @@ func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 			"ports":    []string{"80:80", "443:443", "443:443/udp"},
 			"volumes":  []string{paths.Caddyfile + ":/etc/caddy/Caddyfile:ro", paths.CaddyDataDir + ":/data", paths.CaddyConfDir + ":/config"},
 			"networks": []string{"edge", "backend"}, "read_only": true, "tmpfs": []string{"/tmp:size=64m,mode=1777"},
-			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs,
+			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs, "cap_drop": []string{"ALL"}, "cap_add": []string{"NET_BIND_SERVICE"}, "pids_limit": 128, "init": true,
 		},
 	}
 	if cfg.EnableTURN {
@@ -171,7 +171,8 @@ func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 			"image": cfg.CoturnImage, "restart": "unless-stopped", "network_mode": "host", "read_only": true,
 			"volumes": []string{paths.Coturn + ":/etc/coturn/turnserver.conf:ro"},
 			"command": []string{"-c", "/etc/coturn/turnserver.conf"}, "tmpfs": []string{"/tmp:size=32m,mode=1777"},
-			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs,
+			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs, "cap_drop": []string{"ALL"}, "pids_limit": 256, "init": true,
+			"healthcheck": map[string]any{"test": []string{"CMD", "turnutils_stunclient", "-p", "3478", "-t", "1000", "127.0.0.1"}, "interval": "15s", "timeout": "5s", "retries": 4, "start_period": "5s"},
 		}
 	}
 	document := map[string]any{
