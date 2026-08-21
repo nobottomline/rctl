@@ -119,6 +119,17 @@ stable release was published.
   restored successfully from its automatic backup. Uninstall with deleted data
   removed the managed data directory and left a backup that passed an
   uninstalled-state restore dry run.
+- A qualification-only `0.3.1` upgrade used a pullable but invalid relay image,
+  so candidate validation and backup completed and the target relay container
+  was recreated before health verification failed. Automatic rollback restored
+  the `0.3.0` manifest, healthy relay/Caddy/coturn stack, valid doctor result,
+  and no pending recovery checkpoint.
+- A separate upgrade was killed with `SIGKILL` after its checkpoint existed and
+  target Compose state had been written. `recover --dry-run` identified the
+  interrupted upgrade without mutation; `recover --yes` restored and verified
+  `0.3.0`, then removed the checkpoint. Qualification deployments, generated
+  packages, credentials, backups, logs, containers, and probe tools were
+  removed from both temporary hosts afterward.
 - A second off-host client completed a real UDP STUN request through the public
   coturn endpoint and received its expected reflexive address. This proves
   external UDP reachability to the STUN listener, but not authenticated TURN
@@ -148,22 +159,17 @@ the workflow.
 
 ### Still required before a supported public release
 
-1. Repeat anonymous release bootstrap using the final exact tagged release
-   assets and anonymous GHCR image, then upload its bound qualification report.
-2. Qualify ACME renewal, cloud firewall rules, external UDP and TCP TURN
+1. Make the GHCR package anonymously readable and qualify anonymous amd64 and
+   arm64 manifest pulls without persisted registry credentials.
+2. Repeat bootstrap using the final exact tagged assets and candidate image,
+   then upload its privacy-safe report bound to the image and `SHA256SUMS`.
+3. Qualify ACME renewal, cloud firewall rules, external UDP and TCP TURN
    allocation, and forced-TURN browser/device media.
-3. Enroll an iOS 14 arm64e device from the admin-generated package and verify
-   relay plus independent LAN control before and after relay restart.
-4. Exercise failed-upgrade automatic rollback and interrupted-operation
-   recovery on a disposable VPS. Backup, restore, already-current upgrade,
-   admin credential reset, and both uninstall retention modes are already
-   qualified on a real VPS.
-5. Produce and upload the privacy-safe qualification report bound to the exact
-   candidate image and `SHA256SUMS` digest.
-6. Make the GHCR package anonymously readable, qualify an anonymous
-   multi-architecture pull, produce the exact-artifact fresh-VPS report, then
-   run the gated publication workflow and independently verify the immutable
-   stable release.
+4. Enroll an iOS 14 arm64e device from the admin-generated package and verify
+   independent LAN control, relay control, restart persistence, and device
+   update/rollback.
+5. Run the gated publication workflow and independently verify the immutable
+   stable release, assets, checksums, provenance, SBOM, and public bootstrap.
 
 Until these external gates pass, the wizard is implemented and locally
 qualified but must not be described as fully production-qualified.
