@@ -3,6 +3,7 @@ module github.com/nobottomline/rctl/relay
 go 1.25.0
 
 require (
+	github.com/ulikunitz/xz v0.5.16
 	golang.org/x/crypto v0.55.0
 	modernc.org/sqlite v1.57.0
 	nhooyr.io/websocket v1.8.17

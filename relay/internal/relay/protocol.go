@@ -35,6 +35,23 @@ func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
 }
 
+func readStrictJSON(r *http.Request, v any) error {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	return nil
+}
+
 func wsjsonRead(ctx context.Context, ws *websocket.Conn, v any) error {
 	_, payload, err := ws.Read(ctx)
 	if err != nil {

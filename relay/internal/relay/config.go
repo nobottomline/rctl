@@ -34,6 +34,7 @@ type config struct {
 	TunnelMaxBody      int64
 	StreamStartTimeout time.Duration
 	UpdateManifestURL  string
+	PublicPackagePath  string
 	LoginLimit         rateLimitConfig
 	AdminLimit         rateLimitConfig
 	DeviceLimit        rateLimitConfig
@@ -69,6 +70,7 @@ func loadConfig() (config, error) {
 		TunnelMaxBody:      getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
 		StreamStartTimeout: getenvDuration("RCTL_RELAY_STREAM_START_TIMEOUT", 20*time.Second),
 		UpdateManifestURL:  os.Getenv("RCTL_RELAY_UPDATE_MANIFEST_URL"),
+		PublicPackagePath:  os.Getenv("RCTL_RELAY_PUBLIC_PACKAGE"),
 		LoginLimit:         loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
 		AdminLimit:         loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
 		DeviceLimit:        loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
@@ -96,6 +98,9 @@ func loadConfig() (config, error) {
 			manifestURL.User != nil || manifestURL.Fragment != "" {
 			return cfg, errors.New("RCTL_RELAY_UPDATE_MANIFEST_URL must be HTTPS without credentials or fragment")
 		}
+	}
+	if cfg.PublicPackagePath != "" && !strings.HasPrefix(cfg.PublicPackagePath, "/") {
+		return cfg, errors.New("RCTL_RELAY_PUBLIC_PACKAGE must be an absolute container path")
 	}
 	return cfg, nil
 }

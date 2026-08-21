@@ -247,13 +247,33 @@ const maxEnrollmentTTL = 90 * 24 * time.Hour
 // far enough out to be effectively permanent while staying a real timestamp.
 const neverExpiresUnix = 4102444800
 
-func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Label      string `json:"label"`
-		TTLSeconds int64  `json:"ttl_seconds"`
-	}
-	_ = readJSON(r, &req) // body is optional (curl-friendly)
+type enrollmentOptions struct {
+	Label      string `json:"label"`
+	TTLSeconds int64  `json:"ttl_seconds"`
+}
 
+type createdEnrollment struct {
+	ID        string
+	Token     string
+	ExpiresAt time.Time
+}
+
+func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
+	var req enrollmentOptions
+	_ = readJSON(r, &req) // body is optional (curl-friendly)
+	enrollment, err := s.createEnrollment(r, req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "enrollment_create_failed")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token":      enrollment.Token,
+		"expires_at": enrollment.ExpiresAt.UTC().Format(time.RFC3339),
+		"relay_url":  s.deviceWebSocketURL(),
+	})
+}
+
+func (s *server) createEnrollment(r *http.Request, req enrollmentOptions) (createdEnrollment, error) {
 	now := time.Now()
 	var expiresAt time.Time
 	if req.TTLSeconds < 0 {
@@ -278,23 +298,17 @@ func (s *server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 
 	tokenID, tokenSecret, err := newTokenPair("enroll")
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "token_generation_failed")
-		return
+		return createdEnrollment{}, err
 	}
 	token := tokenID + "." + tokenSecret
 	_, err = s.db.ExecContext(r.Context(),
 		`INSERT INTO enrollments(id, token_hash, expires_at, created_at, label) VALUES(?,?,?,?,?)`,
 		tokenID, hashToken(token), expiresAt.Unix(), now.Unix(), label)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "enrollment_create_failed")
-		return
+		return createdEnrollment{}, err
 	}
 	s.audit(r, "admin_enrollment_created", "enrollment_id", tokenID, "expires_at", expiresAt.UTC().Format(time.RFC3339))
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"token":      token,
-		"expires_at": expiresAt.UTC().Format(time.RFC3339),
-		"relay_url":  s.deviceWebSocketURL(),
-	})
+	return createdEnrollment{ID: tokenID, Token: token, ExpiresAt: expiresAt}, nil
 }
 
 func enrollmentStatus(now int64, expiresAt int64, usedAt, revokedAt sql.NullInt64) string {

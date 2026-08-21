@@ -30,3 +30,18 @@ func TestCapabilitiesEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilitiesAdvertisesPackageGenerationOnlyWhenReady(t *testing.T) {
+	s := &server{}
+	recorder := httptest.NewRecorder()
+	s.handleCapabilities(recorder, httptest.NewRequest(http.MethodGet, "/v1/capabilities", nil))
+	if strings.Contains(recorder.Body.String(), "package.personalization") {
+		t.Fatal("package capability advertised without a verified base package")
+	}
+	s.publicPackage = []byte{1}
+	recorder = httptest.NewRecorder()
+	s.handleCapabilities(recorder, httptest.NewRequest(http.MethodGet, "/v1/capabilities", nil))
+	if !strings.Contains(recorder.Body.String(), "package.personalization") {
+		t.Fatal("package capability missing when a base package is ready")
+	}
+}

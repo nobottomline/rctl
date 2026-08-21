@@ -16,6 +16,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/nobottomline/rctl/relay/internal/deb"
 )
 
 // Version is the build version, overridable via -ldflags "-X ...relay.Version=...".
@@ -31,6 +33,10 @@ type server struct {
 	mu      sync.RWMutex
 	devices map[string]*deviceConn
 	limiter *rateLimiter
+
+	packageMu         sync.Mutex
+	publicPackage     []byte
+	publicPackageInfo deb.Info
 }
 
 func Run() {
@@ -60,6 +66,16 @@ func Run() {
 		startedAt: time.Now(),
 		devices:   make(map[string]*deviceConn),
 		limiter:   newRateLimiter(5 * time.Minute),
+	}
+	if cfg.PublicPackagePath != "" {
+		packageData, packageInfo, err := loadPublicPackage(cfg.PublicPackagePath)
+		if err != nil {
+			logger.Error("load public device package", "error", err)
+			os.Exit(1)
+		}
+		s.publicPackage = packageData
+		s.publicPackageInfo = packageInfo
+		logger.Info("public device package ready", "version", packageInfo.Version, "format", packageInfo.DataFormat)
 	}
 	if err := s.migrate(context.Background()); err != nil {
 		logger.Error("migrate database", "error", err)
@@ -113,6 +129,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/devices", s.withAdmin(s.handleListDevices))
 	mux.HandleFunc("GET /api/admin/enrollments", s.withAdmin(s.handleListEnrollments))
 	mux.HandleFunc("POST /api/admin/enrollments", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleCreateEnrollment)))
+	mux.HandleFunc("POST /api/admin/device-package", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleCreateDevicePackage)))
 	mux.HandleFunc("POST /api/admin/enrollments/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeEnrollment)))
 	mux.HandleFunc("POST /api/admin/enrollments/{id}/delete", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleDeleteEnrollment)))
 	mux.HandleFunc("POST /api/admin/devices/{id}/approve", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleApproveDevice)))
