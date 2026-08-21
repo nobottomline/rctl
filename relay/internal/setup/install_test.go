@@ -75,6 +75,22 @@ func TestInstallerFreshAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestInstallerDryRunDoesNotMutateFilesystem(t *testing.T) {
+	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
+	result, err := installer.Install(context.Background(), validConfig(), InstallOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.DryRun || len(result.Files) == 0 {
+		t.Fatalf("unexpected dry-run result: %#v", result)
+	}
+	for _, path := range []string{installer.Paths.LockPath, installer.Paths.EtcDir, installer.Paths.OptDir, installer.Paths.DataDir} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("dry-run mutated %s: %v", path, statErr)
+		}
+	}
+}
+
 func TestInstallerRefusesForeignState(t *testing.T) {
 	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
 	if err := os.MkdirAll(installer.Paths.EtcDir, 0o700); err != nil {
@@ -130,6 +146,28 @@ func TestInstallerDetectsModifiedOwnedFile(t *testing.T) {
 	}
 	if _, err := installer.Install(context.Background(), validConfig(), InstallOptions{}); err == nil || !strings.Contains(err.Error(), "modified outside") {
 		t.Fatalf("unexpected modified-file result: %v", err)
+	}
+}
+
+func TestInstallerRejectsUnexpectedOwnedPath(t *testing.T) {
+	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
+	if _, err := installer.Install(context.Background(), validConfig(), InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(installer.Paths.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest OwnershipManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Files[0].Path = "/etc/passwd"
+	if err := writeJSONAtomic(installer.Paths.ManifestPath, manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.Install(context.Background(), validConfig(), InstallOptions{}); err == nil || !strings.Contains(err.Error(), "unexpected file metadata") {
+		t.Fatalf("unexpected manifest result: %v", err)
 	}
 }
 

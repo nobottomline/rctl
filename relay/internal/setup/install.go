@@ -82,6 +82,23 @@ type InstallResult struct {
 
 type OSRunner struct{}
 
+func InstallationOwned(paths Paths) (bool, error) {
+	if paths.ManifestPath == "" {
+		paths = DefaultPaths()
+	}
+	manifest, err := loadManifest(paths.ManifestPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := validateOwnershipManifest(manifest, paths); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (OSRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
 	path, err := exec.LookPath(name)
 	if err != nil {
@@ -227,24 +244,29 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	if options.Version == "" {
 		options.Version = "dev"
 	}
-	if err := os.MkdirAll(filepath.Dir(i.Paths.LockPath), 0o755); err != nil {
-		return result, fmt.Errorf("create lock directory: %w", err)
+	if !options.DryRun {
+		if err := os.MkdirAll(filepath.Dir(i.Paths.LockPath), 0o755); err != nil {
+			return result, fmt.Errorf("create lock directory: %w", err)
+		}
+		lock, err := os.OpenFile(i.Paths.LockPath, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return result, fmt.Errorf("open setup lock: %w", err)
+		}
+		defer lock.Close()
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			return result, errors.New("another rctl lifecycle operation is active")
+		}
+		defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	}
-	lock, err := os.OpenFile(i.Paths.LockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return result, fmt.Errorf("open setup lock: %w", err)
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return result, errors.New("another rctl lifecycle operation is active")
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
 	existing, manifestErr := loadManifest(i.Paths.ManifestPath)
 	if manifestErr != nil && !errors.Is(manifestErr, os.ErrNotExist) {
 		return result, manifestErr
 	}
 	if manifestErr == nil {
+		if err := validateOwnershipManifest(existing, i.Paths); err != nil {
+			return result, err
+		}
 		if !configsEqual(existing.Config, cfg) {
 			return result, errors.New("installed configuration differs; use transactional upgrade/reconfigure")
 		}
@@ -478,7 +500,58 @@ func loadManifest(path string) (OwnershipManifest, error) {
 	if manifest.Schema != ownershipSchema || manifest.Product != "rctl" {
 		return manifest, errors.New("ownership manifest is incompatible")
 	}
+	var trailing any
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return manifest, errors.New("ownership manifest contains trailing data")
+	}
 	return manifest, nil
+}
+
+func validateOwnershipManifest(manifest OwnershipManifest, paths Paths) error {
+	if err := manifest.Config.Validate(); err != nil {
+		return fmt.Errorf("ownership manifest configuration: %w", err)
+	}
+	if manifest.Config.Profile != ProfileContainer {
+		return errors.New("ownership manifest has an unsupported deployment profile")
+	}
+	if manifest.Version == "" || len(manifest.Version) > 128 || strings.ContainsAny(manifest.Version, "\r\n\x00") {
+		return errors.New("ownership manifest has invalid version metadata")
+	}
+	if manifest.CreatedAt <= 0 || manifest.UpdatedAt < manifest.CreatedAt {
+		return errors.New("ownership manifest has invalid timestamps")
+	}
+	allowed := map[string]struct {
+		mode   uint32
+		secret bool
+	}{
+		paths.RelayEnv:  {0o600, true},
+		paths.Compose:   {0o644, false},
+		paths.Caddyfile: {0o644, false},
+	}
+	if manifest.Config.EnableTURN {
+		allowed[paths.Coturn] = struct {
+			mode   uint32
+			secret bool
+		}{0o600, true}
+	}
+	if len(manifest.Files) != len(allowed) {
+		return errors.New("ownership manifest file set is incompatible")
+	}
+	seen := make(map[string]bool, len(manifest.Files))
+	for _, file := range manifest.Files {
+		expected, ok := allowed[file.Path]
+		if !ok || seen[file.Path] || file.Mode != expected.mode || file.Secret != expected.secret {
+			return fmt.Errorf("ownership manifest contains unexpected file metadata for %s", file.Path)
+		}
+		if len(file.SHA256) != sha256.Size*2 {
+			return fmt.Errorf("ownership manifest contains an invalid digest for %s", file.Path)
+		}
+		if _, err := hex.DecodeString(file.SHA256); err != nil {
+			return fmt.Errorf("ownership manifest contains an invalid digest for %s", file.Path)
+		}
+		seen[file.Path] = true
+	}
+	return nil
 }
 
 func verifyOwnedFiles(manifest OwnershipManifest) error {

@@ -68,6 +68,9 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 	host := origin.Hostname()
 	if ip := net.ParseIP(host); ip != nil {
 		add("dns", Warn, "Bare-IP TLS profile requires separate qualification", ip.String())
+		if cfg.EnableTURN && !ip.Equal(net.ParseIP(cfg.TURNExternalIP)) {
+			add("dns_target", Fail, "HTTPS and TURN public addresses differ", "the dedicated single-origin profile requires the URL IP to equal turn_external_ip")
+		}
 	} else {
 		ips, err := p.Probe.LookupIP(ctx, host)
 		if err != nil || len(ips) == 0 {
@@ -79,6 +82,18 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 		} else {
 			answers := uniqueIPs(ips)
 			add("dns", Pass, "Public hostname resolves", strings.Join(answers, ", "))
+			if cfg.EnableTURN {
+				wanted := net.ParseIP(cfg.TURNExternalIP)
+				matched := false
+				for _, answer := range ips {
+					matched = matched || answer.Equal(wanted)
+				}
+				if matched {
+					add("dns_target", Pass, "Hostname points to the TURN public address", wanted.String())
+				} else {
+					add("dns_target", Fail, "Hostname does not point to this deployment address", "DNS answers do not include turn_external_ip "+wanted.String()+"; disable CDN proxying and correct the A record")
+				}
+			}
 			for _, ip := range ips {
 				if ip.To4() == nil {
 					add("ipv6", Warn, "AAAA record requires working public IPv6", "a stale AAAA record can break ACME and clients")
@@ -124,6 +139,22 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 			add(item.id, Fail, fmt.Sprintf("Required %s port %d is occupied", item.protocol, item.port), err.Error())
 		} else {
 			add(item.id, Pass, fmt.Sprintf("Required %s port %d is available", item.protocol, item.port), "")
+		}
+	}
+	if cfg.EnableTURN {
+		occupied := make([]string, 0)
+		for port := 49160; port <= 49260; port++ {
+			if err := p.Probe.UDPPortAvailable(port); err != nil {
+				occupied = append(occupied, fmt.Sprintf("%d", port))
+				if len(occupied) == 8 {
+					break
+				}
+			}
+		}
+		if len(occupied) != 0 {
+			add("turn_relay_ports", Fail, "TURN relay UDP range is occupied", strings.Join(occupied, ", "))
+		} else {
+			add("turn_relay_ports", Pass, "TURN relay UDP range is available", "49160-49260")
 		}
 	}
 

@@ -35,7 +35,7 @@ func (f fakeProber) PathExists(path string) (bool, error) { return f.paths[path]
 func passingProbe() fakeProber {
 	return fakeProber{
 		platform: Platform{OS: "linux", Arch: "amd64", Distro: "ubuntu", Root: true, Memory: 2 << 30, Disk: 20 << 30},
-		dns:      []net.IP{net.ParseIP("203.0.113.10")},
+		dns:      []net.IP{net.ParseIP("8.8.8.8")},
 		commands: map[string]string{
 			"docker version --format {{.Server.Version}}":         "27.1.0",
 			"docker compose version --short":                      "2.29.0",
@@ -44,6 +44,18 @@ func passingProbe() fakeProber {
 		ports: map[string]error{},
 		paths: map[string]bool{},
 	}
+}
+
+func TestPreflightRejectsDNSPointingAwayFromTURNAddress(t *testing.T) {
+	probe := passingProbe()
+	probe.dns = []net.IP{net.ParseIP("1.1.1.1")}
+	report := (Preflight{Probe: probe}).Run(context.Background(), validConfig())
+	for _, check := range report.Checks {
+		if check.ID == "dns_target" && check.Severity == Fail {
+			return
+		}
+	}
+	t.Fatalf("missing DNS target failure: %#v", report.Checks)
 }
 
 func TestPreflightPassesHealthyHost(t *testing.T) {

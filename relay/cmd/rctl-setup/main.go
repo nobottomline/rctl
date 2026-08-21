@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	setup "github.com/nobottomline/rctl/relay/internal/setup"
@@ -34,6 +39,8 @@ func run(args []string) int {
 		return 0
 	case "preflight":
 		return runPreflight(args[1:])
+	case "install":
+		return runInstall(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -44,18 +51,56 @@ func run(args []string) int {
 	}
 }
 
+type configFlags struct {
+	configPath    string
+	publicURL     string
+	relayImage    string
+	caddyImage    string
+	coturnImage   string
+	turnIP        string
+	acmeEmail     string
+	turn          bool
+	configuration bool
+}
+
+func addConfigFlags(flags *flag.FlagSet) *configFlags {
+	values := &configFlags{}
+	flags.StringVar(&values.configPath, "config", "", "mode-0600 JSON configuration file")
+	flags.StringVar(&values.publicURL, "public-url", "", "public HTTPS origin (non-secret)")
+	flags.StringVar(&values.relayImage, "image", defaultImage, "digest-pinned relay image (non-secret)")
+	flags.StringVar(&values.caddyImage, "caddy-image", defaultCaddy, "digest-pinned Caddy image (non-secret)")
+	flags.StringVar(&values.coturnImage, "coturn-image", defaultCoturn, "digest-pinned coturn image (non-secret)")
+	flags.StringVar(&values.turnIP, "turn-external-ip", "", "public IPv4 used by TURN (non-secret)")
+	flags.StringVar(&values.acmeEmail, "acme-email", "", "ACME account email (non-secret)")
+	flags.BoolVar(&values.turn, "turn", true, "deploy the recommended TURN service")
+	return values
+}
+
+func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
+	flags.Visit(func(item *flag.Flag) {
+		switch item.Name {
+		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "turn":
+			v.configuration = true
+		}
+	})
+	if v.configPath != "" {
+		if v.configuration {
+			return setup.Config{}, fmt.Errorf("--config cannot be combined with individual configuration flags")
+		}
+		return setup.LoadConfig(v.configPath)
+	}
+	return setup.Config{
+		Schema: setup.ConfigSchema, PublicURL: v.publicURL, Profile: setup.ProfileContainer,
+		RelayImage: v.relayImage, CaddyImage: v.caddyImage, CoturnImage: v.coturnImage,
+		TURNExternalIP: v.turnIP, EnableTURN: v.turn, ACMEEmail: v.acmeEmail, Release: version,
+	}, nil
+}
+
 func runPreflight(args []string) int {
 	flags := flag.NewFlagSet("preflight", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	configPath := flags.String("config", "", "mode-0600 JSON configuration file")
-	publicURL := flags.String("public-url", "", "public HTTPS origin (non-secret)")
-	image := flags.String("image", defaultImage, "digest-pinned relay image (non-secret)")
-	caddyImage := flags.String("caddy-image", defaultCaddy, "digest-pinned Caddy image (non-secret)")
-	coturnImage := flags.String("coturn-image", defaultCoturn, "digest-pinned coturn image (non-secret)")
-	turnExternalIP := flags.String("turn-external-ip", "", "public IPv4 used by TURN (non-secret)")
-	profile := flags.String("profile", setup.ProfileContainer, "container or native")
+	configValues := addConfigFlags(flags)
 	jsonOutput := flags.Bool("json", false, "write structured JSON")
-	turn := flags.Bool("turn", true, "check TURN requirements")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -63,22 +108,10 @@ func runPreflight(args []string) int {
 		fmt.Fprintln(os.Stderr, "preflight does not accept positional arguments")
 		return 2
 	}
-	cfg := setup.DefaultConfig()
-	var err error
-	if *configPath != "" {
-		cfg, err = setup.LoadConfig(*configPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "config:", err)
-			return 2
-		}
-	} else {
-		cfg.PublicURL = *publicURL
-		cfg.Profile = *profile
-		cfg.RelayImage = *image
-		cfg.CaddyImage = *caddyImage
-		cfg.CoturnImage = *coturnImage
-		cfg.TURNExternalIP = *turnExternalIP
-		cfg.EnableTURN = *turn
+	cfg, err := configValues.load(flags)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -97,13 +130,164 @@ func runPreflight(args []string) int {
 	return 0
 }
 
+func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("install", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configValues := addConfigFlags(flags)
+	dryRun := flags.Bool("dry-run", false, "validate and print the plan without changing the host")
+	assumeYes := flags.Bool("yes", false, "apply the displayed plan without an interactive confirmation")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(errorsOutput, "install does not accept positional arguments")
+		return 2
+	}
+	cfg, err := configValues.load(flags)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "config:", err)
+		return 2
+	}
+	reader := bufio.NewReader(input)
+	interactive := input == os.Stdin && stdinIsTerminal()
+	if configValues.configPath == "" && interactive && !*assumeYes {
+		if cfg.PublicURL == "" {
+			cfg.PublicURL, err = prompt(reader, output, "Public HTTPS URL", "")
+			if err != nil {
+				fmt.Fprintln(errorsOutput, "input:", err)
+				return 2
+			}
+		}
+		if cfg.EnableTURN && cfg.TURNExternalIP == "" {
+			inferred := inferPublicIPv4(cfg.PublicURL)
+			cfg.TURNExternalIP, err = prompt(reader, output, "VPS public IPv4 for TURN", inferred)
+			if err != nil {
+				fmt.Fprintln(errorsOutput, "input:", err)
+				return 2
+			}
+		}
+		if cfg.ACMEEmail == "" {
+			cfg.ACMEEmail, err = prompt(reader, output, "ACME email (optional)", "")
+			if err != nil {
+				fmt.Fprintln(errorsOutput, "input:", err)
+				return 2
+			}
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintln(errorsOutput, "config:", err)
+		return 2
+	}
+	if cfg.Profile != setup.ProfileContainer {
+		fmt.Fprintln(errorsOutput, "install: only the container profile is currently supported")
+		return 2
+	}
+
+	paths := setup.DefaultPaths()
+	owned, err := setup.InstallationOwned(paths)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "installed state:", err)
+		return 1
+	}
+	if !owned {
+		preflightCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		report := (setup.Preflight{}).Run(preflightCtx, cfg)
+		cancel()
+		report.WriteText(output)
+		if report.Failed() {
+			fmt.Fprintln(errorsOutput, "preflight failed; the host was not changed")
+			return 1
+		}
+	}
+	printInstallPlan(output, cfg, owned, *dryRun)
+	if !*dryRun && !*assumeYes {
+		if !interactive {
+			fmt.Fprintln(errorsOutput, "install requires an interactive terminal or --yes")
+			return 2
+		}
+		answer, err := prompt(reader, output, "Type install to continue", "")
+		if err != nil || answer != "install" {
+			fmt.Fprintln(errorsOutput, "installation cancelled; the host was not changed")
+			return 1
+		}
+	}
+	installCtx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	result, err := (setup.Installer{}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version})
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "install:", err)
+		return 1
+	}
+	if result.DryRun {
+		fmt.Fprintf(output, "Dry run complete: %d owned files would be managed.\n", len(result.Files))
+		return 0
+	}
+	if result.Fresh {
+		fmt.Fprintf(output, "\nRelay installation verified.\nAdmin URL: %s/admin/\nAdmin password (shown once): %s\n", strings.TrimSuffix(cfg.PublicURL, "/"), result.AdminSecret)
+	} else {
+		fmt.Fprintf(output, "Relay installation is healthy and unchanged: %s/admin/\n", strings.TrimSuffix(cfg.PublicURL, "/"))
+	}
+	return 0
+}
+
+func prompt(reader *bufio.Reader, output io.Writer, label, defaultValue string) (string, error) {
+	if defaultValue == "" {
+		fmt.Fprintf(output, "%s: ", label)
+	} else {
+		fmt.Fprintf(output, "%s [%s]: ", label, defaultValue)
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", err
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		line = defaultValue
+	}
+	return line, nil
+}
+
+func inferPublicIPv4(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil && ip.To4() != nil {
+		return ip.String()
+	}
+	addresses, err := net.LookupIP(parsed.Hostname())
+	if err != nil {
+		return ""
+	}
+	for _, address := range addresses {
+		if address.To4() != nil && address.IsGlobalUnicast() && !address.IsPrivate() {
+			return address.String()
+		}
+	}
+	return ""
+}
+
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func printInstallPlan(w io.Writer, cfg setup.Config, owned, dryRun bool) {
+	action := "fresh install"
+	if owned {
+		action = "verify existing installation"
+	}
+	if dryRun {
+		action += " (dry run)"
+	}
+	fmt.Fprintf(w, "\nPlan: %s\nOrigin: %s\nProfile: %s\nTURN: %t\nRelay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.RelayImage)
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: rctl-setup <command> [options]
 
 Commands:
   version      print build and platform metadata
   preflight    run read-only host and configuration checks
-
-Mutating lifecycle commands are enabled only after transactional apply and
-rollback support are present.`)
+  install      preflight, confirm, apply, verify, and roll back on failure`)
 }
