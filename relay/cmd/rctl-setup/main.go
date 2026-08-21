@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -447,6 +448,14 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		fmt.Fprintln(errorsOutput, "install does not accept positional arguments")
 		return 2
 	}
+	paths := setup.DefaultPaths()
+	if recovery, recoveryErr := (setup.RecoveryManager{}).Plan(); recoveryErr == nil {
+		fmt.Fprintf(errorsOutput, "install: interrupted %s operation requires rctl-setup recover first\n", recovery.Operation)
+		return 1
+	} else if !errors.Is(recoveryErr, os.ErrNotExist) {
+		fmt.Fprintln(errorsOutput, "install: recovery checkpoint:", recoveryErr)
+		return 1
+	}
 	cfg, err := configValues.load(flags)
 	if err != nil {
 		fmt.Fprintln(errorsOutput, "config:", err)
@@ -494,7 +503,6 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		return 2
 	}
 
-	paths := setup.DefaultPaths()
 	owned, err := setup.InstallationOwned(paths)
 	if err != nil {
 		fmt.Fprintln(errorsOutput, "installed state:", err)
