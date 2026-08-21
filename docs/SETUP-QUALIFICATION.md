@@ -113,6 +113,16 @@ stable release was published.
   and post-restore doctor all passed. Doctor reported valid ownership and
   permissions, protected secrets, valid Compose, healthy services, local relay,
   and public HTTPS/WebSocket routes.
+- Admin and session secret rotation completed with its mandatory backup,
+  restarted relay, verified the new login, and passed doctor without exposing
+  the new secret. Uninstall with retained data preserved the data directory and
+  restored successfully from its automatic backup. Uninstall with deleted data
+  removed the managed data directory and left a backup that passed an
+  uninstalled-state restore dry run.
+- A second off-host client completed a real UDP STUN request through the public
+  coturn endpoint and received its expected reflexive address. This proves
+  external UDP reachability to the STUN listener, but not authenticated TURN
+  allocation, the relay port range, TCP allocation, or forced-TURN media.
 - An authenticated admin session generated an in-memory personalized package.
   Its Debian package id, version, and relay plist were verified, then the test
   enrollment, cookie, and downloaded package were deleted.
@@ -144,9 +154,9 @@ the workflow.
    allocation, and forced-TURN browser/device media.
 3. Enroll an iOS 14 arm64e device from the admin-generated package and verify
    relay plus independent LAN control before and after relay restart.
-4. Exercise admin credential reset, failed-upgrade automatic rollback,
-   interrupted-operation recovery, and both uninstall retention modes on a
-   disposable VPS. Backup, restore, and already-current upgrade are already
+4. Exercise failed-upgrade automatic rollback and interrupted-operation
+   recovery on a disposable VPS. Backup, restore, already-current upgrade,
+   admin credential reset, and both uninstall retention modes are already
    qualified on a real VPS.
 5. Produce and upload the privacy-safe qualification report bound to the exact
    candidate image and `SHA256SUMS` digest.
