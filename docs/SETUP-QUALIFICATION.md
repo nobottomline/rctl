@@ -5,9 +5,9 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through setup hardening commit `8993f02`, plus this
-documentation record. Release version remains `0.3.0`; no stable release was
-published.
+Qualified release candidate: tag `v0.3.0` at `9b648fb`. This record may receive
+post-qualification documentation commits after that immutable candidate. No
+stable release was published.
 
 ### Passed locally
 
@@ -125,12 +125,16 @@ published.
 
 The repository was temporarily made public for qualification because the
 private-repository Actions allowance was exhausted. Exact-commit CI passed for
-the preceding candidate, and the draft workflow successfully built the
-multi-architecture OCI image, iOS package, Linux binaries, SBOM, and provenance.
-Final draft assembly then found that artifact download had discarded executable
-modes. The workflow fix restores only the expected executable modes before the
-strict release-set validator. CI and draft assembly must be repeated for the
-new exact tagged commit; the repository must remain private afterward.
+`9b648fb`: Go tests, vet, reachable-vulnerability scan, actionlint, both web
+builds, multi-platform setup cross-build, container build, and container smoke
+test all succeeded. The tag-bound draft workflow then built and attested the
+multi-architecture OCI image, rebuilt the iOS package and four Linux binaries,
+restored the expected executable modes, validated the complete release set, and
+created an unpublished draft with seven expected assets. An independent local
+download verified every `SHA256SUMS` entry, ELF architectures, the public
+package release gate, and absence of qualification host data or relay secrets.
+API readback confirmed the repository was returned to private immediately after
+the workflow.
 
 ### Still required before a supported public release
 
@@ -146,9 +150,10 @@ new exact tagged commit; the repository must remain private afterward.
    qualified on a real VPS.
 5. Produce and upload the privacy-safe qualification report bound to the exact
    candidate image and `SHA256SUMS` digest.
-6. Run the tag-bound draft and publication workflows, inspect all
-   checksums/provenance/SBOMs and multi-architecture GHCR pulls, then perform
-   independent immutable release and asset verification.
+6. Make the GHCR package anonymously readable, qualify an anonymous
+   multi-architecture pull, produce the exact-artifact fresh-VPS report, then
+   run the gated publication workflow and independently verify the immutable
+   stable release.
 
 Until these external gates pass, the wizard is implemented and locally
 qualified but must not be described as fully production-qualified.
