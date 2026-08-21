@@ -212,7 +212,9 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           RCTL_REQUIRE_EXECUTABLE_CHECK: "1"
-        run: scripts/assemble_release_set.sh release "$VERSION" "$SOURCE_SHA"
+        run: |
+          chmod 0755 release/install.sh release/rctl-relay_linux_* release/rctl-setup_linux_*
+          scripts/assemble_release_set.sh release "$VERSION" "$SOURCE_SHA"
       - name: Attest public release artifacts
         if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
