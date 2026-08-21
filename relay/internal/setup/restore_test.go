@@ -126,6 +126,70 @@ func TestRestoreRollsBackWhenRestoredRuntimeFailsVerification(t *testing.T) {
 	}
 }
 
+func TestRestoreRollbackRemovesFilesOwnedOnlyByFailedTarget(t *testing.T) {
+	runner := &fakeRunner{}
+	installer := testInstaller(t, runner, &fakeVerifier{})
+	withoutTURN := validConfig()
+	withoutTURN.EnableTURN = false
+	withoutTURN.CoturnImage = ""
+	withoutTURN.TURNExternalIP = ""
+	if _, err := installer.Install(context.Background(), withoutTURN, InstallOptions{Version: "1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+	rollbackSource, err := (BackupManager{
+		Paths: installer.Paths, Runner: runner, Verifier: &fakeVerifier{},
+		Now: func() time.Time { return time.Unix(1700001100, 0) },
+	}).Create(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secrets, err := readExistingSecrets(installer.Paths.RelayEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets.TURN = strings.Repeat("a", 64)
+	withTURN := validConfig()
+	targetBundle, err := RenderDedicatedBundleAt(withTURN, secrets, installer.Paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range targetBundle.Files {
+		if err := writeFileAtomic(file.Path, file.Content, os.FileMode(file.Mode)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetManifest := manifestFor(withTURN, targetBundle, "1.2.3", time.Unix(1700000000, 0).Unix(), time.Unix(1700001200, 0).Unix())
+	if err := writeJSONAtomic(installer.Paths.ManifestPath, targetManifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	targetSource, err := (BackupManager{
+		Paths: installer.Paths, Runner: runner, Verifier: &fakeVerifier{},
+		Now: func() time.Time { return time.Unix(1700001200, 0) },
+	}).Create(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyBackup(rollbackSource, targetManifest, installer.Paths); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(installer.Paths.Coturn); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("TURN file remained before restore test: %v", err)
+	}
+
+	verifier := &sequenceVerifier{failAt: 2}
+	if _, err := (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: verifier}).Restore(context.Background(), targetSource); err == nil || !strings.Contains(err.Error(), "was rolled back") {
+		t.Fatalf("restore result: %v", err)
+	}
+	if _, err := os.Lstat(installer.Paths.Coturn); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed target TURN file survived rollback: %v", err)
+	}
+	manifest, err := loadManifest(installer.Paths.ManifestPath)
+	if err != nil || manifest.Config.EnableTURN {
+		t.Fatalf("rollback manifest=%+v err=%v", manifest, err)
+	}
+}
+
 func TestBackupValidationRejectsAggregateSizeOverflow(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "backup-oversized")
 	if err := os.Mkdir(name, 0o700); err != nil {

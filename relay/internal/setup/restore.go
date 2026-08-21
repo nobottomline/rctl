@@ -95,6 +95,10 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	if !ownershipManifestsEqual(current, rollbackManifest) {
 		return rollbackBackup, errors.New("installed state changed after the pre-restore backup; refusing to overwrite it")
 	}
+	restoreTarget, err := snapshotOwnership(source, r.Paths)
+	if err != nil {
+		return rollbackBackup, fmt.Errorf("read restore source ownership: %w", err)
+	}
 	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
 	if err := beginRecovery(r.Paths, "restore", rollbackBackup, time.Now()); err != nil {
 		return rollbackBackup, err
@@ -113,11 +117,7 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 		return rollbackBackup, nil
 	}
 
-	rollbackCurrent := current
-	if applyErr == nil {
-		rollbackCurrent = restored
-	}
-	_, rollbackErr := applyBackup(rollbackBackup, rollbackCurrent, r.Paths)
+	_, rollbackErr := applyBackup(rollbackBackup, restoreTarget, r.Paths)
 	if rollbackErr == nil {
 		rollbackCtx, cancel := lifecycleRecoveryContext()
 		defer cancel()
