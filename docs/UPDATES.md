@@ -97,7 +97,10 @@ admin action remains hidden until a newer signed catalog is published.
 State is exposed through `GET /v1/update_status` and shown in device details in
 the relay admin page. Logs and rollback material live below
 `/var/mobile/Library/Caches/com.greatlove.rctl/update`, which the file API treats
-as protected runtime state.
+as protected runtime state. Verified success and rollback remove downloaded
+packages, partial downloads, and the relay identity backup while retaining small
+logs and status markers. A failed rollback deliberately retains recovery
+material for SSH-assisted repair.
 
 ## Rollout and recovery
 

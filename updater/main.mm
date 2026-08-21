@@ -500,6 +500,14 @@ static BOOL relayExpected(NSString *backup) {
     return NO;
 }
 
+static void cleanupTransactionFiles(NSString *work) {
+    if (!work.length) return;
+    for (NSString *name in @[@"current.deb", @"current.deb.download", @"target.deb",
+                             @"target.deb.download", @"relay.plist"]) {
+        unlink([[work stringByAppendingPathComponent:name] fileSystemRepresentation]);
+    }
+}
+
 static BOOL performRollback(NSDictionary *plan, NSString *message) {
     NSString *work = plan[@"work_dir"];
     touchFile([work stringByAppendingPathComponent:@"rollback_in_progress"]);
@@ -510,7 +518,10 @@ static BOOL performRollback(NSDictionary *plan, NSString *message) {
     writeStatus(plan[@"job_id"], verified ? @"rolled_back" : @"rollback_failed",
                 verified ? @"Previous version restored" : @"Automatic rollback failed",
                 plan[@"current_version"], plan[@"target_version"], YES);
-    if (verified) touchFile([work stringByAppendingPathComponent:@"rollback_complete"]);
+    if (verified) {
+        touchFile([work stringByAppendingPathComponent:@"rollback_complete"]);
+        cleanupTransactionFiles(work);
+    }
     return verified;
 }
 
@@ -637,6 +648,7 @@ static int updateMain(NSString *requestPath, NSString *executable) {
         touchFile(heartbeat);
         if (!downloadFile(metadata[@"url"], path, kMaximumArtifactBytes, &error)) {
             writeStatus(job, @"failed", error ?: @"Artifact download failed", current, target, YES);
+            cleanupTransactionFiles(work);
             flock(lock, LOCK_UN); close(lock); return 6;
         }
         struct stat st = {};
@@ -644,6 +656,7 @@ static int updateMain(NSString *requestPath, NSString *executable) {
         if (stat(path.fileSystemRepresentation, &st) != 0 || (unsigned long long)st.st_size != [metadata[@"size"] unsignedLongLongValue] ||
             ![digest isEqualToString:metadata[@"sha256"]] || !packageMatches(path, metadata[@"version"])) {
             writeStatus(job, @"failed", @"Artifact checksum or size mismatch", current, target, YES);
+            cleanupTransactionFiles(work);
             flock(lock, LOCK_UN); close(lock); return 7;
         }
         chmod(path.fileSystemRepresentation, 0600);
@@ -654,6 +667,7 @@ static int updateMain(NSString *requestPath, NSString *executable) {
         NSError *backupError = nil;
         if (![NSFileManager.defaultManager copyItemAtPath:kRelayPreferences toPath:relayBackup error:&backupError]) {
             writeStatus(job, @"failed", @"Could not preserve relay identity", current, target, YES);
+            cleanupTransactionFiles(work);
             flock(lock, LOCK_UN); close(lock); return 8;
         }
         chmod(relayBackup.fileSystemRepresentation, 0600);
@@ -668,6 +682,7 @@ static int updateMain(NSString *requestPath, NSString *executable) {
     writeJSON(planPath, plan, 0600);
     if (!spawnWatchdog(executable, planPath)) {
         writeStatus(job, @"failed", @"Could not start external watchdog", current, target, YES);
+        cleanupTransactionFiles(work);
         flock(lock, LOCK_UN); close(lock); return 8;
     }
 
@@ -679,6 +694,7 @@ static int updateMain(NSString *requestPath, NSString *executable) {
     BOOL verified = installed && verifyRuntime(target, [plan[@"expect_relay"] boolValue], 180, heartbeat);
     if (verified) {
         touchFile([work stringByAppendingPathComponent:@"success"]);
+        cleanupTransactionFiles(work);
         writeStatus(job, @"complete", @"Update verified", current, target, YES);
         flock(lock, LOCK_UN); close(lock); return 0;
     }
