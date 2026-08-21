@@ -119,7 +119,9 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	}
 	_, rollbackErr := applyBackup(rollbackBackup, rollbackCurrent, r.Paths)
 	if rollbackErr == nil {
-		rollbackErr = r.startAndVerify(ctx, installer, rollbackManifest)
+		rollbackCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
+		rollbackErr = r.startAndVerify(rollbackCtx, installer, rollbackManifest)
 	}
 	if rollbackErr != nil {
 		return rollbackBackup, fmt.Errorf("restore failed: %v; automatic rollback also failed: %w", applyErr, rollbackErr)
@@ -167,8 +169,10 @@ func (r RestoreManager) restoreUninstalled(ctx context.Context, source string) (
 			_ = clearRecovery(r.Paths)
 			return
 		}
+		recoveryCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
 		if applied {
-			_, _ = r.Runner.Run(context.Background(), "docker", installer.composeArgs("down", "--remove-orphans")...)
+			_, _ = r.Runner.Run(recoveryCtx, "docker", installer.composeArgs("down", "--remove-orphans")...)
 		}
 		rollbackErr := removeRestoredState(target, r.Paths)
 		if rollbackErr == nil && retainedData != "" {

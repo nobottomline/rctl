@@ -109,7 +109,9 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 		return result, err
 	}
 	if output, stopErr := u.Runner.Run(ctx, "docker", installer.composeArgs("stop")...); stopErr != nil {
-		_, _ = u.Runner.Run(context.Background(), "docker", installer.composeArgs("up", "-d")...)
+		recoveryCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
+		_, _ = u.Runner.Run(recoveryCtx, "docker", installer.composeArgs("up", "-d")...)
 		return result, fmt.Errorf("stop services for upgrade: %s", commandFailure(output, stopErr))
 	}
 
@@ -118,9 +120,11 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 		if err == nil || !applied {
 			return
 		}
+		recoveryCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
 		_, rollbackErr := applyBackup(result.Backup, plan.target, u.Paths)
 		if rollbackErr == nil {
-			rollbackErr = (RestoreManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}).startAndVerify(context.Background(), installer, backupManifest)
+			rollbackErr = (RestoreManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}).startAndVerify(recoveryCtx, installer, backupManifest)
 		}
 		if rollbackErr != nil {
 			err = fmt.Errorf("upgrade failed: %v; automatic rollback also failed: %w", err, rollbackErr)

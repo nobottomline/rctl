@@ -18,6 +18,28 @@ const (
 	targetCoturn = "docker.io/coturn/coturn@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 )
 
+type cancellationVerifier struct {
+	cancel              context.CancelFunc
+	calls               int
+	rollbackContextLive bool
+}
+
+func (v *cancellationVerifier) Verify(ctx context.Context, _ Config, _ string) error {
+	v.calls++
+	if v.calls == 2 {
+		v.cancel()
+		return ctx.Err()
+	}
+	if v.calls == 3 {
+		v.rollbackContextLive = ctx.Err() == nil
+	}
+	return nil
+}
+
+func (v *cancellationVerifier) VerifyPersistence(ctx context.Context, _ Config, _ string, restart func(context.Context) error) error {
+	return restart(ctx)
+}
+
 func upgradeOptions() UpgradeOptions {
 	return UpgradeOptions{Version: "1.3.0", RelayImage: targetImage, CaddyImage: targetCaddy, CoturnImage: targetCoturn}
 }
@@ -197,6 +219,22 @@ func TestUpgradeRollsBackTargetDatabaseMigration(t *testing.T) {
 	}
 	if _, err := restored.Exec(`SELECT protocol_major FROM devices`); err == nil {
 		t.Fatal("target schema survived automatic rollback")
+	}
+}
+
+func TestUpgradeRollbackUsesIndependentBoundedContext(t *testing.T) {
+	installer, runner, _, _ := createUpgradeFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	verifier := &cancellationVerifier{cancel: cancel}
+	manager := UpgradeManager{
+		Paths: installer.Paths, Runner: runner, Verifier: verifier,
+		Now: func() time.Time { return time.Unix(1700003200, 0) }, Chown: func(string, int, int) error { return nil },
+	}
+	if _, err := manager.Upgrade(ctx, upgradeOptions()); err == nil || !strings.Contains(err.Error(), "was rolled back") {
+		t.Fatalf("upgrade result: %v", err)
+	}
+	if verifier.calls != 3 || !verifier.rollbackContextLive {
+		t.Fatalf("verification calls=%d rollback_context_live=%t", verifier.calls, verifier.rollbackContextLive)
 	}
 }
 

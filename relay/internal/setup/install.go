@@ -311,7 +311,9 @@ func (v HTTPSVerifier) VerifyPersistence(ctx context.Context, cfg Config, adminS
 	revoked := false
 	defer func() {
 		if !revoked {
-			_ = revokeAdminSession(context.Background(), client, cfg.PublicURL, session)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = revokeAdminSession(cleanupCtx, client, cfg.PublicURL, session)
 		}
 	}()
 	if err := restart(ctx); err != nil {
@@ -422,11 +424,13 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 		if committed || err == nil {
 			return
 		}
+		recoveryCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
 		journal.Status = "rolled_back"
 		journal.Stage = "rollback"
 		journal.UpdatedAt = i.Now().Unix()
 		journal.Error = redact(err.Error(), secrets)
-		_ = i.stopFreshServices(context.Background())
+		_ = i.stopFreshServices(recoveryCtx)
 		_ = rollbackFresh(i.Paths, bundle)
 		_ = clearRecovery(i.Paths)
 		_ = writeJSONAtomic(journalPath, journal, 0o600)
@@ -475,6 +479,10 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	result.Fresh = true
 	result.AdminSecret = secrets.Admin
 	return result, nil
+}
+
+func lifecycleRecoveryContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Minute)
 }
 
 func acquireLifecycleLock(name string) (func(), error) {

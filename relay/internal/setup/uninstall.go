@@ -105,7 +105,9 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 		return result, err
 	}
 	if output, downErr := u.Runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...); downErr != nil {
-		_, _ = u.Runner.Run(context.Background(), "docker", installer.composeArgs("up", "-d")...)
+		recoveryCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
+		_, _ = u.Runner.Run(recoveryCtx, "docker", installer.composeArgs("up", "-d")...)
 		return result, fmt.Errorf("stop and remove services: %s", commandFailure(output, downErr))
 	}
 
@@ -114,9 +116,11 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 		if err == nil || !mutationStarted {
 			return
 		}
+		recoveryCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
 		_, rollbackErr := applyBackup(result.Backup, current, u.Paths)
 		if rollbackErr == nil {
-			rollbackErr = (RestoreManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}).startAndVerify(context.Background(), installer, backupManifest)
+			rollbackErr = (RestoreManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}).startAndVerify(recoveryCtx, installer, backupManifest)
 		}
 		if rollbackErr != nil {
 			err = fmt.Errorf("uninstall failed: %v; automatic rollback also failed: %w", err, rollbackErr)
