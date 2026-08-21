@@ -155,8 +155,12 @@ token even when setup fails. Do not use the maintainer's normal Docker config,
 write a token to disk outside that temporary directory, place it in command
 arguments, or copy it into `/etc/rctl`. Confirm after cleanup that the temporary
 directory is absent. This is a preliminary private maintainer test path, not the
-public installation UX or final publication qualification. Final qualification
-uses an anonymously pullable public candidate and repeats the full test.
+public installation UX or final publication qualification. Final
+pre-publication qualification uses an anonymously pullable public candidate
+image and the complete locally staged, checksum- and provenance-verified draft
+asset set. Once publication makes the immutable release assets public, the
+workflow anonymously re-downloads and compares all of them; maintainers then
+repeat the documented one-line on a clean host.
 
 ## Wizard commands
 
@@ -229,6 +233,12 @@ configuration and every artifact hash still match that immutable release;
 conflicting artifacts with the same version are rejected. Downgrades are
 rejected and intentional rollback uses `restore`. `--dry-run` performs no image
 pull, backup, or service operation.
+
+The same non-interactive install configuration flags may be repeated unchanged
+through the release bootstrap. Upgrade validates them against the owned
+deployment before any mutation. A changed origin, TURN identity, ACME account,
+profile, or device-package mode is rejected as reconfiguration rather than
+silently ignored.
 
 `rctl-setup uninstall` requires exactly one explicit retention choice. Both
 `--keep-data` and `--delete-data` verify the running deployment, then hold the

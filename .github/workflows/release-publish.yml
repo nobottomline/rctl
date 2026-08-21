@@ -205,3 +205,15 @@ jobs:
           Fresh-host qualification report SHA-256: \`$REPORT_SHA256\`
           EOF
           gh release edit "$TAG" --verify-tag --latest --draft=false --notes-file release-notes.md
+          gh release verify "$TAG"
+
+          anonymous="$(mktemp -d)"
+          trap 'rm -rf "$anonymous"' EXIT
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          while IFS= read -r artifact; do
+            name="$(basename "$artifact")"
+            env -u GH_TOKEN curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+              --retry 3 --connect-timeout 15 --max-time 300 "$base/$name" --output "$anonymous/$name"
+            cmp "$artifact" "$anonymous/$name"
+            gh release verify-asset "$TAG" "$anonymous/$name"
+          done < <(find downloaded -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)

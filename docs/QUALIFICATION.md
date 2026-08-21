@@ -22,11 +22,13 @@ It does not create the stable GHCR version tag. The setup binaries embed the
 immutable candidate digest, so a qualified draft can be exercised without a
 mutable image reference.
 
-The publication report must come from the public candidate: anonymous image
-pull and anonymous release bootstrap are part of the supported user journey.
-An earlier private-repository rehearsal using a temporary read-only GHCR token
-is useful engineering evidence but cannot satisfy `bootstrap` or replace the
-final clean-VPS run.
+The publication report must come from the public candidate image. Because a
+GitHub draft's assets are never anonymously readable, the reversible
+pre-publication run uses the complete locally staged draft set after checksum
+and repository-bound provenance verification. The clean host receives no
+GitHub or registry credential, and pulls the candidate image anonymously. A
+private-GHCR rehearsal using a temporary package token is useful engineering
+evidence but cannot satisfy `bootstrap` or replace the final clean-VPS run.
 
 Publication refuses to proceed unless all of these are true:
 
@@ -100,10 +102,13 @@ are rejected.
 
 The checks have the following minimum evidence contract:
 
-- `bootstrap`: an anonymous clean-host install used the exact release assets
-  and digest-pinned candidate image without pre-existing rctl or registry
-  credentials; `bootstrap_idempotent`: repeating that bootstrap verified the
-  owned deployment without rotating identity or secrets.
+- `bootstrap`: a clean host installed from the complete checksum- and
+  provenance-verified draft asset set and pulled the exact digest-pinned
+  candidate image anonymously, without pre-existing rctl or registry
+  credentials; `bootstrap_idempotent`: repeating the same command verified the
+  owned deployment without rotating identity or secrets. Publication then
+  anonymously downloads every immutable GitHub Release asset, compares it
+  byte-for-byte with the qualified draft, and verifies the release attestation.
 - `acme`: the public origin obtained a trusted certificate from the configured
   ACME issuer; `acme_renewal`: a forced renewal or staging-equivalent renewal
   completed and the renewed certificate was served afterward.
@@ -173,6 +178,9 @@ After success, independently download the public assets and run
 `gh release verify "$TAG"` plus `gh release verify-asset "$TAG" <path>` for
 each file. Confirm that `ghcr.io/nobottomline/rctl-relay:<version>` and the
 digest recorded in the immutable release notes resolve to the same OCI index.
+Repeat the documented anonymous one-line on a clean host. GitHub makes release
+assets public only when the immutable release is published, so this final UX
+check cannot truthfully be a pre-publication report field.
 
 Until this workflow succeeds and those post-publication checks are retained,
 the candidate is not a supported public release.
