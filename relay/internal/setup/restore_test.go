@@ -13,10 +13,16 @@ import (
 type sequenceVerifier struct {
 	calls  int
 	failAt int
+	before func(int) error
 }
 
 func (v *sequenceVerifier) Verify(context.Context, Config, string) error {
 	v.calls++
+	if v.before != nil {
+		if err := v.before(v.calls); err != nil {
+			return err
+		}
+	}
 	if v.calls == v.failAt {
 		return errors.New("synthetic public verification failure")
 	}

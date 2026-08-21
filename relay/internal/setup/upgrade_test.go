@@ -2,11 +2,14 @@ package setup
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -140,6 +143,60 @@ func TestUpgradeRollsBackFailedTargetVerification(t *testing.T) {
 	}
 	if verifier.calls != 3 {
 		t.Fatalf("verification calls=%d, expected backup, target, rollback", verifier.calls)
+	}
+}
+
+func TestUpgradeRollsBackTargetDatabaseMigration(t *testing.T) {
+	installer, runner, database, _ := createUpgradeFixture(t)
+	if err := os.Remove(database); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE devices (id TEXT PRIMARY KEY, name TEXT NOT NULL); INSERT INTO devices VALUES ('ipad-1', 'iPad Air')`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	verifier := &sequenceVerifier{
+		failAt: 2,
+		before: func(call int) error {
+			if call != 2 {
+				return nil
+			}
+			targetDB, err := sql.Open("sqlite", database)
+			if err != nil {
+				return err
+			}
+			defer targetDB.Close()
+			_, err = targetDB.Exec(`ALTER TABLE devices ADD COLUMN protocol_major INTEGER NOT NULL DEFAULT 1; UPDATE devices SET protocol_major = 2`)
+			return err
+		},
+	}
+	manager := UpgradeManager{
+		Paths: installer.Paths, Runner: runner, Verifier: verifier,
+		Now: func() time.Time { return time.Unix(1700003100, 0) }, Chown: func(string, int, int) error { return nil },
+	}
+	if _, err := manager.Upgrade(context.Background(), upgradeOptions()); err == nil || !strings.Contains(err.Error(), "was rolled back") {
+		t.Fatalf("upgrade result: %v", err)
+	}
+
+	restored, err := sql.Open("sqlite", database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	var name string
+	if err := restored.QueryRow(`SELECT name FROM devices WHERE id = 'ipad-1'`).Scan(&name); err != nil || name != "iPad Air" {
+		t.Fatalf("restored row name=%q err=%v", name, err)
+	}
+	if _, err := restored.Exec(`SELECT protocol_major FROM devices`); err == nil {
+		t.Fatal("target schema survived automatic rollback")
 	}
 }
 
