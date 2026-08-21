@@ -5,9 +5,9 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Qualified release candidate: tag `v0.3.0` at `c45b0c4`. This record may receive
-post-qualification documentation commits after that immutable candidate. No
-stable release was published.
+Qualification target: the immutable commit referenced by tag `v0.3.0`. Several
+draft candidates were intentionally invalidated after real-host qualification
+found defects; no stable release was published.
 
 ### Passed locally
 
@@ -141,6 +141,35 @@ stable release was published.
   public package came from the immediately preceding `0.3.0` candidate. This is
   strong engineering evidence, but not the final exact-commit qualification
   required by the publication workflow.
+- A later exact-candidate run began from a host with no ownership manifest and
+  no managed containers. The first preflight correctly rejected retained,
+  unowned backup state without mutation. After the prior recovery data was
+  preserved outside managed paths, the complete locally staged and verified
+  draft set installed successfully with an anonymous pull of the digest-pinned
+  image, real ACME, Caddy, relay, coturn, and device-package support.
+- Repeating the identical bootstrap command selected the already-current path,
+  left the environment and ownership manifests byte-identical, and verified the
+  deployment. Supplying changed bootstrap identity data failed closed and left
+  both files byte-identical. Doctor passed owned-file modes, secrets, Compose,
+  service health, relay health, and trusted HTTPS/WebSocket routing.
+- The real admin API rejected unauthenticated package generation, accepted an
+  authenticated request, returned a version-matched package with `no-store,
+  private`, and embedded a `Relays` entry and one-time `EnrollToken` without a
+  `DeviceSecret`. The enrollment, session, and package were removed afterward.
+- A live SQLite marker was created, captured by `backup`, deleted through the
+  API, and restored by `restore`; API readback proved absence before restore and
+  presence afterward. Admin reset made the old credential return `401`, allowed
+  the new credential, and retained a verified pre-reset backup.
+- A second off-host VPS completed authenticated relayed traffic through the
+  public TURN endpoint over both UDP and TCP client transports. Each path sent
+  and received five 100-byte messages through an external echo peer with zero
+  loss. Only short-lived REST credentials crossed the SSH channel; the shared
+  TURN secret never left the relay host and probe files were deleted.
+- That external test exposed obsolete coturn 4.17 directives. The pinned image
+  rejects `no-loopback-peers`, while CLI and DTLS are disabled by default and
+  their negative options are deprecated. The generator now omits all three,
+  retains explicit loopback/private `denied-peer-ip` ranges, and its rendered
+  configuration started the pinned coturn image with no configuration warning.
 
 ### Hosted workflow status
 
@@ -170,8 +199,24 @@ seven schema 2 draft assets. The new OCI index provenance bundle was retrieved
 by digest from the GitHub Attestations API and passed the same policy against
 GitHub's trusted root with an isolated empty Docker credential configuration.
 API readback confirmed the repository was returned to private immediately after
-the workflow. Registry-hosted SBOM inspection still requires read access to, or
-anonymous visibility for, the GHCR package.
+the workflow.
+
+The GHCR package was subsequently made intentionally public while the source
+repository remained private. A later exact tagged candidate passed CI and draft
+assembly again. With an empty Docker configuration, independent checks read the
+OCI index and pulled both `linux/amd64` and `linux/arm64` manifests by digest.
+The index contained two BuildKit attestation manifests; anonymous inspection
+returned two SPDX 2.3 documents. GitHub/Sigstore verification bound the OCI
+provenance and all seven draft assets to the exact tag, source commit, hosted
+draft workflow, repository, and SHA-256 subjects. Every draft checksum and the
+public package release gate passed.
+
+Real-host testing then found and fixed idempotent bootstrap flag handling,
+backup file-mode preservation under an operator `umask 077`, and the obsolete
+coturn options described above. Each discovery invalidated the prior draft
+rather than weakening qualification. The final tag must therefore be rebuilt
+once more from the corrected source and the exact runtime checks repeated before
+a report can be signed.
 
 ### Passed on a physical iOS 14 device
 
@@ -196,15 +241,17 @@ anonymous visibility for, the GHCR package.
 
 ### Still required before a supported public release
 
-1. Make the GHCR package anonymously readable and qualify anonymous amd64 and
-   arm64 manifest pulls without persisted registry credentials.
-2. Repeat bootstrap using the final exact tagged assets and candidate image,
-   then upload its privacy-safe report bound to the image and `SHA256SUMS`.
-3. Qualify ACME renewal, cloud firewall rules, external UDP and TCP TURN
-   allocation, and forced-TURN browser/device media.
-4. Repeat enrollment, independent LAN and relay control, restart persistence,
+1. Rebuild the tag after the final coturn correction and repeat anonymous
+   amd64/arm64 image, provenance, checksum, SBOM, and clean-host bootstrap checks
+   using that exact candidate.
+2. Repeat forced-TURN browser/device media on the physical device. Real ACME,
+   staging-equivalent renewal, cloud firewall reachability, and authenticated
+   off-host UDP/TCP TURN traffic have passed engineering qualification.
+3. Repeat enrollment, independent LAN and relay control, restart persistence,
    and device update/rollback on an iOS 14 arm64e device using the exact public
    candidate package and its publication catalog.
+4. Complete and upload the privacy-safe report bound to the final image and
+   `SHA256SUMS` without replacing any release asset.
 5. Run the gated publication workflow and independently verify the immutable
    stable release, assets, checksums, provenance, SBOM, and public bootstrap.
 
