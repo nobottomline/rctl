@@ -182,6 +182,25 @@ with the same version are rejected. Downgrades are rejected and intentional
 rollback uses `restore`. `--dry-run` performs no image pull, backup, or service
 operation.
 
+`rctl-setup uninstall` requires exactly one explicit retention choice. Both
+`--keep-data` and `--delete-data` first create and publicly verify a recovery
+backup, stop and remove only the owned Compose project, and remove only paths
+declared by the ownership manifest. It never prunes unrelated containers,
+images, networks, or volumes. `--keep-data` preserves `/var/lib/rctl` after
+removing its ownership manifest; `--delete-data` removes that live data root.
+Both modes preserve `/var/backups/rctl`, setup journals, and the `rctl-setup`
+binary. Unknown files in the managed configuration directories prevent those
+directories from being removed but are never deleted. A failed filesystem
+mutation automatically reapplies and verifies the pre-uninstall backup.
+
+The retained setup binary can restore a selected managed backup even when the
+installation manifest no longer exists. Recovery refuses pre-existing managed
+configuration files, atomically reserves any retained data directory, applies
+the verified snapshot, and starts and verifies the public deployment. On
+failure it removes the partial deployment and puts the exact retained
+uninstalled state back. On success the superseded retained data is removed.
+The source backup is never consumed or modified.
+
 ## Supported deployment profiles
 
 ### Dedicated host

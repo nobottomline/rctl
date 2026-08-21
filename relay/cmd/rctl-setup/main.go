@@ -49,6 +49,8 @@ func run(args []string) int {
 		return runRestore(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "upgrade":
 		return runUpgrade(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "uninstall":
+		return runUninstall(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -57,6 +59,69 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runUninstall(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	dryRun := flags.Bool("dry-run", false, "validate and print the removal plan without changing the host")
+	assumeYes := flags.Bool("yes", false, "uninstall without an interactive confirmation")
+	keepData := flags.Bool("keep-data", false, "preserve /var/lib/rctl for manual recovery")
+	deleteData := flags.Bool("delete-data", false, "delete /var/lib/rctl after creating a verified backup")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *keepData == *deleteData {
+		fmt.Fprintln(errorsOutput, "uninstall requires exactly one of --keep-data or --delete-data and accepts no positional arguments")
+		return 2
+	}
+	options := setup.UninstallOptions{DryRun: *dryRun, KeepData: *keepData, DeleteData: *deleteData}
+	manager := setup.UninstallManager{}
+	plan, err := manager.Plan(options)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "uninstall plan:", err)
+		return 1
+	}
+	fmt.Fprintln(output, "\nRemoval plan:")
+	for _, path := range plan.Removed {
+		fmt.Fprintln(output, " remove", path)
+	}
+	for _, path := range plan.Preserved {
+		fmt.Fprintln(output, " preserve", path)
+	}
+	fmt.Fprintln(output, "A verified recovery backup will be preserved.")
+	if *dryRun {
+		fmt.Fprintln(output, "Uninstall dry run complete. No services or files were changed.")
+		return 0
+	}
+	if !*assumeYes {
+		if input != os.Stdin || !stdinIsTerminal() {
+			fmt.Fprintln(errorsOutput, "uninstall requires an interactive terminal or --yes")
+			return 2
+		}
+		confirmation := "uninstall keep-data"
+		if *deleteData {
+			confirmation = "uninstall delete-data"
+		}
+		answer, promptErr := prompt(bufio.NewReader(input), output, "Type "+confirmation+" to continue", "")
+		if promptErr != nil || answer != confirmation {
+			fmt.Fprintln(errorsOutput, "uninstall cancelled; the host was not changed")
+			return 1
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	result, err := manager.Uninstall(ctx, options)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "uninstall:", err)
+		if result.Backup != "" {
+			fmt.Fprintln(errorsOutput, "Recovery backup:", result.Backup)
+		}
+		return 1
+	}
+	fmt.Fprintf(output, "Uninstall complete. Recovery backup: %s\n", result.Backup)
+	fmt.Fprintln(output, "rctl-setup remains installed so this backup can be restored.")
+	return 0
 }
 
 func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) int {
@@ -168,7 +233,11 @@ func runRestore(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		}
 		return 1
 	}
-	fmt.Fprintf(output, "Restore verified. Pre-restore backup: %s\n", rollback)
+	if rollback == "" {
+		fmt.Fprintln(output, "Restore verified from the selected recovery backup.")
+	} else {
+		fmt.Fprintf(output, "Restore verified. Pre-restore backup: %s\n", rollback)
+	}
 	return 0
 }
 
@@ -485,5 +554,6 @@ Commands:
   doctor       diagnose owned files, services, HTTPS, and WebSocket routing
   backup       stop briefly, snapshot managed state, restart, and verify
   restore      validate, restore, verify, and automatically roll back
-  upgrade      backup, apply a newer pinned release, verify, and roll back`)
+  upgrade      backup, apply a newer pinned release, verify, and roll back
+  uninstall    backup, remove owned services/files, and retain recovery`)
 }

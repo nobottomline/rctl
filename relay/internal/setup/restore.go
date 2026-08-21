@@ -34,6 +34,12 @@ func (r RestoreManager) DryRun(source string) (BackupMetadata, error) {
 		return BackupMetadata{}, errors.New("backup metadata and ownership manifest disagree")
 	}
 	current, err := loadManifest(r.Paths.ManifestPath)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := validateUninstalledRestoreTarget(manifest, r.Paths); err != nil {
+			return BackupMetadata{}, err
+		}
+		return metadata, nil
+	}
 	if err != nil {
 		return BackupMetadata{}, err
 	}
@@ -50,6 +56,11 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	r.defaults()
 	if _, err := r.DryRun(source); err != nil {
 		return "", err
+	}
+	if _, manifestErr := loadManifest(r.Paths.ManifestPath); errors.Is(manifestErr, os.ErrNotExist) {
+		return "", r.restoreUninstalled(ctx, source)
+	} else if manifestErr != nil {
+		return "", manifestErr
 	}
 	rollbackBackup, err = (BackupManager{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}).Create(ctx)
 	if err != nil {
@@ -106,6 +117,65 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	return rollbackBackup, fmt.Errorf("restore failed and was rolled back: %w", applyErr)
 }
 
+func (r RestoreManager) restoreUninstalled(ctx context.Context, source string) (err error) {
+	releaseLock, err := acquireLifecycleLock(r.Paths.LockPath)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+	if _, err := r.DryRun(source); err != nil {
+		return fmt.Errorf("revalidate recovery restore source: %w", err)
+	}
+	target, err := snapshotOwnership(source, r.Paths)
+	if err != nil {
+		return err
+	}
+	retainedData := ""
+	if _, statErr := os.Lstat(r.Paths.DataDir); statErr == nil {
+		retainedData, err = reserveRetainedData(r.Paths.DataDir)
+		if err != nil {
+			return err
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
+	applied := false
+	verified := false
+	defer func() {
+		if verified {
+			if retainedData != "" {
+				if cleanupErr := os.RemoveAll(retainedData); cleanupErr != nil {
+					err = fmt.Errorf("restore verified but retained data cleanup failed at %s: %w", retainedData, cleanupErr)
+				}
+			}
+			return
+		}
+		if applied {
+			_, _ = r.Runner.Run(context.Background(), "docker", installer.composeArgs("down", "--remove-orphans")...)
+		}
+		rollbackErr := removeRestoredState(target, r.Paths)
+		if rollbackErr == nil && retainedData != "" {
+			rollbackErr = os.Rename(retainedData, r.Paths.DataDir)
+		}
+		if rollbackErr != nil {
+			err = fmt.Errorf("recovery restore failed: %v; restoring the uninstalled state also failed: %w", err, rollbackErr)
+			return
+		}
+		err = fmt.Errorf("recovery restore failed and the uninstalled state was restored: %w", err)
+	}()
+	if _, err = applyBackup(source, target, r.Paths); err != nil {
+		applied = true
+		return err
+	}
+	applied = true
+	if err = r.startAndVerify(ctx, installer, target); err != nil {
+		return err
+	}
+	verified = true
+	return nil
+}
+
 func (r *RestoreManager) defaults() {
 	if r.Paths.EtcDir == "" {
 		r.Paths = DefaultPaths()
@@ -138,6 +208,57 @@ func validateBackupSelection(source, backupRoot string) error {
 		return errors.New("restore source must be a direct backup-* child of the managed backup directory")
 	}
 	return nil
+}
+
+func validateUninstalledRestoreTarget(target OwnershipManifest, paths Paths) error {
+	for _, file := range target.Files {
+		if pathWithin(file.Path, paths.DataDir) {
+			continue
+		}
+		if _, err := os.Lstat(file.Path); err == nil {
+			return fmt.Errorf("unowned restore destination already exists: %s", file.Path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if info, err := os.Lstat(paths.DataDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("retained data path is not a safe directory")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func reserveRetainedData(dataDir string) (string, error) {
+	temporary, err := os.MkdirTemp(filepath.Dir(dataDir), ".rctl-retained-")
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(temporary); err != nil {
+		return "", err
+	}
+	if err := os.Rename(dataDir, temporary); err != nil {
+		return "", err
+	}
+	return temporary, nil
+}
+
+func removeRestoredState(target OwnershipManifest, paths Paths) error {
+	var result error
+	for _, file := range target.Files {
+		if pathWithin(file.Path, paths.DataDir) {
+			continue
+		}
+		if err := os.Remove(file.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, err)
+		}
+	}
+	if err := os.RemoveAll(paths.DataDir); err != nil {
+		result = errors.Join(result, err)
+	}
+	return result
 }
 
 func snapshotOwnership(snapshot string, paths Paths) (OwnershipManifest, error) {
@@ -189,14 +310,27 @@ func applyBackup(snapshot string, current OwnershipManifest, paths Paths) (Owner
 	}
 	oldData := paths.DataDir + ".restore-old"
 	_ = os.RemoveAll(oldData)
-	if err := os.Rename(paths.DataDir, oldData); err != nil {
+	hadOldData := false
+	if info, err := os.Lstat(paths.DataDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return OwnershipManifest{}, errors.New("existing data path is not a safe directory")
+		}
+		if err := os.Rename(paths.DataDir, oldData); err != nil {
+			return OwnershipManifest{}, err
+		}
+		hadOldData = true
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return OwnershipManifest{}, err
 	}
 	if err := os.Rename(staging, paths.DataDir); err != nil {
-		_ = os.Rename(oldData, paths.DataDir)
+		if hadOldData {
+			_ = os.Rename(oldData, paths.DataDir)
+		}
 		return OwnershipManifest{}, err
 	}
-	_ = os.RemoveAll(oldData)
+	if hadOldData {
+		_ = os.RemoveAll(oldData)
+	}
 	targetPaths := make(map[string]bool)
 	for _, file := range target.Files {
 		targetPaths[file.Path] = true
