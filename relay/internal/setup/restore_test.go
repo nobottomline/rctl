@@ -72,6 +72,9 @@ func TestRestoreReplacesStateAndKeepsPreRestoreBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if calls := strings.Join(runner.calls, "\n"); !strings.Contains(calls, "docker compose --project-name rctl --file "+installer.Paths.Compose+" stop") {
+		t.Fatalf("restore did not stop the complete stack:\n%s", calls)
+	}
 	if _, err := ValidateBackup(rollback); err != nil {
 		t.Fatalf("pre-restore backup is invalid: %v", err)
 	}

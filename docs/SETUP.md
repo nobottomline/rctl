@@ -172,7 +172,8 @@ installation it validates every declared path, mode, owner, size, and SHA-256
 digest and checks that the archived ownership manifest agrees with the backup
 metadata. Restore always creates and verifies a separate pre-restore backup,
 then rechecks that the installed manifest and owned files did not change during
-that maintenance window. It stops relay and Caddy, restores files through
+that maintenance window. It stops the complete relay/Caddy/coturn stack so
+restored credentials are reloaded, restores files through
 bounded streaming copies and atomic renames, restarts all configured services,
 and verifies the authenticated public HTTPS path. Failed apply, startup, or
 public verification automatically restores and verifies the pre-restore state.

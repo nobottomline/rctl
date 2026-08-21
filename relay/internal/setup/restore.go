@@ -103,7 +103,7 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	if err := beginRecovery(r.Paths, "restore", rollbackBackup, time.Now()); err != nil {
 		return rollbackBackup, err
 	}
-	if output, stopErr := r.Runner.Run(ctx, "docker", installer.composeArgs("stop", "relay", "caddy")...); stopErr != nil {
+	if output, stopErr := r.Runner.Run(ctx, "docker", installer.composeArgs("stop")...); stopErr != nil {
 		return rollbackBackup, fmt.Errorf("stop services for restore: %s", commandFailure(output, stopErr))
 	}
 	restored, applyErr := applyBackup(source, current, r.Paths)
