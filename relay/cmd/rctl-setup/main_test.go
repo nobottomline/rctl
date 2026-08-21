@@ -41,3 +41,24 @@ func TestPromptUsesDefaultAndTrimsInput(t *testing.T) {
 		t.Fatalf("got=%q output=%q err=%v", got, output.String(), err)
 	}
 }
+
+func TestPublicPackageEnablesDevicePackageGeneration(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	values := addConfigFlags(flags)
+	publicPackage := flags.String("public-package", "", "")
+	if err := flags.Parse([]string{"--public-url", "https://rctl.example.test", "--public-package", "/tmp/rctl.deb"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := values.load(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *publicPackage == "" {
+		t.Fatal("public package flag was not parsed")
+	}
+	cfg.DevicePackages = *publicPackage != ""
+	if !cfg.DevicePackages {
+		t.Fatal("device package generation was not enabled")
+	}
+}

@@ -33,6 +33,7 @@ type Config struct {
 	EnableTURN     bool   `json:"enable_turn"`
 	ACMEEmail      string `json:"acme_email,omitempty"`
 	Release        string `json:"release,omitempty"`
+	DevicePackages bool   `json:"device_packages,omitempty"`
 }
 
 func DefaultConfig() Config {

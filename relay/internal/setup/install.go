@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nobottomline/rctl/relay/internal/deb"
 	"nhooyr.io/websocket"
 )
 
@@ -77,8 +78,9 @@ type Installer struct {
 }
 
 type InstallOptions struct {
-	DryRun  bool
-	Version string
+	DryRun              bool
+	Version             string
+	PublicPackageSource string
 }
 
 type InstallResult struct {
@@ -399,6 +401,16 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	if err != nil {
 		return result, err
 	}
+	if cfg.DevicePackages {
+		packageData, packageInfo, packageErr := readPublicPackageSource(options.PublicPackageSource)
+		if packageErr != nil {
+			return result, packageErr
+		}
+		if cfg.Release != "" && cfg.Release != "dev" && packageInfo.Version != cfg.Release {
+			return result, fmt.Errorf("public device package version %q does not match setup release %q", packageInfo.Version, cfg.Release)
+		}
+		bundle.Files = append(bundle.Files, File{Path: i.Paths.PublicPackage, Mode: 0o644, Content: packageData})
+	}
 	result.Files = bundlePaths(bundle)
 	if options.DryRun {
 		result.DryRun = true
@@ -640,6 +652,12 @@ func validateOwnershipManifest(manifest OwnershipManifest, paths Paths) error {
 			secret bool
 		}{0o600, true}
 	}
+	if manifest.Config.DevicePackages {
+		allowed[paths.PublicPackage] = struct {
+			mode   uint32
+			secret bool
+		}{0o644, false}
+	}
 	if len(manifest.Files) != len(allowed) {
 		return errors.New("ownership manifest file set is incompatible")
 	}
@@ -662,7 +680,7 @@ func validateOwnershipManifest(manifest OwnershipManifest, paths Paths) error {
 
 func verifyOwnedFiles(manifest OwnershipManifest) error {
 	for _, owned := range manifest.Files {
-		raw, err := readRegularFile(owned.Path, 64<<20, os.FileMode(owned.Mode))
+		raw, err := readRegularFile(owned.Path, deb.MaxPackageBytes, os.FileMode(owned.Mode))
 		if err != nil {
 			return fmt.Errorf("owned file %s: %w", owned.Path, err)
 		}
@@ -672,6 +690,21 @@ func verifyOwnedFiles(manifest OwnershipManifest) error {
 		}
 	}
 	return nil
+}
+
+func readPublicPackageSource(name string) ([]byte, deb.Info, error) {
+	if name == "" {
+		return nil, deb.Info{}, errors.New("public device package is required when device package generation is enabled")
+	}
+	raw, err := readRegularFile(name, deb.MaxPackageBytes, 0)
+	if err != nil {
+		return nil, deb.Info{}, fmt.Errorf("read public device package: %w", err)
+	}
+	info, err := deb.Inspect(raw)
+	if err != nil {
+		return nil, deb.Info{}, fmt.Errorf("validate public device package: %w", err)
+	}
+	return raw, info, nil
 }
 
 func readRegularFile(path string, maximum int64, exactMode os.FileMode) ([]byte, error) {

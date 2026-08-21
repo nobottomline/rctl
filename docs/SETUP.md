@@ -81,11 +81,13 @@ The convenience command downloads `install.sh` from a GitHub Release asset, not
 from a mutable branch. The script has only four responsibilities:
 
 1. Detect Linux CPU architecture.
-2. Download the matching `rctl-setup` and `SHA256SUMS` into a private temporary
-   directory.
-3. Verify the binary checksum and, when an authenticated GitHub CLI is present,
-   its repository-bound build provenance attestation.
-4. Execute the verified binary with the original arguments.
+2. Download the matching `rctl-setup`, public LAN-only `.deb`, and
+   `SHA256SUMS` into a private temporary directory.
+3. Verify both artifacts against the release checksums and, when an
+   authenticated GitHub CLI is present, their repository-bound build
+   provenance attestations.
+4. Execute the verified binary with the public package as an internal input and
+   remove the temporary files when setup exits.
 
 All prompts, system mutation, rollback, and diagnostics belong to the Go
 binary. A manual download-and-verify path is documented beside the one-liner.
@@ -212,6 +214,7 @@ Default native host paths are:
 /etc/rctl/setup.json            root:root 0600 (no plaintext secrets)
 /opt/rctl/compose.yaml          root:root 0644
 /opt/rctl/Caddyfile             root:root 0644
+/opt/rctl/rctl-public.deb       root:root 0644 (verified LAN-only release)
 /var/lib/rctl/                  root-owned persistent data root
 /var/lib/rctl/relay/            SQLite data
 /var/lib/rctl/caddy/            TLS state
@@ -231,22 +234,28 @@ not a reinstall side effect.
 The final normal flow lives in the authenticated admin page:
 
 1. Admin chooses **Add device**, supplies a display name, and confirms.
-2. Relay obtains the current public package and signed release metadata.
-3. An isolated packager helper validates package id, version, size, checksum,
-   signature, and archive structure before creating an enrollment.
+2. The wizard-provisioned relay uses the version-matched public package that
+   setup already verified and recorded in its ownership manifest.
+3. The relay's bounded pure-Go package parser validates the Debian envelope,
+   package id, version, architecture, compression, archive paths, size and the
+   absence of an existing relay configuration before creating an enrollment.
 4. It injects only the relay URL, one-time enrollment token, and display name.
 5. Relay streams the result to the authenticated session with
    `Cache-Control: no-store` and a generic attachment name.
-6. Temporary input/output files are mode 0600, bounded, outside web roots, and
-   deleted after download, expiry, cancellation, or process restart.
+6. The base package is a read-only container mount loaded and validated once at
+   relay startup. The personalized result exists only in bounded process memory
+   for the duration of one serialized request; it is never written to a web
+   root, database, container layer, backup, or persistent VPS path.
 7. The enrollment remains short-lived and single-use. The device still appears
    pending and requires browser approval, retaining the existing security
    confirmation without any on-device UI.
 
-Package generation is not performed inside an HTTP handler with an ad-hoc shell
-command. The helper has a fixed executable path, a minimal environment, no
-network access, bounded input/output, a timeout, and a narrow request schema.
-The relay never accepts a caller-supplied package URL or filesystem path.
+Package generation never invokes a shell or `dpkg`, fetches from the network,
+or accepts a caller-supplied package URL/filesystem path. The endpoint is an
+authenticated, rate-limited POST with strict JSON, one active generation at a
+time, `Cache-Control: no-store`, and rollback of the new enrollment if archive
+generation fails before the response starts. Manual token creation remains an
+advanced fallback when a deployment intentionally omits the public package.
 
 ## Upgrade and recovery
 

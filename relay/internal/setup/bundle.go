@@ -115,6 +115,9 @@ func RenderDedicatedBundleAt(cfg Config, secrets Secrets, paths Paths) (Bundle, 
 		env["RCTL_RELAY_STUN_URLS"] = "stun:" + host + ":3478"
 		env["RCTL_RELAY_TURN_TTL"] = "1h"
 	}
+	if cfg.DevicePackages {
+		env["RCTL_RELAY_PUBLIC_PACKAGE"] = "/packages/rctl-public.deb"
+	}
 
 	compose, err := renderCompose(cfg, paths)
 	if err != nil {
@@ -165,6 +168,10 @@ func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 			"networks": []string{"edge", "backend"}, "read_only": true, "tmpfs": []string{"/tmp:size=64m,mode=1777"},
 			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs, "cap_drop": []string{"ALL"}, "cap_add": []string{"NET_BIND_SERVICE"}, "pids_limit": 128, "init": true,
 		},
+	}
+	if cfg.DevicePackages {
+		relay := services["relay"].(map[string]any)
+		relay["volumes"] = append(relay["volumes"].([]string), paths.PublicPackage+":/packages/rctl-public.deb:ro")
 	}
 	if cfg.EnableTURN {
 		services["coturn"] = map[string]any{

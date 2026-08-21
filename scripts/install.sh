@@ -47,27 +47,38 @@ download() {
 
 download "${base}/SHA256SUMS" "$work/SHA256SUMS" || \
   fail "cannot download release checksums (private releases require the documented gh workflow)"
-download "${base}/${asset}" "$work/${asset}" || fail "cannot download ${asset}"
 
-expected="$(awk -v name="$asset" '$2 == name { if (found) exit 2; print $1; found=1 } END { if (!found) exit 1 }' "$work/SHA256SUMS")" || \
-  fail "release checksum entry is missing or duplicated"
-case "$expected" in
-  *[!0-9a-f]*|'') fail "release checksum has an invalid format" ;;
-esac
-[ "${#expected}" -eq 64 ] || fail "release checksum has an invalid length"
+package_asset="$(awk '$2 ~ /^rctl_[0-9]+\.[0-9]+\.[0-9]+_iphoneos-arm\.deb$/ { if (found) exit 2; print $2; found=1 } END { if (!found) exit 1 }' "$work/SHA256SUMS")" || \
+  fail "release must contain exactly one public rctl device package"
 
-if command -v sha256sum >/dev/null 2>&1; then
-  actual="$(sha256sum "$work/${asset}" | awk '{print $1}')"
-elif command -v shasum >/dev/null 2>&1; then
-  actual="$(shasum -a 256 "$work/${asset}" | awk '{print $1}')"
-else
-  fail "sha256sum or shasum is required"
-fi
-[ "$actual" = "$expected" ] || fail "setup binary checksum mismatch"
+verify_asset() {
+  name="$1"
+  expected="$(awk -v name="$name" '$2 == name { if (found) exit 2; print $1; found=1 } END { if (!found) exit 1 }' "$work/SHA256SUMS")" || \
+    fail "checksum entry for ${name} is missing or duplicated"
+  case "$expected" in
+    *[!0-9a-f]*|'') fail "checksum for ${name} has an invalid format" ;;
+  esac
+  [ "${#expected}" -eq 64 ] || fail "checksum for ${name} has an invalid length"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$work/${name}" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$work/${name}" | awk '{print $1}')"
+  else
+    fail "sha256sum or shasum is required"
+  fi
+  [ "$actual" = "$expected" ] || fail "checksum mismatch for ${name}"
+}
+
+for name in "$asset" "$package_asset"; do
+  download "${base}/${name}" "$work/${name}" || fail "cannot download ${name}"
+  verify_asset "$name"
+done
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh attestation verify "$work/${asset}" --repo "$REPOSITORY" >/dev/null || \
-    fail "GitHub build provenance verification failed"
+  for name in "$asset" "$package_asset"; do
+    gh attestation verify "$work/${name}" --repo "$REPOSITORY" >/dev/null || \
+      fail "GitHub build provenance verification failed for ${name}"
+  done
 fi
 
 install -d -m 0755 "$(dirname "$DESTINATION")" || fail "cannot create setup binary directory"
@@ -75,4 +86,4 @@ candidate="${DESTINATION}.new.$$"
 install -m 0755 "$work/${asset}" "$candidate" || fail "cannot install setup binary"
 mv -f "$candidate" "$DESTINATION" || fail "cannot activate setup binary"
 candidate=""
-exec "$DESTINATION" install "$@"
+"$DESTINATION" install "$@" --public-package "$work/$package_asset"

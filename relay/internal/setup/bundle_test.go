@@ -97,3 +97,29 @@ func TestRenderDedicatedBundleCanDisableTURN(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderDedicatedBundleMountsPublicPackageReadOnly(t *testing.T) {
+	cfg := validConfig()
+	cfg.DevicePackages = true
+	bundle, err := RenderDedicatedBundle(cfg, Secrets{Admin: strings.Repeat("a", 64), Session: strings.Repeat("b", 64), TURN: strings.Repeat("c", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := make(map[string]File)
+	for _, file := range bundle.Files {
+		files[file.Path] = file
+	}
+	paths := DefaultPaths()
+	if !strings.Contains(string(files[paths.RelayEnv].Content), "RCTL_RELAY_PUBLIC_PACKAGE=/packages/rctl-public.deb\n") {
+		t.Fatal("relay package path is missing from the environment")
+	}
+	var compose map[string]any
+	if err := json.Unmarshal(files[paths.Compose].Content, &compose); err != nil {
+		t.Fatal(err)
+	}
+	relay := compose["services"].(map[string]any)["relay"].(map[string]any)
+	volumes := fmt.Sprint(relay["volumes"])
+	if !strings.Contains(volumes, paths.PublicPackage+":/packages/rctl-public.deb:ro") {
+		t.Fatalf("public package mount is missing or writable: %s", volumes)
+	}
+}

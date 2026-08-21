@@ -102,6 +102,27 @@ func TestInstallerDryRunDoesNotMutateFilesystem(t *testing.T) {
 	}
 }
 
+func TestInstallerRequiresValidPublicPackageBeforeMutation(t *testing.T) {
+	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
+	cfg := validConfig()
+	cfg.DevicePackages = true
+	if _, err := installer.Install(context.Background(), cfg, InstallOptions{DryRun: true}); err == nil || !strings.Contains(err.Error(), "public device package is required") {
+		t.Fatalf("missing package result: %v", err)
+	}
+	invalid := filepath.Join(t.TempDir(), "invalid.deb")
+	if err := os.WriteFile(invalid, []byte("not a deb"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.Install(context.Background(), cfg, InstallOptions{DryRun: true, PublicPackageSource: invalid}); err == nil || !strings.Contains(err.Error(), "validate public device package") {
+		t.Fatalf("invalid package result: %v", err)
+	}
+	for _, path := range []string{installer.Paths.LockPath, installer.Paths.EtcDir, installer.Paths.OptDir, installer.Paths.DataDir} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("package validation failure mutated %s: %v", path, statErr)
+		}
+	}
+}
+
 func TestInstallerRefusesForeignState(t *testing.T) {
 	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
 	if err := os.MkdirAll(installer.Paths.EtcDir, 0o700); err != nil {

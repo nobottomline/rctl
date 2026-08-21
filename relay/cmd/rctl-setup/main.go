@@ -166,6 +166,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	configValues := addConfigFlags(flags)
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without changing the host")
 	assumeYes := flags.Bool("yes", false, "apply the displayed plan without an interactive confirmation")
+	publicPackage := flags.String("public-package", "", "verified public rctl .deb used for admin package generation")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -177,6 +178,13 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	if err != nil {
 		fmt.Fprintln(errorsOutput, "config:", err)
 		return 2
+	}
+	if *publicPackage != "" {
+		if configValues.configPath != "" && !cfg.DevicePackages {
+			fmt.Fprintln(errorsOutput, "config: device_packages must be true when --public-package is supplied with --config")
+			return 2
+		}
+		cfg.DevicePackages = true
 	}
 	reader := bufio.NewReader(input)
 	interactive := input == os.Stdin && stdinIsTerminal()
@@ -243,7 +251,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	}
 	installCtx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	result, err := (setup.Installer{}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version})
+	result, err := (setup.Installer{}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version, PublicPackageSource: *publicPackage})
 	if err != nil {
 		fmt.Fprintln(errorsOutput, "install:", err)
 		return 1
@@ -310,7 +318,7 @@ func printInstallPlan(w io.Writer, cfg setup.Config, owned, dryRun bool) {
 	if dryRun {
 		action += " (dry run)"
 	}
-	fmt.Fprintf(w, "\nPlan: %s\nOrigin: %s\nProfile: %s\nTURN: %t\nRelay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.RelayImage)
+	fmt.Fprintf(w, "\nPlan: %s\nOrigin: %s\nProfile: %s\nTURN: %t\nDevice packages: %t\nRelay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.DevicePackages, cfg.RelayImage)
 }
 
 func usage() {
