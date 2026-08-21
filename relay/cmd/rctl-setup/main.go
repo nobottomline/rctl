@@ -12,9 +12,11 @@ import (
 )
 
 var (
-	version      = "dev"
-	commit       = "unknown"
-	defaultImage = ""
+	version       = "dev"
+	commit        = "unknown"
+	defaultImage  = ""
+	defaultCaddy  = ""
+	defaultCoturn = ""
 )
 
 func main() {
@@ -48,6 +50,9 @@ func runPreflight(args []string) int {
 	configPath := flags.String("config", "", "mode-0600 JSON configuration file")
 	publicURL := flags.String("public-url", "", "public HTTPS origin (non-secret)")
 	image := flags.String("image", defaultImage, "digest-pinned relay image (non-secret)")
+	caddyImage := flags.String("caddy-image", defaultCaddy, "digest-pinned Caddy image (non-secret)")
+	coturnImage := flags.String("coturn-image", defaultCoturn, "digest-pinned coturn image (non-secret)")
+	turnExternalIP := flags.String("turn-external-ip", "", "public IPv4 used by TURN (non-secret)")
 	profile := flags.String("profile", setup.ProfileContainer, "container or native")
 	jsonOutput := flags.Bool("json", false, "write structured JSON")
 	turn := flags.Bool("turn", true, "check TURN requirements")
@@ -70,6 +75,9 @@ func runPreflight(args []string) int {
 		cfg.PublicURL = *publicURL
 		cfg.Profile = *profile
 		cfg.RelayImage = *image
+		cfg.CaddyImage = *caddyImage
+		cfg.CoturnImage = *coturnImage
+		cfg.TURNExternalIP = *turnExternalIP
 		cfg.EnableTURN = *turn
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

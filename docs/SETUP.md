@@ -120,6 +120,11 @@ The default profile owns ports 80/443 and deploys:
 - a root-owned mode-0600 environment file;
 - restart policies and bounded container logs.
 
+The baseline TURN listener supports UDP and TCP on 3478 with short-lived HMAC
+credentials. TURN-over-TLS is not silently claimed: it requires a certificate
+handoff that is independently renewable and must pass forced-TCP/TLS browser and
+iOS 14 qualification before the wizard advertises a `turns:` URL.
+
 Only Caddy and the required TURN listeners are publicly reachable. Relay port
 8080 stays on a private container network and is never published publicly.
 

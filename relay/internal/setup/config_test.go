@@ -7,10 +7,14 @@ import (
 	"testing"
 )
 
-const testImage = "ghcr.io/nobottomline/rctl-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const (
+	testImage  = "ghcr.io/nobottomline/rctl-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testCaddy  = "docker.io/library/caddy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testCoturn = "docker.io/coturn/coturn@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+)
 
 func validConfig() Config {
-	return Config{Schema: ConfigSchema, PublicURL: "https://rctl.example.com", Profile: ProfileContainer, RelayImage: testImage, EnableTURN: true}
+	return Config{Schema: ConfigSchema, PublicURL: "https://rctl.example.com", Profile: ProfileContainer, RelayImage: testImage, CaddyImage: testCaddy, CoturnImage: testCoturn, TURNExternalIP: "8.8.8.8", EnableTURN: true}
 }
 
 func TestConfigValidate(t *testing.T) {
@@ -27,6 +31,10 @@ func TestConfigValidate(t *testing.T) {
 		{"unicode host", func(c *Config) { c.PublicURL = "https://rctl.example.\u0440\u0444" }},
 		{"mutable image", func(c *Config) { c.RelayImage = "ghcr.io/nobottomline/rctl-relay:latest" }},
 		{"bad digest", func(c *Config) { c.RelayImage = "ghcr.io/nobottomline/rctl-relay@sha256:abc" }},
+		{"mutable caddy", func(c *Config) { c.CaddyImage = "caddy:latest" }},
+		{"private turn ip", func(c *Config) { c.TURNExternalIP = "192.168.1.10" }},
+		{"reserved turn ip", func(c *Config) { c.TURNExternalIP = "203.0.113.10" }},
+		{"caddy injection", func(c *Config) { c.ACMEEmail = "admin@example.com }" }},
 		{"unknown profile", func(c *Config) { c.Profile = "magic" }},
 	}
 	for _, tc := range cases {
@@ -43,7 +51,7 @@ func TestConfigValidate(t *testing.T) {
 func TestLoadConfigRejectsLoosePermissionsAndUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "setup.json")
-	raw := `{"schema":1,"public_url":"https://rctl.example.com","profile":"container","relay_image":"` + testImage + `","enable_turn":true}`
+	raw := `{"schema":1,"public_url":"https://rctl.example.com","profile":"container","relay_image":"` + testImage + `","caddy_image":"` + testCaddy + `","coturn_image":"` + testCoturn + `","turn_external_ip":"8.8.8.8","enable_turn":true}`
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}

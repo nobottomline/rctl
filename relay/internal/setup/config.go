@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/mail"
 	"net/url"
 	"os"
 	"regexp"
@@ -22,14 +23,16 @@ const (
 var digestImagePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[a-f0-9]{64}$`)
 
 type Config struct {
-	Schema      int    `json:"schema"`
-	PublicURL   string `json:"public_url"`
-	Profile     string `json:"profile"`
-	RelayImage  string `json:"relay_image,omitempty"`
-	EnableTURN  bool   `json:"enable_turn"`
-	ACMEEmail   string `json:"acme_email,omitempty"`
-	Release     string `json:"release,omitempty"`
-	ImageDigest string `json:"image_digest,omitempty"`
+	Schema         int    `json:"schema"`
+	PublicURL      string `json:"public_url"`
+	Profile        string `json:"profile"`
+	RelayImage     string `json:"relay_image,omitempty"`
+	CaddyImage     string `json:"caddy_image,omitempty"`
+	CoturnImage    string `json:"coturn_image,omitempty"`
+	TURNExternalIP string `json:"turn_external_ip,omitempty"`
+	EnableTURN     bool   `json:"enable_turn"`
+	ACMEEmail      string `json:"acme_email,omitempty"`
+	Release        string `json:"release,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -83,10 +86,41 @@ func (c Config) Validate() error {
 	if c.Profile == ProfileContainer && !digestImagePattern.MatchString(c.RelayImage) {
 		return errors.New("relay_image must be an OCI image pinned by sha256 digest")
 	}
-	if strings.ContainsAny(c.ACMEEmail, "\r\n") {
-		return errors.New("acme_email contains a newline")
+	if c.Profile == ProfileContainer && !digestImagePattern.MatchString(c.CaddyImage) {
+		return errors.New("caddy_image must be an OCI image pinned by sha256 digest")
+	}
+	if c.Profile == ProfileContainer && c.EnableTURN && !digestImagePattern.MatchString(c.CoturnImage) {
+		return errors.New("coturn_image must be an OCI image pinned by sha256 digest")
+	}
+	if c.EnableTURN {
+		ip := net.ParseIP(c.TURNExternalIP)
+		if ip == nil || ip.To4() == nil {
+			return errors.New("turn_external_ip must be a public IPv4 address when TURN is enabled")
+		}
+		if !isPublicIP(ip) {
+			return errors.New("turn_external_ip must not be private, loopback, link-local, or unspecified")
+		}
+	}
+	if c.ACMEEmail != "" {
+		address, err := mail.ParseAddress(c.ACMEEmail)
+		if err != nil || address.Address != c.ACMEEmail || address.Name != "" || strings.ContainsAny(c.ACMEEmail, "\r\n\t ") {
+			return errors.New("acme_email must be one plain email address")
+		}
 	}
 	return nil
+}
+
+func isPublicIP(ip net.IP) bool {
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	for _, block := range []string{"100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4"} {
+		_, network, _ := net.ParseCIDR(block)
+		if network.Contains(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 func ParsePublicOrigin(raw string) (*url.URL, error) {
