@@ -48,8 +48,6 @@ rctl-relay_<version>_linux_amd64
 rctl-relay_<version>_linux_arm64
 install.sh
 SHA256SUMS
-SHA256SUMS.sig
-update-manifest.json
 ```
 
 The relay container is published separately as:
@@ -62,10 +60,15 @@ ghcr.io/nobottomline/rctl-relay@sha256:<digest>
 Generated deployment files pin the immutable image digest. `latest` is never a
 stored installation version. Release notes may show the human-readable tag.
 
-The release also carries artifact attestations and SBOMs. The existing pinned
+Public releases also carry keyless GitHub/Sigstore artifact attestations and
+the OCI image carries provenance plus an SBOM. The existing pinned
 device-update ECDSA key remains independent from GitHub and container signing.
 Its private half is never placed on a relay host. Releases are assembled as
 drafts, fully verified, and only then published.
+
+`update-manifest.json` is published only when a previous verified package is
+available for rollback. It is signed by the independent device-update key and
+is uploaded last; it is not a generic artifact produced for a first release.
 
 While the repository and container package are private, this pipeline is a
 maintainer dry run and requires GitHub authentication. No private token may be
@@ -80,11 +83,29 @@ from a mutable branch. The script has only four responsibilities:
 1. Detect Linux CPU architecture.
 2. Download the matching `rctl-setup` and `SHA256SUMS` into a private temporary
    directory.
-3. Verify the binary checksum (and signature when the verifier is available).
+3. Verify the binary checksum and, when an authenticated GitHub CLI is present,
+   its repository-bound build provenance attestation.
 4. Execute the verified binary with the original arguments.
 
 All prompts, system mutation, rollback, and diagnostics belong to the Go
 binary. A manual download-and-verify path is documented beside the one-liner.
+The bootstrap fixes a trusted system `PATH`, uses a private `/tmp` directory,
+accepts only `latest` or strict `vMAJOR.MINOR.PATCH` through `RCTL_VERSION`, and
+installs only to `/usr/local/bin/rctl-setup` before executing it.
+
+After the repository and GHCR package are public, the normal command is:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/nobottomline/rctl/releases/latest/download/install.sh | \
+  sudo sh
+```
+
+Pin a specific release by setting `RCTL_VERSION=vMAJOR.MINOR.PATCH` on the
+`sudo` side. Do not pipe a mutable branch file to root. While the repository is
+private, maintainers use `gh workflow run release-draft.yml`, inspect the draft
+assets, and download them through authenticated `gh release download`; the
+anonymous one-liner is intentionally unavailable.
 
 ## Wizard commands
 

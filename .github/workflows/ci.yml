@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: relay/go.sum
+      - name: Test and vet relay
+        working-directory: relay
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Scan reachable Go vulnerabilities
+        working-directory: relay
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
+      - name: Lint GitHub Actions workflows
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          actionlint
+      - name: Cross-build setup wizard
+        working-directory: relay
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/rctl-setup-amd64 ./cmd/rctl-setup
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/rctl-setup-arm64 ./cmd/rctl-setup
+      - name: Validate bootstrap shell
+        run: sh -n scripts/install.sh
+
+  web:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [web, relay/web-admin]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+      - name: Install dependencies
+        working-directory: ${{ matrix.project }}
+        run: npm ci
+      - name: Lint admin client
+        if: matrix.project == 'relay/web-admin'
+        working-directory: relay/web-admin
+        run: npm run lint
+      - name: Build client
+        working-directory: ${{ matrix.project }}
+        run: npm run build
+
+  container:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build relay image
+        run: docker build --tag rctl-relay:ci --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA} -f relay/Dockerfile .
+      - name: Smoke-test relay image
+        run: |
+          docker run --detach --rm --name rctl-relay-ci --publish 127.0.0.1:18081:8080 \
+            --env RCTL_RELAY_PUBLIC_URL=http://127.0.0.1:18081 \
+            --env RCTL_RELAY_ALLOW_INSECURE=1 \
+            --env RCTL_RELAY_ADMIN_SECRET=test-admin-secret-with-enough-entropy \
+            --env RCTL_RELAY_SESSION_SECRET=test-session-secret-with-more-than-thirty-two-characters \
+            --env RCTL_RELAY_DB=/data/relay.db \
+            rctl-relay:ci
+          trap 'docker stop rctl-relay-ci >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            response="$(curl --fail --silent http://127.0.0.1:18081/v1/capabilities || true)"
+            printf '%s' "$response" | grep -q '"version":"ci"' && exit 0
+            sleep 0.25
+          done
+          docker logs rctl-relay-ci
+          exit 1

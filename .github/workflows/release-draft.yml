@@ -1,0 +1,209 @@
+name: Release draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed release tag
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/rctl-relay
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - id: version
+        name: Validate immutable release source
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          printf '%s\n' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+            echo "tag must be vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          }
+          source_sha="$(git rev-parse HEAD)"
+          test "$(git rev-list -n1 "$TAG")" = "$source_sha"
+          version="${TAG#v}"
+          test "$(sed -n 's/^Version: //p' control)" = "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: validate
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: name
+        env:
+          RAW_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: echo "image=${RAW_IMAGE,,}" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: relay/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.name.outputs.image }}:${{ needs.validate.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.validate.outputs.version }}
+            COMMIT=${{ needs.validate.outputs.source_sha }}
+          provenance: mode=max
+          sbom: true
+      - name: Attest public OCI image
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ steps.name.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  linux-artifacts:
+    needs: [validate, image]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: relay/go.sum
+      - name: Build static Linux binaries
+        working-directory: relay
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          RELAY_IMAGE: ${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}
+        run: |
+          mkdir -p ../release
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X main.version=$VERSION -X main.commit=$SOURCE_SHA -X main.defaultImage=$RELAY_IMAGE" \
+              -o "../release/rctl-setup_linux_$arch" ./cmd/rctl-setup
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X github.com/nobottomline/rctl/relay/internal/relay.Version=$VERSION" \
+              -o "../release/rctl-relay_linux_$arch" ./cmd/rctl-relay
+          done
+          install -m 0755 ../scripts/install.sh ../release/install.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-artifacts
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  ios-package:
+    needs: validate
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          submodules: recursive
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: third_party/webrtc/.lib
+          key: webrtc-ios-${{ runner.arch }}-${{ hashFiles('third_party/webrtc/build-ios.sh') }}
+      - name: Install pinned toolchain and build public package
+        env:
+          THEOS_COMMIT: 5280bd038207e14f8bd76f5417aa2fe641c03228
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          brew install cmake ninja dpkg ldid make
+          git clone --filter=blob:none --no-checkout https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+          git -C "$RUNNER_TEMP/theos" checkout "$THEOS_COMMIT"
+          git -C "$RUNNER_TEMP/theos" submodule update --init --recursive
+          export THEOS="$RUNNER_TEMP/theos"
+          python3 -m venv "$RUNNER_TEMP/rctl-venv"
+          . "$RUNNER_TEMP/rctl-venv/bin/activate"
+          pip install --disable-pip-version-check jsonschema jinja2
+          make deps
+          make package FINALPACKAGE=1
+          deb="$(find packages -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$deb"
+          scripts/release_check.sh "$deb"
+          mkdir -p release
+          cp "$deb" "release/rctl_${VERSION}_iphoneos-arm.deb"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-package
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    needs: [validate, image, linux-artifacts, ios-package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: '*-artifacts'
+          path: release
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ios-package
+          path: release
+      - name: Verify and checksum release set
+        run: |
+          test "$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 6
+          (cd release && sha256sum install.sh rctl-* > SHA256SUMS)
+      - name: Attest public release artifacts
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: release/*
+      - name: Create immutable draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          IMAGE: ${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+        run: |
+          test -z "$(gh release view "$TAG" --json id --jq .id 2>/dev/null || true)" || { echo "release already exists" >&2; exit 1; }
+          test "$(git rev-list -n1 "$TAG")" = "$SOURCE_SHA"
+          printf 'Relay image: `%s`\n\nThis release is a draft pending artifact and fresh-host qualification.\n' "$IMAGE" > release-notes.md
+          gh release create "$TAG" release/* --draft --verify-tag --title "rctl $VERSION" --notes-file release-notes.md
