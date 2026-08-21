@@ -82,14 +82,13 @@ func TestUninstallDeleteDataKeepsOnlyRecoveryMaterial(t *testing.T) {
 
 func TestUninstallDownFailureDoesNotRemoveOwnedState(t *testing.T) {
 	installer, runner, database := createUninstallFixture(t)
-	// Backup performs stop, up, and one running-services probe before uninstall calls down.
-	runner.failAt = len(runner.calls) + 4
+	runner.failContains = " down --remove-orphans"
 	manager := UninstallManager{
 		Paths: installer.Paths, Runner: runner, Verifier: &fakeVerifier{},
 		Now: func() time.Time { return time.Unix(1700006000, 0) },
 	}
 	result, err := manager.Uninstall(context.Background(), UninstallOptions{DeleteData: true})
-	if err == nil || !strings.Contains(err.Error(), "stop and remove services") || result.Backup == "" {
+	if err == nil || !strings.Contains(err.Error(), "remove stopped services") || result.Backup == "" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if _, err := loadManifest(installer.Paths.ManifestPath); err != nil {

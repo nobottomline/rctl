@@ -66,46 +66,23 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	} else if manifestErr != nil {
 		return "", manifestErr
 	}
-	rollbackBackup, err = (BackupManager{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}).Create(ctx)
+	expected, err := loadManifest(r.Paths.ManifestPath)
 	if err != nil {
-		return "", fmt.Errorf("create pre-restore backup: %w", err)
-	}
-	releaseLock, err := acquireLifecycleLock(r.Paths.LockPath)
-	if err != nil {
-		return rollbackBackup, err
-	}
-	defer releaseLock()
-	if _, err := r.DryRun(source); err != nil {
-		return rollbackBackup, fmt.Errorf("revalidate restore source: %w", err)
-	}
-	rollbackManifest, err := snapshotOwnership(rollbackBackup, r.Paths)
-	if err != nil {
-		return rollbackBackup, fmt.Errorf("read pre-restore backup: %w", err)
-	}
-	current, err := loadManifest(r.Paths.ManifestPath)
-	if err != nil {
-		return rollbackBackup, err
-	}
-	if err := validateOwnershipManifest(current, r.Paths); err != nil {
-		return rollbackBackup, err
-	}
-	if err := verifyOwnedFiles(current); err != nil {
-		return rollbackBackup, err
-	}
-	if !ownershipManifestsEqual(current, rollbackManifest) {
-		return rollbackBackup, errors.New("installed state changed after the pre-restore backup; refusing to overwrite it")
+		return "", err
 	}
 	restoreTarget, err := snapshotOwnership(source, r.Paths)
 	if err != nil {
-		return rollbackBackup, fmt.Errorf("read restore source ownership: %w", err)
+		return "", fmt.Errorf("read restore source ownership: %w", err)
 	}
+	mutation, err := (BackupManager{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}).BeginMutation(ctx, "restore", expected)
+	rollbackBackup = mutation.Backup
+	if err != nil {
+		return rollbackBackup, fmt.Errorf("create pre-restore mutation backup: %w", err)
+	}
+	defer mutation.Release()
+	current := mutation.Manifest
+	rollbackManifest := mutation.Manifest
 	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
-	if err := beginRecovery(r.Paths, "restore", rollbackBackup, time.Now()); err != nil {
-		return rollbackBackup, err
-	}
-	if output, stopErr := r.Runner.Run(ctx, "docker", installer.composeArgs("stop")...); stopErr != nil {
-		return rollbackBackup, fmt.Errorf("stop services for restore: %s", commandFailure(output, stopErr))
-	}
 	restored, applyErr := applyBackup(source, current, r.Paths)
 	if applyErr == nil {
 		applyErr = r.startAndVerify(ctx, installer, restored)

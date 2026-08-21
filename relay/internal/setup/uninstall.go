@@ -77,41 +77,21 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 	if err != nil || options.DryRun {
 		return result, err
 	}
-	result.Backup, err = (BackupManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Now: u.Now}).Create(ctx)
-	if err != nil {
-		return result, fmt.Errorf("create pre-uninstall backup: %w", err)
-	}
-	releaseLock, err := acquireLifecycleLock(u.Paths.LockPath)
+	expected, err := loadManifest(u.Paths.ManifestPath)
 	if err != nil {
 		return result, err
 	}
-	defer releaseLock()
-	current, err := loadManifest(u.Paths.ManifestPath)
+	mutation, err := (BackupManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Now: u.Now}).BeginMutation(ctx, "uninstall", expected)
+	result.Backup = mutation.Backup
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("create pre-uninstall mutation backup: %w", err)
 	}
-	backupManifest, err := snapshotOwnership(result.Backup, u.Paths)
-	if err != nil {
-		return result, err
-	}
-	if !ownershipManifestsEqual(current, backupManifest) {
-		return result, errors.New("installed state changed after the pre-uninstall backup; refusing to remove it")
-	}
-	if err := verifyOwnedFiles(current); err != nil {
-		return result, err
-	}
+	defer mutation.Release()
+	current := mutation.Manifest
+	backupManifest := mutation.Manifest
 	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}
-	if err := beginRecovery(u.Paths, "uninstall", result.Backup, u.Now()); err != nil {
-		return result, err
-	}
-	if output, downErr := u.Runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...); downErr != nil {
-		recoveryCtx, cancel := lifecycleRecoveryContext()
-		defer cancel()
-		_, _ = u.Runner.Run(recoveryCtx, "docker", installer.composeArgs("up", "-d")...)
-		return result, fmt.Errorf("stop and remove services: %s", commandFailure(output, downErr))
-	}
 
-	mutationStarted := false
+	mutationStarted := true
 	defer func() {
 		if err == nil || !mutationStarted {
 			return
@@ -132,8 +112,10 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 		}
 		err = fmt.Errorf("uninstall failed and was rolled back: %w", err)
 	}()
+	if output, downErr := u.Runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...); downErr != nil {
+		return result, fmt.Errorf("remove stopped services: %s", commandFailure(output, downErr))
+	}
 
-	mutationStarted = true
 	for _, file := range current.Files {
 		if pathWithin(file.Path, u.Paths.DataDir) {
 			continue

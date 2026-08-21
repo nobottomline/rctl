@@ -55,7 +55,7 @@ func pendingRecovery(paths Paths) (RecoveryState, error) {
 		if state.Backup != "" {
 			return state, fmt.Errorf("%s recovery checkpoint must not name a rollback archive", state.Operation)
 		}
-	case "restore", "restore-uninstalled", "upgrade", "uninstall":
+	case "restore", "restore-uninstalled", "upgrade", "uninstall", "reset-admin":
 		if err := validateBackupSelection(state.Backup, paths.BackupDir); err != nil {
 			return state, fmt.Errorf("recovery checkpoint backup: %w", err)
 		}
@@ -88,6 +88,26 @@ func beginRecovery(paths Paths, operation, backup string, now time.Time) error {
 	}
 	state := RecoveryState{Schema: recoverySchema, Product: "rctl", Operation: operation, Backup: backup, StartedAt: now.Unix()}
 	return writeJSONAtomic(paths.RecoveryPath, state, 0o600)
+}
+
+func transitionRecovery(paths Paths, operation, backup string, now time.Time) error {
+	state, err := pendingRecovery(paths)
+	if err != nil {
+		return err
+	}
+	if state.Operation != "backup" || state.Backup != "" {
+		return errors.New("lifecycle recovery checkpoint is not a mutation backup")
+	}
+	if err := validateBackupSelection(backup, paths.BackupDir); err != nil {
+		return err
+	}
+	next := RecoveryState{Schema: recoverySchema, Product: "rctl", Operation: operation, Backup: backup, StartedAt: now.Unix()}
+	switch operation {
+	case "restore", "upgrade", "uninstall", "reset-admin":
+	default:
+		return fmt.Errorf("unsupported recovery transition %q", operation)
+	}
+	return writeJSONAtomic(paths.RecoveryPath, next, 0o600)
 }
 
 func clearRecovery(paths Paths) error {

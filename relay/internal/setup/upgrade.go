@@ -76,44 +76,18 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 		return result, nil
 	}
 
-	result.Backup, err = (BackupManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Now: u.Now}).Create(ctx)
-	if err != nil {
-		return result, fmt.Errorf("create pre-upgrade backup: %w", err)
-	}
-	releaseLock, err := acquireLifecycleLock(u.Paths.LockPath)
-	if err != nil {
-		return result, err
-	}
-	defer releaseLock()
-
-	current, err := loadManifest(u.Paths.ManifestPath)
-	if err != nil {
-		return result, err
-	}
-	backupManifest, err := snapshotOwnership(result.Backup, u.Paths)
-	if err != nil {
-		return result, err
-	}
-	if !ownershipManifestsEqual(current, plan.current) || !ownershipManifestsEqual(current, backupManifest) {
-		return result, errors.New("installed state changed after the pre-upgrade backup; refusing to overwrite it")
-	}
-	if err := verifyOwnedFiles(current); err != nil {
-		return result, err
-	}
 	if err := u.validateCandidates(ctx, plan); err != nil {
 		return result, err
 	}
+	mutation, err := (BackupManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Now: u.Now}).BeginMutation(ctx, "upgrade", plan.current)
+	result.Backup = mutation.Backup
+	if err != nil {
+		return result, fmt.Errorf("create pre-upgrade mutation backup: %w", err)
+	}
+	defer mutation.Release()
+	backupManifest := mutation.Manifest
 
 	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Chown: u.Chown}
-	if err := beginRecovery(u.Paths, "upgrade", result.Backup, u.Now()); err != nil {
-		return result, err
-	}
-	if output, stopErr := u.Runner.Run(ctx, "docker", installer.composeArgs("stop")...); stopErr != nil {
-		recoveryCtx, cancel := lifecycleRecoveryContext()
-		defer cancel()
-		_, _ = u.Runner.Run(recoveryCtx, "docker", installer.composeArgs("up", "-d")...)
-		return result, fmt.Errorf("stop services for upgrade: %s", commandFailure(output, stopErr))
-	}
 
 	applied := false
 	defer func() {
@@ -137,11 +111,10 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 		err = fmt.Errorf("upgrade failed and was rolled back: %w", err)
 	}()
 
+	applied = true
 	if err = writeUpgradeBundle(plan.bundle, plan.current, plan.target, u.Paths); err != nil {
-		applied = true
 		return result, err
 	}
-	applied = true
 	if err = installer.verifyServices(ctx, plan.target.Config, plan.secrets.Admin, true); err != nil {
 		return result, fmt.Errorf("upgraded deployment verification failed: %w", err)
 	}

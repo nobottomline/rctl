@@ -16,12 +16,17 @@ import (
 )
 
 type fakeRunner struct {
-	calls  []string
-	failAt int
+	calls        []string
+	failAt       int
+	failContains string
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (string, error) {
-	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	call := name + " " + strings.Join(args, " ")
+	r.calls = append(r.calls, call)
+	if r.failContains != "" && strings.Contains(call, r.failContains) {
+		return "synthetic failure", errors.New("exit 1")
+	}
 	if r.failAt > 0 && len(r.calls) == r.failAt {
 		return "synthetic failure", errors.New("exit 1")
 	}

@@ -48,6 +48,20 @@ type BackupManager struct {
 	Now      func() time.Time
 }
 
+type MutationBackup struct {
+	Backup   string
+	Manifest OwnershipManifest
+	Secrets  Secrets
+	release  func()
+}
+
+func (m *MutationBackup) Release() {
+	if m.release != nil {
+		m.release()
+		m.release = nil
+	}
+}
+
 func (b BackupManager) DryRun() ([]string, error) {
 	if b.Paths.EtcDir == "" {
 		b.Paths = DefaultPaths()
@@ -76,18 +90,7 @@ func (b BackupManager) DryRun() ([]string, error) {
 }
 
 func (b BackupManager) Create(ctx context.Context) (result string, err error) {
-	if b.Paths.EtcDir == "" {
-		b.Paths = DefaultPaths()
-	}
-	if b.Runner == nil {
-		b.Runner = OSRunner{}
-	}
-	if b.Verifier == nil {
-		b.Verifier = HTTPSVerifier{}
-	}
-	if b.Now == nil {
-		b.Now = time.Now
-	}
+	b.defaults()
 	releaseLock, err := acquireLifecycleLock(b.Paths.LockPath)
 	if err != nil {
 		return "", err
@@ -97,47 +100,14 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 		return "", err
 	}
 
-	installed, err := loadManifest(b.Paths.ManifestPath)
+	installed, secrets, err := b.currentState()
 	if err != nil {
 		return "", err
 	}
-	if err := validateOwnershipManifest(installed, b.Paths); err != nil {
-		return "", err
-	}
-	if err := verifyOwnedFiles(installed); err != nil {
-		return "", err
-	}
-	secrets, err := readExistingSecrets(b.Paths.RelayEnv)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(b.Paths.BackupDir, 0o700); err != nil {
-		return "", fmt.Errorf("create backup directory: %w", err)
-	}
-	if err := os.Chmod(b.Paths.BackupDir, 0o700); err != nil {
-		return "", err
-	}
-	candidate, err := os.MkdirTemp(b.Paths.BackupDir, ".backup-")
-	if err != nil {
-		return "", err
-	}
-	if err := os.Chmod(candidate, 0o700); err != nil {
-		_ = os.RemoveAll(candidate)
-		return "", err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.RemoveAll(candidate)
-		}
-	}()
 
 	installer := Installer{Paths: b.Paths, Runner: b.Runner, Verifier: b.Verifier}
 	if err := beginRecovery(b.Paths, "backup", "", b.Now()); err != nil {
 		return "", err
-	}
-	if output, stopErr := b.Runner.Run(ctx, "docker", installer.composeArgs("stop", "relay", "caddy")...); stopErr != nil {
-		return "", fmt.Errorf("stop services for consistent backup: %s", commandFailure(output, stopErr))
 	}
 	servicesStopped := true
 	defer func() {
@@ -153,7 +123,173 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 			}
 		}
 	}()
+	if output, stopErr := b.Runner.Run(ctx, "docker", installer.composeArgs("stop", "relay", "caddy")...); stopErr != nil {
+		return "", fmt.Errorf("stop services for consistent backup: %s", commandFailure(output, stopErr))
+	}
+	stoppedManifest, stoppedSecrets, err := b.currentState()
+	if err != nil {
+		return "", fmt.Errorf("revalidate stopped deployment: %w", err)
+	}
+	if !ownershipManifestsEqual(stoppedManifest, installed) || stoppedSecrets != secrets {
+		return "", errors.New("installed state changed while services were stopping; refusing to snapshot it")
+	}
 
+	result, err = b.snapshotStopped(installed)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil && result != "" {
+			_ = os.RemoveAll(result)
+		}
+	}()
+
+	if output, startErr := b.Runner.Run(ctx, "docker", installer.composeArgs("up", "-d", "relay", "caddy")...); startErr != nil {
+		return "", fmt.Errorf("restart services after backup: %s", commandFailure(output, startErr))
+	}
+	if err := installer.waitForServices(ctx, installed.Config.EnableTURN); err != nil {
+		return "", err
+	}
+	if err := b.Verifier.Verify(ctx, installed.Config, secrets.Admin); err != nil {
+		return "", fmt.Errorf("post-backup verification: %w", err)
+	}
+	if err := clearRecovery(b.Paths); err != nil {
+		return "", fmt.Errorf("commit backup recovery checkpoint: %w", err)
+	}
+	servicesStopped = false
+
+	return result, nil
+}
+
+func (b BackupManager) BeginMutation(ctx context.Context, operation string, expected OwnershipManifest) (result MutationBackup, err error) {
+	b.defaults()
+	switch operation {
+	case "upgrade", "restore", "uninstall", "reset-admin":
+	default:
+		return result, fmt.Errorf("unsupported mutation operation %q", operation)
+	}
+	releaseLock, err := acquireLifecycleLock(b.Paths.LockPath)
+	if err != nil {
+		return result, err
+	}
+	keepLock := false
+	defer func() {
+		if !keepLock {
+			releaseLock()
+		}
+	}()
+	if err := ensureNoPendingRecovery(b.Paths); err != nil {
+		return result, err
+	}
+	result.Manifest, result.Secrets, err = b.currentState()
+	if err != nil {
+		return result, err
+	}
+	if !ownershipManifestsEqual(result.Manifest, expected) {
+		return result, errors.New("installed state changed before the mutation backup; refusing to continue")
+	}
+	installer := Installer{Paths: b.Paths, Runner: b.Runner, Verifier: b.Verifier}
+	if err := installer.verifyServices(ctx, result.Manifest.Config, result.Secrets.Admin, false); err != nil {
+		return result, fmt.Errorf("pre-mutation deployment verification: %w", err)
+	}
+	if err := beginRecovery(b.Paths, "backup", "", b.Now()); err != nil {
+		return result, err
+	}
+	stopped := false
+	defer func() {
+		if err == nil || !stopped {
+			return
+		}
+		recoveryCtx, cancel := lifecycleRecoveryContext()
+		defer cancel()
+		if _, restartErr := b.Runner.Run(recoveryCtx, "docker", installer.composeArgs("up", "-d")...); restartErr == nil {
+			if waitErr := installer.waitForServices(recoveryCtx, result.Manifest.Config.EnableTURN); waitErr == nil {
+				if verifyErr := b.Verifier.Verify(recoveryCtx, result.Manifest.Config, result.Secrets.Admin); verifyErr == nil {
+					_ = clearRecovery(b.Paths)
+				}
+			}
+		}
+	}()
+	stopped = true
+	if output, stopErr := b.Runner.Run(ctx, "docker", installer.composeArgs("stop")...); stopErr != nil {
+		return result, fmt.Errorf("stop services for mutation backup: %s", commandFailure(output, stopErr))
+	}
+	stoppedManifest, stoppedSecrets, err := b.currentState()
+	if err != nil {
+		return result, fmt.Errorf("revalidate stopped deployment: %w", err)
+	}
+	if !ownershipManifestsEqual(stoppedManifest, result.Manifest) || stoppedSecrets != result.Secrets {
+		return result, errors.New("installed state changed while services were stopping; refusing to continue")
+	}
+	result.Backup, err = b.snapshotStopped(result.Manifest)
+	if err != nil {
+		return result, err
+	}
+	if err = transitionRecovery(b.Paths, operation, result.Backup, b.Now()); err != nil {
+		return result, err
+	}
+	result.release = releaseLock
+	keepLock = true
+	return result, nil
+}
+
+func (b *BackupManager) defaults() {
+	if b.Paths.EtcDir == "" {
+		b.Paths = DefaultPaths()
+	}
+	if b.Runner == nil {
+		b.Runner = OSRunner{}
+	}
+	if b.Verifier == nil {
+		b.Verifier = HTTPSVerifier{}
+	}
+	if b.Now == nil {
+		b.Now = time.Now
+	}
+}
+
+func (b BackupManager) currentState() (OwnershipManifest, Secrets, error) {
+	installed, err := loadManifest(b.Paths.ManifestPath)
+	if err != nil {
+		return OwnershipManifest{}, Secrets{}, err
+	}
+	if err := validateOwnershipManifest(installed, b.Paths); err != nil {
+		return OwnershipManifest{}, Secrets{}, err
+	}
+	if err := verifyOwnedFiles(installed); err != nil {
+		return OwnershipManifest{}, Secrets{}, err
+	}
+	secrets, err := readExistingSecrets(b.Paths.RelayEnv)
+	return installed, secrets, err
+}
+
+func (b BackupManager) snapshotStopped(installed OwnershipManifest) (result string, err error) {
+	if info, statErr := os.Lstat(b.Paths.BackupDir); statErr == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("backup path is not a real directory")
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", statErr
+	}
+	if err := os.MkdirAll(b.Paths.BackupDir, 0o700); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+	if err := os.Chmod(b.Paths.BackupDir, 0o700); err != nil {
+		return "", err
+	}
+	candidate, err := os.MkdirTemp(b.Paths.BackupDir, ".backup-")
+	if err != nil {
+		return "", err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(candidate)
+		}
+	}()
+	if err := os.Chmod(candidate, 0o700); err != nil {
+		return "", err
+	}
 	entries := make([]BackupEntry, 0)
 	total := int64(0)
 	backupRoot := filepath.Join(candidate, "root")
@@ -164,7 +300,8 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
-	metadata := BackupMetadata{Schema: backupSchema, Product: "rctl", CreatedAt: b.Now().Unix(), Release: installed.Version, Config: installed.Config, Entries: entries}
+	now := b.Now()
+	metadata := BackupMetadata{Schema: backupSchema, Product: "rctl", CreatedAt: now.Unix(), Release: installed.Version, Config: installed.Config, Entries: entries}
 	if err := writeJSONAtomic(filepath.Join(candidate, "backup.json"), metadata, 0o600); err != nil {
 		return "", err
 	}
@@ -174,23 +311,7 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 	if _, err := ValidateBackup(candidate); err != nil {
 		return "", fmt.Errorf("validate candidate backup: %w", err)
 	}
-
-	if output, startErr := b.Runner.Run(ctx, "docker", installer.composeArgs("up", "-d", "relay", "caddy")...); startErr != nil {
-		return "", fmt.Errorf("restart services after backup: %s", commandFailure(output, startErr))
-	}
-	servicesStopped = false
-	if err := installer.waitForServices(ctx, installed.Config.EnableTURN); err != nil {
-		return "", err
-	}
-	if err := b.Verifier.Verify(ctx, installed.Config, secrets.Admin); err != nil {
-		return "", fmt.Errorf("post-backup verification: %w", err)
-	}
-	if err := clearRecovery(b.Paths); err != nil {
-		return "", fmt.Errorf("commit backup recovery checkpoint: %w", err)
-	}
-
-	stamp := b.Now().UTC().Format("20060102T150405Z")
-	final := filepath.Join(b.Paths.BackupDir, "backup-"+stamp+"-"+safeLifecycleName(installed.Version))
+	final := filepath.Join(b.Paths.BackupDir, "backup-"+now.UTC().Format("20060102T150405Z")+"-"+safeLifecycleName(installed.Version))
 	if _, err := os.Lstat(final); err == nil {
 		return "", fmt.Errorf("backup destination already exists: %s", final)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -200,6 +321,7 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 		return "", err
 	}
 	if err := syncDirectory(b.Paths.BackupDir); err != nil {
+		_ = os.RemoveAll(final)
 		return "", err
 	}
 	committed = true
