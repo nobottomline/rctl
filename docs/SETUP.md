@@ -140,6 +140,21 @@ backup. A failed copy or verification removes the candidate and still restarts
 the prior services. The backup directory is mode 0700 because it contains the
 relay database, sessions, device identities, TLS state, and server secrets.
 
+`rctl-setup restore --from /var/backups/rctl/backup-...` accepts only a direct
+`backup-*` child of the managed backup directory. Before touching the running
+installation it validates every declared path, mode, owner, size, and SHA-256
+digest and checks that the archived ownership manifest agrees with the backup
+metadata. Restore always creates and verifies a separate pre-restore backup,
+then rechecks that the installed manifest and owned files did not change during
+that maintenance window. It stops relay and Caddy, restores files through
+bounded streaming copies and atomic renames, restarts all configured services,
+and verifies the authenticated public HTTPS path. Failed apply, startup, or
+public verification automatically restores and verifies the pre-restore state.
+The command reports that rollback backup even when restore fails. Use
+`--dry-run` to perform archive and ownership validation without stopping a
+service or creating a new backup; unattended execution additionally requires
+`--yes`.
+
 ## Supported deployment profiles
 
 ### Dedicated host

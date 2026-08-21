@@ -45,6 +45,8 @@ func run(args []string) int {
 		return runDoctor(args[1:], os.Stdout, os.Stderr)
 	case "backup":
 		return runBackup(args[1:], os.Stdout, os.Stderr)
+	case "restore":
+		return runRestore(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -53,6 +55,55 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runRestore(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("restore", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	source := flags.String("from", "", "managed backup-* directory to restore")
+	dryRun := flags.Bool("dry-run", false, "validate the backup and installed state without changing services or files")
+	assumeYes := flags.Bool("yes", false, "restore without an interactive confirmation")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *source == "" {
+		fmt.Fprintln(errorsOutput, "restore requires --from and does not accept positional arguments")
+		return 2
+	}
+	manager := setup.RestoreManager{}
+	metadata, err := manager.DryRun(*source)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "restore validation:", err)
+		return 1
+	}
+	fmt.Fprintf(output, "Restore source: %s\nRelease: %s\nOrigin: %s\n", *source, metadata.Release, metadata.Config.PublicURL)
+	if *dryRun {
+		fmt.Fprintln(output, "Restore dry run complete. No services or files were changed.")
+		return 0
+	}
+	if !*assumeYes {
+		if input != os.Stdin || !stdinIsTerminal() {
+			fmt.Fprintln(errorsOutput, "restore requires an interactive terminal or --yes")
+			return 2
+		}
+		answer, promptErr := prompt(bufio.NewReader(input), output, "Type restore to replace the installed state", "")
+		if promptErr != nil || answer != "restore" {
+			fmt.Fprintln(errorsOutput, "restore cancelled; the host was not changed")
+			return 1
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	rollback, err := manager.Restore(ctx, *source)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "restore:", err)
+		if rollback != "" {
+			fmt.Fprintln(errorsOutput, "Pre-restore backup:", rollback)
+		}
+		return 1
+	}
+	fmt.Fprintf(output, "Restore verified. Pre-restore backup: %s\n", rollback)
+	return 0
 }
 
 func runBackup(args []string, output, errorsOutput io.Writer) int {
@@ -366,5 +417,6 @@ Commands:
   preflight    run read-only host and configuration checks
   install      preflight, confirm, apply, verify, and roll back on failure
   doctor       diagnose owned files, services, HTTPS, and WebSocket routing
-  backup       stop briefly, snapshot managed state, restart, and verify`)
+  backup       stop briefly, snapshot managed state, restart, and verify
+  restore      validate, restore, verify, and automatically roll back`)
 }
