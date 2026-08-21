@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -258,6 +259,28 @@ func TestBackupCreatesVerifiedRootOnlySnapshot(t *testing.T) {
 	}
 	if _, err := ValidateBackup(name); err == nil || !strings.Contains(err.Error(), "digest differs") {
 		t.Fatalf("tampered backup validation: %v", err)
+	}
+}
+
+func TestBackupCopyPreservesModeUnderRestrictiveUmask(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	destination := filepath.Join(root, "destination")
+	if err := os.WriteFile(source, []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	if _, err := copyRegularFile(source, destination, 0o644, os.Getuid(), os.Getgid()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(destination)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("destination mode=%v err=%v", info, err)
 	}
 }
 

@@ -450,6 +450,11 @@ func copyRegularFile(source, destination string, mode os.FileMode, uid, gid int)
 	if err := os.Chown(destination, uid, gid); err != nil {
 		return "", err
 	}
+	// OpenFile applies the caller's umask. The release bootstrap intentionally
+	// uses 0077, so restore the recorded mode after ownership is final.
+	if err := os.Chmod(destination, mode); err != nil {
+		return "", err
+	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
