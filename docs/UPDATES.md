@@ -22,6 +22,28 @@ until the relay operator configures a signed release catalog.
   public key. Losing the private key intentionally disables remote updates for
   devices that pin it; do not add a network key-recovery path.
 
+The release maintainer keeps the unencrypted PEM outside every repository, VPS,
+container, CI artifact, and release asset. The default local convention is:
+
+```sh
+export RCTL_UPDATE_SIGNING_KEY="$HOME/.config/rctl/update-signing-key.pem"
+test "$(stat -f %Lp "$RCTL_UPDATE_SIGNING_KEY" 2>/dev/null || stat -c %a "$RCTL_UPDATE_SIGNING_KEY")" = 600
+```
+
+Store a separate encrypted offline backup before the first public release. Once
+any public package pins the matching key, never regenerate or silently replace
+it: a deliberate rotation must be delivered as an update signed by the old key.
+GitHub Actions may receive the PEM through a protected repository/environment
+secret when automated catalog publication is enabled, but the key must never be
+written into the workspace or uploaded as an artifact.
+
+Before building or signing a catalog, prove that the local private key is P-256,
+mode `0600`, and matches the public pin shipped by the package:
+
+```sh
+make verify-update-key
+```
+
 ## Release catalog
 
 Build a catalog with the repository tool. It must include the exact installed

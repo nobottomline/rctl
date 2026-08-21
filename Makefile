@@ -63,6 +63,10 @@ smoke-relay:
 release-check:
 	@scripts/release_check.sh
 
+.PHONY: verify-update-key
+verify-update-key:
+	@scripts/verify-update-signing-key.sh
+
 .PHONY: test-personalize
 test-personalize:
 	@scripts/test_personalize_deb.sh
