@@ -160,6 +160,7 @@ jobs:
       - name: Install pinned toolchain and build public package
         env:
           THEOS_COMMIT: 5280bd038207e14f8bd76f5417aa2fe641c03228
+          THEOS_SDKS_COMMIT: 0222fd5413cf4b9af096f37b4621afa2688572f7
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           brew install cmake ninja dpkg ldid make
@@ -167,6 +168,11 @@ jobs:
           git -C "$RUNNER_TEMP/theos" checkout "$THEOS_COMMIT"
           git -C "$RUNNER_TEMP/theos" submodule update --init --recursive
           export THEOS="$RUNNER_TEMP/theos"
+          git clone --filter=blob:none --no-checkout https://github.com/theos/sdks.git "$RUNNER_TEMP/theos-sdks"
+          git -C "$RUNNER_TEMP/theos-sdks" sparse-checkout set iPhoneOS14.5.sdk
+          git -C "$RUNNER_TEMP/theos-sdks" checkout "$THEOS_SDKS_COMMIT"
+          mkdir -p "$THEOS/sdks"
+          cp -R "$RUNNER_TEMP/theos-sdks/iPhoneOS14.5.sdk" "$THEOS/sdks/"
           python3 -m venv "$RUNNER_TEMP/rctl-venv"
           . "$RUNNER_TEMP/rctl-venv/bin/activate"
           pip install --disable-pip-version-check jsonschema jinja2
