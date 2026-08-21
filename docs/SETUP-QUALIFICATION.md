@@ -173,6 +173,27 @@ API readback confirmed the repository was returned to private immediately after
 the workflow. Registry-hosted SBOM inspection still requires read access to, or
 anonymous visibility for, the GHCR package.
 
+### Passed on a physical iOS 14 device
+
+- The installed iOS 14 package exposed the transactional updater binary, pinned
+  public key, protocol `1.0` capabilities, SpringBoard IPC, LAN HTTP service,
+  and one authenticated relay connection at the same time. The updater state
+  directory was root-owned and mode `0700`; no relay credential was read or
+  copied during qualification.
+- Two signed debug-package updates completed through the detached updater's real
+  `dpkg -r` plus `dpkg -i` path. The latest transaction moved from package
+  revision 315 to 316, reported `complete`, and left the daemon version,
+  SpringBoard IPC, LAN service, and relay connection healthy. No updater or
+  watchdog process remained after commit.
+- A qualification-only package whose runtime deliberately failed verification
+  exercised the external watchdog rollback. Device logs show the target package
+  was installed, removed, and replaced by the verified previous package; the
+  transaction recorded `rollback_complete`. A later successful update confirms
+  the device remained recoverable and paired.
+- These tests qualify the device transaction design and real iOS execution path.
+  They used signed debug revisions, not the immutable public `v0.3.0` candidate,
+  so they do not satisfy the publication report's exact-artifact device checks.
+
 ### Still required before a supported public release
 
 1. Make the GHCR package anonymously readable and qualify anonymous amd64 and
@@ -181,9 +202,9 @@ anonymous visibility for, the GHCR package.
    then upload its privacy-safe report bound to the image and `SHA256SUMS`.
 3. Qualify ACME renewal, cloud firewall rules, external UDP and TCP TURN
    allocation, and forced-TURN browser/device media.
-4. Enroll an iOS 14 arm64e device from the admin-generated package and verify
-   independent LAN control, relay control, restart persistence, and device
-   update/rollback.
+4. Repeat enrollment, independent LAN and relay control, restart persistence,
+   and device update/rollback on an iOS 14 arm64e device using the exact public
+   candidate package and its publication catalog.
 5. Run the gated publication workflow and independently verify the immutable
    stable release, assets, checksums, provenance, SBOM, and public bootstrap.
 
