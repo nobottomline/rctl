@@ -562,30 +562,21 @@ func (i Installer) verifyServices(ctx context.Context, cfg Config, adminSecret s
 }
 
 func (i Installer) waitForServices(ctx context.Context, turn bool) error {
-	wanted := map[string]bool{"relay": false, "caddy": false}
-	if turn {
-		wanted["coturn"] = false
-	}
 	var last string
 	for attempt := 0; attempt < 40; attempt++ {
-		output, err := i.Runner.Run(ctx, "docker", i.composeArgs("ps", "--status", "running", "--services")...)
+		output, err := i.Runner.Run(ctx, "docker", i.composeArgs("ps", "--all", "--format", "json")...)
 		last = output
 		if err == nil {
-			for key := range wanted {
-				wanted[key] = false
+			states, parseErr := parseComposePS(output)
+			if parseErr == nil {
+				parseErr = requireHealthyServices(states, turn)
 			}
-			for _, service := range strings.Fields(output) {
-				if _, ok := wanted[service]; ok {
-					wanted[service] = true
-				}
-			}
-			complete := true
-			for _, found := range wanted {
-				complete = complete && found
-			}
-			if complete {
+			if parseErr == nil {
 				return nil
 			}
+			last = parseErr.Error()
+		} else {
+			last = commandFailure(output, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -593,7 +584,71 @@ func (i Installer) waitForServices(ctx context.Context, turn bool) error {
 		case <-time.After(3 * time.Second):
 		}
 	}
-	return fmt.Errorf("services did not reach running state: %s", last)
+	return fmt.Errorf("services did not become healthy: %s", last)
+}
+
+type composeServiceState struct {
+	Service string `json:"Service"`
+	State   string `json:"State"`
+	Health  string `json:"Health"`
+}
+
+func parseComposePS(raw string) (map[string]composeServiceState, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("docker compose reported no containers")
+	}
+	items := make([]composeServiceState, 0, 3)
+	if strings.HasPrefix(raw, "[") {
+		if err := json.Unmarshal([]byte(raw), &items); err != nil {
+			return nil, fmt.Errorf("decode docker compose service state: %w", err)
+		}
+	} else {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		for {
+			var item composeServiceState
+			if err := decoder.Decode(&item); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				return nil, fmt.Errorf("decode docker compose service state: %w", err)
+			}
+			items = append(items, item)
+		}
+	}
+	states := make(map[string]composeServiceState, len(items))
+	for _, item := range items {
+		if item.Service == "" || item.State == "" {
+			return nil, errors.New("docker compose returned an incomplete service record")
+		}
+		if _, exists := states[item.Service]; exists {
+			return nil, fmt.Errorf("docker compose returned multiple containers for service %s", item.Service)
+		}
+		states[item.Service] = item
+	}
+	return states, nil
+}
+
+func requireHealthyServices(states map[string]composeServiceState, turn bool) error {
+	wanted := []string{"relay", "caddy"}
+	if turn {
+		wanted = append(wanted, "coturn")
+	}
+	for _, name := range wanted {
+		state, ok := states[name]
+		if !ok {
+			return fmt.Errorf("required service %s has no container", name)
+		}
+		if state.State != "running" {
+			return fmt.Errorf("required service %s is %s", name, state.State)
+		}
+		if (name == "relay" || name == "coturn") && state.Health != "healthy" {
+			return fmt.Errorf("required service %s health is %s", name, emptyAs(state.Health, "missing"))
+		}
+		if name == "caddy" && state.Health != "" && state.Health != "healthy" {
+			return fmt.Errorf("required service caddy health is %s", state.Health)
+		}
+	}
+	return nil
 }
 
 func (i Installer) stopFreshServices(ctx context.Context) error {

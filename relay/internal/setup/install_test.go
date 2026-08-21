@@ -25,10 +25,41 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 	if r.failAt > 0 && len(r.calls) == r.failAt {
 		return "synthetic failure", errors.New("exit 1")
 	}
-	if len(args) > 0 && args[len(args)-1] == "--services" {
-		return "relay\ncaddy\ncoturn", nil
+	if len(args) > 0 && args[len(args)-1] == "json" {
+		return strings.Join([]string{
+			`{"Service":"relay","State":"running","Health":"healthy"}`,
+			`{"Service":"caddy","State":"running","Health":""}`,
+			`{"Service":"coturn","State":"running","Health":"healthy"}`,
+		}, "\n"), nil
 	}
 	return "ok", nil
+}
+
+func TestComposeServiceStateRequiresHealthyRuntime(t *testing.T) {
+	states, err := parseComposePS(strings.Join([]string{
+		`{"Service":"relay","State":"running","Health":"healthy"}`,
+		`{"Service":"caddy","State":"running","Health":""}`,
+		`{"Service":"coturn","State":"running","Health":"unhealthy"}`,
+	}, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireHealthyServices(states, true); err == nil || !strings.Contains(err.Error(), "coturn health is unhealthy") {
+		t.Fatalf("unhealthy TURN result: %v", err)
+	}
+	if err := requireHealthyServices(states, false); err != nil {
+		t.Fatalf("disabled TURN affected service readiness: %v", err)
+	}
+}
+
+func TestComposeServiceStateAcceptsJSONArrayAndRejectsDuplicates(t *testing.T) {
+	states, err := parseComposePS(`[{"Service":"relay","State":"running","Health":"healthy"},{"Service":"caddy","State":"running","Health":""}]`)
+	if err != nil || len(states) != 2 {
+		t.Fatalf("array state=%v err=%v", states, err)
+	}
+	if _, err := parseComposePS("{\"Service\":\"relay\",\"State\":\"running\"}\n{\"Service\":\"relay\",\"State\":\"running\"}"); err == nil || !strings.Contains(err.Error(), "multiple containers") {
+		t.Fatalf("duplicate service result: %v", err)
+	}
 }
 
 type fakeVerifier struct {

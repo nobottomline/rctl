@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 )
 
 type Doctor struct {
@@ -64,27 +63,18 @@ func (d Doctor) Run(ctx context.Context) Report {
 	} else {
 		add("compose", Pass, "Compose configuration is valid", "")
 	}
-	output, err := d.Runner.Run(ctx, "docker", composeArgs("ps", "--status", "running", "--services")...)
+	output, err := d.Runner.Run(ctx, "docker", composeArgs("ps", "--all", "--format", "json")...)
 	if err != nil {
 		add("services", Fail, "Service state could not be inspected", commandFailure(output, err))
 	} else {
-		running := make(map[string]bool)
-		for _, name := range strings.Fields(output) {
-			running[name] = true
+		states, parseErr := parseComposePS(output)
+		if parseErr == nil {
+			parseErr = requireHealthyServices(states, manifest.Config.EnableTURN)
 		}
-		missing := make([]string, 0)
-		for _, name := range []string{"relay", "caddy"} {
-			if !running[name] {
-				missing = append(missing, name)
-			}
-		}
-		if manifest.Config.EnableTURN && !running["coturn"] {
-			missing = append(missing, "coturn")
-		}
-		if len(missing) != 0 {
-			add("services", Fail, "Required services are not running", strings.Join(missing, ", "))
+		if parseErr != nil {
+			add("services", Fail, "Required services are not healthy", parseErr.Error())
 		} else {
-			add("services", Pass, "Required services are running", "")
+			add("services", Pass, "Required services are running and healthy", "")
 		}
 	}
 	if output, err := d.Runner.Run(ctx, "docker", composeArgs("exec", "-T", "relay", "/usr/local/bin/rctl-relay", "healthcheck", "http://127.0.0.1:8080/healthz")...); err != nil {
