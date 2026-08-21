@@ -144,6 +144,7 @@ rctl-setup backup        consistent database/config/TLS metadata archive
 rctl-setup restore       validate archive, stop services, restore, verify
 rctl-setup uninstall     explicit data-retention choice and owned-file removal
 rctl-setup recover       repair an interrupted lifecycle transaction
+rctl-setup reset-admin   rotate admin/session credentials with rollback
 rctl-setup version       build and release metadata
 ```
 
@@ -160,20 +161,23 @@ new secrets or replace state merely because a file already exists.
 holds the global lifecycle lock, verifies current ownership/hashes, stops relay
 and Caddy, snapshots all managed configuration plus `/var/lib/rctl`, preserves
 Unix modes and ownership, and writes a sorted SHA-256 manifest under
-`/var/backups/rctl`. Relay and Caddy are restarted and the public authenticated
-path is verified before the candidate is atomically renamed as a successful
-backup. A failed copy or verification removes the candidate and still restarts
-the prior services. The backup directory is mode 0700 because it contains the
+`/var/backups/rctl`. The candidate is promoted with an atomic rename, but is
+retained only after Relay and Caddy restart and the public authenticated path
+passes verification. A failed copy, restart, or verification removes the
+candidate and still attempts to restart the prior services. The backup
+directory is mode 0700 because it contains the
 relay database, sessions, device identities, TLS state, and server secrets.
 
 `rctl-setup restore --from /var/backups/rctl/backup-...` accepts only a direct
 `backup-*` child of the managed backup directory. Before touching the running
 installation it validates every declared path, mode, owner, size, and SHA-256
 digest and checks that the archived ownership manifest agrees with the backup
-metadata. Restore always creates and verifies a separate pre-restore backup,
-then rechecks that the installed manifest and owned files did not change during
-that maintenance window. It stops the complete relay/Caddy/coturn stack so
-restored credentials are reloaded, restores files through
+metadata. Restore validates its candidate before the maintenance window, then
+holds the lifecycle lock continuously while it verifies the live deployment,
+stops the complete relay/Caddy/coturn stack, and snapshots the final stopped
+SQLite and configuration state. This prevents sessions, devices, or concurrent
+lifecycle work from changing state between the rollback snapshot and restore.
+It reloads restored credentials, restores files through
 bounded streaming copies and atomic renames, restarts all configured services,
 and verifies the authenticated public HTTPS path. Failed apply, startup, or
 public verification automatically restores and verifies the pre-restore state.
@@ -189,11 +193,13 @@ installed origin, ACME and TURN settings, admin/session/TURN secrets, database,
 sessions, device identities, and enrollment state. When device package
 generation is enabled, the matching verified public `.deb` is mandatory and
 its package version must exactly equal the target release. Before stopping the
-current stack, setup creates a verified backup, validates candidate Compose and
-Caddy files, and pulls target images. It then atomically replaces managed
-files, verifies service health, trusted public routes, authenticated admin
-access, and SQLite session persistence across a relay restart. Any failed apply
-or verification restores the pre-upgrade backup and old pinned images. A
+current stack, setup validates candidate Compose and Caddy files and pulls
+target images. It then holds the lifecycle lock continuously across live
+verification, complete stack stop, final stopped-state rollback snapshot, and
+atomic replacement. The target must pass service health, trusted public routes,
+authenticated admin access, and SQLite session persistence across a relay
+restart. Any failed apply or verification restores the pre-upgrade backup and
+old pinned images. A
 same-version rerun is an idempotent health check only when configuration and
 every artifact hash still match that immutable release; conflicting artifacts
 with the same version are rejected. Downgrades are rejected and intentional
@@ -201,8 +207,9 @@ rollback uses `restore`. `--dry-run` performs no image pull, backup, or service
 operation.
 
 `rctl-setup uninstall` requires exactly one explicit retention choice. Both
-`--keep-data` and `--delete-data` first create and publicly verify a recovery
-backup, stop and remove only the owned Compose project, and remove only paths
+`--keep-data` and `--delete-data` verify the running deployment, then hold the
+lifecycle lock across complete stack stop, a final stopped-state recovery
+backup, removal of only the owned Compose project, and removal of only paths
 declared by the ownership manifest. It never prunes unrelated containers,
 images, networks, or volumes. `--keep-data` preserves `/var/lib/rctl` after
 removing its ownership manifest; `--delete-data` removes that live data root.
@@ -210,6 +217,19 @@ Both modes preserve `/var/backups/rctl`, setup journals, and the `rctl-setup`
 binary. Unknown files in the managed configuration directories prevent those
 directories from being removed but are never deleted. A failed filesystem
 mutation automatically reapplies and verifies the pre-uninstall backup.
+
+`rctl-setup reset-admin` is the SSH recovery path for a lost or compromised
+admin credential. It validates the owned deployment before mutation, takes a
+final stopped-state backup, rotates the admin login and session-signing secrets,
+and preserves TURN credentials, relay configuration, device identities,
+enrollment state, and SQLite data. Rotating the session secret invalidates all
+existing browser sessions. The new admin password is printed exactly once,
+after authenticated access and persistence across a relay restart have passed.
+Interactive use requires typing `reset-admin`; automation requires explicit
+`--yes`. Use `--dry-run` for validation without generating credentials,
+stopping services, or creating a backup. Any apply or verification failure
+restores and verifies the exact pre-reset state. Store the new password in a
+password manager; it is never written to setup journals.
 
 The retained setup binary can restore a selected managed backup even when the
 installation manifest no longer exists. Recovery refuses pre-existing managed
@@ -224,11 +244,11 @@ the data and backup trees immediately before its first service mutation. The
 checkpoint contains an operation name and, where applicable, the already
 verified rollback-backup path; it contains no secret values. A normal commit or
 successful automatic rollback removes and fsyncs the checkpoint. While one is
-present, install, backup, restore, upgrade, and uninstall refuse to start a
-second transaction. `rctl-setup recover --dry-run` validates the checkpoint and
-archive without mutation; `rctl-setup recover` restores the pre-operation
-snapshot, removes only known obsolete rctl files, restarts the pinned stack,
-checks public admin access and SQLite session persistence across a relay
+present, install, backup, restore, upgrade, uninstall, and admin reset refuse to
+start a second transaction. `rctl-setup recover --dry-run` validates the
+checkpoint and archive without mutation; `rctl-setup recover` restores the
+pre-operation snapshot, removes only known obsolete rctl files, restarts the
+pinned stack, checks public admin access and SQLite session persistence across a relay
 restart, and then clears the checkpoint. Recovery from an interrupted backup
 restarts and verifies the unchanged deployment and removes only hidden,
 incomplete backup candidates.
@@ -349,9 +369,10 @@ Default native host paths are:
 
 The relay environment necessarily contains server-side secrets. It is never
 printed by `doctor`, which reports file permission problems without printing
-values. There is no diagnostics export or secret-rotation command in the
-current release. Admin/session/TURN secrets remain independent and install,
-upgrade, backup, restore, and recovery never rotate them as a side effect.
+values. Admin/session/TURN secrets remain independent and install, upgrade,
+backup, restore, and recovery never rotate them as a side effect. The explicit
+`reset-admin` recovery command rotates only admin and session secrets; TURN and
+device credentials are deliberately preserved.
 
 ## Device package delivery
 
@@ -412,8 +433,9 @@ before stopping services.
 
 ## Failure and edge-case policy
 
-- Interrupted lifecycle mutation is recovered from the mode-0600 recovery
-  checkpoint and its verified rollback backup via `rctl-setup recover`.
+- Interrupted lifecycle mutation, including admin credential rotation, is
+  recovered from the mode-0600 recovery checkpoint and its verified rollback
+  backup via `rctl-setup recover`.
 - Concurrent lifecycle commands are rejected by the global lock.
 - DNS changes, ACME rate limits, closed cloud firewalls, broken IPv6, clock
   skew, disk exhaustion, read-only filesystems, and occupied ports have distinct

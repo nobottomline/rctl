@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `a343930`, plus the documentation record itself.
+Source baseline: `main` through `1432061`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -25,6 +25,18 @@ Release version remains `0.3.0`; no tag or public release was created.
   SQLite session persistence checks. Upgrade rollback was also exercised after
   the target verifier performed a real SQLite schema migration and data write;
   the old schema and row were restored without the target column.
+- Upgrade, restore, uninstall, and admin credential rotation now hold one
+  lifecycle lock continuously across live verification, complete stack stop,
+  the final stopped-state snapshot, apply, and commit or rollback. A test wrote
+  new SQLite state immediately before stop and confirmed that exact state was
+  present in the rollback archive. A separate test changed a managed file
+  during stop; setup rejected it before snapshot, restarted the prior services,
+  and cleared the temporary recovery checkpoint.
+- Admin recovery rotates independent admin and session secrets while preserving
+  TURN credentials, deployment identity, device state, and SQLite data. Tests
+  cover dry-run, CSPRNG failure before maintenance, successful restart and
+  persistence verification, failed-new-login rollback, interrupted-operation
+  recovery, and blocking a second lifecycle operation.
 - Container readiness tests reject missing, duplicate, stopped, starting, and
   unhealthy required services. Relay and coturn healthchecks are mandatory;
   install and doctor no longer accept Docker's `running/unhealthy` state.
@@ -62,7 +74,7 @@ Release version remains `0.3.0`; no tag or public release was created.
 
 ### Externally blocked
 
-GitHub Actions run `32510772362` for source `99e0113` created the relay,
+GitHub Actions run `32512470878` for source `27c98ee` created the relay,
 container, control-client, and admin-client jobs, but GitHub started zero steps.
 Every job has the same check annotation: recent account payments failed or the
 Actions spending limit must be increased. This is an account-level runner
@@ -78,8 +90,9 @@ repeated after billing is repaired.
    browser/device media.
 3. Enroll an iOS 14 arm64e device from the admin-generated package and verify
    relay plus independent LAN control before and after relay restart.
-4. Exercise backup, restore, upgrade, automatic rollback, interrupted-operation
-   recovery, and both uninstall retention modes on that VPS.
+4. Exercise backup, restore, upgrade, admin credential reset, automatic
+   rollback, interrupted-operation recovery, and both uninstall retention modes
+   on that VPS.
 5. Run the draft release workflow, inspect all checksums/provenance/SBOMs and
    multi-architecture GHCR pulls, then publish only after the recorded tag and
    package versions match.
