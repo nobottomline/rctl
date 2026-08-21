@@ -16,6 +16,7 @@ type RestoreManager struct {
 	Paths    Paths
 	Runner   Runner
 	Verifier PublicVerifier
+	Chown    Chowner
 }
 
 func (r RestoreManager) DryRun(source string) (BackupMetadata, error) {
@@ -82,7 +83,7 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	defer mutation.Release()
 	current := mutation.Manifest
 	rollbackManifest := mutation.Manifest
-	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
+	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier, Chown: r.Chown}
 	restored, applyErr := applyBackup(source, current, r.Paths)
 	if applyErr == nil {
 		applyErr = r.startAndVerify(ctx, installer, restored)
@@ -123,7 +124,7 @@ func (r RestoreManager) restoreUninstalled(ctx context.Context, source string) (
 		return err
 	}
 	retainedData := ""
-	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
+	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier, Chown: r.Chown}
 	applied := false
 	mutationStarted := false
 	verified := false
@@ -197,9 +198,19 @@ func (r *RestoreManager) defaults() {
 	if r.Verifier == nil {
 		r.Verifier = HTTPSVerifier{}
 	}
+	if r.Chown == nil {
+		r.Chown = os.Chown
+	}
 }
 
 func (r RestoreManager) startAndVerify(ctx context.Context, installer Installer, manifest OwnershipManifest) error {
+	chown := r.Chown
+	if chown == nil {
+		chown = installer.Chown
+	}
+	if err := applyRuntimeOwnership(manifest.Config, r.Paths, chown); err != nil {
+		return err
+	}
 	if output, err := r.Runner.Run(ctx, "docker", installer.composeArgs("up", "-d", "--remove-orphans")...); err != nil {
 		return fmt.Errorf("start restored services: %s", commandFailure(output, err))
 	}

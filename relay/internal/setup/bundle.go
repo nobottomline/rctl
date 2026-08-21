@@ -178,7 +178,7 @@ func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 			"image": cfg.CoturnImage, "restart": "unless-stopped", "network_mode": "host", "read_only": true,
 			"volumes": []string{paths.Coturn + ":/etc/coturn/turnserver.conf:ro"},
 			"command": []string{"-c", "/etc/coturn/turnserver.conf"}, "tmpfs": []string{"/tmp:size=32m,mode=1777"},
-			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs, "cap_drop": []string{"ALL"}, "pids_limit": 256, "init": true,
+			"security_opt": []string{"no-new-privileges:true"}, "logging": boundedLogs, "cap_drop": []string{"ALL"}, "cap_add": []string{"NET_BIND_SERVICE"}, "pids_limit": 256, "init": true,
 			"healthcheck": map[string]any{"test": []string{"CMD", "turnutils_stunclient", "-p", "3478", "-t", "1000", "127.0.0.1"}, "interval": "15s", "timeout": "5s", "retries": 4, "start_period": "5s"},
 		}
 	}

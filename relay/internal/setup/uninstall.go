@@ -29,6 +29,7 @@ type UninstallManager struct {
 	Runner   Runner
 	Verifier PublicVerifier
 	Now      func() time.Time
+	Chown    Chowner
 }
 
 func (u UninstallManager) Plan(options UninstallOptions) (UninstallResult, error) {
@@ -89,7 +90,7 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 	defer mutation.Release()
 	current := mutation.Manifest
 	backupManifest := mutation.Manifest
-	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}
+	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Chown: u.Chown}
 
 	mutationStarted := true
 	defer func() {
@@ -157,6 +158,9 @@ func (u *UninstallManager) defaults() {
 	}
 	if u.Now == nil {
 		u.Now = time.Now
+	}
+	if u.Chown == nil {
+		u.Chown = os.Chown
 	}
 }
 

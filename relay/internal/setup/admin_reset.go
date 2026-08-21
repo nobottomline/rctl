@@ -23,6 +23,7 @@ type AdminResetManager struct {
 	Verifier PublicVerifier
 	Random   io.Reader
 	Now      func() time.Time
+	Chown    Chowner
 }
 
 func (m AdminResetManager) Plan() error {
@@ -99,7 +100,7 @@ func (m AdminResetManager) Reset(ctx context.Context, dryRun bool) (result Admin
 	current := mutation.Manifest
 	backupManifest := mutation.Manifest
 
-	installer := Installer{Paths: m.Paths, Runner: m.Runner, Verifier: m.Verifier}
+	installer := Installer{Paths: m.Paths, Runner: m.Runner, Verifier: m.Verifier, Chown: m.Chown}
 	defer func() {
 		if err == nil {
 			return
@@ -167,5 +168,8 @@ func (m *AdminResetManager) defaults() {
 	}
 	if m.Now == nil {
 		m.Now = time.Now
+	}
+	if m.Chown == nil {
+		m.Chown = os.Chown
 	}
 }

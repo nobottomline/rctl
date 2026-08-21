@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -20,7 +21,10 @@ const (
 	maxConfigBytes   = 64 << 10
 )
 
-var digestImagePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[a-f0-9]{64}$`)
+var (
+	digestImagePattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[a-f0-9]{64}$`)
+	digestImageWithPortPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*:([0-9]{1,5})/[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[a-f0-9]{64}$`)
+)
 
 type Config struct {
 	Schema         int    `json:"schema"`
@@ -85,16 +89,16 @@ func (c Config) Validate() error {
 	if c.Profile != ProfileContainer && c.Profile != ProfileNative {
 		return fmt.Errorf("unsupported deployment profile %q", c.Profile)
 	}
-	if c.Profile == ProfileContainer && !digestImagePattern.MatchString(c.RelayImage) {
+	if c.Profile == ProfileContainer && !validDigestImage(c.RelayImage) {
 		return errors.New("relay_image must be an OCI image pinned by sha256 digest")
 	}
 	if c.Profile == ProfileContainer && net.ParseIP(origin.Hostname()) != nil {
 		return errors.New("container profile requires a DNS hostname; public IP certificates are not yet a supported profile")
 	}
-	if c.Profile == ProfileContainer && !digestImagePattern.MatchString(c.CaddyImage) {
+	if c.Profile == ProfileContainer && !validDigestImage(c.CaddyImage) {
 		return errors.New("caddy_image must be an OCI image pinned by sha256 digest")
 	}
-	if c.Profile == ProfileContainer && c.EnableTURN && !digestImagePattern.MatchString(c.CoturnImage) {
+	if c.Profile == ProfileContainer && c.EnableTURN && !validDigestImage(c.CoturnImage) {
 		return errors.New("coturn_image must be an OCI image pinned by sha256 digest")
 	}
 	if c.EnableTURN {
@@ -113,6 +117,18 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validDigestImage(image string) bool {
+	if digestImagePattern.MatchString(image) {
+		return true
+	}
+	match := digestImageWithPortPattern.FindStringSubmatch(image)
+	if match == nil {
+		return false
+	}
+	port, err := strconv.Atoi(match[1])
+	return err == nil && port > 0 && port <= 65535
 }
 
 func isPublicIP(ip net.IP) bool {

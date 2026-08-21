@@ -86,6 +86,7 @@ func TestAdminResetRollsBackFailedNewCredentialVerification(t *testing.T) {
 		Paths: installer.Paths, Runner: runner, Verifier: verifier,
 		Random: strings.NewReader(strings.Repeat("abcdef0123456789", 16)),
 		Now:    func() time.Time { return time.Unix(1700004100, 0) },
+		Chown:  installer.Chown,
 	}
 	result, err := manager.Reset(context.Background(), false)
 	if err == nil || !strings.Contains(err.Error(), "was rolled back") || result.Backup == "" || result.AdminSecret != "" {

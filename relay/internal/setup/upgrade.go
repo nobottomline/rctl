@@ -115,6 +115,9 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 	if err = writeUpgradeBundle(plan.bundle, plan.current, plan.target, u.Paths); err != nil {
 		return result, err
 	}
+	if err = applyRuntimeOwnership(plan.target.Config, u.Paths, u.Chown); err != nil {
+		return result, err
+	}
 	if err = installer.verifyServices(ctx, plan.target.Config, plan.secrets.Admin, true); err != nil {
 		return result, fmt.Errorf("upgraded deployment verification failed: %w", err)
 	}

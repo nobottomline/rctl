@@ -27,6 +27,7 @@ type RecoveryManager struct {
 	Paths    Paths
 	Runner   Runner
 	Verifier PublicVerifier
+	Chown    Chowner
 }
 
 func pendingRecovery(paths Paths) (RecoveryState, error) {
@@ -146,7 +147,7 @@ func (r RecoveryManager) Recover(ctx context.Context) (RecoveryState, error) {
 	if err != nil {
 		return state, err
 	}
-	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
+	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier, Chown: r.Chown}
 	if state.Operation == "install" {
 		if info, statErr := os.Lstat(r.Paths.Compose); statErr == nil && info.Mode().IsRegular() {
 			_, _ = r.Runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...)
@@ -264,6 +265,9 @@ func (r *RecoveryManager) defaults() {
 	}
 	if r.Verifier == nil {
 		r.Verifier = HTTPSVerifier{}
+	}
+	if r.Chown == nil {
+		r.Chown = os.Chown
 	}
 }
 

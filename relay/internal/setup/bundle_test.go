@@ -66,6 +66,9 @@ func TestRenderDedicatedBundleIsPinnedAndDoesNotExposeRelayPort(t *testing.T) {
 		}
 	}
 	coturn := services["coturn"].(map[string]any)
+	if got := coturn["cap_add"].([]any); len(got) != 1 || got[0] != "NET_BIND_SERVICE" {
+		t.Fatalf("coturn capabilities=%v", got)
+	}
 	health := coturn["healthcheck"].(map[string]any)
 	if !strings.Contains(fmt.Sprint(health["test"]), "turnutils_stunclient") {
 		t.Fatal("coturn does not have a STUN health check")

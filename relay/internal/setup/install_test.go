@@ -122,6 +122,55 @@ func TestInstallerFreshAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestInstallerAppliesRuntimeOwnership(t *testing.T) {
+	runner := &fakeRunner{}
+	verifier := &fakeVerifier{}
+	installer := testInstaller(t, runner, verifier)
+	type ownership struct {
+		path     string
+		uid, gid int
+	}
+	var calls []ownership
+	installer.Chown = func(path string, uid, gid int) error {
+		calls = append(calls, ownership{path: path, uid: uid, gid: gid})
+		return nil
+	}
+	if _, err := installer.Install(context.Background(), validConfig(), InstallOptions{Version: "1.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []ownership{
+		{path: installer.Paths.RelayDataDir, uid: relayRuntimeUID, gid: relayRuntimeGID},
+		{path: installer.Paths.Coturn, uid: coturnRuntimeUID, gid: coturnRuntimeGID},
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("ownership calls=%+v", calls)
+	}
+	for index := range want {
+		if calls[index] != want[index] {
+			t.Fatalf("ownership call %d=%+v, want %+v", index, calls[index], want[index])
+		}
+	}
+}
+
+func TestInstallerDoesNotChownDisabledTURNConfig(t *testing.T) {
+	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
+	var paths []string
+	installer.Chown = func(path string, _, _ int) error {
+		paths = append(paths, path)
+		return nil
+	}
+	cfg := validConfig()
+	cfg.EnableTURN = false
+	cfg.CoturnImage = ""
+	cfg.TURNExternalIP = ""
+	if _, err := installer.Install(context.Background(), cfg, InstallOptions{Version: "1.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != installer.Paths.RelayDataDir {
+		t.Fatalf("unexpected ownership calls: %v", paths)
+	}
+}
+
 func TestInstallerDryRunDoesNotMutateFilesystem(t *testing.T) {
 	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
 	result, err := installer.Install(context.Background(), validConfig(), InstallOptions{DryRun: true})
@@ -360,6 +409,25 @@ func TestPublicVerifierChecksIdentityCookieAndLogout(t *testing.T) {
 	}
 	if !loggedOut {
 		t.Fatal("verification session was not revoked")
+	}
+}
+
+func TestPublicRouteVerifierAcceptsProtectedDeviceWebSocket(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/capabilities":
+			_ = json.NewEncoder(w).Encode(map[string]any{"product": "rctl", "component": "relay", "protocol": map[string]int{"major": 1}})
+		case "/device":
+			http.Error(w, "device authentication required", http.StatusUnauthorized)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	if err := verifyPublicRoutes(context.Background(), server.Client(), server.URL); err != nil {
+		t.Fatal(err)
 	}
 }
 

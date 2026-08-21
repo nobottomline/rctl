@@ -68,6 +68,13 @@ type RouteVerifier interface {
 
 type Chowner func(path string, uid, gid int) error
 
+const (
+	relayRuntimeUID  = 65532
+	relayRuntimeGID  = 65532
+	coturnRuntimeUID = 65534
+	coturnRuntimeGID = 65533
+)
+
 type Installer struct {
 	Paths    Paths
 	Runner   Runner
@@ -292,8 +299,15 @@ func verifyWebSocketUpgrade(ctx context.Context, client *http.Client, origin str
 		return err
 	}
 	parsed.Scheme = "wss"
-	conn, _, err := websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{HTTPClient: client})
+	conn, response, err := websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{HTTPClient: client})
 	if err != nil {
+		if response != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+			response.Body.Close()
+			if response.StatusCode == http.StatusUnauthorized {
+				return nil
+			}
+		}
 		return fmt.Errorf("public WebSocket upgrade failed: %w", err)
 	}
 	return conn.Close(websocket.StatusNormalClosure, "setup route probe")
@@ -453,6 +467,9 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 			return result, err
 		}
 	}
+	if err = applyRuntimeOwnership(cfg, i.Paths, i.Chown); err != nil {
+		return result, err
+	}
 	journal.Stage = "validate_and_start"
 	journal.UpdatedAt = i.Now().Unix()
 	_ = writeJSONAtomic(journalPath, journal, 0o600)
@@ -527,8 +544,21 @@ func (i Installer) prepareDirectories() error {
 			return fmt.Errorf("chmod %s: %w", dir.path, err)
 		}
 	}
-	if err := i.Chown(i.Paths.RelayDataDir, 65532, 65532); err != nil {
+	if err := i.Chown(i.Paths.RelayDataDir, relayRuntimeUID, relayRuntimeGID); err != nil {
 		return fmt.Errorf("chown relay data: %w", err)
+	}
+	return nil
+}
+
+func applyRuntimeOwnership(cfg Config, paths Paths, chown Chowner) error {
+	if !cfg.EnableTURN {
+		return nil
+	}
+	if chown == nil {
+		chown = os.Chown
+	}
+	if err := chown(paths.Coturn, coturnRuntimeUID, coturnRuntimeGID); err != nil {
+		return fmt.Errorf("chown coturn config: %w", err)
 	}
 	return nil
 }

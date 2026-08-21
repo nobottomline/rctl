@@ -49,6 +49,28 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
+func TestDigestImageAcceptsRegistryPort(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, image := range []string{
+		"127.0.0.1:5000/rctl-relay@sha256:" + digest,
+		"registry.example.com:443/team/rctl-relay:v1@sha256:" + digest,
+	} {
+		if !validDigestImage(image) {
+			t.Fatalf("valid image was rejected: %s", image)
+		}
+	}
+	for _, image := range []string{
+		"127.0.0.1:0/rctl-relay@sha256:" + digest,
+		"127.0.0.1:65536/rctl-relay@sha256:" + digest,
+		"127.0.0.1:5000/rctl-relay:latest",
+		"127.0.0.1:5000//rctl-relay@sha256:" + digest,
+	} {
+		if validDigestImage(image) {
+			t.Fatalf("invalid image was accepted: %s", image)
+		}
+	}
+}
+
 func TestLoadConfigRejectsLoosePermissionsAndUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "setup.json")

@@ -25,7 +25,7 @@ func TestRecoveryRestoresInterruptedLifecycleBackup(t *testing.T) {
 	if err := os.WriteFile(database, []byte("partial-upgrade-state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager := RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}
+	manager := RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}, Chown: installer.Chown}
 	beforeCalls := len(runner.calls)
 	state, err := manager.Plan()
 	if err != nil || state.Operation != "upgrade" || state.Backup != backup || len(runner.calls) != beforeCalls {
@@ -58,7 +58,7 @@ func TestRecoveryRestoresInterruptedAdminReset(t *testing.T) {
 	if err := os.WriteFile(installer.Paths.RelayEnv, []byte("partial credential state\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	state, err := (RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}).Recover(context.Background())
+	state, err := (RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}, Chown: installer.Chown}).Recover(context.Background())
 	if err != nil || state.Operation != "reset-admin" {
 		t.Fatalf("state=%+v err=%v", state, err)
 	}
@@ -76,7 +76,7 @@ func TestRecoveryRestartsInterruptedBackupAndCleansCandidate(t *testing.T) {
 	if err := os.Mkdir(candidate, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	state, err := (RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}).Recover(context.Background())
+	state, err := (RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}, Chown: installer.Chown}).Recover(context.Background())
 	if err != nil || state.Operation != "backup" {
 		t.Fatalf("state=%+v err=%v", state, err)
 	}
@@ -164,7 +164,7 @@ func TestRecoveryCompletesInterruptedUninstalledRestore(t *testing.T) {
 	if err := os.WriteFile(installer.Paths.Compose, []byte("partial compose"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	state, err := (RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}).Recover(context.Background())
+	state, err := (RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}, Chown: installer.Chown}).Recover(context.Background())
 	if err != nil || state.Operation != "restore-uninstalled" {
 		t.Fatalf("state=%+v err=%v", state, err)
 	}

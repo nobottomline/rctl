@@ -135,7 +135,7 @@ func TestRestoreRecoversKeepDataUninstall(t *testing.T) {
 	if err := os.WriteFile(database, []byte("retained-after-uninstall"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rollback, err := (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}).Restore(context.Background(), uninstall.Backup)
+	rollback, err := (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}, Chown: installer.Chown}).Restore(context.Background(), uninstall.Backup)
 	if err != nil || rollback != "" {
 		t.Fatalf("rollback=%q err=%v", rollback, err)
 	}
@@ -159,7 +159,7 @@ func TestFailedRecoveryRestoreReturnsToRetainedUninstalledState(t *testing.T) {
 	if err := os.WriteFile(database, []byte("retained-after-uninstall"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{failAt: 1}}).Restore(context.Background(), uninstall.Backup)
+	_, err = (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{failAt: 1}, Chown: installer.Chown}).Restore(context.Background(), uninstall.Backup)
 	if err == nil || !strings.Contains(err.Error(), "uninstalled state was restored") {
 		t.Fatalf("recovery result: %v", err)
 	}

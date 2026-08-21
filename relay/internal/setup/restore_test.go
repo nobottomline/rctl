@@ -59,7 +59,7 @@ func createRestoreFixture(t *testing.T) (Installer, *fakeRunner, string, string)
 
 func TestRestoreReplacesStateAndKeepsPreRestoreBackup(t *testing.T) {
 	installer, runner, source, database := createRestoreFixture(t)
-	manager := RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}
+	manager := RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}, Chown: installer.Chown}
 	metadata, err := manager.DryRun(source)
 	if err != nil || metadata.Release != "1.2.3" {
 		t.Fatalf("dry run metadata=%+v err=%v", metadata, err)
@@ -91,7 +91,7 @@ func TestRestoreReplacesStateAndKeepsPreRestoreBackup(t *testing.T) {
 
 func TestRestoreRejectsUnmanagedAndTamperedBackupBeforeServiceMutation(t *testing.T) {
 	installer, runner, source, database := createRestoreFixture(t)
-	manager := RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}
+	manager := RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}, Chown: installer.Chown}
 	beforeCalls := len(runner.calls)
 	if _, err := manager.Restore(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "direct backup-*") {
 		t.Fatalf("unmanaged backup result: %v", err)
@@ -113,7 +113,7 @@ func TestRestoreRejectsUnmanagedAndTamperedBackupBeforeServiceMutation(t *testin
 func TestRestoreRollsBackWhenRestoredRuntimeFailsVerification(t *testing.T) {
 	installer, runner, source, database := createRestoreFixture(t)
 	verifier := &sequenceVerifier{failAt: 2}
-	rollback, err := (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: verifier}).Restore(context.Background(), source)
+	rollback, err := (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: verifier, Chown: installer.Chown}).Restore(context.Background(), source)
 	if err == nil || !strings.Contains(err.Error(), "was rolled back") {
 		t.Fatalf("restore result: rollback=%s err=%v", rollback, err)
 	}
@@ -181,7 +181,7 @@ func TestRestoreRollbackRemovesFilesOwnedOnlyByFailedTarget(t *testing.T) {
 	}
 
 	verifier := &sequenceVerifier{failAt: 2}
-	if _, err := (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: verifier}).Restore(context.Background(), targetSource); err == nil || !strings.Contains(err.Error(), "was rolled back") {
+	if _, err := (RestoreManager{Paths: installer.Paths, Runner: runner, Verifier: verifier, Chown: installer.Chown}).Restore(context.Background(), targetSource); err == nil || !strings.Contains(err.Error(), "was rolled back") {
 		t.Fatalf("restore result: %v", err)
 	}
 	if _, err := os.Lstat(installer.Paths.Coturn); !errors.Is(err, os.ErrNotExist) {
