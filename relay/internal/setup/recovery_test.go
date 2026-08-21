@@ -43,6 +43,30 @@ func TestRecoveryRestoresInterruptedLifecycleBackup(t *testing.T) {
 	}
 }
 
+func TestRecoveryRestoresInterruptedAdminReset(t *testing.T) {
+	installer, runner, _, oldEnvironment := createUpgradeFixture(t)
+	backup, err := (BackupManager{
+		Paths: installer.Paths, Runner: runner, Verifier: &fakeVerifier{},
+		Now: func() time.Time { return time.Unix(1700010150, 0) },
+	}).Create(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := beginRecovery(installer.Paths, "reset-admin", backup, time.Unix(1700010160, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installer.Paths.RelayEnv, []byte("partial credential state\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := (RecoveryManager{Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{}}).Recover(context.Background())
+	if err != nil || state.Operation != "reset-admin" {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	if raw, err := os.ReadFile(installer.Paths.RelayEnv); err != nil || string(raw) != string(oldEnvironment) {
+		t.Fatalf("recovered environment differs: err=%v", err)
+	}
+}
+
 func TestRecoveryRestartsInterruptedBackupAndCleansCandidate(t *testing.T) {
 	installer, runner, _, _ := createUpgradeFixture(t)
 	if err := beginRecovery(installer.Paths, "backup", "", time.Unix(1700010200, 0)); err != nil {
@@ -75,6 +99,9 @@ func TestPendingRecoveryBlocksNewLifecycleOperations(t *testing.T) {
 	}
 	if _, err := (UpgradeManager{Paths: installer.Paths, Runner: runner, Verifier: &fakeVerifier{}, Now: time.Now}).Plan(upgradeOptions()); err == nil || !strings.Contains(err.Error(), "requires rctl-setup recover") {
 		t.Fatalf("upgrade while recovery pending: %v", err)
+	}
+	if err := (AdminResetManager{Paths: installer.Paths}).Plan(); err == nil || !strings.Contains(err.Error(), "requires rctl-setup recover") {
+		t.Fatalf("admin reset while recovery pending: %v", err)
 	}
 	if err := os.WriteFile(installer.Paths.RecoveryPath, []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)

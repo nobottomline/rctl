@@ -54,6 +54,8 @@ func run(args []string) int {
 		return runUninstall(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "recover":
 		return runRecover(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "reset-admin":
+		return runAdminReset(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -62,6 +64,55 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runAdminReset(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("reset-admin", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	dryRun := flags.Bool("dry-run", false, "validate and print the reset plan without changing credentials")
+	assumeYes := flags.Bool("yes", false, "reset credentials without an interactive confirmation")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(errorsOutput, "reset-admin does not accept positional arguments")
+		return 2
+	}
+	manager := setup.AdminResetManager{}
+	if err := manager.Plan(); err != nil {
+		fmt.Fprintln(errorsOutput, "reset-admin plan:", err)
+		return 1
+	}
+	fmt.Fprintln(output, "\nPlan: rotate the admin login and session signing secrets")
+	fmt.Fprintln(output, "All existing browser sessions will be invalidated. Device identities and TURN credentials will be preserved.")
+	fmt.Fprintln(output, "A verified backup and automatic rollback are mandatory.")
+	if *dryRun {
+		fmt.Fprintln(output, "Admin reset dry run complete. No services, files, or credentials were changed.")
+		return 0
+	}
+	if !*assumeYes {
+		if input != os.Stdin || !stdinIsTerminal() {
+			fmt.Fprintln(errorsOutput, "reset-admin requires an interactive terminal or --yes")
+			return 2
+		}
+		answer, promptErr := prompt(bufio.NewReader(input), output, "Type reset-admin to continue", "")
+		if promptErr != nil || answer != "reset-admin" {
+			fmt.Fprintln(errorsOutput, "admin credential reset cancelled; the deployment was not changed")
+			return 1
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	result, err := manager.Reset(ctx, false)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "reset-admin:", err)
+		if result.Backup != "" {
+			fmt.Fprintln(errorsOutput, "Pre-reset backup:", result.Backup)
+		}
+		return 1
+	}
+	fmt.Fprintf(output, "Admin credentials reset and verified.\nNew admin password (shown once): %s\nPre-reset backup: %s\n", result.AdminSecret, result.Backup)
+	return 0
 }
 
 func runRecover(args []string, input io.Reader, output, errorsOutput io.Writer) int {
@@ -614,5 +665,6 @@ Commands:
   restore      validate, restore, verify, and automatically roll back
   upgrade      backup, apply a newer pinned release, verify, and roll back
   uninstall    backup, remove owned services/files, and retain recovery
-  recover      finish recovery after an interrupted lifecycle operation`)
+  recover      finish recovery after an interrupted lifecycle operation
+  reset-admin  rotate admin/session credentials with backup and rollback`)
 }
