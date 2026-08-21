@@ -62,3 +62,32 @@ func TestPublicPackageEnablesDevicePackageGeneration(t *testing.T) {
 		t.Fatal("device package generation was not enabled")
 	}
 }
+
+func TestUpgradeAcceptsRepeatedBootstrapConfigurationFlags(t *testing.T) {
+	var errorsOutput strings.Builder
+	code := runUpgrade([]string{
+		"--public-url", "https://rctl.example.test",
+		"--turn-external-ip", "8.8.8.8",
+		"--acme-email", "admin@example.test",
+		"--image", "ghcr.io/example/relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"--caddy-image", "docker.io/library/caddy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"--coturn-image", "docker.io/coturn/coturn@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		"--yes",
+	}, strings.NewReader(""), io.Discard, &errorsOutput)
+	if code == 2 || strings.Contains(errorsOutput.String(), "flag provided but not defined") {
+		t.Fatalf("repeated bootstrap flags were not accepted: code=%d error=%q", code, errorsOutput.String())
+	}
+}
+
+func TestConfigFlagsObserveIdentityBeforeLoad(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	values := addConfigFlags(flags)
+	if err := flags.Parse([]string{"--public-url", "https://rctl.example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	values.observe(flags)
+	if !values.configuration || !values.identityConfiguration {
+		t.Fatalf("configuration=%t identity=%t", values.configuration, values.identityConfiguration)
+	}
+}

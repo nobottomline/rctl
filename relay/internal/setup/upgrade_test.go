@@ -140,6 +140,29 @@ func TestUpgradeAlreadyCurrentVerifiesWithoutBackup(t *testing.T) {
 	}
 }
 
+func TestUpgradeBootstrapConfigurationMustMatchInstalledIdentity(t *testing.T) {
+	installer, runner, _, _ := createUpgradeFixture(t)
+	manager := UpgradeManager{
+		Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{},
+		Now: time.Now, Chown: func(string, int, int) error { return nil },
+	}
+	expected := validConfig()
+	options := upgradeOptions()
+	options.ExpectedConfig = &expected
+	if _, err := manager.Plan(options); err != nil {
+		t.Fatalf("matching bootstrap configuration was rejected: %v", err)
+	}
+
+	beforeCalls := len(runner.calls)
+	expected.PublicURL = "https://different.example.test"
+	if _, err := manager.Plan(options); err == nil || !strings.Contains(err.Error(), "differs from the installed deployment") {
+		t.Fatalf("mismatched bootstrap identity result: %v", err)
+	}
+	if len(runner.calls) != beforeCalls {
+		t.Fatal("mismatched bootstrap identity changed or probed runtime state")
+	}
+}
+
 func TestUpgradeRollsBackFailedTargetVerification(t *testing.T) {
 	installer, runner, database, secrets := createUpgradeFixture(t)
 	verifier := &sequenceVerifier{failAt: 2}

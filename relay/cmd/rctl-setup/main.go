@@ -229,12 +229,10 @@ func runUninstall(args []string, input io.Reader, output, errorsOutput io.Writer
 func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
+	configValues := addConfigFlags(flags)
 	dryRun := flags.Bool("dry-run", false, "validate and print the upgrade plan without changing the host")
 	assumeYes := flags.Bool("yes", false, "upgrade without an interactive confirmation")
 	publicPackage := flags.String("public-package", "", "verified public rctl .deb for the target release")
-	relayImage := flags.String("image", defaultImage, "target digest-pinned relay image")
-	caddyImage := flags.String("caddy-image", defaultCaddy, "target digest-pinned Caddy image")
-	coturnImage := flags.String("coturn-image", defaultCoturn, "target digest-pinned coturn image")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -242,9 +240,28 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		fmt.Fprintln(errorsOutput, "upgrade does not accept positional arguments")
 		return 2
 	}
+	configValues.observe(flags)
+	relayImage, caddyImage, coturnImage := configValues.relayImage, configValues.caddyImage, configValues.coturnImage
+	var expectedConfig *setup.Config
+	if configValues.configPath != "" || configValues.identityConfiguration {
+		cfg, err := configValues.load(flags)
+		if err != nil {
+			fmt.Fprintln(errorsOutput, "config:", err)
+			return 2
+		}
+		if *publicPackage != "" {
+			cfg.DevicePackages = true
+		}
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintln(errorsOutput, "config:", err)
+			return 2
+		}
+		relayImage, caddyImage, coturnImage = cfg.RelayImage, cfg.CaddyImage, cfg.CoturnImage
+		expectedConfig = &cfg
+	}
 	options := setup.UpgradeOptions{
-		DryRun: *dryRun, Version: version, RelayImage: *relayImage, CaddyImage: *caddyImage,
-		CoturnImage: *coturnImage, PublicPackageSource: *publicPackage,
+		DryRun: *dryRun, Version: version, RelayImage: relayImage, CaddyImage: caddyImage,
+		CoturnImage: coturnImage, PublicPackageSource: *publicPackage, ExpectedConfig: expectedConfig,
 	}
 	manager := setup.UpgradeManager{}
 	plan, err := manager.Plan(options)
@@ -407,15 +424,16 @@ func runDoctor(args []string, output, errorsOutput io.Writer) int {
 }
 
 type configFlags struct {
-	configPath    string
-	publicURL     string
-	relayImage    string
-	caddyImage    string
-	coturnImage   string
-	turnIP        string
-	acmeEmail     string
-	turn          bool
-	configuration bool
+	configPath            string
+	publicURL             string
+	relayImage            string
+	caddyImage            string
+	coturnImage           string
+	turnIP                string
+	acmeEmail             string
+	turn                  bool
+	configuration         bool
+	identityConfiguration bool
 }
 
 func addConfigFlags(flags *flag.FlagSet) *configFlags {
@@ -432,12 +450,7 @@ func addConfigFlags(flags *flag.FlagSet) *configFlags {
 }
 
 func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
-	flags.Visit(func(item *flag.Flag) {
-		switch item.Name {
-		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "turn":
-			v.configuration = true
-		}
-	})
+	v.observe(flags)
 	if v.configPath != "" {
 		if v.configuration {
 			return setup.Config{}, fmt.Errorf("--config cannot be combined with individual configuration flags")
@@ -449,6 +462,19 @@ func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
 		RelayImage: v.relayImage, CaddyImage: v.caddyImage, CoturnImage: v.coturnImage,
 		TURNExternalIP: v.turnIP, EnableTURN: v.turn, ACMEEmail: v.acmeEmail, Release: version,
 	}, nil
+}
+
+func (v *configFlags) observe(flags *flag.FlagSet) {
+	flags.Visit(func(item *flag.Flag) {
+		switch item.Name {
+		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "turn":
+			v.configuration = true
+		}
+		switch item.Name {
+		case "public-url", "turn-external-ip", "acme-email", "turn":
+			v.identityConfiguration = true
+		}
+	})
 }
 
 func runPreflight(args []string) int {

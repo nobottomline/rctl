@@ -18,6 +18,7 @@ type UpgradeOptions struct {
 	CaddyImage          string
 	CoturnImage         string
 	PublicPackageSource string
+	ExpectedConfig      *Config
 }
 
 type UpgradeResult struct {
@@ -159,6 +160,14 @@ func (u UpgradeManager) prepare(options UpgradeOptions) (upgradePlan, error) {
 	if err := verifyOwnedFiles(current); err != nil {
 		return upgradePlan{}, err
 	}
+	if options.ExpectedConfig != nil {
+		if err := options.ExpectedConfig.Validate(); err != nil {
+			return upgradePlan{}, fmt.Errorf("expected bootstrap configuration: %w", err)
+		}
+		if !sameDeploymentIdentity(current.Config, *options.ExpectedConfig) {
+			return upgradePlan{}, errors.New("supplied bootstrap configuration differs from the installed deployment")
+		}
+	}
 	comparison, err := compareReleases(current.Version, options.Version)
 	if err != nil {
 		return upgradePlan{}, err
@@ -200,6 +209,16 @@ func (u UpgradeManager) prepare(options UpgradeOptions) (upgradePlan, error) {
 		return upgradePlan{}, errors.New("installed files differ from artifacts carrying the same release version")
 	}
 	return upgradePlan{current: current, target: target, bundle: bundle, secrets: secrets, alreadyCurrent: alreadyCurrent}, nil
+}
+
+func sameDeploymentIdentity(current, expected Config) bool {
+	return current.Schema == expected.Schema &&
+		current.PublicURL == expected.PublicURL &&
+		current.Profile == expected.Profile &&
+		current.TURNExternalIP == expected.TURNExternalIP &&
+		current.EnableTURN == expected.EnableTURN &&
+		current.ACMEEmail == expected.ACMEEmail &&
+		current.DevicePackages == expected.DevicePackages
 }
 
 func (u UpgradeManager) validateCandidates(ctx context.Context, plan upgradePlan) error {
