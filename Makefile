@@ -44,8 +44,7 @@ after-stage::
 	$(ECHO_NOTHING)if [ ! -f web/dist/index.html ] || find web/src web/index.html web/package.json -newer web/dist/index.html 2>/dev/null | grep -q .; then echo "==> Building web client"; ( cd web && { [ -d node_modules ] || npm ci; } && npm run build ); fi$(ECHO_END)
 	$(ECHO_NOTHING)cp web/dist/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
 	$(ECHO_NOTHING)test -s "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html" || { echo "error: required control client is missing or empty" >&2; exit 1; }$(ECHO_END)
-	$(ECHO_NOTHING)cp ".theos/obj/debug/rctlappmedia.dylib" \
-		"$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)
+	$(ECHO_NOTHING)set -e; dylib=".theos/obj/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib=".theos/obj/debug/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib="app/.theos/obj/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib="app/.theos/obj/debug/rctlappmedia.dylib"; test -f "$$dylib" || { echo "error: required rctlappmedia library is missing" >&2; exit 1; }; cp "$$dylib" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
 	$(ECHO_NOTHING)set -e; dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
