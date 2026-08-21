@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `7c11562`, plus the documentation record itself.
+Source baseline: `main` through `a343930`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -34,6 +34,10 @@ Release version remains `0.3.0`; no tag or public release was created.
 - Upgrade cancellation during target verification was exercised explicitly.
   Automatic rollback used a fresh bounded recovery context, restored the old
   deployment, and did not inherit the cancelled command context.
+- Cross-configuration restore rollback was exercised with a TURN-only target
+  file. Failed target verification removed that file and restored the original
+  non-TURN manifest. Restore now stops the complete stack before replacement so
+  coturn cannot retain an old shared secret across a successful restore.
 - Relay Go tests and race-sensitive setup tests; control client production
   build; relay admin lint and production build; production dependency audits
   for both web projects with zero reported vulnerabilities.
