@@ -146,8 +146,17 @@ a trusted maintainer machine, verify them there, and transfer that directory to
 the temporary VPS over SSH. Run the transferred `install.sh` with absolute
 `RCTL_ASSETS_DIR=/path/to/assets`; local mode rejects symlinked
 directories/assets and applies the same checksum and activation contract
-without embedding a GitHub token on the VPS. This is a maintainer test path,
-not the public installation UX.
+without embedding a GitHub token in an asset or rctl configuration. A private
+GHCR candidate still requires registry authentication. Use a dedicated
+read-only package token through `docker login --password-stdin` and an isolated
+root-owned `DOCKER_CONFIG` directory under `/run`; pass that directory to the
+bootstrap process, then run `docker logout`, delete the directory, and unset the
+token even when setup fails. Do not use the maintainer's normal Docker config,
+write a token to disk outside that temporary directory, place it in command
+arguments, or copy it into `/etc/rctl`. Confirm after cleanup that the temporary
+directory is absent. This is a preliminary private maintainer test path, not the
+public installation UX or final publication qualification. Final qualification
+uses an anonymously pullable public candidate and repeats the full test.
 
 ## Wizard commands
 

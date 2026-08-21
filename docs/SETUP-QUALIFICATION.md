@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `fa85422`, plus the documentation record itself.
+Source baseline: `main` through `327182a`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -77,6 +77,10 @@ Release version remains `0.3.0`; no tag or public release was created.
   for the exact tagged commit, exact remote assets and checksums,
   repository/workflow/ref/commit-bound provenance, a hosted runner, OCI SBOM,
   and a fresh-VPS qualification report bound to the same artifacts.
+- Publication inspects the candidate digest before configuring registry
+  credentials, so a private GHCR package cannot pass as the anonymous
+  production bootstrap. A private rehearsal must use an isolated ephemeral
+  Docker credential directory and is explicitly insufficient for publication.
 - The strict qualification verifier and CLI passed positive identity binding,
   digest binding, unknown/trailing JSON, symlink, stale/future report, profile,
   and every incomplete-check rejection test. All Go tests, `go vet`, shell
@@ -84,7 +88,7 @@ Release version remains `0.3.0`; no tag or public release was created.
 
 ### Externally blocked
 
-GitHub Actions run `32514479222` for source `a300a80` created the relay,
+GitHub Actions run `32515961321` for source `9006b51` created the relay,
 container, control-client, and admin-client jobs, but GitHub started zero steps.
 Every job has the same check annotation: recent account payments failed or the
 Actions spending limit must be increased. This is an account-level runner

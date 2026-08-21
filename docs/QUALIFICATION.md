@@ -22,20 +22,28 @@ It does not create the stable GHCR version tag. The setup binaries embed the
 immutable candidate digest, so a qualified draft can be exercised without a
 mutable image reference.
 
+The publication report must come from the public candidate: anonymous image
+pull and anonymous release bootstrap are part of the supported user journey.
+An earlier private-repository rehearsal using a temporary read-only GHCR token
+is useful engineering evidence but cannot satisfy `bootstrap` or replace the
+final clean-VPS run.
+
 Publication refuses to proceed unless all of these are true:
 
 1. The repository is public and the release still exists as a draft.
-2. The exact tagged source commit has a successful `CI` workflow run.
-3. The draft contains exactly the version-matched release set, `SHA256SUMS`,
+2. The candidate image digest is anonymously readable before any registry
+   credentials are configured in the publication job.
+3. The exact tagged source commit has a successful `CI` workflow run.
+4. The draft contains exactly the version-matched release set, `SHA256SUMS`,
    and one `rctl-qualification_<version>.json` report.
-4. Reassembling the release set produces byte-identical checksums.
-5. Every release artifact and the OCI image has repository-bound build
+5. Reassembling the release set produces byte-identical checksums.
+6. Every release artifact and the OCI image has repository-bound build
    provenance from the tag-bound draft workflow.
-6. The OCI image exposes its BuildKit SBOM attestation.
-7. The qualification report matches the tag, source commit, image digest,
+7. The OCI image exposes its BuildKit SBOM attestation.
+8. The qualification report matches the tag, source commit, image digest,
    checksum-set digest, supported profile, freshness window, and report digest
    supplied by the operator.
-8. Every required clean-VPS, TURN, device, lifecycle, and LAN check passed.
+9. Every required clean-VPS, TURN, device, lifecycle, and LAN check passed.
 
 Only after those checks does publication promote the candidate digest to the
 stable GHCR version tag. A pre-existing version tag is accepted only when it
