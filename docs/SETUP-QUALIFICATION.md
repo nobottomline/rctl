@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `99e0113`, plus the documentation record itself.
+Source baseline: `main` through `4f3ce5b`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -23,6 +23,15 @@ Release version remains `0.3.0`; no tag or public release was created.
   SQLite session persistence checks. Upgrade rollback was also exercised after
   the target verifier performed a real SQLite schema migration and data write;
   the old schema and row were restored without the target column.
+- Container readiness tests reject missing, duplicate, stopped, starting, and
+  unhealthy required services. Relay and coturn healthchecks are mandatory;
+  install and doctor no longer accept Docker's `running/unhealthy` state.
+- A failed fresh install now preserves its redacted journal and can be retried
+  successfully without manual cleanup. Symlinked journal paths and retained
+  unowned backup state are rejected before mutation.
+- Upgrade cancellation during target verification was exercised explicitly.
+  Automatic rollback used a fresh bounded recovery context, restored the old
+  deployment, and did not inherit the cancelled command context.
 - Relay Go tests and race-sensitive setup tests; control client production
   build; relay admin lint and production build; production dependency audits
   for both web projects with zero reported vulnerabilities.
