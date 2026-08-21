@@ -187,12 +187,12 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 		add("clock", Fail, "System clock is not synchronized", "TLS and signed metadata require correct time")
 	}
 
-	for _, path := range []string{"/etc/rctl", "/opt/rctl", "/var/lib/rctl"} {
+	for _, path := range []string{"/etc/rctl", "/opt/rctl", "/var/lib/rctl", "/var/backups/rctl"} {
 		exists, err := p.Probe.PathExists(path)
 		if err != nil {
 			add("existing_state", Fail, "Existing state could not be inspected", path+": "+err.Error())
 		} else if exists {
-			add("existing_state", Warn, "Existing rctl state requires ownership reconciliation", path)
+			add("existing_state", Fail, "Unowned rctl state blocks fresh installation", path+"; restore, reconcile, or explicitly remove the prior state before installing")
 		}
 	}
 	return report

@@ -255,6 +255,24 @@ func TestInstallerRollsBackFailedFreshInstallAndRedactsJournal(t *testing.T) {
 	if !strings.Contains(string(raw), `"status": "rolled_back"`) || strings.Contains(string(raw), "0123456789abcdef") {
 		t.Fatalf("journal status/redaction invalid: %s", raw)
 	}
+	runner.failAt = 0
+	result, retryErr := installer.Install(context.Background(), validConfig(), InstallOptions{Version: "1.0.0"})
+	if retryErr != nil || !result.Fresh {
+		t.Fatalf("retry after rolled-back install: result=%+v err=%v", result, retryErr)
+	}
+}
+
+func TestInstallerRejectsSymlinkedJournalDirectory(t *testing.T) {
+	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
+	if err := os.MkdirAll(filepath.Dir(installer.Paths.LogDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), installer.Paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.Install(context.Background(), validConfig(), InstallOptions{}); err == nil || !strings.Contains(err.Error(), "journal path is not a real directory") {
+		t.Fatalf("symlinked journal result: %v", err)
+	}
 }
 
 func TestInstallerRollsBackPartialDirectoryPreparation(t *testing.T) {

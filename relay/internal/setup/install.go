@@ -505,6 +505,13 @@ func (i Installer) prepareDirectories() error {
 		{i.Paths.BackupDir, 0o700}, {i.Paths.LogDir, 0o700}, {i.Paths.StateDir, 0o700},
 	}
 	for _, dir := range directories {
+		if info, err := os.Lstat(dir.path); err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("managed directory path is not a real directory: %s", dir.path)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect %s: %w", dir.path, err)
+		}
 		if err := os.MkdirAll(dir.path, dir.mode); err != nil {
 			return fmt.Errorf("create %s: %w", dir.path, err)
 		}
@@ -660,12 +667,19 @@ func (i Installer) stopFreshServices(ctx context.Context) error {
 }
 
 func ensureNoForeignState(paths Paths) error {
-	for _, path := range []string{paths.EtcDir, paths.OptDir, paths.DataDir, paths.BackupDir, paths.LogDir} {
+	for _, path := range []string{paths.EtcDir, paths.OptDir, paths.DataDir, paths.BackupDir} {
 		if _, err := os.Lstat(path); err == nil {
 			return fmt.Errorf("unowned existing path %s; refusing to overwrite", path)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("inspect %s: %w", path, err)
 		}
+	}
+	if info, err := os.Lstat(paths.LogDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("existing setup journal path is not a real directory: %s", paths.LogDir)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect %s: %w", paths.LogDir, err)
 	}
 	return nil
 }

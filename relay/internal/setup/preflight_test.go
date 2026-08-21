@@ -72,6 +72,18 @@ func TestPreflightRejectsDNSPointingAwayFromTURNAddress(t *testing.T) {
 	t.Fatalf("missing DNS target failure: %#v", report.Checks)
 }
 
+func TestPreflightRejectsRetainedUnownedBackupState(t *testing.T) {
+	probe := passingProbe()
+	probe.paths["/var/backups/rctl"] = true
+	report := (Preflight{Probe: probe}).Run(context.Background(), validConfig())
+	for _, check := range report.Checks {
+		if check.ID == "existing_state" && check.Severity == Fail && strings.Contains(check.Detail, "/var/backups/rctl") {
+			return
+		}
+	}
+	t.Fatalf("missing retained backup conflict: %#v", report.Checks)
+}
+
 func TestPreflightPassesHealthyHost(t *testing.T) {
 	report := (Preflight{Probe: passingProbe()}).Run(context.Background(), validConfig())
 	if report.Failed() {
