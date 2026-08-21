@@ -123,6 +123,77 @@ func TestInstallerRequiresValidPublicPackageBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestBackupCreatesVerifiedRootOnlySnapshot(t *testing.T) {
+	runner := &fakeRunner{}
+	verifier := &fakeVerifier{}
+	installer := testInstaller(t, runner, verifier)
+	if _, err := installer.Install(context.Background(), validConfig(), InstallOptions{Version: "1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(installer.Paths.RelayDataDir, "rctl-relay.db")
+	if err := os.WriteFile(database, []byte("sqlite fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := BackupManager{Paths: installer.Paths, Runner: runner, Verifier: verifier, Now: func() time.Time { return time.Unix(1700000100, 0) }}
+	callCount := len(runner.calls)
+	if sources, err := manager.DryRun(); err != nil || len(sources) == 0 {
+		t.Fatalf("backup dry run: sources=%v err=%v", sources, err)
+	}
+	if len(runner.calls) != callCount {
+		t.Fatal("backup dry run changed service state")
+	}
+	name, err := manager.Create(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pathWithin(name, installer.Paths.BackupDir) {
+		t.Fatalf("backup escaped backup root: %s", name)
+	}
+	info, err := os.Stat(name)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("backup directory mode=%v err=%v", info, err)
+	}
+	metadata, err := loadBackupMetadata(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Release != "1.2.3" || len(metadata.Entries) == 0 {
+		t.Fatalf("unexpected backup metadata: %+v", metadata)
+	}
+	backedUpDB := filepath.Join(name, "root", strings.TrimPrefix(database, string(filepath.Separator)))
+	if raw, err := os.ReadFile(backedUpDB); err != nil || string(raw) != "sqlite fixture" {
+		t.Fatalf("database snapshot missing: %q err=%v", raw, err)
+	}
+	calls := strings.Join(runner.calls, "\n")
+	if !strings.Contains(calls, " stop relay caddy") || !strings.Contains(calls, " up -d relay caddy") {
+		t.Fatalf("backup did not bracket snapshot with service lifecycle:\n%s", calls)
+	}
+	if err := os.WriteFile(backedUpDB, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateBackup(name); err == nil || !strings.Contains(err.Error(), "digest differs") {
+		t.Fatalf("tampered backup validation: %v", err)
+	}
+}
+
+func TestBackupRejectsSymlinkAndRestartsServices(t *testing.T) {
+	runner := &fakeRunner{}
+	installer := testInstaller(t, runner, &fakeVerifier{})
+	if _, err := installer.Install(context.Background(), validConfig(), InstallOptions{Version: "1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(installer.Paths.RelayDataDir, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (BackupManager{Paths: installer.Paths, Runner: runner, Verifier: &fakeVerifier{}}).Create(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "non-regular") {
+		t.Fatalf("symlink backup result: %v", err)
+	}
+	if calls := strings.Join(runner.calls, "\n"); !strings.Contains(calls, " up -d relay caddy") {
+		t.Fatalf("services were not restarted after backup failure:\n%s", calls)
+	}
+}
+
 func TestInstallerRefusesForeignState(t *testing.T) {
 	installer := testInstaller(t, &fakeRunner{}, &fakeVerifier{})
 	if err := os.MkdirAll(installer.Paths.EtcDir, 0o700); err != nil {

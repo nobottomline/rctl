@@ -130,6 +130,16 @@ Every mutating command has `--dry-run`. Re-running `install` reconciles an
 existing installation when its ownership metadata is valid; it does not create
 new secrets or replace state merely because a file already exists.
 
+`rctl-setup backup` is implemented as a short, explicit maintenance window. It
+holds the global lifecycle lock, verifies current ownership/hashes, stops relay
+and Caddy, snapshots all managed configuration plus `/var/lib/rctl`, preserves
+Unix modes and ownership, and writes a sorted SHA-256 manifest under
+`/var/backups/rctl`. Relay and Caddy are restarted and the public authenticated
+path is verified before the candidate is atomically renamed as a successful
+backup. A failed copy or verification removes the candidate and still restarts
+the prior services. The backup directory is mode 0700 because it contains the
+relay database, sessions, device identities, TLS state, and server secrets.
+
 ## Supported deployment profiles
 
 ### Dedicated host

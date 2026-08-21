@@ -350,18 +350,11 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 		options.Version = "dev"
 	}
 	if !options.DryRun {
-		if err := os.MkdirAll(filepath.Dir(i.Paths.LockPath), 0o755); err != nil {
-			return result, fmt.Errorf("create lock directory: %w", err)
-		}
-		lock, err := os.OpenFile(i.Paths.LockPath, os.O_CREATE|os.O_RDWR, 0o600)
+		releaseLock, err := acquireLifecycleLock(i.Paths.LockPath)
 		if err != nil {
-			return result, fmt.Errorf("open setup lock: %w", err)
+			return result, err
 		}
-		defer lock.Close()
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			return result, errors.New("another rctl lifecycle operation is active")
-		}
-		defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		defer releaseLock()
 	}
 
 	existing, manifestErr := loadManifest(i.Paths.ManifestPath)
@@ -472,6 +465,24 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	result.Fresh = true
 	result.AdminSecret = secrets.Admin
 	return result, nil
+}
+
+func acquireLifecycleLock(name string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		return nil, fmt.Errorf("create lock directory: %w", err)
+	}
+	lock, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open setup lock: %w", err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, errors.New("another rctl lifecycle operation is active")
+	}
+	return func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+	}, nil
 }
 
 func (i Installer) prepareDirectories() error {

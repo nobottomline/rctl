@@ -43,6 +43,8 @@ func run(args []string) int {
 		return runInstall(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "doctor":
 		return runDoctor(args[1:], os.Stdout, os.Stderr)
+	case "backup":
+		return runBackup(args[1:], os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -51,6 +53,41 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runBackup(args []string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("backup", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	dryRun := flags.Bool("dry-run", false, "validate and print snapshot sources without stopping services")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(errorsOutput, "backup does not accept positional arguments")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	manager := setup.BackupManager{}
+	if *dryRun {
+		sources, err := manager.DryRun()
+		if err != nil {
+			fmt.Fprintln(errorsOutput, "backup dry run:", err)
+			return 1
+		}
+		fmt.Fprintln(output, "Backup dry run complete. Snapshot sources:")
+		for _, source := range sources {
+			fmt.Fprintln(output, " ", source)
+		}
+		return 0
+	}
+	name, err := manager.Create(ctx)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "backup:", err)
+		return 1
+	}
+	fmt.Fprintf(output, "Backup verified: %s\n", name)
+	return 0
 }
 
 func runDoctor(args []string, output, errorsOutput io.Writer) int {
@@ -328,5 +365,6 @@ Commands:
   version      print build and platform metadata
   preflight    run read-only host and configuration checks
   install      preflight, confirm, apply, verify, and roll back on failure
-  doctor       diagnose owned files, services, HTTPS, and WebSocket routing`)
+  doctor       diagnose owned files, services, HTTPS, and WebSocket routing
+  backup       stop briefly, snapshot managed state, restart, and verify`)
 }
