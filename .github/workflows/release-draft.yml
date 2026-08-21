@@ -36,6 +36,7 @@ jobs:
       - id: version
         name: Validate immutable release source
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
           printf '%s\n' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
@@ -44,6 +45,20 @@ jobs:
           }
           source_sha="$(git rev-parse HEAD)"
           test "$(git rev-list -n1 "$TAG")" = "$source_sha"
+          test "$GITHUB_REF" = "refs/tags/$TAG" || {
+            echo "dispatch this workflow with --ref $TAG so provenance is bound to the release tag" >&2
+            exit 1
+          }
+          test "$GITHUB_SHA" = "$source_sha"
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "$source_sha" origin/main || {
+            echo "release tag must point to a commit reachable from main" >&2
+            exit 1
+          }
+          test -z "$(gh release view "$TAG" --json id --jq .id 2>/dev/null || true)" || {
+            echo "release already exists" >&2
+            exit 1
+          }
           version="${TAG#v}"
           test "$(sed -n 's/^Version: //p' control)" = "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -76,7 +91,7 @@ jobs:
           file: relay/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.name.outputs.image }}:${{ needs.validate.outputs.version }}
+          tags: ${{ steps.name.outputs.image }}:candidate-${{ needs.validate.outputs.source_sha }}
           build-args: |
             VERSION=${{ needs.validate.outputs.version }}
             COMMIT=${{ needs.validate.outputs.source_sha }}
@@ -207,5 +222,5 @@ jobs:
         run: |
           test -z "$(gh release view "$TAG" --json id --jq .id 2>/dev/null || true)" || { echo "release already exists" >&2; exit 1; }
           test "$(git rev-list -n1 "$TAG")" = "$SOURCE_SHA"
-          printf 'Relay image: `%s`\n\nThis release is a draft pending artifact and fresh-host qualification.\n' "$IMAGE" > release-notes.md
+          printf 'Relay candidate image: `%s`\n\nSource commit: `%s`\n\nThis release is a draft pending artifact and fresh-host qualification.\n' "$IMAGE" "$SOURCE_SHA" > release-notes.md
           gh release create "$TAG" release/* --draft --verify-tag --title "rctl $VERSION" --notes-file release-notes.md

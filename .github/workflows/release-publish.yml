@@ -1,0 +1,201 @@
+name: Release publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Qualified v-prefixed draft release tag
+        required: true
+        type: string
+      image_digest:
+        description: Qualified relay image digest (sha256:...)
+        required: true
+        type: string
+      qualification_sha256:
+        description: SHA-256 of the uploaded qualification report
+        required: true
+        type: string
+      confirm:
+        description: Type publish-TAG, for example publish-v1.2.3
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  attestations: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/rctl-relay
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: relay/go.sum
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: release
+        name: Validate qualified draft identity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          QUALIFICATION_SHA256: ${{ inputs.qualification_sha256 }}
+          CONFIRM: ${{ inputs.confirm }}
+          RAW_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          printf '%s\n' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          printf '%s\n' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          printf '%s\n' "$QUALIFICATION_SHA256" | grep -Eq '^[0-9a-f]{64}$'
+          test "$CONFIRM" = "publish-$TAG"
+          source_sha="$(git rev-parse HEAD)"
+          test "$GITHUB_REF" = "refs/tags/$TAG" || {
+            echo "dispatch this workflow with --ref $TAG" >&2
+            exit 1
+          }
+          test "$GITHUB_SHA" = "$source_sha"
+          test "$(git rev-list -n1 "$TAG")" = "$source_sha"
+          test "$(sed -n 's/^Version: //p' control)" = "${TAG#v}"
+          test "$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)" = public || {
+            echo "immutable publication is disabled while the repository is private" >&2
+            exit 1
+          }
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+          successful_ci="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$source_sha&status=success&per_page=1" --jq .total_count)"
+          test "$successful_ci" -ge 1 || {
+            echo "the exact release commit has no successful CI run" >&2
+            exit 1
+          }
+          image="${RAW_IMAGE,,}@$IMAGE_DIGEST"
+          body="$(gh release view "$TAG" --json body --jq .body)"
+          printf '%s\n' "$body" | grep -F "Relay candidate image: \`$image\`" >/dev/null
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "image_name=${RAW_IMAGE,,}" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Download and verify the exact draft release set
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          REPORT_SHA256: ${{ inputs.qualification_sha256 }}
+        run: |
+          report="rctl-qualification_${VERSION}.json"
+          mkdir -p downloaded assembled
+          gh release download "$TAG" --dir downloaded
+          expected=(
+            SHA256SUMS
+            install.sh
+            rctl-relay_linux_amd64
+            rctl-relay_linux_arm64
+            rctl-setup_linux_amd64
+            rctl-setup_linux_arm64
+            "rctl_${VERSION}_iphoneos-arm.deb"
+            "$report"
+          )
+          mapfile -t actual < <(find downloaded -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          test "${#actual[@]}" -eq "${#wanted[@]}"
+          test "$(printf '%s\n' "${actual[@]}")" = "$(printf '%s\n' "${wanted[@]}")"
+          for name in install.sh rctl-relay_linux_amd64 rctl-relay_linux_arm64 rctl-setup_linux_amd64 rctl-setup_linux_arm64 "rctl_${VERSION}_iphoneos-arm.deb"; do
+            cp "downloaded/$name" "assembled/$name"
+          done
+          chmod 0755 assembled/install.sh assembled/rctl-relay_linux_* assembled/rctl-setup_linux_*
+          RCTL_REQUIRE_EXECUTABLE_CHECK=1 scripts/assemble_release_set.sh assembled "$VERSION" "$SOURCE_SHA"
+          cmp assembled/SHA256SUMS downloaded/SHA256SUMS
+          checksums_sha256="$(sha256sum downloaded/SHA256SUMS | awk '{print $1}')"
+          (
+            cd downloaded
+            sha256sum --check --strict SHA256SUMS
+          )
+          (
+            cd relay
+            go run ./cmd/rctl-verify-qualification \
+              --file "../downloaded/$report" \
+              --tag "$TAG" \
+              --source-sha "$SOURCE_SHA" \
+              --relay-image "$IMAGE" \
+              --checksums-sha256 "$checksums_sha256" \
+              --report-sha256 "$REPORT_SHA256"
+          )
+      - name: Verify repository-bound artifact and image provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          IMAGE: ${{ steps.release.outputs.image }}
+        run: |
+          signer="$GITHUB_REPOSITORY/.github/workflows/release-draft.yml"
+          while IFS= read -r artifact; do
+            gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --signer-digest "$SOURCE_SHA" \
+              --source-ref "refs/tags/$TAG" \
+              --source-digest "$SOURCE_SHA" \
+              --deny-self-hosted-runners >/dev/null
+          done < <(find downloaded -mindepth 1 -maxdepth 1 -type f ! -name 'rctl-qualification_*.json' -print | LC_ALL=C sort)
+          gh attestation verify "oci://$IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --signer-digest "$SOURCE_SHA" \
+            --source-ref "refs/tags/$TAG" \
+            --source-digest "$SOURCE_SHA" \
+            --deny-self-hosted-runners >/dev/null
+          docker buildx imagetools inspect "$IMAGE" --format '{{ json .SBOM }}' | jq -e 'type == "object" and length > 0' >/dev/null
+      - name: Promote the qualified image and publish immutable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          REPORT_SHA256: ${{ inputs.qualification_sha256 }}
+        run: |
+          inspect_digest() {
+            docker buildx imagetools inspect "$1" | awk '$1 == "Digest:" { print $2; exit }'
+          }
+          candidate="$IMAGE_NAME:candidate-$SOURCE_SHA"
+          test "$(inspect_digest "$candidate")" = "$IMAGE_DIGEST"
+          versioned="$IMAGE_NAME:$VERSION"
+          existing="$(inspect_digest "$versioned" 2>/dev/null || true)"
+          if test -n "$existing"; then
+            test "$existing" = "$IMAGE_DIGEST" || {
+              echo "version image tag already points to a different digest" >&2
+              exit 1
+            }
+          else
+            docker buildx imagetools create --tag "$versioned" "$IMAGE"
+          fi
+          test "$(inspect_digest "$versioned")" = "$IMAGE_DIGEST"
+          cat > release-notes.md <<EOF
+          Relay image: \`$versioned\`
+
+          Relay digest: \`$IMAGE\`
+
+          Source commit: \`$SOURCE_SHA\`
+
+          Fresh-host qualification report SHA-256: \`$REPORT_SHA256\`
+          EOF
+          gh release edit "$TAG" --verify-tag --latest --draft=false --notes-file release-notes.md
