@@ -54,6 +54,6 @@ window.RCTL_RELAY_PROTOCOL_MINOR=` + fmt.Sprint(protocolMinor) + `;
 	// script-src 'wasm-unsafe-eval' lets the page compile the bundled Opus decoder
 	// WASM (the iOS Safari < 26 audio fallback); it permits WASM compilation only,
 	// NOT arbitrary eval, so it's far narrower than 'unsafe-eval'.
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: stun: turn: turns:; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ws: wss: stun: turn: turns:; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	writeText(w, http.StatusOK, "text/html; charset=utf-8", page)
 }

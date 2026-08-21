@@ -100,6 +100,9 @@ func TestControlPageInjectsRelayPaths(t *testing.T) {
 	if !strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
 		t.Fatalf("control CSP does not allow current inline client script: %q", csp)
 	}
+	if !strings.Contains(csp, "font-src 'self' data:") {
+		t.Fatalf("admin font assets are blocked by CSP: %q", csp)
+	}
 }
 
 type controlPageTestServer struct {
