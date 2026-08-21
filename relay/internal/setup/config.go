@@ -78,7 +78,8 @@ func (c Config) Validate() error {
 	if c.Schema != ConfigSchema {
 		return fmt.Errorf("unsupported config schema %d", c.Schema)
 	}
-	if _, err := ParsePublicOrigin(c.PublicURL); err != nil {
+	origin, err := ParsePublicOrigin(c.PublicURL)
+	if err != nil {
 		return err
 	}
 	if c.Profile != ProfileContainer && c.Profile != ProfileNative {
@@ -86,6 +87,9 @@ func (c Config) Validate() error {
 	}
 	if c.Profile == ProfileContainer && !digestImagePattern.MatchString(c.RelayImage) {
 		return errors.New("relay_image must be an OCI image pinned by sha256 digest")
+	}
+	if c.Profile == ProfileContainer && net.ParseIP(origin.Hostname()) != nil {
+		return errors.New("container profile requires a DNS hostname; public IP certificates are not yet a supported profile")
 	}
 	if c.Profile == ProfileContainer && !digestImagePattern.MatchString(c.CaddyImage) {
 		return errors.New("caddy_image must be an OCI image pinned by sha256 digest")

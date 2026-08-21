@@ -239,6 +239,11 @@ Only Caddy and the required TURN listeners are publicly reachable. Relay port
 
 ### Existing reverse proxy
 
+This profile is not implemented in the current release. The dedicated-host
+preflight refuses occupied ports 80/443 before mutation. The intended future
+contract is documented here so a later implementation cannot silently weaken
+ownership or validation.
+
 If 80/443 are already occupied, the wizard identifies the listener and stops
 before mutation unless it is a supported Caddy/Nginx installation. It writes a
 versioned candidate configuration, backs up the owned target, validates the
@@ -250,9 +255,11 @@ A non-standard HTTPS port is an explicit advanced choice.
 
 ### Native systemd
 
-The release Go binary and static web bundle can be installed without Docker.
-This profile is for operators who deliberately select it. It has the same
-filesystem, secret, backup, and health contracts as the container profile.
+This profile is not implemented in the current release. The relay is a normal
+Go binary and can be operated manually under systemd, but `rctl-setup` currently
+accepts only the dedicated container profile. A future native profile must keep
+the same filesystem, secret, backup, and health contracts as the container
+profile before it is advertised by the wizard.
 
 ## Preflight and apply transaction
 

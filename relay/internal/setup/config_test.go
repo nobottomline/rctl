@@ -27,6 +27,7 @@ func TestConfigValidate(t *testing.T) {
 	}{
 		{"http", func(c *Config) { c.PublicURL = "http://rctl.example.com" }},
 		{"path", func(c *Config) { c.PublicURL = "https://rctl.example.com/admin" }},
+		{"ip origin", func(c *Config) { c.PublicURL = "https://8.8.8.8" }},
 		{"credentials", func(c *Config) { c.PublicURL = "https://user:pass@rctl.example.com" }},
 		{"unicode host", func(c *Config) { c.PublicURL = "https://rctl.example.\u0440\u0444" }},
 		{"mutable image", func(c *Config) { c.RelayImage = "ghcr.io/nobottomline/rctl-relay:latest" }},
