@@ -82,8 +82,24 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
 fi
 
 install -d -m 0755 "$(dirname "$DESTINATION")" || fail "cannot create setup binary directory"
+[ ! -L "$DESTINATION" ] || fail "refusing to replace a symlink at ${DESTINATION}"
+if [ -e "$DESTINATION" ]; then
+  [ -f "$DESTINATION" ] || fail "existing ${DESTINATION} is not a regular file"
+fi
 candidate="${DESTINATION}.new.$$"
 install -m 0755 "$work/${asset}" "$candidate" || fail "cannot install setup binary"
-mv -f "$candidate" "$DESTINATION" || fail "cannot activate setup binary"
+if [ -e /var/lib/rctl/setup/ownership.json ]; then
+  "$candidate" upgrade "$@" --public-package "$work/$package_asset" || \
+    fail "upgrade failed; the previous setup binary remains active"
+else
+  "$candidate" install "$@" --public-package "$work/$package_asset" || \
+    fail "installation failed; no setup binary was activated"
+fi
+
+for argument do
+  if [ "$argument" = "--dry-run" ]; then
+    exit 0
+  fi
+done
+mv -f "$candidate" "$DESTINATION" || fail "lifecycle succeeded but the setup binary could not be activated"
 candidate=""
-"$DESTINATION" install "$@" --public-package "$work/$package_asset"

@@ -47,6 +47,8 @@ func run(args []string) int {
 		return runBackup(args[1:], os.Stdout, os.Stderr)
 	case "restore":
 		return runRestore(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "upgrade":
+		return runUpgrade(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -55,6 +57,70 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("upgrade", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	dryRun := flags.Bool("dry-run", false, "validate and print the upgrade plan without changing the host")
+	assumeYes := flags.Bool("yes", false, "upgrade without an interactive confirmation")
+	publicPackage := flags.String("public-package", "", "verified public rctl .deb for the target release")
+	relayImage := flags.String("image", defaultImage, "target digest-pinned relay image")
+	caddyImage := flags.String("caddy-image", defaultCaddy, "target digest-pinned Caddy image")
+	coturnImage := flags.String("coturn-image", defaultCoturn, "target digest-pinned coturn image")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(errorsOutput, "upgrade does not accept positional arguments")
+		return 2
+	}
+	options := setup.UpgradeOptions{
+		DryRun: *dryRun, Version: version, RelayImage: *relayImage, CaddyImage: *caddyImage,
+		CoturnImage: *coturnImage, PublicPackageSource: *publicPackage,
+	}
+	manager := setup.UpgradeManager{}
+	plan, err := manager.Plan(options)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "upgrade plan:", err)
+		return 1
+	}
+	if plan.AlreadyCurrent {
+		fmt.Fprintf(output, "\nPlan: verify already-current release %s\nManaged files: %d\n", plan.ToVersion, len(plan.Files))
+	} else {
+		fmt.Fprintf(output, "\nPlan: upgrade %s to %s\nManaged files: %d\nA verified backup and automatic rollback are mandatory.\n", plan.FromVersion, plan.ToVersion, len(plan.Files))
+	}
+	if *dryRun {
+		fmt.Fprintln(output, "Upgrade dry run complete. No images, services, or files were changed.")
+		return 0
+	}
+	if !*assumeYes {
+		if input != os.Stdin || !stdinIsTerminal() {
+			fmt.Fprintln(errorsOutput, "upgrade requires an interactive terminal or --yes")
+			return 2
+		}
+		answer, promptErr := prompt(bufio.NewReader(input), output, "Type upgrade to continue", "")
+		if promptErr != nil || answer != "upgrade" {
+			fmt.Fprintln(errorsOutput, "upgrade cancelled; the host was not changed")
+			return 1
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	result, err := manager.Upgrade(ctx, options)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "upgrade:", err)
+		if result.Backup != "" {
+			fmt.Fprintln(errorsOutput, "Pre-upgrade backup:", result.Backup)
+		}
+		return 1
+	}
+	if result.AlreadyCurrent {
+		fmt.Fprintf(output, "Release %s is already current and healthy.\n", result.ToVersion)
+		return 0
+	}
+	fmt.Fprintf(output, "Upgrade to %s verified. Pre-upgrade backup: %s\n", result.ToVersion, result.Backup)
+	return 0
 }
 
 func runRestore(args []string, input io.Reader, output, errorsOutput io.Writer) int {
@@ -418,5 +484,6 @@ Commands:
   install      preflight, confirm, apply, verify, and roll back on failure
   doctor       diagnose owned files, services, HTTPS, and WebSocket routing
   backup       stop briefly, snapshot managed state, restart, and verify
-  restore      validate, restore, verify, and automatically roll back`)
+  restore      validate, restore, verify, and automatically roll back
+  upgrade      backup, apply a newer pinned release, verify, and roll back`)
 }

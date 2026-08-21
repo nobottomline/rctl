@@ -89,6 +89,15 @@ from a mutable branch. The script has only four responsibilities:
 4. Execute the verified binary with the public package as an internal input and
    remove the temporary files when setup exits.
 
+On a host with a valid ownership manifest, the same command selects
+`rctl-setup upgrade`; otherwise it selects `install`. The verified target setup
+binary remains an adjacent candidate while it performs the lifecycle command
+and is atomically activated only after that command succeeds. A failed command
+therefore leaves the previous lifecycle tool untouched. `--dry-run` removes the
+candidate without changing the active binary. The target setup binary controls
+the target deployment format without committing itself before relay rollback
+is known to work.
+
 All prompts, system mutation, rollback, and diagnostics belong to the Go
 binary. A manual download-and-verify path is documented beside the one-liner.
 The bootstrap fixes a trusted system `PATH`, uses a private `/tmp` directory,
@@ -154,6 +163,24 @@ The command reports that rollback backup even when restore fails. Use
 `--dry-run` to perform archive and ownership validation without stopping a
 service or creating a new backup; unattended execution additionally requires
 `--yes`.
+
+`rctl-setup upgrade` is intentionally version-directed by the verified release
+binary: its build metadata supplies the strictly newer `MAJOR.MINOR.PATCH`
+version and digest-pinned relay, Caddy, and coturn images. It preserves the
+installed origin, ACME and TURN settings, admin/session/TURN secrets, database,
+sessions, device identities, and enrollment state. When device package
+generation is enabled, the matching verified public `.deb` is mandatory and
+its package version must exactly equal the target release. Before stopping the
+current stack, setup creates a verified backup, validates candidate Compose and
+Caddy files, and pulls target images. It then atomically replaces managed
+files, verifies service health, trusted public routes, authenticated admin
+access, and SQLite session persistence across a relay restart. Any failed apply
+or verification restores the pre-upgrade backup and old pinned images. A
+same-version rerun is an idempotent health check only when configuration and
+every artifact hash still match that immutable release; conflicting artifacts
+with the same version are rejected. Downgrades are rejected and intentional
+rollback uses `restore`. `--dry-run` performs no image pull, backup, or service
+operation.
 
 ## Supported deployment profiles
 

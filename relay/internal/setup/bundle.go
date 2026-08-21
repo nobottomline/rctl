@@ -71,7 +71,7 @@ func RenderDedicatedBundleAt(cfg Config, secrets Secrets, paths Paths) (Bundle, 
 	if cfg.Profile != ProfileContainer {
 		return Bundle{}, errors.New("dedicated bundle requires the container profile")
 	}
-	if len(secrets.Admin) < 48 || len(secrets.Session) < 48 || len(secrets.TURN) < 64 {
+	if len(secrets.Admin) < 48 || len(secrets.Session) < 48 || (cfg.EnableTURN && len(secrets.TURN) < 64) {
 		return Bundle{}, errors.New("generated secrets are missing or too short")
 	}
 	for _, value := range []string{secrets.Admin, secrets.Session, secrets.TURN} {
