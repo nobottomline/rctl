@@ -41,6 +41,8 @@ func run(args []string) int {
 		return runPreflight(args[1:])
 	case "install":
 		return runInstall(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "doctor":
+		return runDoctor(args[1:], os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -49,6 +51,34 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runDoctor(args []string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	jsonOutput := flags.Bool("json", false, "write structured JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(errorsOutput, "doctor does not accept positional arguments")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	report := (setup.Doctor{}).Run(ctx)
+	if *jsonOutput {
+		if err := report.WriteJSON(output); err != nil {
+			fmt.Fprintln(errorsOutput, err)
+			return 1
+		}
+	} else {
+		report.WriteText(output)
+	}
+	if report.Failed() {
+		return 1
+	}
+	return 0
 }
 
 type configFlags struct {
@@ -289,5 +319,6 @@ func usage() {
 Commands:
   version      print build and platform metadata
   preflight    run read-only host and configuration checks
-  install      preflight, confirm, apply, verify, and roll back on failure`)
+  install      preflight, confirm, apply, verify, and roll back on failure
+  doctor       diagnose owned files, services, HTTPS, and WebSocket routing`)
 }

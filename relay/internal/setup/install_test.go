@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"nhooyr.io/websocket"
 )
 
 type fakeRunner struct {
@@ -30,13 +32,22 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 }
 
 type fakeVerifier struct {
-	calls int
-	err   error
+	calls            int
+	persistenceCalls int
+	err              error
 }
 
 func (v *fakeVerifier) Verify(context.Context, Config, string) error {
 	v.calls++
 	return v.err
+}
+
+func (v *fakeVerifier) VerifyPersistence(ctx context.Context, _ Config, _ string, restart func(context.Context) error) error {
+	v.persistenceCalls++
+	if v.err != nil {
+		return v.err
+	}
+	return restart(ctx)
 }
 
 func testInstaller(t *testing.T, runner *fakeRunner, verifier *fakeVerifier) Installer {
@@ -58,8 +69,8 @@ func TestInstallerFreshAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Fresh || len(result.AdminSecret) < 48 || verifier.calls != 2 {
-		t.Fatalf("unexpected fresh result: %#v calls=%d", result, verifier.calls)
+	if !result.Fresh || len(result.AdminSecret) < 48 || verifier.calls != 1 || verifier.persistenceCalls != 1 {
+		t.Fatalf("unexpected fresh result: %#v calls=%d persistence=%d", result, verifier.calls, verifier.persistenceCalls)
 	}
 	for _, path := range []string{installer.Paths.ManifestPath, installer.Paths.RelayEnv, installer.Paths.Compose, installer.Paths.Caddyfile, installer.Paths.Coturn} {
 		if _, err := os.Stat(path); err != nil {
@@ -70,7 +81,7 @@ func TestInstallerFreshAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Fresh || result.AdminSecret != "" || verifier.calls != 3 {
+	if result.Fresh || result.AdminSecret != "" || verifier.calls != 2 || verifier.persistenceCalls != 1 {
 		t.Fatalf("idempotent install leaked/regenerated credentials: %#v calls=%d", result, verifier.calls)
 	}
 }
@@ -178,12 +189,18 @@ func TestPublicVerifierChecksIdentityCookieAndLogout(t *testing.T) {
 		case "/healthz":
 			w.WriteHeader(http.StatusOK)
 		case "/v1/capabilities":
-			_ = json.NewEncoder(w).Encode(map[string]string{"product": "rctl", "component": "relay"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"product": "rctl", "component": "relay", "protocol": map[string]int{"major": 1, "minor": 0}})
+		case "/device":
+			conn, err := websocket.Accept(w, r, nil)
+			if err == nil {
+				defer conn.CloseNow()
+				_, _, _ = conn.Read(r.Context())
+			}
 		case "/api/admin/login":
-			http.SetCookie(w, &http.Cookie{Name: "rctl_admin", Value: "session", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.SetCookie(w, &http.Cookie{Name: "rctl_session", Value: "session.secret", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		case "/api/admin/logout":
-			if cookie, err := r.Cookie("rctl_admin"); err == nil && cookie.Value == "session" {
+			if cookie, err := r.Cookie("rctl_session"); err == nil && cookie.Value == "session.secret" {
 				loggedOut = true
 			}
 			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -197,5 +214,64 @@ func TestPublicVerifierChecksIdentityCookieAndLogout(t *testing.T) {
 	}
 	if !loggedOut {
 		t.Fatal("verification session was not revoked")
+	}
+}
+
+func TestPublicVerifierProvesSessionPersistenceAcrossRestart(t *testing.T) {
+	restarted := false
+	loggedOut := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/admin/login":
+			http.SetCookie(w, &http.Cookie{Name: "rctl_session", Value: "session.secret", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		case "/api/admin/status":
+			cookie, err := r.Cookie("rctl_session")
+			if !restarted || err != nil || cookie.Value != "session.secret" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		case "/api/admin/logout":
+			loggedOut = true
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	verifier := HTTPSVerifier{Client: server.Client()}
+	cfg := validConfig()
+	cfg.PublicURL = server.URL
+	err := verifier.VerifyPersistence(context.Background(), cfg, strings.Repeat("a", 64), func(context.Context) error {
+		restarted = true
+		return nil
+	})
+	if err != nil || !restarted || !loggedOut {
+		t.Fatalf("err=%v restarted=%t loggedOut=%t", err, restarted, loggedOut)
+	}
+}
+
+func TestPublicVerifierRevokesProbeSessionWhenRestartFails(t *testing.T) {
+	loggedOut := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/admin/login":
+			http.SetCookie(w, &http.Cookie{Name: "rctl_session", Value: "session.secret", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		case "/api/admin/logout":
+			loggedOut = true
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		}
+	}))
+	defer server.Close()
+	verifier := HTTPSVerifier{Client: server.Client()}
+	cfg := validConfig()
+	cfg.PublicURL = server.URL
+	err := verifier.VerifyPersistence(context.Background(), cfg, strings.Repeat("a", 64), func(context.Context) error {
+		return errors.New("restart failed")
+	})
+	if err == nil || !loggedOut {
+		t.Fatalf("err=%v loggedOut=%t", err, loggedOut)
 	}
 }

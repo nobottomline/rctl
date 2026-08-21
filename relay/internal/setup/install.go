@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"nhooyr.io/websocket"
 )
 
 const ownershipSchema = 1
@@ -55,6 +58,11 @@ type Runner interface {
 
 type PublicVerifier interface {
 	Verify(ctx context.Context, cfg Config, adminSecret string) error
+	VerifyPersistence(ctx context.Context, cfg Config, adminSecret string, restart func(context.Context) error) error
+}
+
+type RouteVerifier interface {
+	VerifyRoutes(ctx context.Context, cfg Config) error
 }
 
 type Chowner func(path string, uid, gid int) error
@@ -164,7 +172,29 @@ func (v HTTPSVerifier) Verify(ctx context.Context, cfg Config, adminSecret strin
 	}
 }
 
+func (v HTTPSVerifier) VerifyRoutes(ctx context.Context, cfg Config) error {
+	client := v.Client
+	if client == nil {
+		client = &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		}
+	}
+	return verifyPublicRoutes(ctx, client, cfg.PublicURL)
+}
+
 func verifyPublicOnce(ctx context.Context, client *http.Client, origin, adminSecret string) error {
+	if err := verifyPublicRoutes(ctx, client, origin); err != nil {
+		return err
+	}
+	session, err := createAdminSession(ctx, client, origin, adminSecret)
+	if err != nil {
+		return err
+	}
+	return revokeAdminSession(ctx, client, origin, session)
+}
+
+func verifyPublicRoutes(ctx context.Context, client *http.Client, origin string) error {
 	for _, path := range []string{"/healthz", "/v1/capabilities"} {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(origin, "/")+path, nil)
 		response, err := client.Do(req)
@@ -180,34 +210,51 @@ func verifyPublicOnce(ctx context.Context, client *http.Client, origin, adminSec
 			var capability struct {
 				Product   string `json:"product"`
 				Component string `json:"component"`
+				Protocol  struct {
+					Major int `json:"major"`
+				} `json:"protocol"`
 			}
 			if err := json.Unmarshal(raw, &capability); err != nil || capability.Product != "rctl" || capability.Component != "relay" {
 				return errors.New("capability endpoint did not identify an rctl relay")
 			}
+			if capability.Protocol.Major != 1 {
+				return fmt.Errorf("relay protocol major %d is incompatible with setup protocol major 1", capability.Protocol.Major)
+			}
 		}
 	}
+	if err := verifyWebSocketUpgrade(ctx, client, origin); err != nil {
+		return err
+	}
+	return nil
+}
+
+func createAdminSession(ctx context.Context, client *http.Client, origin, adminSecret string) (*http.Cookie, error) {
 	body, _ := json.Marshal(map[string]string{"secret": adminSecret})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(origin, "/")+"/api/admin/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("admin login returned %s", response.Status)
+		return nil, fmt.Errorf("admin login returned %s", response.Status)
 	}
 	var session *http.Cookie
 	for _, cookie := range response.Cookies() {
-		if cookie.HttpOnly && cookie.Secure {
+		if cookie.Name == "rctl_session" && cookie.HttpOnly && cookie.Secure && cookie.Path == "/" && cookie.SameSite == http.SameSiteStrictMode {
 			session = cookie
 			break
 		}
 	}
 	if session == nil {
-		return errors.New("admin login did not issue a Secure HttpOnly session cookie")
+		return nil, errors.New("admin login did not issue the required Secure HttpOnly SameSite=Strict session cookie")
 	}
+	return session, nil
+}
+
+func revokeAdminSession(ctx context.Context, client *http.Client, origin string, session *http.Cookie) error {
 	logout, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(origin, "/")+"/api/admin/logout", nil)
 	logout.AddCookie(session)
 	logoutResponse, err := client.Do(logout)
@@ -219,6 +266,62 @@ func verifyPublicOnce(ctx context.Context, client *http.Client, origin, adminSec
 	if logoutResponse.StatusCode != http.StatusOK {
 		return fmt.Errorf("admin logout returned %s", logoutResponse.Status)
 	}
+	return nil
+}
+
+func verifyAdminSession(ctx context.Context, client *http.Client, origin string, session *http.Cookie) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(origin, "/")+"/api/admin/status", nil)
+	req.AddCookie(session)
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("persisted admin session returned %s", response.Status)
+	}
+	return nil
+}
+
+func verifyWebSocketUpgrade(ctx context.Context, client *http.Client, origin string) error {
+	parsed, err := url.Parse(strings.TrimSuffix(origin, "/") + "/device")
+	if err != nil {
+		return err
+	}
+	parsed.Scheme = "wss"
+	conn, _, err := websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{HTTPClient: client})
+	if err != nil {
+		return fmt.Errorf("public WebSocket upgrade failed: %w", err)
+	}
+	return conn.Close(websocket.StatusNormalClosure, "setup route probe")
+}
+
+func (v HTTPSVerifier) VerifyPersistence(ctx context.Context, cfg Config, adminSecret string, restart func(context.Context) error) error {
+	client := v.Client
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	session, err := createAdminSession(ctx, client, cfg.PublicURL, adminSecret)
+	if err != nil {
+		return err
+	}
+	revoked := false
+	defer func() {
+		if !revoked {
+			_ = revokeAdminSession(context.Background(), client, cfg.PublicURL, session)
+		}
+	}()
+	if err := restart(ctx); err != nil {
+		return err
+	}
+	if err := verifyAdminSession(ctx, client, cfg.PublicURL, session); err != nil {
+		return fmt.Errorf("relay SQLite session did not survive restart: %w", err)
+	}
+	if err := revokeAdminSession(ctx, client, cfg.PublicURL, session); err != nil {
+		return err
+	}
+	revoked = true
 	return nil
 }
 
@@ -409,14 +512,17 @@ func (i Installer) verifyServices(ctx context.Context, cfg Config, adminSecret s
 		return err
 	}
 	if start {
-		if output, err := i.Runner.Run(ctx, "docker", i.composeArgs("restart", "relay")...); err != nil {
-			return fmt.Errorf("relay persistence restart: %s", commandFailure(output, err))
+		restart := func(restartCtx context.Context) error {
+			if output, err := i.Runner.Run(restartCtx, "docker", i.composeArgs("restart", "relay")...); err != nil {
+				return fmt.Errorf("relay persistence restart: %s", commandFailure(output, err))
+			}
+			if err := i.waitForServices(restartCtx, cfg.EnableTURN); err != nil {
+				return fmt.Errorf("post-restart health: %w", err)
+			}
+			return nil
 		}
-		if err := i.waitForServices(ctx, cfg.EnableTURN); err != nil {
-			return fmt.Errorf("post-restart health: %w", err)
-		}
-		if err := i.Verifier.Verify(ctx, cfg, adminSecret); err != nil {
-			return fmt.Errorf("post-restart public health: %w", err)
+		if err := i.Verifier.VerifyPersistence(ctx, cfg, adminSecret, restart); err != nil {
+			return fmt.Errorf("post-restart persistence: %w", err)
 		}
 	}
 	return nil
