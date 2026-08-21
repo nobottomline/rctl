@@ -81,10 +81,12 @@ jobs:
           image="${RAW_IMAGE,,}@$IMAGE_DIGEST"
           body="$(gh release view "$TAG" --json body --jq .body)"
           printf '%s\n' "$body" | grep -F "Relay candidate image: \`$image\`" >/dev/null
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "image_name=${RAW_IMAGE,,}" >> "$GITHUB_OUTPUT"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${TAG#v}"
+            echo "source_sha=$source_sha"
+            echo "image_name=${RAW_IMAGE,,}"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
       - name: Verify anonymous candidate image access
         env:
           IMAGE: ${{ steps.release.outputs.image }}

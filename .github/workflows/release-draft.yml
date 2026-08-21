@@ -222,5 +222,11 @@ jobs:
         run: |
           test -z "$(gh release view "$TAG" --json id --jq .id 2>/dev/null || true)" || { echo "release already exists" >&2; exit 1; }
           test "$(git rev-list -n1 "$TAG")" = "$SOURCE_SHA"
-          printf 'Relay candidate image: `%s`\n\nSource commit: `%s`\n\nThis release is a draft pending artifact and fresh-host qualification.\n' "$IMAGE" "$SOURCE_SHA" > release-notes.md
+          printf '%s\n' \
+            "Relay candidate image: \`$IMAGE\`" \
+            "" \
+            "Source commit: \`$SOURCE_SHA\`" \
+            "" \
+            "This release is a draft pending artifact and fresh-host qualification." \
+            > release-notes.md
           gh release create "$TAG" release/* --draft --verify-tag --title "rctl $VERSION" --notes-file release-notes.md
