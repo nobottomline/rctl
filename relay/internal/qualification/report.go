@@ -14,7 +14,10 @@ import (
 	"time"
 )
 
-const maxReportBytes = 1 << 20
+const (
+	ReportSchema   = 2
+	maxReportBytes = 1 << 20
+)
 
 var (
 	versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -24,22 +27,29 @@ var (
 )
 
 type Checks struct {
-	Bootstrap           bool `json:"bootstrap"`
-	ACME                bool `json:"acme"`
-	HTTPSWSS            bool `json:"https_wss"`
-	TURNUDP             bool `json:"turn_udp"`
-	TURNTCP             bool `json:"turn_tcp"`
-	ForcedTURN          bool `json:"forced_turn"`
-	DeviceEnrollment    bool `json:"device_enrollment"`
-	RelayControl        bool `json:"relay_control"`
-	LANControl          bool `json:"lan_control"`
-	RelayRestart        bool `json:"relay_restart"`
-	BackupRestore       bool `json:"backup_restore"`
-	UpgradeRollback     bool `json:"upgrade_rollback"`
-	ResetAdmin          bool `json:"reset_admin"`
-	InterruptedRecovery bool `json:"interrupted_recovery"`
-	UninstallKeepData   bool `json:"uninstall_keep_data"`
-	UninstallDeleteData bool `json:"uninstall_delete_data"`
+	Bootstrap              bool `json:"bootstrap"`
+	BootstrapIdempotent    bool `json:"bootstrap_idempotent"`
+	ACME                   bool `json:"acme"`
+	ACMERenewal            bool `json:"acme_renewal"`
+	HTTPSWSS               bool `json:"https_wss"`
+	TURNUDP                bool `json:"turn_udp"`
+	TURNTCP                bool `json:"turn_tcp"`
+	ForcedTURN             bool `json:"forced_turn"`
+	PackagePersonalization bool `json:"package_personalization"`
+	DeviceEnrollment       bool `json:"device_enrollment"`
+	RelayControl           bool `json:"relay_control"`
+	LANControl             bool `json:"lan_control"`
+	RelayRestart           bool `json:"relay_restart"`
+	Doctor                 bool `json:"doctor"`
+	BackupRestore          bool `json:"backup_restore"`
+	RelayUpgrade           bool `json:"relay_upgrade"`
+	UpgradeRollback        bool `json:"upgrade_rollback"`
+	ResetAdmin             bool `json:"reset_admin"`
+	InterruptedRecovery    bool `json:"interrupted_recovery"`
+	DeviceUpdate           bool `json:"device_update"`
+	DeviceUpdateRollback   bool `json:"device_update_rollback"`
+	UninstallKeepData      bool `json:"uninstall_keep_data"`
+	UninstallDeleteData    bool `json:"uninstall_delete_data"`
 }
 
 type Report struct {
@@ -107,7 +117,7 @@ func Validate(report Report, expected Expected) error {
 	if expected.Now.IsZero() {
 		expected.Now = time.Now()
 	}
-	if report.Schema != 1 || report.Product != "rctl" {
+	if report.Schema != ReportSchema || report.Product != "rctl" {
 		return errors.New("qualification report is incompatible")
 	}
 	if !strings.HasPrefix(expected.Tag, "v") || !versionPattern.MatchString(strings.TrimPrefix(expected.Tag, "v")) {
@@ -152,12 +162,16 @@ func failedChecks(checks Checks) []string {
 		name string
 		pass bool
 	}{
-		{"bootstrap", checks.Bootstrap}, {"acme", checks.ACME}, {"https_wss", checks.HTTPSWSS},
+		{"bootstrap", checks.Bootstrap}, {"bootstrap_idempotent", checks.BootstrapIdempotent},
+		{"acme", checks.ACME}, {"acme_renewal", checks.ACMERenewal}, {"https_wss", checks.HTTPSWSS},
 		{"turn_udp", checks.TURNUDP}, {"turn_tcp", checks.TURNTCP}, {"forced_turn", checks.ForcedTURN},
-		{"device_enrollment", checks.DeviceEnrollment}, {"relay_control", checks.RelayControl},
-		{"lan_control", checks.LANControl}, {"relay_restart", checks.RelayRestart},
-		{"backup_restore", checks.BackupRestore}, {"upgrade_rollback", checks.UpgradeRollback},
+		{"package_personalization", checks.PackagePersonalization}, {"device_enrollment", checks.DeviceEnrollment},
+		{"relay_control", checks.RelayControl}, {"lan_control", checks.LANControl},
+		{"relay_restart", checks.RelayRestart}, {"doctor", checks.Doctor},
+		{"backup_restore", checks.BackupRestore}, {"relay_upgrade", checks.RelayUpgrade},
+		{"upgrade_rollback", checks.UpgradeRollback},
 		{"reset_admin", checks.ResetAdmin}, {"interrupted_recovery", checks.InterruptedRecovery},
+		{"device_update", checks.DeviceUpdate}, {"device_update_rollback", checks.DeviceUpdateRollback},
 		{"uninstall_keep_data", checks.UninstallKeepData}, {"uninstall_delete_data", checks.UninstallDeleteData},
 	}
 	missing := make([]string, 0)

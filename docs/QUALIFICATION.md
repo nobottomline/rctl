@@ -54,14 +54,14 @@ assets.
 ## Qualification report
 
 The report is privacy-safe evidence binding the external acceptance run to the
-exact artifacts under review. Schema 1 is strict: unknown fields, trailing
+exact artifacts under review. Schema 2 is strict: unknown fields, trailing
 JSON, symlinks, oversized input, malformed identities, reports older than 30
 days, reports over five minutes in the future, and any false or missing check
 are rejected.
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",
@@ -72,24 +72,73 @@ are rejected.
   "completed_at": "2026-08-21T20:00:00Z",
   "checks": {
     "bootstrap": true,
+    "bootstrap_idempotent": true,
     "acme": true,
+    "acme_renewal": true,
     "https_wss": true,
     "turn_udp": true,
     "turn_tcp": true,
     "forced_turn": true,
+    "package_personalization": true,
     "device_enrollment": true,
     "relay_control": true,
     "lan_control": true,
     "relay_restart": true,
+    "doctor": true,
     "backup_restore": true,
+    "relay_upgrade": true,
     "upgrade_rollback": true,
     "reset_admin": true,
     "interrupted_recovery": true,
+    "device_update": true,
+    "device_update_rollback": true,
     "uninstall_keep_data": true,
     "uninstall_delete_data": true
   }
 }
 ```
+
+The checks have the following minimum evidence contract:
+
+- `bootstrap`: an anonymous clean-host install used the exact release assets
+  and digest-pinned candidate image without pre-existing rctl or registry
+  credentials; `bootstrap_idempotent`: repeating that bootstrap verified the
+  owned deployment without rotating identity or secrets.
+- `acme`: the public origin obtained a trusted certificate from the configured
+  ACME issuer; `acme_renewal`: a forced renewal or staging-equivalent renewal
+  completed and the renewed certificate was served afterward.
+- `https_wss`: external HTTPS, authenticated admin session, protected device
+  WebSocket routing, security headers, and relay restart persistence passed.
+- `turn_udp` and `turn_tcp`: authenticated allocations and relayed traffic
+  passed from an off-host client over each transport, including the configured
+  relay port range; `forced_turn`: browser/device media and control passed with
+  host and server-reflexive ICE candidates disabled or rejected.
+- `package_personalization`: an authenticated admin request generated a
+  no-store, version-matched package containing only the expected relay
+  bootstrap plist, and unauthenticated generation was rejected;
+  `device_enrollment`: that package completed one-time enrollment and explicit
+  browser approval without on-device setup UI or reusable enrollment secrets.
+- `relay_control`, `lan_control`, and `relay_restart`: real screen, input, and
+  at least one non-screen control worked through the relay, independently over
+  LAN with relay configuration installed, and again after relay restart.
+- `doctor`: the installed deployment produced no failed checks after the other
+  lifecycle tests.
+- `backup_restore`: a changed persistent state was restored byte-for-byte from
+  a verified backup; `relay_upgrade`: a newer valid relay release upgraded and
+  retained identity, secrets, device state, and connectivity;
+  `upgrade_rollback`: an applied target was made unhealthy and automatic
+  rollback restored the previous release and cleared its checkpoint.
+- `reset_admin`: admin/session secrets rotated, prior sessions stopped working,
+  deployment identity and TURN secret remained stable, and the new login
+  survived restart; `interrupted_recovery`: the lifecycle process was killed
+  after target state was applied and `recover` restored a verified prior state.
+- `device_update`: the external updater installed a newer signed/checksummed
+  public package while preserving relay identity and both control paths;
+  `device_update_rollback`: an injected post-install verification failure made
+  the watchdog restore the prior working package and reconnect automatically.
+- `uninstall_keep_data` and `uninstall_delete_data`: each explicit retention
+  mode removed only owned resources, produced a valid recovery backup, and
+  respectively preserved or removed the managed data directory.
 
 The `relay_image` value is copied from the draft release notes.
 `checksums_sha256` is the SHA-256 digest of the downloaded `SHA256SUMS` file,

@@ -18,7 +18,7 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
 	checksums := strings.Repeat("b", 64)
 	image := "ghcr.io/nobottomline/rctl-relay@sha256:" + strings.Repeat("c", 64)
 	raw := []byte(`{
-  "schema": 1,
+  "schema": 2,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",
@@ -28,11 +28,15 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
   "deployment_profile": "dedicated-domain",
   "completed_at": "` + time.Now().UTC().Format(time.RFC3339) + `",
   "checks": {
-    "bootstrap": true, "acme": true, "https_wss": true,
+    "bootstrap": true, "bootstrap_idempotent": true,
+    "acme": true, "acme_renewal": true, "https_wss": true,
     "turn_udp": true, "turn_tcp": true, "forced_turn": true,
-    "device_enrollment": true, "relay_control": true, "lan_control": true,
-    "relay_restart": true, "backup_restore": true, "upgrade_rollback": true,
+    "package_personalization": true, "device_enrollment": true,
+    "relay_control": true, "lan_control": true, "relay_restart": true,
+    "doctor": true, "backup_restore": true, "relay_upgrade": true,
+    "upgrade_rollback": true,
     "reset_admin": true, "interrupted_recovery": true,
+    "device_update": true, "device_update_rollback": true,
     "uninstall_keep_data": true, "uninstall_delete_data": true
   }
 }`)

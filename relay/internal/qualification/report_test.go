@@ -1,8 +1,11 @@
 package qualification
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +17,15 @@ func validReport() (Report, Expected) {
 	digest := strings.Repeat("b", 64)
 	image := "ghcr.io/nobottomline/rctl-relay@sha256:" + strings.Repeat("c", 64)
 	checks := Checks{
-		Bootstrap: true, ACME: true, HTTPSWSS: true, TURNUDP: true, TURNTCP: true,
-		ForcedTURN: true, DeviceEnrollment: true, RelayControl: true, LANControl: true,
-		RelayRestart: true, BackupRestore: true, UpgradeRollback: true, ResetAdmin: true,
-		InterruptedRecovery: true, UninstallKeepData: true, UninstallDeleteData: true,
+		Bootstrap: true, BootstrapIdempotent: true, ACME: true, ACMERenewal: true,
+		HTTPSWSS: true, TURNUDP: true, TURNTCP: true, ForcedTURN: true,
+		PackagePersonalization: true, DeviceEnrollment: true, RelayControl: true, LANControl: true,
+		RelayRestart: true, Doctor: true, BackupRestore: true, RelayUpgrade: true,
+		UpgradeRollback: true, ResetAdmin: true, InterruptedRecovery: true,
+		DeviceUpdate: true, DeviceUpdateRollback: true, UninstallKeepData: true, UninstallDeleteData: true,
 	}
 	return Report{
-		Schema: 1, Product: "rctl", Tag: "v1.2.3", Version: "1.2.3", SourceSHA: commit,
+		Schema: ReportSchema, Product: "rctl", Tag: "v1.2.3", Version: "1.2.3", SourceSHA: commit,
 		RelayImage: image, ChecksumsSHA256: digest, DeploymentProfile: "dedicated-domain",
 		CompletedAt: now.Add(-time.Hour).Format(time.RFC3339), Checks: checks,
 	}, Expected{Tag: "v1.2.3", SourceSHA: commit, RelayImage: image, ChecksumsSHA256: digest, Now: now}
@@ -46,7 +51,7 @@ func TestValidateRejectsIdentityFreshnessAndIncompleteChecks(t *testing.T) {
 		{"profile", func(r *Report, _ *Expected) { r.DeploymentProfile = "bare-ip" }, "deployment profile"},
 		{"stale", func(r *Report, e *Expected) { r.CompletedAt = e.Now.Add(-31 * 24 * time.Hour).Format(time.RFC3339) }, "publication window"},
 		{"future", func(r *Report, e *Expected) { r.CompletedAt = e.Now.Add(6 * time.Minute).Format(time.RFC3339) }, "publication window"},
-		{"failed", func(r *Report, _ *Expected) { r.Checks.ForcedTURN = false }, "forced_turn"},
+		{"schema", func(r *Report, _ *Expected) { r.Schema-- }, "incompatible"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -56,6 +61,57 @@ func TestValidateRejectsIdentityFreshnessAndIncompleteChecks(t *testing.T) {
 				t.Fatalf("validation error=%v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestValidateRejectsEveryIncompleteCheck(t *testing.T) {
+	report, expected := validReport()
+	checks := &report.Checks
+	tests := []struct {
+		name  string
+		field *bool
+	}{
+		{"bootstrap", &checks.Bootstrap}, {"bootstrap_idempotent", &checks.BootstrapIdempotent},
+		{"acme", &checks.ACME}, {"acme_renewal", &checks.ACMERenewal}, {"https_wss", &checks.HTTPSWSS},
+		{"turn_udp", &checks.TURNUDP}, {"turn_tcp", &checks.TURNTCP}, {"forced_turn", &checks.ForcedTURN},
+		{"package_personalization", &checks.PackagePersonalization}, {"device_enrollment", &checks.DeviceEnrollment},
+		{"relay_control", &checks.RelayControl}, {"lan_control", &checks.LANControl},
+		{"relay_restart", &checks.RelayRestart}, {"doctor", &checks.Doctor},
+		{"backup_restore", &checks.BackupRestore}, {"relay_upgrade", &checks.RelayUpgrade},
+		{"upgrade_rollback", &checks.UpgradeRollback}, {"reset_admin", &checks.ResetAdmin},
+		{"interrupted_recovery", &checks.InterruptedRecovery}, {"device_update", &checks.DeviceUpdate},
+		{"device_update_rollback", &checks.DeviceUpdateRollback}, {"uninstall_keep_data", &checks.UninstallKeepData},
+		{"uninstall_delete_data", &checks.UninstallDeleteData},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			*test.field = false
+			defer func() { *test.field = true }()
+			if err := Validate(report, expected); err == nil || !strings.Contains(err.Error(), test.name) {
+				t.Fatalf("validation error=%v, want incomplete %q", err, test.name)
+			}
+		})
+	}
+}
+
+func TestFailedChecksCoversEverySchemaField(t *testing.T) {
+	raw, err := json.Marshal(Checks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]bool
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	got := failedChecks(Checks{})
+	want := make([]string, 0, len(fields))
+	for name := range fields {
+		want = append(want, name)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("failed-check coverage=%v, schema fields=%v", got, want)
 	}
 }
 
