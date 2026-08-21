@@ -20,8 +20,8 @@ var (
 	version       = "dev"
 	commit        = "unknown"
 	defaultImage  = ""
-	defaultCaddy  = ""
-	defaultCoturn = ""
+	defaultCaddy  = "docker.io/library/caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648"
+	defaultCoturn = "docker.io/coturn/coturn@sha256:771a95d04cb97bbc5bfc672e5fdf455591c7d2b2a15f02bb9ceda3e27561695f"
 )
 
 func main() {
