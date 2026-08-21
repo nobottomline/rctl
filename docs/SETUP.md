@@ -240,6 +240,15 @@ deployment before any mutation. A changed origin, TURN identity, ACME account,
 profile, or device-package mode is rejected as reconfiguration rather than
 silently ignored.
 
+`--update-manifest-url https://.../catalog.json` is an optional non-secret
+configuration value owned by setup. It is validated, stored in the ownership
+manifest, and rendered as `RCTL_RELAY_UPDATE_MANIFEST_URL`; operators must not
+edit the managed environment file by hand. A later verified release may replace
+the catalog URL during its normal relay upgrade without changing deployment
+identity. Same-version reconfiguration remains forbidden. Leave the option
+unset until a catalog signed by the package's pinned update key includes both
+the installed rollback package and a newer target package.
+
 `rctl-setup uninstall` requires exactly one explicit retention choice. Both
 `--keep-data` and `--delete-data` verify the running deployment, then hold the
 lifecycle lock across complete stack stop, a final stopped-state recovery

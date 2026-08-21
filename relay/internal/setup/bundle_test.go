@@ -114,6 +114,7 @@ func TestRenderDedicatedBundleCanDisableTURN(t *testing.T) {
 func TestRenderDedicatedBundleMountsPublicPackageReadOnly(t *testing.T) {
 	cfg := validConfig()
 	cfg.DevicePackages = true
+	cfg.UpdateManifestURL = "https://releases.example.com/rctl-update-stable.json"
 	bundle, err := RenderDedicatedBundle(cfg, Secrets{Admin: strings.Repeat("a", 64), Session: strings.Repeat("b", 64), TURN: strings.Repeat("c", 64)})
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +126,9 @@ func TestRenderDedicatedBundleMountsPublicPackageReadOnly(t *testing.T) {
 	paths := DefaultPaths()
 	if !strings.Contains(string(files[paths.RelayEnv].Content), "RCTL_RELAY_PUBLIC_PACKAGE=/packages/rctl-public.deb\n") {
 		t.Fatal("relay package path is missing from the environment")
+	}
+	if !strings.Contains(string(files[paths.RelayEnv].Content), "RCTL_RELAY_UPDATE_MANIFEST_URL="+cfg.UpdateManifestURL+"\n") {
+		t.Fatal("device update catalog is missing from the environment")
 	}
 	var compose map[string]any
 	if err := json.Unmarshal(files[paths.Compose].Content, &compose); err != nil {

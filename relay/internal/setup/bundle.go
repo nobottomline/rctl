@@ -118,6 +118,9 @@ func RenderDedicatedBundleAt(cfg Config, secrets Secrets, paths Paths) (Bundle, 
 	if cfg.DevicePackages {
 		env["RCTL_RELAY_PUBLIC_PACKAGE"] = "/packages/rctl-public.deb"
 	}
+	if cfg.UpdateManifestURL != "" {
+		env["RCTL_RELAY_UPDATE_MANIFEST_URL"] = cfg.UpdateManifestURL
+	}
 
 	compose, err := renderCompose(cfg, paths)
 	if err != nil {

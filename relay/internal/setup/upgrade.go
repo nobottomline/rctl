@@ -180,6 +180,9 @@ func (u UpgradeManager) prepare(options UpgradeOptions) (upgradePlan, error) {
 	targetConfig.Release = options.Version
 	targetConfig.RelayImage = options.RelayImage
 	targetConfig.CaddyImage = options.CaddyImage
+	if options.ExpectedConfig != nil {
+		targetConfig.UpdateManifestURL = options.ExpectedConfig.UpdateManifestURL
+	}
 	if targetConfig.EnableTURN {
 		targetConfig.CoturnImage = options.CoturnImage
 	}

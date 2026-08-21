@@ -163,6 +163,29 @@ func TestUpgradeBootstrapConfigurationMustMatchInstalledIdentity(t *testing.T) {
 	}
 }
 
+func TestUpgradeMayReplaceOwnedUpdateCatalog(t *testing.T) {
+	installer, runner, _, _ := createUpgradeFixture(t)
+	manager := UpgradeManager{
+		Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{},
+		Now: time.Now, Chown: func(string, int, int) error { return nil },
+	}
+	expected := validConfig()
+	expected.UpdateManifestURL = "https://releases.example.test/rctl-update-stable.json"
+	options := upgradeOptions()
+	options.ExpectedConfig = &expected
+	plan, err := manager.prepare(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.target.Config.UpdateManifestURL != expected.UpdateManifestURL {
+		t.Fatalf("target update manifest URL=%q", plan.target.Config.UpdateManifestURL)
+	}
+	env := string(bundleFile(plan.bundle, manager.Paths.RelayEnv).Content)
+	if !strings.Contains(env, "RCTL_RELAY_UPDATE_MANIFEST_URL="+expected.UpdateManifestURL+"\n") {
+		t.Fatal("target relay environment does not contain the update catalog")
+	}
+}
+
 func TestUpgradeRollsBackFailedTargetVerification(t *testing.T) {
 	installer, runner, database, secrets := createUpgradeFixture(t)
 	verifier := &sequenceVerifier{failAt: 2}

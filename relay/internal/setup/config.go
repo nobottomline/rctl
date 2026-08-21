@@ -27,17 +27,18 @@ var (
 )
 
 type Config struct {
-	Schema         int    `json:"schema"`
-	PublicURL      string `json:"public_url"`
-	Profile        string `json:"profile"`
-	RelayImage     string `json:"relay_image,omitempty"`
-	CaddyImage     string `json:"caddy_image,omitempty"`
-	CoturnImage    string `json:"coturn_image,omitempty"`
-	TURNExternalIP string `json:"turn_external_ip,omitempty"`
-	EnableTURN     bool   `json:"enable_turn"`
-	ACMEEmail      string `json:"acme_email,omitempty"`
-	Release        string `json:"release,omitempty"`
-	DevicePackages bool   `json:"device_packages,omitempty"`
+	Schema            int    `json:"schema"`
+	PublicURL         string `json:"public_url"`
+	Profile           string `json:"profile"`
+	RelayImage        string `json:"relay_image,omitempty"`
+	CaddyImage        string `json:"caddy_image,omitempty"`
+	CoturnImage       string `json:"coturn_image,omitempty"`
+	TURNExternalIP    string `json:"turn_external_ip,omitempty"`
+	EnableTURN        bool   `json:"enable_turn"`
+	ACMEEmail         string `json:"acme_email,omitempty"`
+	Release           string `json:"release,omitempty"`
+	DevicePackages    bool   `json:"device_packages,omitempty"`
+	UpdateManifestURL string `json:"update_manifest_url,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -115,6 +116,29 @@ func (c Config) Validate() error {
 		if err != nil || address.Address != c.ACMEEmail || address.Name != "" || strings.ContainsAny(c.ACMEEmail, "\r\n\t ") {
 			return errors.New("acme_email must be one plain email address")
 		}
+	}
+	if err := validateUpdateManifestURL(c.UpdateManifestURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateUpdateManifestURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if strings.ContainsAny(raw, "\r\n\t ") {
+		return errors.New("update_manifest_url must not contain whitespace")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
+		return errors.New("update_manifest_url must be an absolute HTTPS URL without credentials, query, fragment, or encoded path")
+	}
+	if u.Path == "" || u.Path == "/" || strings.HasSuffix(u.Path, "/") {
+		return errors.New("update_manifest_url must identify a manifest file")
+	}
+	if _, err := ParsePublicOrigin((&url.URL{Scheme: u.Scheme, Host: u.Host}).String()); err != nil {
+		return fmt.Errorf("update_manifest_url origin: %w", err)
 	}
 	return nil
 }

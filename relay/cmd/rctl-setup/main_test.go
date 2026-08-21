@@ -91,3 +91,24 @@ func TestConfigFlagsObserveIdentityBeforeLoad(t *testing.T) {
 		t.Fatalf("configuration=%t identity=%t", values.configuration, values.identityConfiguration)
 	}
 }
+
+func TestConfigFlagsParseUpdateManifestURL(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	values := addConfigFlags(flags)
+	manifestURL := "https://releases.example.test/rctl-update-stable.json"
+	if err := flags.Parse([]string{
+		"--public-url", "https://rctl.example.test",
+		"--turn-external-ip", "8.8.8.8",
+		"--update-manifest-url", manifestURL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := values.load(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UpdateManifestURL != manifestURL {
+		t.Fatalf("update manifest URL=%q", cfg.UpdateManifestURL)
+	}
+}

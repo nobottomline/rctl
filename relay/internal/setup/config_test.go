@@ -36,6 +36,10 @@ func TestConfigValidate(t *testing.T) {
 		{"private turn ip", func(c *Config) { c.TURNExternalIP = "192.168.1.10" }},
 		{"reserved turn ip", func(c *Config) { c.TURNExternalIP = "203.0.113.10" }},
 		{"caddy injection", func(c *Config) { c.ACMEEmail = "admin@example.com }" }},
+		{"http update manifest", func(c *Config) { c.UpdateManifestURL = "http://releases.example.com/catalog.json" }},
+		{"update manifest credentials", func(c *Config) { c.UpdateManifestURL = "https://user:pass@releases.example.com/catalog.json" }},
+		{"update manifest query", func(c *Config) { c.UpdateManifestURL = "https://releases.example.com/catalog.json?channel=stable" }},
+		{"update manifest directory", func(c *Config) { c.UpdateManifestURL = "https://releases.example.com/catalog/" }},
 		{"unknown profile", func(c *Config) { c.Profile = "magic" }},
 	}
 	for _, tc := range cases {
@@ -46,6 +50,14 @@ func TestConfigValidate(t *testing.T) {
 				t.Fatal("expected validation failure")
 			}
 		})
+	}
+}
+
+func TestConfigAcceptsSignedUpdateManifestURL(t *testing.T) {
+	cfg := validConfig()
+	cfg.UpdateManifestURL = "https://github.com/nobottomline/rctl/releases/latest/download/rctl-update-stable.json"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 
