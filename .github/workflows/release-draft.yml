@@ -187,9 +187,11 @@ jobs:
           name: ios-package
           path: release
       - name: Verify and checksum release set
-        run: |
-          test "$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 6
-          (cd release && sha256sum install.sh rctl-* > SHA256SUMS)
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          RCTL_REQUIRE_EXECUTABLE_CHECK: "1"
+        run: scripts/assemble_release_set.sh release "$VERSION" "$SOURCE_SHA"
       - name: Attest public release artifacts
         if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
