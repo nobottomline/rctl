@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `34b9e15`, plus the documentation record itself.
+Source baseline: `main` through `99e0113`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -34,6 +34,9 @@ Release version remains `0.3.0`; no tag or public release was created.
   Debian package validation, and public-release-gate rejection of that private
   package. An insecure `ws://` personalization attempt was rejected before the
   production-form `wss://` case passed.
+- The final source baseline was rebuilt as a production relay image from the
+  pinned base images and passed an isolated container smoke test reporting
+  relay `0.3.0` and protocol `1.0` through `/v1/capabilities`.
 - `actionlint v1.7.12`; pinned Caddy and coturn image indexes exist and include
   both `linux/amd64` and `linux/arm64` manifests.
 - A complete local release set was assembled from the production `.deb` and
@@ -44,11 +47,12 @@ Release version remains `0.3.0`; no tag or public release was created.
 
 ### Externally blocked
 
-GitHub Actions run `32509126857` for source `2b6d0a2` created all expected CI
-jobs, but GitHub started zero steps. Its check annotation reports that recent
-account payments failed or the Actions spending limit must be increased. This
-is an account-level runner block, not a test failure. A draft release/GHCR run
-must be repeated after billing is repaired.
+GitHub Actions run `32510772362` for source `99e0113` created the relay,
+container, control-client, and admin-client jobs, but GitHub started zero steps.
+Every job has the same check annotation: recent account payments failed or the
+Actions spending limit must be increased. This is an account-level runner
+block, not a test failure. CI and the draft release/GHCR workflow must be
+repeated after billing is repaired.
 
 ### Still required before a supported public release
 
