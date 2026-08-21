@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `df27edc`, plus the documentation record itself.
+Source baseline: `main` through `34b9e15`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -20,7 +20,9 @@ Release version remains `0.3.0`; no tag or public release was created.
 - Setup lifecycle failure tests: ownership conflict, backup tampering and size
   limits, restore rollback, upgrade rollback, keep/delete-data uninstall,
   uninstalled recovery, interrupted fresh install/backup/restore/upgrade, and
-  SQLite session persistence checks.
+  SQLite session persistence checks. Upgrade rollback was also exercised after
+  the target verifier performed a real SQLite schema migration and data write;
+  the old schema and row were restored without the target column.
 - Relay Go tests and race-sensitive setup tests; control client production
   build; relay admin lint and production build; production dependency audits
   for both web projects with zero reported vulnerabilities.
@@ -34,6 +36,11 @@ Release version remains `0.3.0`; no tag or public release was created.
   production-form `wss://` case passed.
 - `actionlint v1.7.12`; pinned Caddy and coturn image indexes exist and include
   both `linux/amd64` and `linux/arm64` manifests.
+- A complete local release set was assembled from the production `.deb` and
+  four cross-compiled Linux binaries. Exact names, executable modes, Debian
+  metadata, ELF architectures, setup version/source metadata, sorted SHA-256
+  checksums, and checksum verification passed. Repository-level GitHub
+  immutable releases were enabled and read back through the administration API.
 
 ### Externally blocked
 

@@ -38,7 +38,7 @@ restored, and removed without cloning this repository or installing a compiler.
 
 ## Release contract
 
-Every stable tag publishes immutable, version-matched artifacts:
+Every stable tag publishes version-matched artifacts:
 
 ```text
 rctl_<version>_iphoneos-arm.deb
@@ -63,8 +63,10 @@ stored installation version. Release notes may show the human-readable tag.
 Public releases also carry keyless GitHub/Sigstore artifact attestations and
 the OCI image carries provenance plus an SBOM. The existing pinned
 device-update ECDSA key remains independent from GitHub and container signing.
-Its private half is never placed on a relay host. Releases are assembled as
-drafts, fully verified, and only then published.
+Its private half is never placed on a relay host. Repository-level immutable
+releases are enabled. Releases are assembled as drafts, fully verified, and
+only then published; publication permanently locks the tag and assets and
+creates GitHub's signed release attestation.
 
 `update-manifest.json` is published only when a previous verified package is
 available for rollback. It is signed by the independent device-update key and
@@ -74,6 +76,11 @@ While the repository and container package are private, this pipeline is a
 maintainer dry run and requires GitHub authentication. No private token may be
 embedded in bootstrap output or generated VPS configuration. Anonymous install
 is enabled only after both release assets and the GHCR package are public.
+
+After publishing a qualified draft, maintainers run `gh release verify TAG`
+and `gh release verify-asset TAG PATH` for every downloaded asset. A release
+that does not report immutable, or any asset that does not match its signed
+release attestation, is not an install source.
 
 ## Bootstrap contract
 
@@ -326,10 +333,10 @@ Default native host paths are:
 ```
 
 The relay environment necessarily contains server-side secrets. It is never
-included in ordinary diagnostics. `doctor --export` emits an allowlisted,
-redacted bundle and reports file permission problems without printing values.
-Admin/session/TURN secrets are independent and rotation is a lifecycle command,
-not a reinstall side effect.
+printed by `doctor`, which reports file permission problems without printing
+values. There is no diagnostics export or secret-rotation command in the
+current release. Admin/session/TURN secrets remain independent and install,
+upgrade, backup, restore, and recovery never rotate them as a side effect.
 
 ## Device package delivery
 
@@ -371,8 +378,11 @@ Relay upgrade is separate from the already implemented device updater:
 - automatically restore the old digest and files on failure.
 
 Persistent volumes and secrets are never replaced during a normal upgrade.
-Database migrations must be forward-compatible with rollback or explicitly mark
-a release as non-rollbackable before mutation.
+Automatic rollback stops the target stack and restores the complete verified
+pre-upgrade SQLite snapshot before starting the old image, so a failed target
+migration is not left for old code to interpret. Successful schema migrations
+must remain supported by every later release; an intentionally non-rollbackable
+migration requires a new explicit product contract before implementation.
 
 Device updates continue to install the public LAN-only `.deb`; the detached
 device updater preserves the personalized relay plist and `DeviceSecret`. A
@@ -387,7 +397,8 @@ before stopping services.
 
 ## Failure and edge-case policy
 
-- Interrupted install/upgrade is resumed or rolled back from the journal.
+- Interrupted lifecycle mutation is recovered from the mode-0600 recovery
+  checkpoint and its verified rollback backup via `rctl-setup recover`.
 - Concurrent lifecycle commands are rejected by the global lock.
 - DNS changes, ACME rate limits, closed cloud firewalls, broken IPv6, clock
   skew, disk exhaustion, read-only filesystems, and occupied ports have distinct
