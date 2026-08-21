@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `1432061`, plus the documentation record itself.
+Source baseline: `main` through `fa85422`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -71,10 +71,20 @@ Release version remains `0.3.0`; no tag or public release was created.
   metadata, ELF architectures, setup version/source metadata, sorted SHA-256
   checksums, and checksum verification passed. Repository-level GitHub
   immutable releases were enabled and read back through the administration API.
+- Release publication is now separate from draft assembly. Draft builds use
+  only a source-addressed candidate image tag. The publication workflow gates
+  stable GHCR tag promotion and immutable release publication on successful CI
+  for the exact tagged commit, exact remote assets and checksums,
+  repository/workflow/ref/commit-bound provenance, a hosted runner, OCI SBOM,
+  and a fresh-VPS qualification report bound to the same artifacts.
+- The strict qualification verifier and CLI passed positive identity binding,
+  digest binding, unknown/trailing JSON, symlink, stale/future report, profile,
+  and every incomplete-check rejection test. All Go tests, `go vet`, shell
+  syntax validation, and `actionlint v1.7.12` passed after the workflow changes.
 
 ### Externally blocked
 
-GitHub Actions run `32512470878` for source `27c98ee` created the relay,
+GitHub Actions run `32514479222` for source `a300a80` created the relay,
 container, control-client, and admin-client jobs, but GitHub started zero steps.
 Every job has the same check annotation: recent account payments failed or the
 Actions spending limit must be increased. This is an account-level runner
@@ -93,9 +103,11 @@ repeated after billing is repaired.
 4. Exercise backup, restore, upgrade, admin credential reset, automatic
    rollback, interrupted-operation recovery, and both uninstall retention modes
    on that VPS.
-5. Run the draft release workflow, inspect all checksums/provenance/SBOMs and
-   multi-architecture GHCR pulls, then publish only after the recorded tag and
-   package versions match.
+5. Produce and upload the privacy-safe qualification report bound to the exact
+   candidate image and `SHA256SUMS` digest.
+6. Run the tag-bound draft and publication workflows, inspect all
+   checksums/provenance/SBOMs and multi-architecture GHCR pulls, then perform
+   independent immutable release and asset verification.
 
 Until these external gates pass, the wizard is implemented and locally
 qualified but must not be described as fully production-qualified.

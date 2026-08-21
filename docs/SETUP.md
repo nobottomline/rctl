@@ -61,12 +61,17 @@ Generated deployment files pin the immutable image digest. `latest` is never a
 stored installation version. Release notes may show the human-readable tag.
 
 Public releases also carry keyless GitHub/Sigstore artifact attestations and
-the OCI image carries provenance plus an SBOM. The existing pinned
+the OCI image carries provenance plus an SBOM. Draft creation initially pushes
+only a source-addressed `candidate-<commit>` image tag; the stable version tag
+does not exist until the separate publication gate has verified the exact
+release. The existing pinned
 device-update ECDSA key remains independent from GitHub and container signing.
 Its private half is never placed on a relay host. Repository-level immutable
 releases are enabled. Releases are assembled as drafts, fully verified, and
 only then published; publication permanently locks the tag and assets and
-creates GitHub's signed release attestation.
+creates GitHub's signed release attestation. [Setup qualification](SETUP-QUALIFICATION.md)
+records current evidence and [release qualification](QUALIFICATION.md) defines
+the enforced draft-to-publication procedure.
 
 `update-manifest.json` is published only when a previous verified package is
 available for rollback. It is signed by the independent device-update key and
@@ -76,6 +81,17 @@ While the repository and container package are private, this pipeline is a
 maintainer dry run and requires GitHub authentication. No private token may be
 embedded in bootstrap output or generated VPS configuration. Anonymous install
 is enabled only after both release assets and the GHCR package are public.
+
+Both release workflows must be dispatched from the release tag itself, not
+from a branch. Draft creation uses:
+
+```sh
+gh workflow run release-draft.yml --ref "$TAG" -f tag="$TAG"
+```
+
+This binds GitHub OIDC provenance to the same immutable source ref and commit
+that supply the device package and binaries. Branch-based dispatch is rejected
+before an image or release is created.
 
 After publishing a qualified draft, maintainers run `gh release verify TAG`
 and `gh release verify-asset TAG PATH` for every downloaded asset. A release
@@ -121,7 +137,7 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 
 Pin a specific release by setting `RCTL_VERSION=vMAJOR.MINOR.PATCH` on the
 `sudo` side. Do not pipe a mutable branch file to root. While the repository is
-private, maintainers use `gh workflow run release-draft.yml`, inspect the draft
+private, maintainers use the tag-bound draft command above, inspect the draft
 assets, and download them through authenticated `gh release download`; the
 anonymous one-liner is intentionally unavailable.
 
@@ -165,8 +181,8 @@ Unix modes and ownership, and writes a sorted SHA-256 manifest under
 retained only after Relay and Caddy restart and the public authenticated path
 passes verification. A failed copy, restart, or verification removes the
 candidate and still attempts to restart the prior services. The backup
-directory is mode 0700 because it contains the
-relay database, sessions, device identities, TLS state, and server secrets.
+directory is mode 0700 because it contains the relay database, sessions,
+device identities, TLS state, and server secrets.
 
 `rctl-setup restore --from /var/backups/rctl/backup-...` accepts only a direct
 `backup-*` child of the managed backup directory. Before touching the running
@@ -199,12 +215,11 @@ verification, complete stack stop, final stopped-state rollback snapshot, and
 atomic replacement. The target must pass service health, trusted public routes,
 authenticated admin access, and SQLite session persistence across a relay
 restart. Any failed apply or verification restores the pre-upgrade backup and
-old pinned images. A
-same-version rerun is an idempotent health check only when configuration and
-every artifact hash still match that immutable release; conflicting artifacts
-with the same version are rejected. Downgrades are rejected and intentional
-rollback uses `restore`. `--dry-run` performs no image pull, backup, or service
-operation.
+old pinned images. A same-version rerun is an idempotent health check only when
+configuration and every artifact hash still match that immutable release;
+conflicting artifacts with the same version are rejected. Downgrades are
+rejected and intentional rollback uses `restore`. `--dry-run` performs no image
+pull, backup, or service operation.
 
 `rctl-setup uninstall` requires exactly one explicit retention choice. Both
 `--keep-data` and `--delete-data` verify the running deployment, then hold the
