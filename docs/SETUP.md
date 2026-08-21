@@ -139,9 +139,10 @@ rctl-setup recover       repair an interrupted lifecycle transaction
 rctl-setup version       build and release metadata
 ```
 
-Non-interactive automation uses a mode-0600 configuration file or environment
-variables read by the process. Secrets are never accepted as command-line
-flags, because arguments are visible in shell history and process listings.
+Non-interactive automation uses a mode-0600 JSON configuration file. Setup
+does not accept deployment secrets in that file, environment variables, or
+command-line flags; it generates them from the kernel CSPRNG after validation
+and confirmation.
 
 Every mutating command has `--dry-run`. Re-running `install` reconciles an
 existing installation when its ownership metadata is valid; it does not create
@@ -308,6 +309,11 @@ operation journal, and the separate crash-recovery checkpoint:
 9. On failure, stop the partial stack, remove fresh owned paths, and preserve a
    redacted journal. Upgrade/reconfigure uses the verified backup transaction
    documented above rather than the fresh-install path.
+
+The redacted journal directory is not deployment state. A failed fresh install
+can therefore be retried without deleting its evidence; setup accepts only a
+real directory at that path and still rejects symlinks, non-directories, prior
+configuration/data, retained backups, and unowned Compose resources.
 
 The ownership manifest records paths, modes, secret classification, hashes,
 deployment configuration, and release version. Immutable Compose content owns
