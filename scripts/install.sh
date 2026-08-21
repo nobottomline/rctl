@@ -7,6 +7,7 @@ export PATH
 REPOSITORY="nobottomline/rctl"
 DESTINATION="/usr/local/bin/rctl-setup"
 VERSION="${RCTL_VERSION:-latest}"
+ASSETS_DIR="${RCTL_ASSETS_DIR:-}"
 
 fail() {
   printf 'rctl bootstrap: %s\n' "$*" >&2
@@ -31,6 +32,15 @@ case "$VERSION" in
     ;;
 esac
 
+if [ -n "$ASSETS_DIR" ]; then
+  case "$ASSETS_DIR" in
+    /*) ;;
+    *) fail "RCTL_ASSETS_DIR must be an absolute path" ;;
+  esac
+  [ -d "$ASSETS_DIR" ] && [ ! -L "$ASSETS_DIR" ] || \
+    fail "RCTL_ASSETS_DIR must be a real directory, not a symlink"
+fi
+
 umask 077
 work="$(mktemp -d "/tmp/rctl-bootstrap.XXXXXX")" || fail "cannot create temporary directory"
 candidate=""
@@ -45,8 +55,19 @@ download() {
     --retry 3 --connect-timeout 15 --max-time 300 "$1" --output "$2"
 }
 
-download "${base}/SHA256SUMS" "$work/SHA256SUMS" || \
-  fail "cannot download release checksums (private releases require the documented gh workflow)"
+fetch_asset() {
+  name="$1"
+  destination="$2"
+  if [ -n "$ASSETS_DIR" ]; then
+    source="${ASSETS_DIR}/${name}"
+    [ -f "$source" ] && [ ! -L "$source" ] || fail "local release asset is missing or unsafe: ${name}"
+    install -m 0600 "$source" "$destination" || fail "cannot stage local release asset ${name}"
+  else
+    download "${base}/${name}" "$destination" || fail "cannot download ${name}"
+  fi
+}
+
+fetch_asset "SHA256SUMS" "$work/SHA256SUMS"
 
 package_asset="$(awk '$2 ~ /^rctl_[0-9]+\.[0-9]+\.[0-9]+_iphoneos-arm\.deb$/ { if (found) exit 2; print $2; found=1 } END { if (!found) exit 1 }' "$work/SHA256SUMS")" || \
   fail "release must contain exactly one public rctl device package"
@@ -70,7 +91,7 @@ verify_asset() {
 }
 
 for name in "$asset" "$package_asset"; do
-  download "${base}/${name}" "$work/${name}" || fail "cannot download ${name}"
+  fetch_asset "$name" "$work/${name}"
   verify_asset "$name"
 done
 

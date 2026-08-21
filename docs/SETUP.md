@@ -125,6 +125,14 @@ private, maintainers use `gh workflow run release-draft.yml`, inspect the draft
 assets, and download them through authenticated `gh release download`; the
 anonymous one-liner is intentionally unavailable.
 
+For private fresh-host qualification, download one draft's complete assets on
+a trusted maintainer machine, verify them there, and transfer that directory to
+the temporary VPS over SSH. Run the transferred `install.sh` with absolute
+`RCTL_ASSETS_DIR=/path/to/assets`; local mode rejects symlinked
+directories/assets and applies the same checksum and activation contract
+without embedding a GitHub token on the VPS. This is a maintainer test path,
+not the public installation UX.
+
 ## Wizard commands
 
 ```text

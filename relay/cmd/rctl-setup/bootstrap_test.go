@@ -101,9 +101,32 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	}
 	assertLastLog(t, logPath, "upgrade --dry-run --yes --public-package ")
 
+	runBootstrapOffline(t, scriptPath, assets, logPath, "--dry-run", "--yes")
+	assertLastLog(t, logPath, "upgrade --dry-run --yes --public-package ")
+
 	runBootstrap(t, scriptPath, assets, logPath, false, "--yes")
 	if string(mustRead(t, destination)) != string(mustRead(t, setupAsset)) {
 		t.Fatal("successful upgrade did not activate the verified setup binary")
+	}
+
+	assetsLink := filepath.Join(root, "assets-link")
+	if err := os.Symlink(assets, assetsLink); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("sh", scriptPath, "--dry-run", "--yes")
+	command.Env = append(os.Environ(), "RCTL_ASSETS_DIR="+assetsLink, "SETUP_LOG="+logPath, "FAIL_SETUP=0")
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "must be a real directory, not a symlink") {
+		t.Fatalf("symlinked offline asset directory: err=%v output=%s", err, output)
+	}
+}
+
+func runBootstrapOffline(t *testing.T, script, assets, log string, args ...string) {
+	t.Helper()
+	command := exec.Command("sh", append([]string{script}, args...)...)
+	command.Env = append(os.Environ(), "RCTL_ASSETS_DIR="+assets, "SETUP_LOG="+log, "FAIL_SETUP=0")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("offline bootstrap failed: %v\n%s", err, output)
 	}
 }
 
