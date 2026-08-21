@@ -9,7 +9,30 @@ token, so it must never be published as a GitHub release artifact.
 
 ## User Flow
 
-1. User deploys their own relay on a domain with HTTPS/WSS.
+The supported release flow is:
+
+1. User deploys their own relay on a domain with HTTPS/WSS using the release
+   bootstrap and `rctl-setup`. The bootstrap also supplies the version-matched,
+   verified public LAN-only package to the wizard.
+2. User opens `https://rctl.example.com/admin`, chooses **Pair device**, enters a
+   display name, and downloads the generated private `.deb`.
+3. User installs that one package on the jailbroken iPad. No settings page,
+   token entry, or other on-device setup exists.
+4. The device appears as pending in relay admin. User approves it, after which
+   the one-time enrollment token is replaced by a long-lived per-relay device
+   secret.
+5. Local LAN control continues to work independently; remote control uses
+   `https://rctl.example.com/control/devices/{device_id}`.
+
+The personalized download is generated in bounded memory and is never stored on
+the VPS. It embeds only the user's relay URL, one-time enrollment token, and
+device display name. It is never a GitHub Release asset.
+
+### Advanced manual flow
+
+Maintainers and custom deployments can still run the lower-level flow:
+
+1. Deploy the relay manually on a domain with HTTPS/WSS.
 
    ```sh
    cd relay
@@ -23,7 +46,7 @@ token, so it must never be published as a GitHub release artifact.
    `relay/Caddyfile.example`, `relay/nginx.conf.example`, and
    `relay/nginx_proxy_params.example`.
 
-2. User opens the admin panel and creates an enrollment token:
+2. Open the admin panel and create an enrollment token:
 
    ```text
    https://rctl.example.com/admin
@@ -42,7 +65,7 @@ token, so it must never be published as a GitHub release artifact.
      -X POST https://rctl.example.com/api/admin/enrollments
    ```
 
-3. User creates a local device package config:
+3. Create a local device package config:
 
    ```sh
    cp relay.env.example relay.env
@@ -57,17 +80,17 @@ token, so it must never be published as a GitHub release artifact.
    DEVICE_NAME=iPad Air 3
    ```
 
-4. User builds a private relay-enabled package:
+4. Build a private relay-enabled package:
 
    ```sh
    make package-relay
    ```
 
-5. User installs the generated package from `personalized/`.
+5. Install the generated package from `personalized/`.
 6. The device appears in the relay admin panel as pending.
-7. User approves the device from the browser. After approval, the relay issues a
+7. Approve the device from the browser. After approval, the relay issues a
    long-lived device secret and the enrollment token is no longer accepted.
-8. User opens the relay-hosted control page:
+8. Open the relay-hosted control page:
 
    ```text
    https://rctl.example.com/control/devices/{device_id}
@@ -253,9 +276,10 @@ Then open:
 https://rctl.example.com/admin
 ```
 
-Create an enrollment token, build a private package with `make package-relay`,
-install it, approve the pending device, then use the `Open` button in the admin
-panel.
+Choose **Pair device**, download and install the private package, approve the
+pending device, then use the `Open` button in the admin panel. On a manual
+deployment without a wizard-provisioned public package, create an enrollment
+token and use `make package-relay` instead.
 
 ### Production Checklist
 

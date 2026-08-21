@@ -75,9 +75,10 @@ browser audio capture is enabled.
 - **Compatibility fallback:** local `/stream` over HTTP chunked H.264 decoded
   with WebCodecs. The relay stream tunnel is kept for smoke/debug fallback, not
   as the preferred internet video path.
-- **Internet packaging:** public release `.deb` files stay LAN-only. Relay-enabled
-  packages are generated per user with `make package-relay` and must not be
-  published. See `docs/RELAY.md`.
+- **Internet packaging:** public release `.deb` files stay LAN-only. A verified
+  self-hosted relay generates each private device package on demand from its
+  admin page; `make package-relay` remains an advanced maintainer fallback.
+  Private packages must never be published. See `docs/RELAY.md`.
 
 ## Build & deploy
 

@@ -266,8 +266,8 @@ function Empty() {
       </div>
       <p className="mt-4 text-[15px] font-medium text-fg-dim">No devices yet</p>
       <p className="mt-1 max-w-xs text-[13px] text-muted">
-        Create an enrollment token, build a personalized package, and install it on a
-        device to see it appear here.
+        Download a private package from Pair device and install it to see the device
+        appear here.
       </p>
     </div>
   )

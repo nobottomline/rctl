@@ -57,6 +57,10 @@ export interface CreateEnrollmentOptions {
   ttl_seconds?: number
 }
 
+export interface CreateDevicePackageOptions extends CreateEnrollmentOptions {
+  device_name: string
+}
+
 export interface DevicesResponse {
   devices: Device[]
 }
@@ -136,6 +140,8 @@ export interface RelayStatus {
   protocol_minor: number
   features: string[]
   update_configured: boolean
+  device_package_available: boolean
+  device_package_version?: string
 }
 
 export interface UpdateStatus {

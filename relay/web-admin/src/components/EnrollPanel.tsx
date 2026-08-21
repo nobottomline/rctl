@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Download,
   KeyRound,
   MoreHorizontal,
   Plus,
@@ -44,14 +45,17 @@ const statusStyle: Record<EnrollmentStatus, string> = {
 
 export type EnrollPanelProps = {
   enrollments: EnrollmentSummary[]
+  packageAvailable: boolean
+  packageVersion?: string
   onChanged: () => void
 }
 
-export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
+export function EnrollPanel({ enrollments, packageAvailable, packageVersion, onChanged }: EnrollPanelProps) {
   const [open, setOpen] = useState(false)
   const [label, setLabel] = useState('')
   const [ttl, setTtl] = useState(TTLS[0])
   const [creating, setCreating] = useState(false)
+  const [packaging, setPackaging] = useState(false)
   const [created, setCreated] = useState<Enrollment | null>(null)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState('')
@@ -79,6 +83,24 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
       toast.error(err instanceof Error ? err.message : 'Could not create token')
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function downloadPackage() {
+    setPackaging(true)
+    try {
+      const filename = await api.createDevicePackage({
+        device_name: label.trim() || 'iPad',
+        label: label.trim() || undefined,
+        ttl_seconds: ttl.value,
+      })
+      toast.success(`${filename} downloaded`)
+      setOpen(false)
+      onChanged()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not create device package')
+    } finally {
+      setPackaging(false)
     }
   }
 
@@ -118,7 +140,7 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
       action={
         <Button variant="primary" size="sm" onClick={openModal}>
           <Plus className="size-4" />
-          New token
+          Pair device
         </Button>
       }
     >
@@ -196,11 +218,13 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
       <Modal
         open={open}
         onOpenChange={setOpen}
-        title={created ? 'Token created' : 'New enrollment token'}
+        title={created ? 'Token created' : 'Pair a device'}
         description={
           created
             ? undefined
-            : 'A one-time token to pair a device. Drop it into make-device-deb to build a personalized package.'
+            : packageAvailable
+              ? `Download a private rctl${packageVersion ? ` ${packageVersion}` : ''} package configured for this relay.`
+              : 'Create a one-time token for the manual package workflow.'
         }
         className="max-w-lg"
       >
@@ -214,8 +238,8 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
               className="space-y-5"
             >
               <Field
-                label="Label"
-                placeholder="Optional — e.g. John's iPad"
+                label="Device name"
+                placeholder="iPad Air"
                 value={label}
                 autoFocus
                 maxLength={80}
@@ -246,13 +270,29 @@ export function EnrollPanel({ enrollments, onChanged }: EnrollPanelProps) {
                   ))}
                 </Menu>
               </div>
-              <div className="flex justify-end gap-2.5 pt-1">
-                <Button variant="secondary" onClick={() => setOpen(false)}>
+              <div className="grid grid-cols-2 gap-2.5 pt-1 sm:flex sm:justify-end">
+                <Button variant="secondary" className="w-full sm:w-auto" onClick={() => setOpen(false)}>
                   Cancel
                 </Button>
-                <Button variant="primary" onClick={create} loading={creating}>
-                  {!creating && <Plus className="size-4" />}
-                  Create token
+                {packageAvailable && (
+                  <Button variant="secondary" className="w-full sm:w-auto" onClick={create} loading={creating} disabled={packaging}>
+                    {!creating && <KeyRound className="size-4" />}
+                    Token only
+                  </Button>
+                )}
+                <Button
+                  variant="primary"
+                  onClick={packageAvailable ? downloadPackage : create}
+                  loading={packageAvailable ? packaging : creating}
+                  disabled={packageAvailable ? creating : packaging}
+                  className={cn(packageAvailable && 'col-span-2 w-full sm:w-auto')}
+                >
+                  {packageAvailable ? (
+                    !packaging && <Download className="size-4" />
+                  ) : (
+                    !creating && <Plus className="size-4" />
+                  )}
+                  {packageAvailable ? 'Download package' : 'Create token'}
                 </Button>
               </div>
             </motion.div>

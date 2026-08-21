@@ -4,6 +4,7 @@
 import type {
   AuditResponse,
   CreateEnrollmentOptions,
+  CreateDevicePackageOptions,
   DeviceInfo,
   DevicesResponse,
   DiagnosticsResponse,
@@ -53,6 +54,42 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return body as T
 }
 
+async function requestDownload(path: string, body: unknown): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-RCTL-Touch': String((typeof navigator !== 'undefined' && navigator.maxTouchPoints) || 0),
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let message = res.statusText
+    try {
+      message = ((await res.json()) as { error?: string }).error || message
+    } catch {
+      /* non-JSON proxy errors retain their HTTP status text */
+    }
+    throw new ApiError(message, res.status)
+  }
+  const disposition = res.headers.get('Content-Disposition') || ''
+  const match = disposition.match(/filename=(?:"([^"]+)"|([^;\s]+))/)
+  return { blob: await res.blob(), filename: match?.[1] || match?.[2] || 'rctl-relay-device.deb' }
+}
+
+function saveDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.style.display = 'none'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
+}
+
 interface Ok {
   ok: boolean
 }
@@ -96,6 +133,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(opts),
     }),
+  createDevicePackage: async (opts: CreateDevicePackageOptions) => {
+    const download = await requestDownload('/api/admin/device-package', opts)
+    saveDownload(download.blob, download.filename)
+    return download.filename
+  },
   revokeEnrollment: (id: string) =>
     request<{ ok: boolean }>(`/api/admin/enrollments/${encodeURIComponent(id)}/revoke`, {
       method: 'POST',

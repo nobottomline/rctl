@@ -230,6 +230,8 @@ export default function App() {
         <div className="flex flex-col gap-5">
           <EnrollPanel
             enrollments={enrollments}
+            packageAvailable={status?.device_package_available ?? false}
+            packageVersion={status?.device_package_version}
             onChanged={() => loadAll({ silent: true })}
           />
           <SessionsPanel
