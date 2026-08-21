@@ -5,8 +5,9 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `327182a`, plus the documentation record itself.
-Release version remains `0.3.0`; no tag or public release was created.
+Source baseline: `main` through setup hardening commit `8993f02`, plus this
+documentation record. Release version remains `0.3.0`; no stable release was
+published.
 
 ### Passed locally
 
@@ -86,27 +87,63 @@ Release version remains `0.3.0`; no tag or public release was created.
   and every incomplete-check rejection test. All Go tests, `go vet`, shell
   syntax validation, and `actionlint v1.7.12` passed after the workflow changes.
 
-### Externally blocked
+### Passed on temporary VPS infrastructure
 
-GitHub Actions run `32515961321` for source `9006b51` created the relay,
-container, control-client, and admin-client jobs, but GitHub started zero steps.
-Every job has the same check annotation: recent account payments failed or the
-Actions spending limit must be increased. This is an account-level runner
-block, not a test failure. CI and the draft release/GHCR workflow must be
-repeated after billing is repaired.
+- A clean Ubuntu 24.04 amd64 VPS with approximately 2 GiB RAM passed aggregated
+  host, DNS, port, Docker, Compose, storage, memory, clock, and ownership
+  preflight checks. A second Ubuntu host with an unrelated service on port 443,
+  no Docker, and DNS pointing elsewhere reported all conflicts without creating
+  rctl files, networks, or containers.
+- Fresh installation obtained a real Let's Encrypt certificate and exposed the
+  relay only through Caddy. External HTTPS returned HTTP/2 200 with HSTS, CSP,
+  no-sniff, and no direct relay port. Relay and coturn became healthy, and relay
+  authentication state survived the install verifier's forced restart.
+- Two failed install attempts exposed production-only defects before commit:
+  the non-root coturn process could not read its mode-0600 configuration, and
+  its file capability could not execute after dropping the entire capability
+  bounding set. Install rolled back all managed state in both cases. Commit
+  `8993f02` assigns the configuration to the pinned image's non-root UID/GID,
+  reapplies ownership after upgrade/restore/recovery, and grants only
+  `NET_BIND_SERVICE` after `cap_drop: ALL`.
+- The route verifier originally rejected the relay's correct anonymous `401`
+  response on the protected device WebSocket. Commit `8993f02` now accepts
+  either a successful upgrade or explicit authentication rejection while still
+  failing every other status or transport error.
+- A verified backup, restore dry run, live restore, already-current upgrade,
+  and post-restore doctor all passed. Doctor reported valid ownership and
+  permissions, protected secrets, valid Compose, healthy services, local relay,
+  and public HTTPS/WebSocket routes.
+- An authenticated admin session generated an in-memory personalized package.
+  Its Debian package id, version, and relay plist were verified, then the test
+  enrollment, cookie, and downloaded package were deleted.
+- The E2E wizard included `8993f02`, while the digest-pinned relay image and
+  public package came from the immediately preceding `0.3.0` candidate. This is
+  strong engineering evidence, but not the final exact-commit qualification
+  required by the publication workflow.
+
+### Hosted workflow status
+
+The repository was temporarily made public for qualification because the
+private-repository Actions allowance was exhausted. Exact-commit CI passed for
+the preceding candidate, and the draft workflow successfully built the
+multi-architecture OCI image, iOS package, Linux binaries, SBOM, and provenance.
+Final draft assembly then found that artifact download had discarded executable
+modes. The workflow fix restores only the expected executable modes before the
+strict release-set validator. CI and draft assembly must be repeated for the
+new exact tagged commit; the repository must remain private afterward.
 
 ### Still required before a supported public release
 
-1. Run the anonymous release bootstrap on a clean supported Debian/Ubuntu VPS
-   with a new DNS hostname and no prior rctl state.
-2. Qualify real ACME issuance/renewal, public HTTPS and WebSocket routing,
-   cloud firewall rules, external UDP and TCP TURN allocation, and forced-TURN
-   browser/device media.
+1. Repeat anonymous release bootstrap using the final exact tagged release
+   assets and anonymous GHCR image, then upload its bound qualification report.
+2. Qualify ACME renewal, cloud firewall rules, external UDP and TCP TURN
+   allocation, and forced-TURN browser/device media.
 3. Enroll an iOS 14 arm64e device from the admin-generated package and verify
    relay plus independent LAN control before and after relay restart.
-4. Exercise backup, restore, upgrade, admin credential reset, automatic
-   rollback, interrupted-operation recovery, and both uninstall retention modes
-   on that VPS.
+4. Exercise admin credential reset, failed-upgrade automatic rollback,
+   interrupted-operation recovery, and both uninstall retention modes on a
+   disposable VPS. Backup, restore, and already-current upgrade are already
+   qualified on a real VPS.
 5. Produce and upload the privacy-safe qualification report bound to the exact
    candidate image and `SHA256SUMS` digest.
 6. Run the tag-bound draft and publication workflows, inspect all
