@@ -5,7 +5,7 @@ contains no private hostname, address, credential, device identity, or package.
 
 ## 2026-08-21 engineering qualification
 
-Source baseline: `main` through `4f3ce5b`, plus the documentation record itself.
+Source baseline: `main` through `7c11562`, plus the documentation record itself.
 Release version remains `0.3.0`; no tag or public release was created.
 
 ### Passed locally
@@ -16,7 +16,9 @@ Release version remains `0.3.0`; no tag or public release was created.
   required-module advisory was not called by the program.
 - Hermetic execution of the real `scripts/install.sh`: fresh install, owned
   upgrade, failed-upgrade binary preservation, dry-run non-activation, release
-  checksum enforcement, and successful atomic binary activation.
+  checksum enforcement, and successful atomic binary activation. The private
+  qualification path also passed from a local verified asset directory without
+  network access and rejected a symlinked asset directory.
 - Setup lifecycle failure tests: ownership conflict, backup tampering and size
   limits, restore rollback, upgrade rollback, keep/delete-data uninstall,
   uninstalled recovery, interrupted fresh install/backup/restore/upgrade, and
