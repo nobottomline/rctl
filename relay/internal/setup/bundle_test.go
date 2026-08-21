@@ -77,8 +77,18 @@ func TestRenderDedicatedBundleIsPinnedAndDoesNotExposeRelayPort(t *testing.T) {
 	if !strings.Contains(env, "RCTL_RELAY_ENABLE_WEBRTC=1\n") || !strings.Contains(env, "RCTL_RELAY_TRUST_PROXY_HEADERS=1\n") {
 		t.Fatal("relay production invariants are missing")
 	}
-	if !strings.Contains(string(files[paths.Coturn].Content), "static-auth-secret="+secrets.TURN) {
+	coturnConfig := string(files[paths.Coturn].Content)
+	if !strings.Contains(coturnConfig, "static-auth-secret="+secrets.TURN) {
 		t.Fatal("TURN and relay secrets do not match")
+	}
+	for _, obsolete := range []string{"no-cli", "no-dtls", "no-loopback-peers"} {
+		if strings.Contains(coturnConfig, obsolete) {
+			t.Errorf("coturn config contains obsolete option %q", obsolete)
+		}
+	}
+	if !strings.Contains(coturnConfig, "denied-peer-ip=127.0.0.0-127.255.255.255") ||
+		!strings.Contains(coturnConfig, "denied-peer-ip=::1") {
+		t.Fatal("coturn config does not explicitly deny loopback peers")
 	}
 	if strings.Contains(string(files[paths.Caddyfile].Content), secrets.Admin) {
 		t.Fatal("admin secret leaked into public proxy configuration")

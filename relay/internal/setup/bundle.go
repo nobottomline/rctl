@@ -212,7 +212,7 @@ func renderCoturn(cfg Config, realm, secret string) []byte {
 	lines := []string{
 		"listening-port=3478", "listening-ip=0.0.0.0", "external-ip=" + net.ParseIP(cfg.TURNExternalIP).String(),
 		"realm=" + realm, "server-name=" + realm, "fingerprint", "use-auth-secret", "static-auth-secret=" + secret,
-		"min-port=49160", "max-port=49260", "no-cli", "no-tls", "no-dtls", "no-multicast-peers", "no-loopback-peers", "stale-nonce=600", "total-quota=100",
+		"min-port=49160", "max-port=49260", "no-tls", "no-multicast-peers", "stale-nonce=600", "total-quota=100",
 		"denied-peer-ip=0.0.0.0-0.255.255.255", "denied-peer-ip=10.0.0.0-10.255.255.255",
 		"denied-peer-ip=100.64.0.0-100.127.255.255", "denied-peer-ip=127.0.0.0-127.255.255.255",
 		"denied-peer-ip=169.254.0.0-169.254.255.255", "denied-peer-ip=172.16.0.0-172.31.255.255",
