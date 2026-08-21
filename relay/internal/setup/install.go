@@ -356,6 +356,9 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 		}
 		defer releaseLock()
 	}
+	if err := ensureNoPendingRecovery(i.Paths); err != nil {
+		return result, err
+	}
 
 	existing, manifestErr := loadManifest(i.Paths.ManifestPath)
 	if manifestErr != nil && !errors.Is(manifestErr, os.ErrNotExist) {
@@ -425,8 +428,12 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 		journal.Error = redact(err.Error(), secrets)
 		_ = i.stopFreshServices(context.Background())
 		_ = rollbackFresh(i.Paths, bundle)
+		_ = clearRecovery(i.Paths)
 		_ = writeJSONAtomic(journalPath, journal, 0o600)
 	}()
+	if err = beginRecovery(i.Paths, "install", "", i.Now()); err != nil {
+		return result, err
+	}
 	if err = i.prepareDirectories(); err != nil {
 		return result, err
 	}
@@ -459,6 +466,9 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	journal.UpdatedAt = i.Now().Unix()
 	journal.Error = ""
 	if err = writeJSONAtomic(journalPath, journal, 0o600); err != nil {
+		return result, err
+	}
+	if err = clearRecovery(i.Paths); err != nil {
 		return result, err
 	}
 	committed = true

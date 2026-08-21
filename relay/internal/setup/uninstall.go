@@ -33,6 +33,9 @@ type UninstallManager struct {
 
 func (u UninstallManager) Plan(options UninstallOptions) (UninstallResult, error) {
 	u.defaults()
+	if err := ensureNoPendingRecovery(u.Paths); err != nil {
+		return UninstallResult{}, err
+	}
 	if options.KeepData == options.DeleteData {
 		return UninstallResult{}, errors.New("choose exactly one of keep-data or delete-data")
 	}
@@ -98,6 +101,9 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 		return result, err
 	}
 	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}
+	if err := beginRecovery(u.Paths, "uninstall", result.Backup, u.Now()); err != nil {
+		return result, err
+	}
 	if output, downErr := u.Runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...); downErr != nil {
 		_, _ = u.Runner.Run(context.Background(), "docker", installer.composeArgs("up", "-d")...)
 		return result, fmt.Errorf("stop and remove services: %s", commandFailure(output, downErr))
@@ -114,6 +120,10 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 		}
 		if rollbackErr != nil {
 			err = fmt.Errorf("uninstall failed: %v; automatic rollback also failed: %w", err, rollbackErr)
+			return
+		}
+		if clearErr := clearRecovery(u.Paths); clearErr != nil {
+			err = fmt.Errorf("uninstall failed and was rolled back, but recovery checkpoint remains: %v: %w", err, clearErr)
 			return
 		}
 		err = fmt.Errorf("uninstall failed and was rolled back: %w", err)
@@ -142,6 +152,9 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 		if removeErr := os.Remove(directory); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) && !isDirectoryNotEmpty(removeErr) {
 			return result, removeErr
 		}
+	}
+	if err = clearRecovery(u.Paths); err != nil {
+		return result, fmt.Errorf("commit uninstall recovery checkpoint: %w", err)
 	}
 	return result, nil
 }

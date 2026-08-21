@@ -128,6 +128,7 @@ rctl-setup upgrade       backup, pull pinned release, apply, verify, rollback
 rctl-setup backup        consistent database/config/TLS metadata archive
 rctl-setup restore       validate archive, stop services, restore, verify
 rctl-setup uninstall     explicit data-retention choice and owned-file removal
+rctl-setup recover       repair an interrupted lifecycle transaction
 rctl-setup version       build and release metadata
 ```
 
@@ -200,6 +201,20 @@ the verified snapshot, and starts and verifies the public deployment. On
 failure it removes the partial deployment and puts the exact retained
 uninstalled state back. On success the superseded retained data is removed.
 The source backup is never consumed or modified.
+
+Every lifecycle command writes a mode-0600 crash-recovery checkpoint outside
+the data and backup trees immediately before its first service mutation. The
+checkpoint contains an operation name and, where applicable, the already
+verified rollback-backup path; it contains no secret values. A normal commit or
+successful automatic rollback removes and fsyncs the checkpoint. While one is
+present, install, backup, restore, upgrade, and uninstall refuse to start a
+second transaction. `rctl-setup recover --dry-run` validates the checkpoint and
+archive without mutation; `rctl-setup recover` restores the pre-operation
+snapshot, removes only known obsolete rctl files, restarts the pinned stack,
+checks public admin access and SQLite session persistence across a relay
+restart, and then clears the checkpoint. Recovery from an interrupted backup
+restarts and verifies the unchanged deployment and removes only hidden,
+incomplete backup candidates.
 
 ## Supported deployment profiles
 
@@ -292,6 +307,7 @@ Default native host paths are:
 /var/lib/rctl/coturn/           TURN state when needed
 /var/backups/rctl/              root-only lifecycle backups
 /var/log/rctl-setup/            redacted setup journals
+/var/log/rctl-setup/recovery.json  root-only crash-recovery checkpoint
 ```
 
 The relay environment necessarily contains server-side secrets. It is never

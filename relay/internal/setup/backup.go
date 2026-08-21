@@ -52,6 +52,9 @@ func (b BackupManager) DryRun() ([]string, error) {
 	if b.Paths.EtcDir == "" {
 		b.Paths = DefaultPaths()
 	}
+	if err := ensureNoPendingRecovery(b.Paths); err != nil {
+		return nil, err
+	}
 	installed, err := loadManifest(b.Paths.ManifestPath)
 	if err != nil {
 		return nil, err
@@ -90,6 +93,9 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 		return "", err
 	}
 	defer releaseLock()
+	if err := ensureNoPendingRecovery(b.Paths); err != nil {
+		return "", err
+	}
 
 	installed, err := loadManifest(b.Paths.ManifestPath)
 	if err != nil {
@@ -127,13 +133,24 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 	}()
 
 	installer := Installer{Paths: b.Paths, Runner: b.Runner, Verifier: b.Verifier}
+	if err := beginRecovery(b.Paths, "backup", "", b.Now()); err != nil {
+		return "", err
+	}
 	if output, stopErr := b.Runner.Run(ctx, "docker", installer.composeArgs("stop", "relay", "caddy")...); stopErr != nil {
 		return "", fmt.Errorf("stop services for consistent backup: %s", commandFailure(output, stopErr))
 	}
 	servicesStopped := true
 	defer func() {
 		if servicesStopped {
-			_, _ = b.Runner.Run(context.Background(), "docker", installer.composeArgs("up", "-d", "relay", "caddy")...)
+			recoveryContext, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if _, restartErr := b.Runner.Run(recoveryContext, "docker", installer.composeArgs("up", "-d", "relay", "caddy")...); restartErr == nil {
+				if waitErr := installer.waitForServices(recoveryContext, installed.Config.EnableTURN); waitErr == nil {
+					if verifyErr := b.Verifier.Verify(recoveryContext, installed.Config, secrets.Admin); verifyErr == nil {
+						_ = clearRecovery(b.Paths)
+					}
+				}
+			}
 		}
 	}()
 
@@ -167,6 +184,9 @@ func (b BackupManager) Create(ctx context.Context) (result string, err error) {
 	}
 	if err := b.Verifier.Verify(ctx, installed.Config, secrets.Admin); err != nil {
 		return "", fmt.Errorf("post-backup verification: %w", err)
+	}
+	if err := clearRecovery(b.Paths); err != nil {
+		return "", fmt.Errorf("commit backup recovery checkpoint: %w", err)
 	}
 
 	stamp := b.Now().UTC().Format("20060102T150405Z")

@@ -105,6 +105,9 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 	}
 
 	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Chown: u.Chown}
+	if err := beginRecovery(u.Paths, "upgrade", result.Backup, u.Now()); err != nil {
+		return result, err
+	}
 	if output, stopErr := u.Runner.Run(ctx, "docker", installer.composeArgs("stop")...); stopErr != nil {
 		_, _ = u.Runner.Run(context.Background(), "docker", installer.composeArgs("up", "-d")...)
 		return result, fmt.Errorf("stop services for upgrade: %s", commandFailure(output, stopErr))
@@ -123,6 +126,10 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 			err = fmt.Errorf("upgrade failed: %v; automatic rollback also failed: %w", err, rollbackErr)
 			return
 		}
+		if clearErr := clearRecovery(u.Paths); clearErr != nil {
+			err = fmt.Errorf("upgrade failed and was rolled back, but recovery checkpoint remains: %v: %w", err, clearErr)
+			return
+		}
 		err = fmt.Errorf("upgrade failed and was rolled back: %w", err)
 	}()
 
@@ -133,6 +140,9 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 	applied = true
 	if err = installer.verifyServices(ctx, plan.target.Config, plan.secrets.Admin, true); err != nil {
 		return result, fmt.Errorf("upgraded deployment verification failed: %w", err)
+	}
+	if err = clearRecovery(u.Paths); err != nil {
+		return result, fmt.Errorf("commit upgrade recovery checkpoint: %w", err)
 	}
 	return result, nil
 }
@@ -156,6 +166,9 @@ func (u *UpgradeManager) defaults() {
 }
 
 func (u UpgradeManager) prepare(options UpgradeOptions) (upgradePlan, error) {
+	if err := ensureNoPendingRecovery(u.Paths); err != nil {
+		return upgradePlan{}, err
+	}
 	current, err := loadManifest(u.Paths.ManifestPath)
 	if err != nil {
 		return upgradePlan{}, err

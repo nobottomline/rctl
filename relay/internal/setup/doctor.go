@@ -2,7 +2,9 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -25,6 +27,13 @@ func (d Doctor) Run(ctx context.Context) Report {
 	report := Report{}
 	add := func(id string, severity Severity, summary, detail string) {
 		report.Checks = append(report.Checks, Check{ID: id, Severity: severity, Summary: summary, Detail: detail})
+	}
+	if recovery, err := pendingRecovery(d.Paths); err == nil {
+		add("recovery", Fail, "An interrupted lifecycle operation requires recovery", recovery.Operation+"; run rctl-setup recover")
+	} else if errors.Is(err, os.ErrNotExist) {
+		add("recovery", Pass, "No interrupted lifecycle operation is pending", "")
+	} else {
+		add("recovery", Fail, "The lifecycle recovery checkpoint is invalid", err.Error())
 	}
 	manifest, err := loadManifest(d.Paths.ManifestPath)
 	if err != nil {

@@ -51,6 +51,8 @@ func run(args []string) int {
 		return runUpgrade(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "uninstall":
 		return runUninstall(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "recover":
+		return runRecover(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -59,6 +61,54 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runRecover(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("recover", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	dryRun := flags.Bool("dry-run", false, "validate and print the pending recovery without changing the host")
+	assumeYes := flags.Bool("yes", false, "recover without an interactive confirmation")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(errorsOutput, "recover does not accept positional arguments")
+		return 2
+	}
+	manager := setup.RecoveryManager{}
+	state, err := manager.Plan()
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "recovery plan:", err)
+		return 1
+	}
+	fmt.Fprintf(output, "Interrupted operation: %s\n", state.Operation)
+	if state.Backup != "" {
+		fmt.Fprintf(output, "Rollback backup: %s\n", state.Backup)
+	}
+	if *dryRun {
+		fmt.Fprintln(output, "Recovery dry run complete. No services or files were changed.")
+		return 0
+	}
+	if !*assumeYes {
+		if input != os.Stdin || !stdinIsTerminal() {
+			fmt.Fprintln(errorsOutput, "recover requires an interactive terminal or --yes")
+			return 2
+		}
+		answer, promptErr := prompt(bufio.NewReader(input), output, "Type recover to restore a verified state", "")
+		if promptErr != nil || answer != "recover" {
+			fmt.Fprintln(errorsOutput, "recovery cancelled; the host was not changed")
+			return 1
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	state, err = manager.Recover(ctx)
+	if err != nil {
+		fmt.Fprintln(errorsOutput, "recover:", err)
+		return 1
+	}
+	fmt.Fprintf(output, "Interrupted %s operation recovered and verified.\n", state.Operation)
+	return 0
 }
 
 func runUninstall(args []string, input io.Reader, output, errorsOutput io.Writer) int {
@@ -555,5 +605,6 @@ Commands:
   backup       stop briefly, snapshot managed state, restart, and verify
   restore      validate, restore, verify, and automatically roll back
   upgrade      backup, apply a newer pinned release, verify, and roll back
-  uninstall    backup, remove owned services/files, and retain recovery`)
+  uninstall    backup, remove owned services/files, and retain recovery
+  recover      finish recovery after an interrupted lifecycle operation`)
 }

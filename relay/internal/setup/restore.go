@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type RestoreManager struct {
@@ -19,6 +20,9 @@ type RestoreManager struct {
 
 func (r RestoreManager) DryRun(source string) (BackupMetadata, error) {
 	r.defaults()
+	if err := ensureNoPendingRecovery(r.Paths); err != nil {
+		return BackupMetadata{}, err
+	}
 	if err := validateBackupSelection(source, r.Paths.BackupDir); err != nil {
 		return BackupMetadata{}, err
 	}
@@ -92,6 +96,9 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 		return rollbackBackup, errors.New("installed state changed after the pre-restore backup; refusing to overwrite it")
 	}
 	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
+	if err := beginRecovery(r.Paths, "restore", rollbackBackup, time.Now()); err != nil {
+		return rollbackBackup, err
+	}
 	if output, stopErr := r.Runner.Run(ctx, "docker", installer.composeArgs("stop", "relay", "caddy")...); stopErr != nil {
 		return rollbackBackup, fmt.Errorf("stop services for restore: %s", commandFailure(output, stopErr))
 	}
@@ -100,6 +107,9 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 		applyErr = r.startAndVerify(ctx, installer, restored)
 	}
 	if applyErr == nil {
+		if clearErr := clearRecovery(r.Paths); clearErr != nil {
+			return rollbackBackup, fmt.Errorf("restore verified but recovery checkpoint could not be committed: %w", clearErr)
+		}
 		return rollbackBackup, nil
 	}
 
@@ -113,6 +123,9 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 	}
 	if rollbackErr != nil {
 		return rollbackBackup, fmt.Errorf("restore failed: %v; automatic rollback also failed: %w", applyErr, rollbackErr)
+	}
+	if clearErr := clearRecovery(r.Paths); clearErr != nil {
+		return rollbackBackup, fmt.Errorf("restore failed and was rolled back, but recovery checkpoint remains: %v: %w", applyErr, clearErr)
 	}
 	return rollbackBackup, fmt.Errorf("restore failed and was rolled back: %w", applyErr)
 }
@@ -131,17 +144,13 @@ func (r RestoreManager) restoreUninstalled(ctx context.Context, source string) (
 		return err
 	}
 	retainedData := ""
-	if _, statErr := os.Lstat(r.Paths.DataDir); statErr == nil {
-		retainedData, err = reserveRetainedData(r.Paths.DataDir)
-		if err != nil {
-			return err
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return statErr
-	}
 	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier}
 	applied := false
+	mutationStarted := false
 	verified := false
+	if err := beginRecovery(r.Paths, "restore-uninstalled", source, time.Now()); err != nil {
+		return err
+	}
 	defer func() {
 		if verified {
 			if retainedData != "" {
@@ -149,6 +158,13 @@ func (r RestoreManager) restoreUninstalled(ctx context.Context, source string) (
 					err = fmt.Errorf("restore verified but retained data cleanup failed at %s: %w", retainedData, cleanupErr)
 				}
 			}
+			if clearErr := clearRecovery(r.Paths); clearErr != nil {
+				err = errors.Join(err, fmt.Errorf("commit recovery restore checkpoint: %w", clearErr))
+			}
+			return
+		}
+		if !mutationStarted {
+			_ = clearRecovery(r.Paths)
 			return
 		}
 		if applied {
@@ -162,8 +178,22 @@ func (r RestoreManager) restoreUninstalled(ctx context.Context, source string) (
 			err = fmt.Errorf("recovery restore failed: %v; restoring the uninstalled state also failed: %w", err, rollbackErr)
 			return
 		}
+		if clearErr := clearRecovery(r.Paths); clearErr != nil {
+			err = fmt.Errorf("recovery restore failed and the uninstalled state was restored, but checkpoint remains: %v: %w", err, clearErr)
+			return
+		}
 		err = fmt.Errorf("recovery restore failed and the uninstalled state was restored: %w", err)
 	}()
+	if _, statErr := os.Lstat(r.Paths.DataDir); statErr == nil {
+		retainedData, err = reserveRetainedData(r.Paths.DataDir)
+		if err != nil {
+			return err
+		}
+		mutationStarted = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	mutationStarted = true
 	if _, err = applyBackup(source, target, r.Paths); err != nil {
 		applied = true
 		return err
@@ -199,7 +229,19 @@ func (r RestoreManager) startAndVerify(ctx context.Context, installer Installer,
 	if err != nil {
 		return err
 	}
-	return r.Verifier.Verify(ctx, manifest.Config, secrets.Admin)
+	if err := r.Verifier.Verify(ctx, manifest.Config, secrets.Admin); err != nil {
+		return err
+	}
+	restart := func(restartCtx context.Context) error {
+		if output, err := r.Runner.Run(restartCtx, "docker", installer.composeArgs("restart", "relay")...); err != nil {
+			return fmt.Errorf("recovery persistence restart: %s", commandFailure(output, err))
+		}
+		return installer.waitForServices(restartCtx, manifest.Config.EnableTURN)
+	}
+	if err := r.Verifier.VerifyPersistence(ctx, manifest.Config, secrets.Admin, restart); err != nil {
+		return fmt.Errorf("recovery persistence verification: %w", err)
+	}
+	return nil
 }
 
 func validateBackupSelection(source, backupRoot string) error {
