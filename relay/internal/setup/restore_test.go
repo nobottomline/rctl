@@ -119,3 +119,24 @@ func TestRestoreRollsBackWhenRestoredRuntimeFailsVerification(t *testing.T) {
 		t.Fatalf("rollback backup is invalid: %v", validateErr)
 	}
 }
+
+func TestBackupValidationRejectsAggregateSizeOverflow(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "backup-oversized")
+	if err := os.Mkdir(name, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	digest := strings.Repeat("0", 64)
+	metadata := BackupMetadata{
+		Schema: backupSchema, Product: "rctl", CreatedAt: 1700000000, Release: "1.2.3", Config: validConfig(),
+		Entries: []BackupEntry{
+			{Path: "var/lib/rctl/a", Type: "file", Mode: 0o600, Size: maxBackupBytes, SHA256: digest},
+			{Path: "var/lib/rctl/b", Type: "file", Mode: 0o600, Size: 1, SHA256: digest},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(name, "backup.json"), metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateBackup(name); err == nil || !strings.Contains(err.Error(), "aggregate size limit") {
+		t.Fatalf("oversized metadata result: %v", err)
+	}
+}

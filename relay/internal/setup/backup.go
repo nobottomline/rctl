@@ -409,6 +409,7 @@ func ValidateBackup(name string) (BackupMetadata, error) {
 	expected := make(map[string]BackupEntry, len(metadata.Entries))
 	parents := make(map[string]bool)
 	last := ""
+	total := int64(0)
 	for _, entry := range metadata.Entries {
 		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(entry.Path)))
 		if entry.Path == "" || clean != entry.Path || strings.HasPrefix(clean, "../") || clean == ".." || filepath.IsAbs(entry.Path) || entry.Path <= last {
@@ -417,8 +418,17 @@ func ValidateBackup(name string) (BackupMetadata, error) {
 		if entry.Type != "file" && entry.Type != "dir" {
 			return empty, fmt.Errorf("backup metadata contains invalid type for %s", entry.Path)
 		}
-		if entry.Mode > 0o777 || (entry.Type == "file" && (entry.Size < 0 || len(entry.SHA256) != sha256.Size*2)) {
+		if entry.Mode > 0o777 || (entry.Type == "file" && (entry.Size < 0 || len(entry.SHA256) != sha256.Size*2)) || (entry.Type == "dir" && (entry.Size != 0 || entry.SHA256 != "")) {
 			return empty, fmt.Errorf("backup metadata contains invalid file attributes for %s", entry.Path)
+		}
+		if entry.Type == "file" {
+			if _, err := hex.DecodeString(entry.SHA256); err != nil {
+				return empty, fmt.Errorf("backup metadata contains invalid digest for %s", entry.Path)
+			}
+			if entry.Size > maxBackupBytes-total {
+				return empty, errors.New("backup exceeds the aggregate size limit")
+			}
+			total += entry.Size
 		}
 		expected[entry.Path] = entry
 		for parent := filepath.ToSlash(filepath.Dir(filepath.FromSlash(entry.Path))); parent != "." && parent != "/"; parent = filepath.ToSlash(filepath.Dir(filepath.FromSlash(parent))) {
