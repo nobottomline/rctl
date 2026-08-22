@@ -226,9 +226,13 @@ current stack, setup validates candidate Compose and Caddy files and pulls
 target images. It then holds the lifecycle lock continuously across live
 verification, complete stack stop, final stopped-state rollback snapshot, and
 atomic replacement. The target must pass service health, trusted public routes,
-authenticated admin access, and SQLite session persistence across a relay
-restart. Any failed apply or verification restores the pre-upgrade backup and
-old pinned images. A same-version rerun is an idempotent health check only when
+an exact match between the managed release and `relay.version` from
+`/v1/capabilities`, authenticated admin access, and SQLite session persistence
+across a relay restart. Any failed apply or verification stops and removes the
+complete target stack before restoring the pre-upgrade backup and old pinned
+images. This stop is mandatory even when target and rollback reference the same
+image digest, because no process may retain SQLite or WAL handles across state
+replacement. A same-version rerun is an idempotent health check only when
 configuration and every artifact hash still match that immutable release;
 conflicting artifacts with the same version are rejected. Downgrades are
 rejected and intentional rollback uses `restore`. `--dry-run` performs no image
@@ -457,7 +461,8 @@ Relay upgrade is separate from the already implemented device updater:
 - automatically restore the old digest and files on failure.
 
 Persistent volumes and secrets are never replaced during a normal upgrade.
-Automatic rollback stops the target stack and restores the complete verified
+Automatic rollback runs `down --remove-orphans` for the target stack and
+restores the complete verified
 pre-upgrade SQLite snapshot before starting the old image, so a failed target
 migration is not left for old code to interpret. Successful schema migrations
 must remain supported by every later release; an intentionally non-rollbackable

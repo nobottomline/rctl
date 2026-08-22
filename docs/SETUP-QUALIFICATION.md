@@ -3,7 +3,7 @@
 This record distinguishes implemented behavior from release qualification. It
 contains no private hostname, address, credential, device identity, or package.
 
-## 2026-08-21 engineering qualification
+## 2026-08-21 through 2026-08-22 engineering qualification
 
 Qualification target: the immutable commit referenced by tag `v0.3.0`. Several
 draft candidates were intentionally invalidated after real-host qualification
@@ -182,6 +182,37 @@ found defects; no stable release was published.
   their negative options are deprecated. The generator now omits all three,
   retains explicit loopback/private `denied-peer-ip` ranges, and its rendered
   configuration started the pinned coturn image with no configuration warning.
+- A later exact-source fresh-host run found that dedicated-host preflight
+  checked TCP 443 but not the UDP 443 listener used by Caddy HTTP/3. The
+  corrected wizard rejected independently occupied TCP and UDP 443 before
+  creating managed state. After the unrelated listeners were stopped, the same
+  verified asset set completed fresh install, real ACME, doctor, and an
+  idempotent second bootstrap without changing secrets or ownership metadata.
+- The real admin API rejected anonymous package generation and produced a
+  version-matched, no-store personalized package for an authenticated session.
+  A clean iOS install claimed its single-use enrollment, appeared pending,
+  required explicit approval, and reconnected as an approved protocol-1
+  device. Independent LAN control, relay HTTP control, toast, and the control
+  page passed. Browser WebRTC rendered a live 834 by 1112 stream and one click
+  emitted the expected pair of control DataChannel messages.
+- Relay restart preserved the browser session, approved device identity, and
+  live stream. Backup/restore recovered a deleted SQLite enrollment marker;
+  admin reset invalidated the old password and sessions while preserving the
+  device; keep-data and delete-data uninstall modes both removed the runtime
+  and restored successfully from verified recovery backups.
+- A qualification-only valid 0.3.1 target exercised a real newer-version relay
+  upgrade while preserving SQLite state and the connected device. A deliberately
+  mismatched 0.3.2 target then exposed that route verification accepted a
+  healthy 0.3.1 runtime under a 0.3.2 ownership manifest. Setup now requires the
+  runtime capability version to equal the managed release.
+- The same mismatch exposed a second rollback defect when target and rollback
+  used one image digest: state replacement could occur while the target still
+  held SQLite/WAL handles, causing the persistence probe session to disappear
+  after restart. All rollback paths now stop and remove the complete target
+  stack before applying a snapshot. Real-host retest rejected the mismatch,
+  completed automatic rollback, removed the recovery checkpoint, and passed
+  doctor. The retained checkpoint from the first failed attempt also passed
+  both `recover --dry-run` and `recover --yes`.
 
 ### Hosted workflow status
 
