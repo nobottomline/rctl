@@ -98,8 +98,11 @@ admin action remains hidden until a newer signed catalog is published.
 3. `rctld` writes a mode `0600` request and starts the signed
    `/usr/local/libexec/rctl-updater` as a separate process, which immediately
    creates an independent session and closes inherited descriptors before
-   returning `202 Accepted`. No update work runs in the replaceable daemon; the
-   already mapped executable remains valid when its package pathname is removed.
+   returning `202 Accepted`. Before spawning, the daemon atomically publishes a
+   non-terminal `queued` status with the new job ID, so polling can never mistake
+   a terminal result from an earlier transaction for the accepted job. No update
+   work runs in the replaceable daemon; the already mapped executable remains
+   valid when its package pathname is removed.
 4. The updater locks the global update state, verifies the signed catalog, and
    downloads and verifies target and rollback packages.
 5. It backs up the relay plist, including every `DeviceSecret`, and starts a

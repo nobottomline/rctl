@@ -31,6 +31,28 @@ static BOOL secure_manifest_url(NSString *value) {
            !parts.user.length && !parts.password.length && !parts.fragment.length;
 }
 
+static BOOL write_launch_status(NSString *job, NSString *phase, NSString *message, BOOL terminal) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{
+        @"job_id": job ?: @"",
+        @"phase": phase ?: @"unknown",
+        @"message": message ?: @"",
+        @"from_version": @"",
+        @"to_version": @"",
+        @"terminal": @(terminal),
+        @"updated_at": @((long long)time(nullptr)),
+    } options:0 error:nil];
+    if (!data) return NO;
+
+    NSString *temporary = [kStatusPath stringByAppendingFormat:@".tmp.%d", getpid()];
+    if (![data writeToFile:temporary atomically:NO]) return NO;
+    chmod(temporary.fileSystemRepresentation, 0644);
+    if (rename(temporary.fileSystemRepresentation, kStatusPath.fileSystemRepresentation) != 0) {
+        unlink(temporary.fileSystemRepresentation);
+        return NO;
+    }
+    return YES;
+}
+
 static int spawn_updater(NSString *executable, NSString *request) {
     char *argv[] = {(char *)executable.fileSystemRepresentation, (char *)"--run",
                     (char *)request.fileSystemRepresentation, nullptr};
@@ -92,9 +114,20 @@ char *rctl_update_launch(const char *manifest_url, int *status) {
     }
     chmod(request.fileSystemRepresentation, 0600);
 
+    // Publish the new job before spawning. Otherwise a fast status poll can
+    // observe a terminal result left by the previous transaction.
+    if (!write_launch_status(job, @"queued", @"Update accepted", NO)) {
+        unlink(request.fileSystemRepresentation);
+        unlink(kLaunchGuard.fileSystemRepresentation);
+        if (status) *status = 500;
+        pthread_mutex_unlock(&gLaunchLock);
+        return json_bytes(@{@"error": @"update_status_write_failed"});
+    }
+
     int spawnResult = spawn_updater(kUpdater, request);
     if (spawnResult != 0) {
         unlink(request.fileSystemRepresentation);
+        write_launch_status(job, @"failed", @"Could not start updater process", YES);
         if (status) *status = 500;
         unlink(kLaunchGuard.fileSystemRepresentation);
         pthread_mutex_unlock(&gLaunchLock);

@@ -508,6 +508,14 @@ static void cleanupTransactionFiles(NSString *work) {
     }
 }
 
+static void cleanupLaunchRequest(NSString *job) {
+    if (![job isKindOfClass:NSString.class]) return;
+    NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:job];
+    if (!uuid || ![uuid.UUIDString.lowercaseString isEqualToString:job]) return;
+    NSString *request = [kStateRoot stringByAppendingPathComponent:[job stringByAppendingString:@".request.json"]];
+    unlink(request.fileSystemRepresentation);
+}
+
 static BOOL performRollback(NSDictionary *plan, NSString *message) {
     NSString *work = plan[@"work_dir"];
     touchFile([work stringByAppendingPathComponent:@"rollback_in_progress"]);
@@ -521,6 +529,7 @@ static BOOL performRollback(NSDictionary *plan, NSString *message) {
     if (verified) {
         touchFile([work stringByAppendingPathComponent:@"rollback_complete"]);
         cleanupTransactionFiles(work);
+        cleanupLaunchRequest(plan[@"job_id"]);
     }
     return verified;
 }
