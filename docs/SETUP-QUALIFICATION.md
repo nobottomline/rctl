@@ -72,6 +72,18 @@ found defects; no stable release was published.
   metadata, ELF architectures, setup version/source metadata, sorted SHA-256
   checksums, and checksum verification passed. Repository-level GitHub
   immutable releases were enabled and read back through the administration API.
+- Before the first public release, qualification found that the private half of
+  the previously generated device-update key had not been durably retained. No
+  public user package existed, so the pin was safely replaced once. The new
+  P-256 private key is a mode-0600 maintainer file outside the repository; its
+  derived public key matches the package pin and the production `.deb` passed
+  the secret audit. A maintainer helper verifies curve, mode, and exact pin
+  equality and rejects both loose permissions and a different private key.
+- Setup now owns the optional signed device-update catalog URL. Strict config
+  validation, CLI/config-file parsing, ownership serialization, relay
+  environment rendering, and verified release-upgrade replacement passed Go
+  tests. Operators no longer need to edit the managed secret environment file
+  to enable the admin page's transactional update action.
 - Release publication is now separate from draft assembly. Draft builds use
   only a source-addressed candidate image tag. The publication workflow gates
   stable GHCR tag promotion and immutable release publication on successful CI
@@ -213,10 +225,11 @@ public package release gate passed.
 
 Real-host testing then found and fixed idempotent bootstrap flag handling,
 backup file-mode preservation under an operator `umask 077`, and the obsolete
-coturn options described above. Each discovery invalidated the prior draft
-rather than weakening qualification. The final tag must therefore be rebuilt
-once more from the corrected source and the exact runtime checks repeated before
-a report can be signed.
+coturn options described above. Local release review then found and fixed the
+missing durable update-signing key and managed catalog wiring. Each discovery
+invalidated the prior draft rather than weakening qualification. Only a later
+tag rebuild from the corrected source is eligible; exact runtime checks must be
+repeated before a report can be signed.
 
 ### Passed on a physical iOS 14 device
 
@@ -241,7 +254,7 @@ a report can be signed.
 
 ### Still required before a supported public release
 
-1. Rebuild the tag after the final coturn correction and repeat anonymous
+1. Rebuild the tag after the final setup and update corrections and repeat anonymous
    amd64/arm64 image, provenance, checksum, SBOM, and clean-host bootstrap checks
    using that exact candidate.
 2. Repeat forced-TURN browser/device media on the physical device. Real ACME,
