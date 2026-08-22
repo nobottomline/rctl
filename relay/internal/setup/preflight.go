@@ -139,6 +139,7 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 	}{
 		{"http_port", "tcp", 80},
 		{"https_port", "tcp", 443},
+		{"https_udp", "udp", 443},
 		{"turn_tcp", "tcp", 3478},
 		{"turn_udp", "udp", 3478},
 	} {
@@ -173,7 +174,7 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 			add("turn_relay_ports", Pass, "TURN relay UDP range is available", "49160-49260")
 		}
 	}
-	publicPorts := "TCP 80/443"
+	publicPorts := "TCP 80/443 and UDP 443"
 	if cfg.EnableTURN {
 		publicPorts += ", TCP/UDP 3478, and UDP 49160-49260"
 	}

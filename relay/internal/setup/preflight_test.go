@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -28,8 +29,18 @@ func (f fakeProber) Command(_ context.Context, name string, args ...string) (str
 	}
 	return "", errors.New("command unavailable")
 }
-func (f fakeProber) TCPPortAvailable(port int) error      { return f.ports["tcp"] }
-func (f fakeProber) UDPPortAvailable(port int) error      { return f.ports["udp"] }
+func (f fakeProber) TCPPortAvailable(port int) error {
+	if err, ok := f.ports[fmt.Sprintf("tcp:%d", port)]; ok {
+		return err
+	}
+	return f.ports["tcp"]
+}
+func (f fakeProber) UDPPortAvailable(port int) error {
+	if err, ok := f.ports[fmt.Sprintf("udp:%d", port)]; ok {
+		return err
+	}
+	return f.ports["udp"]
+}
 func (f fakeProber) PathExists(path string) (bool, error) { return f.paths[path], nil }
 
 func passingProbe() fakeProber {
@@ -98,6 +109,18 @@ func TestPreflightPassesHealthyHost(t *testing.T) {
 	if !foundBoundary {
 		t.Fatalf("missing cloud firewall boundary warning: %#v", report.Checks)
 	}
+}
+
+func TestPreflightRejectsOccupiedHTTPSUDPPort(t *testing.T) {
+	probe := passingProbe()
+	probe.ports["udp:443"] = errors.New("address in use")
+	report := (Preflight{Probe: probe}).Run(context.Background(), validConfig())
+	for _, check := range report.Checks {
+		if check.ID == "https_udp" && check.Severity == Fail && strings.Contains(check.Detail, "address in use") {
+			return
+		}
+	}
+	t.Fatalf("missing occupied UDP 443 failure: %#v", report.Checks)
 }
 
 func TestPreflightReportsAllIndependentFailures(t *testing.T) {

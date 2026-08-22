@@ -320,7 +320,7 @@ Only Caddy and the required TURN listeners are publicly reachable. Relay port
 ### Existing reverse proxy
 
 This profile is not implemented in the current release. The dedicated-host
-preflight refuses occupied ports 80/443 before mutation. The intended future
+preflight refuses occupied TCP ports 80/443 and UDP port 443 before mutation. The intended future
 contract is documented here so a later implementation cannot silently weaken
 ownership or validation.
 
