@@ -165,7 +165,7 @@ func (v HTTPSVerifier) Verify(ctx context.Context, cfg Config, adminSecret strin
 	deadline := time.Now().Add(wait)
 	var last error
 	for {
-		if err := verifyPublicOnce(ctx, client, cfg.PublicURL, adminSecret); err == nil {
+		if err := verifyPublicOnce(ctx, client, cfg.PublicURL, cfg.Release, adminSecret); err == nil {
 			return nil
 		} else {
 			last = err
@@ -189,11 +189,11 @@ func (v HTTPSVerifier) VerifyRoutes(ctx context.Context, cfg Config) error {
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
-	return verifyPublicRoutes(ctx, client, cfg.PublicURL)
+	return verifyPublicRoutes(ctx, client, cfg.PublicURL, cfg.Release)
 }
 
-func verifyPublicOnce(ctx context.Context, client *http.Client, origin, adminSecret string) error {
-	if err := verifyPublicRoutes(ctx, client, origin); err != nil {
+func verifyPublicOnce(ctx context.Context, client *http.Client, origin, release, adminSecret string) error {
+	if err := verifyPublicRoutes(ctx, client, origin, release); err != nil {
 		return err
 	}
 	session, err := createAdminSession(ctx, client, origin, adminSecret)
@@ -203,7 +203,7 @@ func verifyPublicOnce(ctx context.Context, client *http.Client, origin, adminSec
 	return revokeAdminSession(ctx, client, origin, session)
 }
 
-func verifyPublicRoutes(ctx context.Context, client *http.Client, origin string) error {
+func verifyPublicRoutes(ctx context.Context, client *http.Client, origin, release string) error {
 	for _, path := range []string{"/healthz", "/v1/capabilities"} {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(origin, "/")+path, nil)
 		response, err := client.Do(req)
@@ -219,7 +219,10 @@ func verifyPublicRoutes(ctx context.Context, client *http.Client, origin string)
 			var capability struct {
 				Product   string `json:"product"`
 				Component string `json:"component"`
-				Protocol  struct {
+				Relay     struct {
+					Version string `json:"version"`
+				} `json:"relay"`
+				Protocol struct {
 					Major int `json:"major"`
 				} `json:"protocol"`
 			}
@@ -228,6 +231,9 @@ func verifyPublicRoutes(ctx context.Context, client *http.Client, origin string)
 			}
 			if capability.Protocol.Major != 1 {
 				return fmt.Errorf("relay protocol major %d is incompatible with setup protocol major 1", capability.Protocol.Major)
+			}
+			if capability.Relay.Version != release {
+				return fmt.Errorf("relay runtime version %q does not match managed release %q", capability.Relay.Version, release)
 			}
 		}
 	}

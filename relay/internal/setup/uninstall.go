@@ -99,7 +99,10 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 		}
 		recoveryCtx, cancel := lifecycleRecoveryContext()
 		defer cancel()
-		_, rollbackErr := applyBackup(result.Backup, current, u.Paths)
+		rollbackErr := stopForStateReplacement(recoveryCtx, u.Runner, installer)
+		if rollbackErr == nil {
+			_, rollbackErr = applyBackup(result.Backup, current, u.Paths)
+		}
 		if rollbackErr == nil {
 			rollbackErr = (RestoreManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}).startAndVerify(recoveryCtx, installer, backupManifest)
 		}

@@ -107,7 +107,10 @@ func (m AdminResetManager) Reset(ctx context.Context, dryRun bool) (result Admin
 		}
 		recoveryCtx, cancel := lifecycleRecoveryContext()
 		defer cancel()
-		_, rollbackErr := applyBackup(result.Backup, target, m.Paths)
+		rollbackErr := stopForStateReplacement(recoveryCtx, m.Runner, installer)
+		if rollbackErr == nil {
+			_, rollbackErr = applyBackup(result.Backup, target, m.Paths)
+		}
 		if rollbackErr == nil {
 			rollbackErr = (RestoreManager{Paths: m.Paths, Runner: m.Runner, Verifier: m.Verifier}).startAndVerify(recoveryCtx, installer, backupManifest)
 		}

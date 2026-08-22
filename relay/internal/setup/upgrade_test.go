@@ -212,6 +212,10 @@ func TestUpgradeRollsBackFailedTargetVerification(t *testing.T) {
 	if verifier.calls != 3 {
 		t.Fatalf("verification calls=%d, expected backup, target, rollback", verifier.calls)
 	}
+	calls := strings.Join(runner.calls, "\n")
+	if !strings.Contains(calls, "down --remove-orphans") {
+		t.Fatalf("rollback replaced live state without stopping the target stack:\n%s", calls)
+	}
 }
 
 func TestUpgradeRollsBackTargetDatabaseMigration(t *testing.T) {

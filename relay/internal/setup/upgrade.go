@@ -97,7 +97,10 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 		}
 		recoveryCtx, cancel := lifecycleRecoveryContext()
 		defer cancel()
-		_, rollbackErr := applyBackup(result.Backup, plan.target, u.Paths)
+		rollbackErr := stopForStateReplacement(recoveryCtx, u.Runner, installer)
+		if rollbackErr == nil {
+			_, rollbackErr = applyBackup(result.Backup, plan.target, u.Paths)
+		}
 		if rollbackErr == nil {
 			rollbackErr = (RestoreManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier}).startAndVerify(recoveryCtx, installer, backupManifest)
 		}

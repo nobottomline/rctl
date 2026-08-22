@@ -407,7 +407,7 @@ func TestPublicVerifierChecksIdentityCookieAndLogout(t *testing.T) {
 		case "/healthz":
 			w.WriteHeader(http.StatusOK)
 		case "/v1/capabilities":
-			_ = json.NewEncoder(w).Encode(map[string]any{"product": "rctl", "component": "relay", "protocol": map[string]int{"major": 1, "minor": 0}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"product": "rctl", "component": "relay", "relay": map[string]string{"version": "0.3.0"}, "protocol": map[string]int{"major": 1, "minor": 0}})
 		case "/device":
 			conn, err := websocket.Accept(w, r, nil)
 			if err == nil {
@@ -427,7 +427,7 @@ func TestPublicVerifierChecksIdentityCookieAndLogout(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	if err := verifyPublicOnce(context.Background(), server.Client(), server.URL, strings.Repeat("a", 64)); err != nil {
+	if err := verifyPublicOnce(context.Background(), server.Client(), server.URL, "0.3.0", strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
 	if !loggedOut {
@@ -441,7 +441,7 @@ func TestPublicRouteVerifierAcceptsProtectedDeviceWebSocket(t *testing.T) {
 		case "/healthz":
 			w.WriteHeader(http.StatusOK)
 		case "/v1/capabilities":
-			_ = json.NewEncoder(w).Encode(map[string]any{"product": "rctl", "component": "relay", "protocol": map[string]int{"major": 1}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"product": "rctl", "component": "relay", "relay": map[string]string{"version": "0.3.0"}, "protocol": map[string]int{"major": 1}})
 		case "/device":
 			http.Error(w, "device authentication required", http.StatusUnauthorized)
 		default:
@@ -449,8 +449,26 @@ func TestPublicRouteVerifierAcceptsProtectedDeviceWebSocket(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	if err := verifyPublicRoutes(context.Background(), server.Client(), server.URL); err != nil {
+	if err := verifyPublicRoutes(context.Background(), server.Client(), server.URL, "0.3.0"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPublicRouteVerifierRejectsRuntimeVersionMismatch(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/capabilities":
+			_ = json.NewEncoder(w).Encode(map[string]any{"product": "rctl", "component": "relay", "relay": map[string]string{"version": "0.3.1"}, "protocol": map[string]int{"major": 1}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	err := verifyPublicRoutes(context.Background(), server.Client(), server.URL, "0.3.2")
+	if err == nil || !strings.Contains(err.Error(), `runtime version "0.3.1" does not match managed release "0.3.2"`) {
+		t.Fatalf("unexpected version mismatch result: %v", err)
 	}
 }
 

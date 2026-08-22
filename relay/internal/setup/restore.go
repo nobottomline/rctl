@@ -95,10 +95,13 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 		return rollbackBackup, nil
 	}
 
-	_, rollbackErr := applyBackup(rollbackBackup, restoreTarget, r.Paths)
+	rollbackCtx, cancel := lifecycleRecoveryContext()
+	defer cancel()
+	rollbackErr := stopForStateReplacement(rollbackCtx, r.Runner, installer)
 	if rollbackErr == nil {
-		rollbackCtx, cancel := lifecycleRecoveryContext()
-		defer cancel()
+		_, rollbackErr = applyBackup(rollbackBackup, restoreTarget, r.Paths)
+	}
+	if rollbackErr == nil {
 		rollbackErr = r.startAndVerify(rollbackCtx, installer, rollbackManifest)
 	}
 	if rollbackErr != nil {
@@ -108,6 +111,13 @@ func (r RestoreManager) Restore(ctx context.Context, source string) (rollbackBac
 		return rollbackBackup, fmt.Errorf("restore failed and was rolled back, but recovery checkpoint remains: %v: %w", applyErr, clearErr)
 	}
 	return rollbackBackup, fmt.Errorf("restore failed and was rolled back: %w", applyErr)
+}
+
+func stopForStateReplacement(ctx context.Context, runner Runner, installer Installer) error {
+	if output, err := runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...); err != nil {
+		return fmt.Errorf("stop services before state replacement: %s", commandFailure(output, err))
+	}
+	return nil
 }
 
 func (r RestoreManager) restoreUninstalled(ctx context.Context, source string) (err error) {
