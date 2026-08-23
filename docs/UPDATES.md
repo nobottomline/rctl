@@ -2,7 +2,8 @@
 
 Device updates are initiated from the relay admin page. There is no app,
 PreferenceBundle, prompt, or other UI on the iPad. The update path is disabled
-until the relay operator configures a signed release catalog.
+when the relay is configured with `device_update_channel: off`. Official wizard
+installations use a signed, version-bound stable catalog by default.
 
 ## Security model
 
@@ -33,9 +34,12 @@ test "$(stat -f %Lp "$RCTL_UPDATE_SIGNING_KEY" 2>/dev/null || stat -c %a "$RCTL_
 Store a separate encrypted offline backup before the first public release. Once
 any public package pins the matching key, never regenerate or silently replace
 it: a deliberate rotation must be delivered as an update signed by the old key.
-GitHub Actions may receive the PEM through a protected repository/environment
-secret when automated catalog publication is enabled, but the key must never be
-written into the workspace or uploaded as an artifact.
+GitHub Actions receives only a base64 representation through the protected
+`release-signing` Environment secret `RCTL_UPDATE_SIGNING_KEY_B64`. The workflow
+decodes it to a mode-0600 file below `RUNNER_TEMP`, proves it matches the package
+public pin, removes it before artifact upload, and never prints it. Configure a
+required reviewer for this Environment so arbitrary branch jobs cannot obtain
+the signing key.
 
 Before building or signing a catalog, prove that the local private key is P-256,
 mode `0600`, and matches the public pin shipped by the package:
@@ -46,23 +50,41 @@ make verify-update-key
 
 ## Release catalog
 
-Build a catalog with the repository tool. It must include the exact installed
-version(s) that may update, because each one is the verified rollback artifact,
-plus the target version:
+Build a catalog with the repository tool. It must include every installed
+version that the release still supports, because each one is its own verified
+rollback artifact, plus the target version. Per-version URLs keep historical
+packages on their immutable release tags instead of duplicating them:
 
 ```sh
 cd relay
 go run ./cmd/rctl-update-manifest \
   -key "$RCTL_UPDATE_SIGNING_KEY" \
   -target 0.3.1 \
-  -base-url https://releases.example.com/rctl/0.3.1 \
-  -output update-manifest.json \
-  ../artifacts/com.greatlove.rctl_0.3.0_iphoneos-arm.deb \
-  ../artifacts/com.greatlove.rctl_0.3.1_iphoneos-arm.deb
+  -artifact-url 0.3.0=https://github.com/OWNER/rctl/releases/download/v0.3.0/rctl_0.3.0_iphoneos-arm.deb \
+  -artifact-url 0.3.1=https://github.com/OWNER/rctl/releases/download/v0.3.1/rctl_0.3.1_iphoneos-arm.deb \
+  -output rctl-update-stable.json \
+  ../artifacts/rctl_0.3.0_iphoneos-arm.deb \
+  ../artifacts/rctl_0.3.1_iphoneos-arm.deb
+```
+
+`-base-url` remains available for a custom server where all packages are in one
+immutable HTTPS directory. It is mutually exclusive with `-artifact-url`.
+Every URL is rejected unless it is plain HTTPS without credentials, query,
+fragment, encoded path, or a filename mismatch.
+
+Before publication, independently verify the envelope and every referenced
+package. Offline qualification can point the verifier at a directory containing
+the exact package filenames; publication downloads historical artifacts from
+their signed URLs:
+
+```sh
+scripts/verify_update_catalog.sh \
+  rctl-update-stable.json \
+  artifacts/rctl_0.3.1_iphoneos-arm.deb
 ```
 
 Upload the catalog and every referenced `.deb` without renaming the archives.
-Configure the relay only after all URLs are live:
+For a custom channel, configure the relay only after all URLs are live:
 
 ```text
 RCTL_RELAY_UPDATE_MANIFEST_URL=https://releases.example.com/rctl/0.3.1/update-manifest.json
@@ -87,8 +109,17 @@ private key in this directory or on the relay host.
 
 An installed version absent from the signed catalog is not updateable. This is
 intentional: proceeding without a verified rollback package is forbidden.
-Unset `RCTL_RELAY_UPDATE_MANIFEST_URL` after the fleet reaches the target so the
-admin action remains hidden until a newer signed catalog is published.
+The official release workflow accepts a comma-separated `rollback_tags` input so
+devices may safely skip releases. The managed stable URL is bound to the same
+version as the relay rather than mutable `latest`; upgrading the relay advances
+it transactionally. The admin action is hidden, and the endpoint rejects the
+request, when a device already reports the catalog target version.
+
+The draft workflow requires `release-signing` and includes the signed catalog in
+`SHA256SUMS` and repository-bound build provenance. The publish workflow verifies
+the signature against the package pin, strict payload schema, every artifact's
+package identity/version/architecture/size/SHA-256, and the exact release set
+before making the release immutable.
 
 ## Runtime transaction
 
@@ -129,8 +160,8 @@ material for SSH-assisted repair.
 
 ## Rollout and recovery
 
-Deploy in this order: relay first, then publish/configure the signed catalog,
-then update devices. Protocol minor and component version differences warn but
+Deploy in this order: relay release first, then update devices from its signed
+catalog. Protocol minor and component version differences warn but
 remain connected. A protocol major mismatch is the only compatibility condition
 that rejects a device connection.
 

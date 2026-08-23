@@ -127,6 +127,17 @@ The bootstrap fixes a trusted system `PATH`, uses a private `/tmp` directory,
 accepts only `latest` or strict `vMAJOR.MINOR.PATCH` through `RCTL_VERSION`, and
 installs only to `/usr/local/bin/rctl-setup` before executing it.
 
+The pipeline stdin contains the script itself, so interactive bootstrap opens
+the verified Go wizard on the caller's controlling `/dev/tty`. Without a real
+terminal it fails before deployment mutation and requires complete flags plus
+`--yes`. Ordinary output is human-readable: preflight uses `[pass]`, `[warn]`,
+and `[fail]`, while long operations print `==>` progress stages for image pull,
+service health, HTTPS, and persistence checks. JSON is emitted only by an
+explicit `preflight --json` or `doctor --json` command.
+The interactive URL prompt accepts either `relay.example.com` or the equivalent
+`https://relay.example.com`; configuration files and flags remain strict and
+require the full HTTPS origin.
+
 After the repository and GHCR package are public, the normal command is:
 
 ```sh
@@ -140,6 +151,21 @@ Pin a specific release by setting `RCTL_VERSION=vMAJOR.MINOR.PATCH` on the
 private, maintainers use the tag-bound draft command above, inspect the draft
 assets, and download them through authenticated `gh release download`; the
 anonymous one-liner is intentionally unavailable.
+
+To inspect the complete interactive wizard on an occupied VPS without retaining
+changes, add `--dry-run`. The bootstrap temporarily stages a checksum-verified
+candidate and removes it on exit; the Go lifecycle does not write deployment
+files, start containers, or change the active setup binary:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/nobottomline/rctl/releases/latest/download/install.sh | \
+  sudo sh -s -- --dry-run
+```
+
+Existing listeners, insufficient DNS, missing Docker/Compose, and unsupported
+host state are reported by preflight. A failure is expected on a busy host and
+does not authorize setup to replace another service.
 
 For private fresh-host qualification, download one draft's complete assets on
 a trusted maintainer machine, verify them there, and transfer that directory to
@@ -181,6 +207,12 @@ Non-interactive automation uses a mode-0600 JSON configuration file. Setup
 does not accept deployment secrets in that file, environment variables, or
 command-line flags; it generates them from the kernel CSPRNG after validation
 and confirmation.
+
+The official wizard enables the version-bound signed `stable` device-update
+catalog. Use `--device-updates off` to disable remote package updates, or
+`--device-updates custom --update-manifest-url https://.../catalog.json` for an
+operator-owned signing channel. Stable URLs advance transactionally with relay
+upgrades; custom and off policies are preserved.
 
 Every mutating command has `--dry-run`. Re-running `install` reconciles an
 existing installation when its ownership metadata is valid; it does not create

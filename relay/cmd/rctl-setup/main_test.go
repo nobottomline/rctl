@@ -133,3 +133,20 @@ func TestConfigFlagsDefaultToStableSignedUpdates(t *testing.T) {
 		t.Fatalf("default update config=%+v", cfg)
 	}
 }
+
+func TestInteractiveOriginAcceptsBareDomain(t *testing.T) {
+	if got := normalizeInteractiveOrigin("relay.example.test"); got != "https://relay.example.test" {
+		t.Fatalf("normalized origin=%q", got)
+	}
+	if got := normalizeInteractiveOrigin("https://relay.example.test"); got != "https://relay.example.test" {
+		t.Fatalf("existing origin changed to %q", got)
+	}
+}
+
+func TestInstallPlanAbbreviatesPinnedImage(t *testing.T) {
+	image := "ghcr.io/nobottomline/rctl-relay@sha256:" + strings.Repeat("a", 64)
+	got := displayPinnedImage(image)
+	if strings.Contains(got, strings.Repeat("a", 64)) || !strings.Contains(got, "aaaaaaaaaaaa... (pinned)") {
+		t.Fatalf("display image=%q", got)
+	}
+}

@@ -6,6 +6,11 @@ inject real touches and keyboard input, transfer files, open a root terminal, an
 automate device actions from a browser or native client. Direct LAN and
 authenticated self-hosted relay access are both implemented.
 
+Security-sensitive deployments should begin with
+[`docs/SECURITY.md`](docs/SECURITY.md). Local device port `8080` is intentionally
+unauthenticated and must remain limited to a trusted LAN or USB tunnel; use the
+authenticated TLS relay for internet access.
+
 > Why jailbreak: Apple's iPhone Mirroring needs iOS 18 + the same Apple ID + a Mac + the
 > same network. App Store apps (TeamViewer / AnyDesk / RustDesk) can only *view* an iOS
 > screen, never control it. Only root on a jailbroken device enables real input injection.

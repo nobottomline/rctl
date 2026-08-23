@@ -587,11 +587,12 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	interactive := input == os.Stdin && stdinIsTerminal()
 	if configValues.configPath == "" && interactive && !*assumeYes {
 		if cfg.PublicURL == "" {
-			cfg.PublicURL, err = prompt(reader, output, "Public HTTPS URL", "")
+			cfg.PublicURL, err = prompt(reader, output, "Relay domain or HTTPS URL", "")
 			if err != nil {
 				fmt.Fprintln(errorsOutput, "input:", err)
 				return 2
 			}
+			cfg.PublicURL = normalizeInteractiveOrigin(cfg.PublicURL)
 		}
 		if cfg.EnableTURN && cfg.TURNExternalIP == "" {
 			inferred := inferPublicIPv4(cfg.PublicURL)
@@ -707,6 +708,14 @@ func inferPublicIPv4(rawURL string) string {
 	return ""
 }
 
+func normalizeInteractiveOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw != "" && !strings.Contains(raw, "://") {
+		return "https://" + raw
+	}
+	return raw
+}
+
 func stdinIsTerminal() bool {
 	info, err := os.Stdin.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
@@ -720,7 +729,15 @@ func printInstallPlan(w io.Writer, cfg setup.Config, owned, dryRun bool) {
 	if dryRun {
 		action += " (dry run)"
 	}
-	fmt.Fprintf(w, "\nPlan: %s\nOrigin: %s\nProfile: %s\nTURN: %t\nDevice packages: %t\nRelay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.DevicePackages, cfg.RelayImage)
+	fmt.Fprintf(w, "\nPlan: %s\nOrigin: %s\nProfile: %s\nTURN: %t\nDevice packages: %t\nDevice updates: %s\nRelay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.DevicePackages, cfg.DeviceUpdateChannel, displayPinnedImage(cfg.RelayImage))
+}
+
+func displayPinnedImage(image string) string {
+	name, digest, ok := strings.Cut(image, "@sha256:")
+	if !ok || len(digest) < 12 {
+		return image
+	}
+	return fmt.Sprintf("%s@sha256:%s... (pinned)", name, digest[:12])
 }
 
 func usage() {

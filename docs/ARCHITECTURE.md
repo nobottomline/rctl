@@ -323,8 +323,9 @@ internet clients terminate TLS and authenticate at the relay.
   scripts own no persistent TCC rows and therefore delete none on uninstall. TCC
   is still per-process, so this boundary must be revalidated for every supported
   jailbreak/iOS combination.
-- **`:8080` is unauthenticated.** Fine on a trusted LAN; **must** gain auth before
-  internet exposure (see §6).
+- **`:8080` is intentionally unauthenticated.** It is only supported on a fully
+  trusted LAN or USB tunnel and must never be exposed to the internet; internet
+  access uses the authenticated TLS relay (see §6 and `docs/SECURITY.md`).
 - **The daemon is root** and exposes file read/write (`/v1/ls,pull,push,rm`), app
   launch, input injection, and a root PTY terminal. Anyone who reaches `:8080`
   controls the device.
