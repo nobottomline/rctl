@@ -106,7 +106,11 @@ test-virtual-mic:
 	@/tmp/rctl-virtual-mic-dsp-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-destructive-actions test-personalize
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-destructive-actions test-personalize test-update-signing-key
+
+.PHONY: test-update-signing-key
+test-update-signing-key:
+	@scripts/test_verify_update_signing_key.sh
 
 .PHONY: test-destructive-actions
 test-destructive-actions:

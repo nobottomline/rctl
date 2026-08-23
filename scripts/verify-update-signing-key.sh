@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEY="${RCTL_UPDATE_SIGNING_KEY:-${HOME}/.config/rctl/update-signing-key.pem}"
-PIN="${ROOT}/layout/usr/local/share/rctl/update-public-key.pem"
+PIN="${RCTL_UPDATE_PUBLIC_KEY:-${ROOT}/layout/usr/local/share/rctl/update-public-key.pem}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rctl-update-key.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -15,7 +15,11 @@ fail() {
 [[ -f "${KEY}" && ! -L "${KEY}" ]] || fail "private key must be a regular, non-symlink file: ${KEY}"
 [[ -f "${PIN}" && ! -L "${PIN}" ]] || fail "public key pin is missing: ${PIN}"
 
-mode="$(stat -f '%Lp' "${KEY}" 2>/dev/null || stat -c '%a' "${KEY}")"
+mode="$(stat -c '%a' -- "${KEY}" 2>/dev/null || true)"
+if [[ ! "${mode}" =~ ^[0-7]{3,4}$ ]]; then
+  mode="$(stat -f '%Lp' "${KEY}" 2>/dev/null || true)"
+fi
+[[ "${mode}" =~ ^[0-7]{3,4}$ ]] || fail "could not determine private key mode"
 [[ "${mode}" == "600" ]] || fail "private key mode must be 600, got ${mode}"
 
 openssl ec -in "${KEY}" -text -noout 2>/dev/null | grep -Eq 'ASN1 OID: prime256v1|NIST CURVE: P-256' || \

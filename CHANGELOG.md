@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.1
+## 0.3.2
 
 - Fixed interactive `curl | sudo sh` setup by reconnecting the verified wizard
   to the controlling terminal and added visible lifecycle progress.
@@ -10,6 +10,8 @@
   redundant transaction.
 - Documented the intentional unauthenticated trusted-LAN/USB local-control
   contract and added contributor navigation across runtime components.
+- Made release-signing key permission validation portable across GNU/Linux and
+  BSD/macOS `stat` implementations.
 
 ## 0.3.0
 
