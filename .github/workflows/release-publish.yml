@@ -220,7 +220,7 @@ jobs:
           cat changelog.md >> release-notes.md
           gh release edit "$TAG" --verify-tag --latest --draft=false --notes-file release-notes.md
           release_attested=false
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if gh release verify "$TAG" >/dev/null 2>&1; then
               release_attested=true
               break
