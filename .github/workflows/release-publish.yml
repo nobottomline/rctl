@@ -111,23 +111,28 @@ jobs:
             rctl-setup_linux_amd64
             rctl-setup_linux_arm64
             "rctl_${VERSION}_iphoneos-arm.deb"
+            rctl-update-stable.json
             "$report"
           )
           mapfile -t actual < <(find downloaded -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
           test "${#actual[@]}" -eq "${#wanted[@]}"
           test "$(printf '%s\n' "${actual[@]}")" = "$(printf '%s\n' "${wanted[@]}")"
-          for name in install.sh rctl-relay_linux_amd64 rctl-relay_linux_arm64 rctl-setup_linux_amd64 rctl-setup_linux_arm64 "rctl_${VERSION}_iphoneos-arm.deb"; do
+          for name in install.sh rctl-relay_linux_amd64 rctl-relay_linux_arm64 rctl-setup_linux_amd64 rctl-setup_linux_arm64 "rctl_${VERSION}_iphoneos-arm.deb" rctl-update-stable.json; do
             cp "downloaded/$name" "assembled/$name"
           done
           chmod 0755 assembled/install.sh assembled/rctl-relay_linux_* assembled/rctl-setup_linux_*
-          RCTL_REQUIRE_EXECUTABLE_CHECK=1 scripts/assemble_release_set.sh assembled "$VERSION" "$SOURCE_SHA"
+          RCTL_REQUIRE_EXECUTABLE_CHECK=1 RCTL_REQUIRE_UPDATE_CATALOG=1 \
+            scripts/assemble_release_set.sh assembled "$VERSION" "$SOURCE_SHA"
           cmp assembled/SHA256SUMS downloaded/SHA256SUMS
           checksums_sha256="$(sha256sum downloaded/SHA256SUMS | awk '{print $1}')"
           (
             cd downloaded
             sha256sum --check --strict SHA256SUMS
           )
+          scripts/verify_update_catalog.sh \
+            downloaded/rctl-update-stable.json \
+            "downloaded/rctl_${VERSION}_iphoneos-arm.deb"
           (
             cd relay
             go run ./cmd/rctl-verify-qualification \

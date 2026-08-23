@@ -68,6 +68,10 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "device_updater_not_supported")
 		return
 	}
+	if s.cfg.UpdateTargetVersion != "" && dc.daemonVersion == s.cfg.UpdateTargetVersion {
+		writeErr(w, http.StatusConflict, "device_already_current")
+		return
+	}
 	var compatibilityError string
 	_ = s.db.QueryRowContext(r.Context(), `SELECT COALESCE(compatibility_error, '') FROM devices WHERE id=?`, deviceID).Scan(&compatibilityError)
 	if compatibilityError != "" {

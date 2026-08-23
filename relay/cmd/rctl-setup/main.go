@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -24,6 +25,15 @@ var (
 	defaultCaddy  = "docker.io/library/caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648"
 	defaultCoturn = "docker.io/coturn/coturn@sha256:771a95d04cb97bbc5bfc672e5fdf455591c7d2b2a15f02bb9ceda3e27561695f"
 )
+
+var releaseVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+func stableUpdateManifestURL() string {
+	if releaseVersion.MatchString(version) {
+		return fmt.Sprintf("https://github.com/nobottomline/rctl/releases/download/v%s/rctl-update-stable.json", version)
+	}
+	return "https://github.com/nobottomline/rctl/releases/latest/download/rctl-update-stable.json"
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -243,7 +253,7 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	configValues.observe(flags)
 	relayImage, caddyImage, coturnImage := configValues.relayImage, configValues.caddyImage, configValues.coturnImage
 	var expectedConfig *setup.Config
-	if configValues.configPath != "" || configValues.identityConfiguration || configValues.updateManifestURL != "" {
+	if configValues.configPath != "" || configValues.identityConfiguration || configValues.updateConfiguration {
 		cfg, err := configValues.load(flags)
 		if err != nil {
 			fmt.Fprintln(errorsOutput, "config:", err)
@@ -262,6 +272,7 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	options := setup.UpgradeOptions{
 		DryRun: *dryRun, Version: version, RelayImage: relayImage, CaddyImage: caddyImage,
 		CoturnImage: coturnImage, PublicPackageSource: *publicPackage, ExpectedConfig: expectedConfig,
+		DefaultUpdateManifestURL: stableUpdateManifestURL(),
 	}
 	manager := setup.UpgradeManager{Progress: textProgress(output)}
 	plan, err := manager.Plan(options)
@@ -432,9 +443,11 @@ type configFlags struct {
 	turnIP                string
 	acmeEmail             string
 	updateManifestURL     string
+	deviceUpdateChannel   string
 	turn                  bool
 	configuration         bool
 	identityConfiguration bool
+	updateConfiguration   bool
 }
 
 func addConfigFlags(flags *flag.FlagSet) *configFlags {
@@ -447,6 +460,7 @@ func addConfigFlags(flags *flag.FlagSet) *configFlags {
 	flags.StringVar(&values.turnIP, "turn-external-ip", "", "public IPv4 used by TURN (non-secret)")
 	flags.StringVar(&values.acmeEmail, "acme-email", "", "ACME account email (non-secret)")
 	flags.StringVar(&values.updateManifestURL, "update-manifest-url", "", "signed HTTPS device-update catalog (non-secret)")
+	flags.StringVar(&values.deviceUpdateChannel, "device-updates", setup.UpdateChannelStable, "device update channel: stable, custom, or off")
 	flags.BoolVar(&values.turn, "turn", true, "deploy the recommended TURN service")
 	return values
 }
@@ -459,23 +473,44 @@ func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
 		}
 		return setup.LoadConfig(v.configPath)
 	}
+	channel := v.deviceUpdateChannel
+	manifestURL := v.updateManifestURL
+	if v.updateConfiguration && manifestURL != "" && channel == setup.UpdateChannelStable {
+		channel = setup.UpdateChannelCustom
+	}
+	switch channel {
+	case setup.UpdateChannelStable:
+		manifestURL = stableUpdateManifestURL()
+	case setup.UpdateChannelOff:
+		manifestURL = ""
+	case setup.UpdateChannelCustom:
+		if manifestURL == "" {
+			return setup.Config{}, errors.New("--device-updates custom requires --update-manifest-url")
+		}
+	default:
+		return setup.Config{}, errors.New("--device-updates must be stable, custom, or off")
+	}
 	return setup.Config{
 		Schema: setup.ConfigSchema, PublicURL: v.publicURL, Profile: setup.ProfileContainer,
 		RelayImage: v.relayImage, CaddyImage: v.caddyImage, CoturnImage: v.coturnImage,
 		TURNExternalIP: v.turnIP, EnableTURN: v.turn, ACMEEmail: v.acmeEmail, Release: version,
-		UpdateManifestURL: v.updateManifestURL,
+		DeviceUpdateChannel: channel, UpdateManifestURL: manifestURL,
 	}, nil
 }
 
 func (v *configFlags) observe(flags *flag.FlagSet) {
 	flags.Visit(func(item *flag.Flag) {
 		switch item.Name {
-		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "update-manifest-url", "turn":
+		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "update-manifest-url", "device-updates", "turn":
 			v.configuration = true
 		}
 		switch item.Name {
 		case "public-url", "turn-external-ip", "acme-email", "turn":
 			v.identityConfiguration = true
+		}
+		switch item.Name {
+		case "update-manifest-url", "device-updates":
+			v.updateConfiguration = true
 		}
 	})
 }

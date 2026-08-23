@@ -33,6 +33,12 @@ expected=(
   rctl-setup_linux_arm64
   "$package"
 )
+catalog=rctl-update-stable.json
+if [[ -e "$release_dir/$catalog" || ${RCTL_REQUIRE_UPDATE_CATALOG:-0} == 1 ]]; then
+  expected+=("$catalog")
+fi
+
+mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
 
 actual=()
 while IFS= read -r name; do

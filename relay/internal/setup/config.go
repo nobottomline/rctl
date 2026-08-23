@@ -15,30 +15,35 @@ import (
 )
 
 const (
-	ConfigSchema     = 1
-	ProfileContainer = "container"
-	ProfileNative    = "native"
-	maxConfigBytes   = 64 << 10
+	ConfigSchema        = 1
+	ProfileContainer    = "container"
+	ProfileNative       = "native"
+	UpdateChannelStable = "stable"
+	UpdateChannelCustom = "custom"
+	UpdateChannelOff    = "off"
+	maxConfigBytes      = 64 << 10
 )
 
 var (
 	digestImagePattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[a-f0-9]{64}$`)
 	digestImageWithPortPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*:([0-9]{1,5})/[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[a-f0-9]{64}$`)
+	semanticVersionPattern     = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 )
 
 type Config struct {
-	Schema            int    `json:"schema"`
-	PublicURL         string `json:"public_url"`
-	Profile           string `json:"profile"`
-	RelayImage        string `json:"relay_image,omitempty"`
-	CaddyImage        string `json:"caddy_image,omitempty"`
-	CoturnImage       string `json:"coturn_image,omitempty"`
-	TURNExternalIP    string `json:"turn_external_ip,omitempty"`
-	EnableTURN        bool   `json:"enable_turn"`
-	ACMEEmail         string `json:"acme_email,omitempty"`
-	Release           string `json:"release,omitempty"`
-	DevicePackages    bool   `json:"device_packages,omitempty"`
-	UpdateManifestURL string `json:"update_manifest_url,omitempty"`
+	Schema              int    `json:"schema"`
+	PublicURL           string `json:"public_url"`
+	Profile             string `json:"profile"`
+	RelayImage          string `json:"relay_image,omitempty"`
+	CaddyImage          string `json:"caddy_image,omitempty"`
+	CoturnImage         string `json:"coturn_image,omitempty"`
+	TURNExternalIP      string `json:"turn_external_ip,omitempty"`
+	EnableTURN          bool   `json:"enable_turn"`
+	ACMEEmail           string `json:"acme_email,omitempty"`
+	Release             string `json:"release,omitempty"`
+	DevicePackages      bool   `json:"device_packages,omitempty"`
+	DeviceUpdateChannel string `json:"device_update_channel,omitempty"`
+	UpdateManifestURL   string `json:"update_manifest_url,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -119,6 +124,21 @@ func (c Config) Validate() error {
 	}
 	if err := validateUpdateManifestURL(c.UpdateManifestURL); err != nil {
 		return err
+	}
+	switch c.DeviceUpdateChannel {
+	case "":
+		// Legacy schema-1 manifests predate named channels. They are normalized
+		// transactionally by the first setup upgrade that knows about channels.
+	case UpdateChannelStable, UpdateChannelCustom:
+		if c.UpdateManifestURL == "" {
+			return fmt.Errorf("device_update_channel %q requires update_manifest_url", c.DeviceUpdateChannel)
+		}
+	case UpdateChannelOff:
+		if c.UpdateManifestURL != "" {
+			return errors.New("device_update_channel off cannot have update_manifest_url")
+		}
+	default:
+		return fmt.Errorf("unsupported device_update_channel %q", c.DeviceUpdateChannel)
 	}
 	return nil
 }

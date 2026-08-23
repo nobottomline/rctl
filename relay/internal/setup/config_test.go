@@ -55,9 +55,27 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigAcceptsSignedUpdateManifestURL(t *testing.T) {
 	cfg := validConfig()
+	cfg.DeviceUpdateChannel = UpdateChannelStable
 	cfg.UpdateManifestURL = "https://github.com/nobottomline/rctl/releases/latest/download/rctl-update-stable.json"
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConfigEnforcesDeviceUpdateChannelContract(t *testing.T) {
+	cfg := validConfig()
+	cfg.DeviceUpdateChannel = UpdateChannelOff
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.UpdateManifestURL = "https://releases.example.test/catalog.json"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "off") {
+		t.Fatalf("off channel with URL result=%v", err)
+	}
+	cfg.DeviceUpdateChannel = UpdateChannelCustom
+	cfg.UpdateManifestURL = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires") {
+		t.Fatalf("custom channel without URL result=%v", err)
 	}
 }
 

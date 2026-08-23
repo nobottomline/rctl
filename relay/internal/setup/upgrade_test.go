@@ -170,6 +170,7 @@ func TestUpgradeMayReplaceOwnedUpdateCatalog(t *testing.T) {
 		Now: time.Now, Chown: func(string, int, int) error { return nil },
 	}
 	expected := validConfig()
+	expected.DeviceUpdateChannel = UpdateChannelCustom
 	expected.UpdateManifestURL = "https://releases.example.test/rctl-update-stable.json"
 	options := upgradeOptions()
 	options.ExpectedConfig = &expected
@@ -183,6 +184,32 @@ func TestUpgradeMayReplaceOwnedUpdateCatalog(t *testing.T) {
 	env := string(bundleFile(plan.bundle, manager.Paths.RelayEnv).Content)
 	if !strings.Contains(env, "RCTL_RELAY_UPDATE_MANIFEST_URL="+expected.UpdateManifestURL+"\n") {
 		t.Fatal("target relay environment does not contain the update catalog")
+	}
+}
+
+func TestUpgradeMigratesLegacyEmptyUpdateConfigToStable(t *testing.T) {
+	installer, runner, _, _ := createUpgradeFixture(t)
+	manager := UpgradeManager{
+		Paths: installer.Paths, Runner: runner, Verifier: &sequenceVerifier{},
+		Now: time.Now, Chown: func(string, int, int) error { return nil },
+	}
+	options := upgradeOptions()
+	options.DefaultUpdateManifestURL = "https://github.com/nobottomline/rctl/releases/latest/download/rctl-update-stable.json"
+	plan, err := manager.prepare(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.target.Config.DeviceUpdateChannel != UpdateChannelStable || plan.target.Config.UpdateManifestURL != options.DefaultUpdateManifestURL {
+		t.Fatalf("migrated update config=%+v", plan.target.Config)
+	}
+	env := string(bundleFile(plan.bundle, manager.Paths.RelayEnv).Content)
+	for _, expected := range []string{
+		"RCTL_RELAY_UPDATE_MANIFEST_URL=" + options.DefaultUpdateManifestURL + "\n",
+		"RCTL_RELAY_UPDATE_TARGET_VERSION=" + options.Version + "\n",
+	} {
+		if !strings.Contains(env, expected) {
+			t.Fatalf("target relay environment missing %q", expected)
+		}
 	}
 }
 

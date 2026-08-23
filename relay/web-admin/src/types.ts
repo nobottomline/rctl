@@ -140,6 +140,7 @@ export interface RelayStatus {
   protocol_minor: number
   features: string[]
   update_configured: boolean
+  update_target_version?: string
   device_package_available: boolean
   device_package_version?: string
 }

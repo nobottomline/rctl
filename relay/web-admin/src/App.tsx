@@ -223,6 +223,7 @@ export default function App() {
             busyId={busyId}
             audit={audit}
             updateConfigured={status?.update_configured ?? false}
+            updateTargetVersion={status?.update_target_version}
             onAction={handleAction}
           />
           <ActivityPanel entries={audit} sessions={sessions} />

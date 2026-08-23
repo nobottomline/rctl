@@ -120,6 +120,9 @@ func RenderDedicatedBundleAt(cfg Config, secrets Secrets, paths Paths) (Bundle, 
 	}
 	if cfg.UpdateManifestURL != "" {
 		env["RCTL_RELAY_UPDATE_MANIFEST_URL"] = cfg.UpdateManifestURL
+		if semanticVersionPattern.MatchString(cfg.Release) {
+			env["RCTL_RELAY_UPDATE_TARGET_VERSION"] = cfg.Release
+		}
 	}
 
 	compose, err := renderCompose(cfg, paths)

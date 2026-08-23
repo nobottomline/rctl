@@ -36,7 +36,7 @@ interface Action {
   accent?: boolean
 }
 
-function actionsFor(device: Device, updateConfigured: boolean): Action[] {
+function actionsFor(device: Device, updateConfigured: boolean, updateTargetVersion?: string): Action[] {
   const list: Action[] = []
   list.push({ key: 'details', label: 'View details', icon: Info })
   if (device.status === 'pending')
@@ -48,7 +48,8 @@ function actionsFor(device: Device, updateConfigured: boolean): Action[] {
     device.online &&
     device.compatible &&
     device.features.includes('update.transactional') &&
-    updateConfigured
+    updateConfigured &&
+    (!updateTargetVersion || device.daemon_version !== updateTargetVersion)
   )
     list.push({ key: 'update', label: 'Update device…', icon: Download, accent: true })
   list.push({ key: 'copy', label: 'Copy device ID', icon: Copy })
@@ -62,10 +63,11 @@ export type DevicesPanelProps = {
   busyId: string
   audit?: AuditEntry[]
   updateConfigured: boolean
+  updateTargetVersion?: string
   onAction: (key: ActionKey, device: Device) => void
 }
 
-export function DevicesPanel({ devices, loading, busyId, audit, updateConfigured, onAction }: DevicesPanelProps) {
+export function DevicesPanel({ devices, loading, busyId, audit, updateConfigured, updateTargetVersion, onAction }: DevicesPanelProps) {
   const online = devices.filter((d) => d.online).length
   const pending = devices.filter((d) => d.status === 'pending').length
   const incompatible = devices.filter((d) => !d.compatible).length
@@ -127,7 +129,7 @@ export function DevicesPanel({ devices, loading, busyId, audit, updateConfigured
                 transition={{ duration: 0.25, delay: Math.min(i * 0.025, 0.2) }}
                 className="overflow-hidden"
               >
-                <DeviceRow device={d} busy={busyId === d.id} updateConfigured={updateConfigured} run={run} />
+                <DeviceRow device={d} busy={busyId === d.id} updateConfigured={updateConfigured} updateTargetVersion={updateTargetVersion} run={run} />
               </motion.li>
             ))}
           </AnimatePresence>
@@ -143,14 +145,16 @@ function DeviceRow({
   device,
   busy,
   updateConfigured,
+  updateTargetVersion,
   run,
 }: {
   device: Device
   busy: boolean
   updateConfigured: boolean
+  updateTargetVersion?: string
   run: (key: ActionKey, device: Device) => void
 }) {
-  const acts = actionsFor(device, updateConfigured)
+  const acts = actionsFor(device, updateConfigured, updateTargetVersion)
   const canOpen = device.online && device.status === 'approved' && device.compatible
   return (
     <ContextMenu.Root>

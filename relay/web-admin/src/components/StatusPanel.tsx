@@ -10,6 +10,9 @@ export function StatusPanel({ status }: { status: RelayStatus | null }) {
     { label: 'Relay version', value: status.version },
     { label: 'Protocol', value: `${status.protocol_major}.${status.protocol_minor}` },
   ]
+  if (status.update_configured) {
+    stats.push({ label: 'Device update target', value: status.update_target_version || 'Custom catalog' })
+  }
   return (
     <Panel title="Relay" subtitle={`up ${fmtUptime(status.uptime_seconds)}`}>
       <div className="grid grid-cols-2 gap-3 p-4">

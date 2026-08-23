@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	setup "github.com/nobottomline/rctl/relay/internal/setup"
 )
 
 func TestConfigFileAllowsOperationalFlags(t *testing.T) {
@@ -110,5 +112,24 @@ func TestConfigFlagsParseUpdateManifestURL(t *testing.T) {
 	}
 	if cfg.UpdateManifestURL != manifestURL {
 		t.Fatalf("update manifest URL=%q", cfg.UpdateManifestURL)
+	}
+	if cfg.DeviceUpdateChannel != setup.UpdateChannelCustom {
+		t.Fatalf("update channel=%q", cfg.DeviceUpdateChannel)
+	}
+}
+
+func TestConfigFlagsDefaultToStableSignedUpdates(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	values := addConfigFlags(flags)
+	if err := flags.Parse([]string{"--public-url", "https://rctl.example.test", "--turn-external-ip", "8.8.8.8"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := values.load(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeviceUpdateChannel != setup.UpdateChannelStable || cfg.UpdateManifestURL != stableUpdateManifestURL() {
+		t.Fatalf("default update config=%+v", cfg)
 	}
 }

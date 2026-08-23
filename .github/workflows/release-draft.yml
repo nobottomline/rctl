@@ -7,6 +7,10 @@ on:
         description: Existing v-prefixed release tag
         required: true
         type: string
+      rollback_tags:
+        description: Comma-separated immutable stable tags accepted as rollback sources
+        required: true
+        type: string
 
 concurrency:
   group: release-${{ inputs.tag }}
@@ -190,8 +194,86 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  update-catalog:
+    needs: [validate, ios-package]
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: relay/go.sum
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ios-package
+          path: packages
+      - name: Build signed stable update catalog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEY_B64: ${{ secrets.RCTL_UPDATE_SIGNING_KEY_B64 }}
+          ROLLBACK_TAGS: ${{ inputs.rollback_tags }}
+          TARGET_TAG: ${{ inputs.tag }}
+          TARGET_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          test -n "$KEY_B64" || { echo "release-signing key is not configured" >&2; exit 1; }
+          target_package="rctl_${TARGET_VERSION}_iphoneos-arm.deb"
+          test -f "packages/$target_package"
+
+          IFS=',' read -r -a rollback_tags <<< "$ROLLBACK_TAGS"
+          test "${#rollback_tags[@]}" -ge 1
+          declare -A seen_versions=()
+          packages=("packages/$target_package")
+          artifact_urls=("$TARGET_VERSION=https://github.com/$GITHUB_REPOSITORY/releases/download/$TARGET_TAG/$target_package")
+          for rollback_tag in "${rollback_tags[@]}"; do
+            printf '%s\n' "$rollback_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+            test "$rollback_tag" != "$TARGET_TAG"
+            rollback_version="${rollback_tag#v}"
+            test -z "${seen_versions[$rollback_version]:-}"
+            seen_versions[$rollback_version]=1
+            rollback_package="rctl_${rollback_version}_iphoneos-arm.deb"
+            gh release verify "$rollback_tag"
+            gh release download "$rollback_tag" --pattern "$rollback_package" --dir packages
+            gh release verify-asset "$rollback_tag" "packages/$rollback_package"
+            test "$(dpkg-deb -f "packages/$rollback_package" Package)" = com.greatlove.rctl
+            test "$(dpkg-deb -f "packages/$rollback_package" Version)" = "$rollback_version"
+            packages+=("packages/$rollback_package")
+            artifact_urls+=("$rollback_version=https://github.com/$GITHUB_REPOSITORY/releases/download/$rollback_tag/$rollback_package")
+          done
+
+          key="$RUNNER_TEMP/rctl-update-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$KEY_B64" | base64 --decode > "$key"
+          chmod 0600 "$key"
+          RCTL_UPDATE_SIGNING_KEY="$key" scripts/verify-update-signing-key.sh
+          mkdir -p catalog
+          manifest_args=()
+          for artifact_url in "${artifact_urls[@]}"; do
+            manifest_args+=(-artifact-url "$artifact_url")
+          done
+          (
+            cd relay
+            go run ./cmd/rctl-update-manifest \
+              -key "$key" \
+              -target "$TARGET_VERSION" \
+              -channel stable \
+              "${manifest_args[@]}" \
+              -output ../catalog/rctl-update-stable.json \
+              "${packages[@]/#/../}"
+          )
+          test ! -s "$key" || rm -f "$key"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: update-catalog
+          path: catalog/rctl-update-stable.json
+          if-no-files-found: error
+          retention-days: 7
+
   draft:
-    needs: [validate, image, linux-artifacts, ios-package]
+    needs: [validate, image, linux-artifacts, ios-package, update-catalog]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -207,11 +289,16 @@ jobs:
         with:
           name: ios-package
           path: release
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: update-catalog
+          path: release
       - name: Verify and checksum release set
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           RCTL_REQUIRE_EXECUTABLE_CHECK: "1"
+          RCTL_REQUIRE_UPDATE_CATALOG: "1"
         run: |
           chmod 0755 release/install.sh release/rctl-relay_linux_* release/rctl-setup_linux_*
           scripts/assemble_release_set.sh release "$VERSION" "$SOURCE_SHA"

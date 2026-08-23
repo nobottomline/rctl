@@ -28,6 +28,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"protocol_minor":           protocolMinor,
 		"features":                 s.features(),
 		"update_configured":        s.cfg.UpdateManifestURL != "",
+		"update_target_version":    s.cfg.UpdateTargetVersion,
 		"device_package_available": len(s.publicPackage) != 0,
 		"device_package_version":   s.publicPackageInfo.Version,
 		"go_version":               runtime.Version(),

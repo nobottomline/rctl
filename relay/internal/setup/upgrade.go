@@ -12,13 +12,14 @@ import (
 )
 
 type UpgradeOptions struct {
-	DryRun              bool
-	Version             string
-	RelayImage          string
-	CaddyImage          string
-	CoturnImage         string
-	PublicPackageSource string
-	ExpectedConfig      *Config
+	DryRun                   bool
+	Version                  string
+	RelayImage               string
+	CaddyImage               string
+	CoturnImage              string
+	PublicPackageSource      string
+	ExpectedConfig           *Config
+	DefaultUpdateManifestURL string
 }
 
 type UpgradeResult struct {
@@ -195,8 +196,20 @@ func (u UpgradeManager) prepare(options UpgradeOptions) (upgradePlan, error) {
 	targetConfig.Release = options.Version
 	targetConfig.RelayImage = options.RelayImage
 	targetConfig.CaddyImage = options.CaddyImage
+	if targetConfig.DeviceUpdateChannel == "" {
+		if targetConfig.UpdateManifestURL != "" {
+			targetConfig.DeviceUpdateChannel = UpdateChannelCustom
+		} else if options.DefaultUpdateManifestURL != "" {
+			targetConfig.DeviceUpdateChannel = UpdateChannelStable
+			targetConfig.UpdateManifestURL = options.DefaultUpdateManifestURL
+		}
+	}
 	if options.ExpectedConfig != nil {
+		targetConfig.DeviceUpdateChannel = options.ExpectedConfig.DeviceUpdateChannel
 		targetConfig.UpdateManifestURL = options.ExpectedConfig.UpdateManifestURL
+	}
+	if targetConfig.DeviceUpdateChannel == UpdateChannelStable && options.DefaultUpdateManifestURL != "" {
+		targetConfig.UpdateManifestURL = options.DefaultUpdateManifestURL
 	}
 	if targetConfig.EnableTURN {
 		targetConfig.CoturnImage = options.CoturnImage
