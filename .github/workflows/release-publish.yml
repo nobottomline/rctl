@@ -205,6 +205,18 @@ jobs:
           Fresh-host qualification report SHA-256: \`$REPORT_SHA256\`
           EOF
           gh release edit "$TAG" --verify-tag --latest --draft=false --notes-file release-notes.md
+          release_attested=false
+          for attempt in $(seq 1 60); do
+            if gh release verify "$TAG" >/dev/null 2>&1; then
+              release_attested=true
+              break
+            fi
+            sleep 5
+          done
+          test "$release_attested" = true || {
+            echo "GitHub did not publish the release attestation within five minutes" >&2
+            exit 1
+          }
           gh release verify "$TAG"
 
           anonymous="$(mktemp -d)"

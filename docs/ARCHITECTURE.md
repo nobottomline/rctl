@@ -346,8 +346,10 @@ compatibility matrix, path inventory and acceptance gates are in
 
 ## 10. Known limitations / TODO
 
-- Relay/WebRTC are implemented but still require release qualification across
-  direct, STUN, and forced-TURN paths (§6).
+- The `v0.3.0` dedicated-domain relay profile is qualified on a rootful iOS 14
+  arm64e device, including authenticated forced-TURN media/control over UDP and
+  TCP. Other jailbreak/iOS combinations and the bare-IP TLS profile remain
+  separate qualification lanes (§6, §9).
 - Local `:8080` has no authentication by design; bind/firewall policy must keep
   it on trusted LAN/USB networks (§6, §8).
 - Camera works only with an app foreground (§5).

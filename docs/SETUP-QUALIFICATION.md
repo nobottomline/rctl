@@ -283,21 +283,44 @@ repeated before a report can be signed.
   They used signed debug revisions, not the immutable public `v0.3.0` candidate,
   so they do not satisfy the publication report's exact-artifact device checks.
 
-### Still required before a supported public release
+### Final `v0.3.0` qualification
 
-1. Rebuild the tag after the final setup and update corrections and repeat anonymous
-   amd64/arm64 image, provenance, checksum, SBOM, and clean-host bootstrap checks
-   using that exact candidate.
-2. Repeat forced-TURN browser/device media on the physical device. Real ACME,
-   staging-equivalent renewal, cloud firewall reachability, and authenticated
-   off-host UDP/TCP TURN traffic have passed engineering qualification.
-3. Repeat enrollment, independent LAN and relay control, restart persistence,
-   and device update/rollback on an iOS 14 arm64e device using the exact public
-   candidate package and its publication catalog.
-4. Complete and upload the privacy-safe report bound to the final image and
-   `SHA256SUMS` without replacing any release asset.
-5. Run the gated publication workflow and independently verify the immutable
-   stable release, assets, checksums, provenance, SBOM, and public bootstrap.
+The exact tagged source `13c8845c24599f3c78cf4e32958bb174c2bd92b8`
+completed the remaining gates on 2026-08-23:
 
-Until these external gates pass, the wizard is implemented and locally
-qualified but must not be described as fully production-qualified.
+- Exact-commit CI and tag-bound draft assembly passed. The seven build assets
+  and multi-architecture OCI image passed checksum, architecture, public-package,
+  repository-bound Sigstore provenance, hosted-runner, source-ref, source-digest,
+  and SBOM verification. Anonymous pulls resolved both relay architectures from
+  the qualified OCI digest.
+- A clean dedicated-domain host passed bootstrap and repeat bootstrap, trusted
+  ACME issuance and forced renewal, HTTPS/WSS security checks, authenticated TURN
+  over UDP and TCP, forced-TURN browser media/control, package personalization,
+  enrollment, relay and independent LAN control, relay restart, doctor,
+  backup/restore, successful upgrade, automatic rollback, interrupted recovery,
+  admin reset, and both uninstall retention modes.
+- The exact public `0.3.0` device package updated a physical rootful iOS 14
+  arm64e device from `0.2.9`. The detached updater verified daemon version,
+  SpringBoard IPC, LAN control, and relay reconnect before reporting `complete`.
+  A separately signed manifest containing an intentionally invalid target then
+  exercised clean-install failure and external-watchdog rollback; the device
+  returned to exact `0.3.0` with LAN and relay control connected.
+- The privacy-safe schema 2 qualification report was bound to the final source,
+  OCI digest, and exact `SHA256SUMS`, validated by the repository verifier, and
+  included in the immutable release without host or device identifiers.
+- GitHub published and locked `v0.3.0`, promoted `rctl-relay:0.3.0` to the
+  qualified OCI digest, and generated the signed release attestation. Every
+  release asset was then downloaded without authentication and passed checksum
+  plus `gh release verify-asset`; `gh release verify` and version-tag digest
+  verification also passed.
+
+The first publication job reported a post-publication failure because it asked
+GitHub for the asynchronous release attestation immediately after locking the
+release. The attestation appeared normally and all independent checks passed.
+The workflow now polls for that bounded eventual-consistency window so later
+releases do not report the same false failure. No release asset or tag was
+replaced during recovery.
+
+This qualifies the `v0.3.0` dedicated-domain profile on the tested platform.
+The portability and bare-IP profiles retain their separate gates; this record
+does not generalize support beyond the matrix in `PORTABILITY.md`.
