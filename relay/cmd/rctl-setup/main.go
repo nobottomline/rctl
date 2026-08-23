@@ -263,7 +263,7 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		DryRun: *dryRun, Version: version, RelayImage: relayImage, CaddyImage: caddyImage,
 		CoturnImage: coturnImage, PublicPackageSource: *publicPackage, ExpectedConfig: expectedConfig,
 	}
-	manager := setup.UpgradeManager{}
+	manager := setup.UpgradeManager{Progress: textProgress(output)}
 	plan, err := manager.Plan(options)
 	if err != nil {
 		fmt.Fprintln(errorsOutput, "upgrade plan:", err)
@@ -612,7 +612,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	}
 	installCtx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	result, err := (setup.Installer{}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version, PublicPackageSource: *publicPackage})
+	result, err := (setup.Installer{Progress: textProgress(output)}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version, PublicPackageSource: *publicPackage})
 	if err != nil {
 		fmt.Fprintln(errorsOutput, "install:", err)
 		return 1
@@ -644,6 +644,12 @@ func prompt(reader *bufio.Reader, output io.Writer, label, defaultValue string) 
 		line = defaultValue
 	}
 	return line, nil
+}
+
+func textProgress(output io.Writer) setup.ProgressFunc {
+	return func(message string) {
+		fmt.Fprintf(output, "==> %s\n", message)
+	}
 }
 
 func inferPublicIPv4(rawURL string) string {

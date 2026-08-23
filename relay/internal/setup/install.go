@@ -67,6 +67,7 @@ type RouteVerifier interface {
 }
 
 type Chowner func(path string, uid, gid int) error
+type ProgressFunc func(message string)
 
 const (
 	relayRuntimeUID  = 65532
@@ -82,6 +83,7 @@ type Installer struct {
 	Random   io.Reader
 	Now      func() time.Time
 	Chown    Chowner
+	Progress ProgressFunc
 }
 
 type InstallOptions struct {
@@ -403,6 +405,7 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 		if options.DryRun {
 			return InstallResult{DryRun: true, Files: ownedPaths(existing.Files)}, nil
 		}
+		i.progress("Verifying the existing relay deployment")
 		if err := i.verifyServices(ctx, cfg, secrets.Admin, false); err != nil {
 			return result, err
 		}
@@ -458,6 +461,7 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	if err = beginRecovery(i.Paths, "install", "", i.Now()); err != nil {
 		return result, err
 	}
+	i.progress("Preparing protected configuration and data directories")
 	if err = i.prepareDirectories(); err != nil {
 		return result, err
 	}
@@ -468,6 +472,7 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	journal.Stage = "write_files"
 	journal.UpdatedAt = i.Now().Unix()
 	_ = writeJSONAtomic(journalPath, journal, 0o600)
+	i.progress("Writing managed deployment files")
 	for _, file := range bundle.Files {
 		if err = writeFileAtomic(file.Path, file.Content, os.FileMode(file.Mode)); err != nil {
 			return result, err
@@ -484,6 +489,7 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 		return result, err
 	}
 
+	i.progress("Committing the verified installation")
 	manifest := manifestFor(cfg, bundle, options.Version, started, i.Now().Unix())
 	if err = writeJSONAtomic(i.Paths.ManifestPath, manifest, 0o600); err != nil {
 		return result, err
@@ -574,28 +580,41 @@ func (i Installer) composeArgs(extra ...string) []string {
 	return append(base, extra...)
 }
 
+func (i Installer) progress(message string) {
+	if i.Progress != nil {
+		i.Progress(message)
+	}
+}
+
 func (i Installer) verifyServices(ctx context.Context, cfg Config, adminSecret string, start bool) error {
 	if start {
+		i.progress("Validating the Docker Compose deployment")
 		if output, err := i.Runner.Run(ctx, "docker", i.composeArgs("config", "--quiet")...); err != nil {
 			return fmt.Errorf("compose validation: %s", commandFailure(output, err))
 		}
+		i.progress("Pulling digest-pinned container images")
 		if output, err := i.Runner.Run(ctx, "docker", i.composeArgs("pull")...); err != nil {
 			return fmt.Errorf("image pull: %s", commandFailure(output, err))
 		}
+		i.progress("Validating the HTTPS reverse-proxy configuration")
 		if output, err := i.Runner.Run(ctx, "docker", "run", "--rm", "--network", "none", "-v", i.Paths.Caddyfile+":/etc/caddy/Caddyfile:ro", cfg.CaddyImage, "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"); err != nil {
 			return fmt.Errorf("Caddy validation: %s", commandFailure(output, err))
 		}
+		i.progress("Starting relay, HTTPS, and TURN services")
 		if output, err := i.Runner.Run(ctx, "docker", i.composeArgs("up", "-d", "--remove-orphans")...); err != nil {
 			return fmt.Errorf("service start: %s", commandFailure(output, err))
 		}
 	}
+	i.progress("Waiting for services to become healthy")
 	if err := i.waitForServices(ctx, cfg.EnableTURN); err != nil {
 		return err
 	}
+	i.progress("Verifying public HTTPS, WebSocket, and admin authentication")
 	if err := i.Verifier.Verify(ctx, cfg, adminSecret); err != nil {
 		return err
 	}
 	if start {
+		i.progress("Verifying state persistence across a relay restart")
 		restart := func(restartCtx context.Context) error {
 			if output, err := i.Runner.Run(restartCtx, "docker", i.composeArgs("restart", "relay")...); err != nil {
 				return fmt.Errorf("relay persistence restart: %s", commandFailure(output, err))

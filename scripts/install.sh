@@ -44,6 +44,12 @@ fi
 umask 077
 work="$(mktemp -d "/tmp/rctl-bootstrap.XXXXXX")" || fail "cannot create temporary directory"
 candidate=""
+assume_yes=0
+for argument do
+  if [ "$argument" = "--yes" ]; then
+    assume_yes=1
+  fi
+done
 cleanup() {
   rm -rf "$work"
   [ -z "$candidate" ] || rm -f "$candidate"
@@ -109,11 +115,25 @@ if [ -e "$DESTINATION" ]; then
 fi
 candidate="${DESTINATION}.new.$$"
 install -m 0755 "$work/${asset}" "$candidate" || fail "cannot install setup binary"
+
+run_setup() {
+  command_name="$1"
+  shift
+  if [ "$assume_yes" -eq 1 ]; then
+    "$candidate" "$command_name" "$@"
+    return
+  fi
+  if ! ( : </dev/tty ) 2>/dev/null; then
+    fail "interactive setup needs a controlling terminal; rerun from an SSH terminal, or supply complete options with --yes"
+  fi
+  "$candidate" "$command_name" "$@" </dev/tty
+}
+
 if [ -e /var/lib/rctl/setup/ownership.json ]; then
-  "$candidate" upgrade "$@" --public-package "$work/$package_asset" || \
+  run_setup upgrade "$@" --public-package "$work/$package_asset" || \
     fail "upgrade failed; the previous setup binary remains active"
 else
-  "$candidate" install "$@" --public-package "$work/$package_asset" || \
+  run_setup install "$@" --public-package "$work/$package_asset" || \
     fail "installation failed; no setup binary was activated"
 fi
 

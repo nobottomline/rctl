@@ -36,6 +36,7 @@ type UpgradeManager struct {
 	Verifier PublicVerifier
 	Now      func() time.Time
 	Chown    Chowner
+	Progress ProgressFunc
 }
 
 type upgradePlan struct {
@@ -70,16 +71,19 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 		return result, nil
 	}
 	if plan.alreadyCurrent {
-		installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Chown: u.Chown}
+		u.progress("Verifying the already-current relay deployment")
+		installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Chown: u.Chown, Progress: u.Progress}
 		if err := installer.verifyServices(ctx, plan.current.Config, plan.secrets.Admin, false); err != nil {
 			return result, fmt.Errorf("current deployment verification failed: %w", err)
 		}
 		return result, nil
 	}
 
+	u.progress("Validating and pulling the target release")
 	if err := u.validateCandidates(ctx, plan); err != nil {
 		return result, err
 	}
+	u.progress("Creating and verifying the pre-upgrade backup")
 	mutation, err := (BackupManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Now: u.Now}).BeginMutation(ctx, "upgrade", plan.current)
 	result.Backup = mutation.Backup
 	if err != nil {
@@ -88,7 +92,7 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 	defer mutation.Release()
 	backupManifest := mutation.Manifest
 
-	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Chown: u.Chown}
+	installer := Installer{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Chown: u.Chown, Progress: u.Progress}
 
 	applied := false
 	defer func() {
@@ -116,6 +120,7 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 	}()
 
 	applied = true
+	u.progress("Applying the target release")
 	if err = writeUpgradeBundle(plan.bundle, plan.current, plan.target, u.Paths); err != nil {
 		return result, err
 	}
@@ -128,7 +133,14 @@ func (u UpgradeManager) Upgrade(ctx context.Context, options UpgradeOptions) (re
 	if err = clearRecovery(u.Paths); err != nil {
 		return result, fmt.Errorf("commit upgrade recovery checkpoint: %w", err)
 	}
+	u.progress("Upgrade committed after runtime verification")
 	return result, nil
+}
+
+func (u UpgradeManager) progress(message string) {
+	if u.Progress != nil {
+		u.Progress(message)
+	}
 }
 
 func (u *UpgradeManager) defaults() {

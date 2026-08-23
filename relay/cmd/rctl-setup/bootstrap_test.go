@@ -3,12 +3,15 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/creack/pty"
 )
 
 func TestBootstrapSelectsLifecycleAndActivatesOnlyOnSuccess(t *testing.T) {
@@ -48,6 +51,11 @@ done
 	setupAsset := filepath.Join(assets, "rctl-setup_linux_amd64")
 	writeExecutable(t, setupAsset, `#!/bin/sh
 printf '%s\n' "$*" >> "$SETUP_LOG"
+[ "${EXPECT_TTY:-0}" != 1 ] || {
+  [ -t 0 ] || { echo 'setup stdin is not a terminal' >&2; exit 20; }
+  IFS= read -r answer
+  printf 'tty:%s\n' "$answer" >> "$SETUP_LOG"
+}
 [ "${FAIL_SETUP:-0}" != 1 ]
 `)
 	packageName := "rctl_1.2.3_iphoneos-arm.deb"
@@ -104,6 +112,9 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	runBootstrapOffline(t, scriptPath, assets, logPath, "--dry-run", "--yes")
 	assertLastLog(t, logPath, "upgrade --dry-run --yes --public-package ")
 
+	runBootstrapThroughPTY(t, scriptPath, assets, logPath)
+	assertLastLog(t, logPath, "tty:install")
+
 	runBootstrap(t, scriptPath, assets, logPath, false, "--yes")
 	if string(mustRead(t, destination)) != string(mustRead(t, setupAsset)) {
 		t.Fatal("successful upgrade did not activate the verified setup binary")
@@ -118,6 +129,31 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	output, err := command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "must be a real directory, not a symlink") {
 		t.Fatalf("symlinked offline asset directory: err=%v output=%s", err, output)
+	}
+}
+
+func runBootstrapThroughPTY(t *testing.T, script, assets, log string) {
+	t.Helper()
+	command := exec.Command("sh", "-c", `cat "$BOOTSTRAP_SCRIPT" | sh`)
+	command.Env = append(os.Environ(),
+		"ASSET_DIR="+assets,
+		"BOOTSTRAP_SCRIPT="+script,
+		"SETUP_LOG="+log,
+		"EXPECT_TTY=1",
+		"FAIL_SETUP=0",
+	)
+	terminal, err := pty.Start(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	if _, err := terminal.Write([]byte("install\n")); err != nil {
+		t.Fatal(err)
+	}
+	output, readErr := io.ReadAll(terminal)
+	waitErr := command.Wait()
+	if waitErr != nil {
+		t.Fatalf("piped bootstrap under PTY failed: %v (read=%v)\n%s", waitErr, readErr, output)
 	}
 }
 
