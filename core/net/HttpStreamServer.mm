@@ -705,7 +705,7 @@ static void *accept_loop(void *arg) {
     return NULL;
 }
 
-rctl_http_server *rctl_http_start(int port) {
+rctl_http_server *rctl_http_start(int port, bool loopback_only) {
     signal(SIGPIPE, SIG_IGN);
     int lfd = socket(AF_INET, SOCK_STREAM, 0);
     if (lfd < 0) { fprintf(stderr, "[http] socket failed\n"); return NULL; }
@@ -713,7 +713,7 @@ rctl_http_server *rctl_http_start(int port) {
     setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_addr.s_addr = htonl(loopback_only ? INADDR_LOOPBACK : INADDR_ANY);
     addr.sin_port = htons((uint16_t)port);
     if (bind(lfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fprintf(stderr, "[http] bind %d failed: %s\n", port, strerror(errno));
@@ -728,7 +728,7 @@ rctl_http_server *rctl_http_start(int port) {
     pthread_mutex_init(&s->mtx, NULL);
     s->audio_thread_started = pthread_create(&s->audio_thread, NULL, audio_test_loop, s) == 0;
     pthread_create(&s->thread, NULL, accept_loop, s);
-    fprintf(stderr, "[http] serving on 0.0.0.0:%d\n", port);
+    fprintf(stderr, "[http] serving on %s:%d\n", loopback_only ? "127.0.0.1" : "0.0.0.0", port);
     return s;
 }
 

@@ -38,6 +38,7 @@
 #import <mach-o/dyld.h>
 #import "net/HttpStreamServer.h"
 #import "net/RelayClient.h"
+#import "config/LocalAccess.h"
 #import "ipc/Ipc.h"
 #import "net/WebRTCBridge.h"
 #import "net/CameraIngest.h"
@@ -1178,6 +1179,21 @@ static char *rctl_json_error(const char *message) {
     return result;
 }
 
+static char *rctl_local_access_json(bool restarting) {
+    const bool enabled = rctl_local_access_enabled();
+    NSDictionary *payload = @{
+        @"ok": @YES,
+        @"enabled": @(enabled),
+        @"mode": enabled ? @"lan" : @"relay-only",
+        @"listen": enabled ? @"0.0.0.0:8080" : @"127.0.0.1:8080",
+        @"restarting": @(restarting),
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    char *result = (char *)malloc(data.length + 1);
+    memcpy(result, data.bytes, data.length); result[data.length] = 0;
+    return result;
+}
+
 static bool rctl_require_destructive_post(const char *method, const char *content_type,
                                           int *status, char **response) {
     if (!strcmp(method, "POST") && !strcmp(content_type, "application/json")) return true;
@@ -1275,6 +1291,30 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         char *result = (char *)malloc(data.length + 1);
         memcpy(result, data.bytes, data.length); result[data.length] = 0;
         return result;
+    } else if (!strcmp(path, "/v1/local_access")) {
+        if (!strcmp(method, "GET")) return rctl_local_access_json(false);
+        char *error = NULL;
+        if (!rctl_require_destructive_post(method, content_type, status, &error)) return error;
+        NSDictionary *json = rctl_json_object(body, body_len);
+        NSNumber *enabled = [json[@"enabled"] isKindOfClass:[NSNumber class]] ? json[@"enabled"] : nil;
+        if (!enabled || CFGetTypeID((__bridge CFTypeRef)enabled) != CFBooleanGetTypeID()) {
+            *status = 400;
+            return rctl_json_error("enabled_boolean_required");
+        }
+        NSString *target = enabled.boolValue ? @"lan" : @"relay-only";
+        if (!rctl_confirm_destructive(json, "local_access", target, status, &error)) return error;
+        char reason[128] = {};
+        if (!rctl_local_access_set_enabled(enabled.boolValue, reason, sizeof(reason))) {
+            *status = !strcmp(reason, "approved_relay_required") ? 409 : 500;
+            return rctl_json_error(reason);
+        }
+        *status = 202;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 750 * NSEC_PER_MSEC),
+                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            // launchd KeepAlive restarts rctld with the newly persisted binding.
+            _exit(0);
+        });
+        return rctl_local_access_json(true);
     } else if (!strcmp(path, "/v1/relay_status")) {
         return rctl_relay_status_json();
     } else if (!strcmp(path, "/v1/update_status")) {
@@ -2042,6 +2082,20 @@ int main(int argc, char **argv) {
         printf("LOADFAIL %s\n", dlerror() ? dlerror() : "(null)");
         return 1;
     }
+    if (argc == 3 && strcmp(argv[1], "--local-access") == 0) {
+        const bool enabled = !strcmp(argv[2], "lan");
+        if (!enabled && strcmp(argv[2], "relay-only")) {
+            fprintf(stderr, "usage: rctld --local-access lan|relay-only\n");
+            return 2;
+        }
+        char error[128] = {};
+        if (!rctl_local_access_set_enabled(enabled, error, sizeof(error))) {
+            fprintf(stderr, "rctld: %s\n", error[0] ? error : "local_access_update_failed");
+            return 1;
+        }
+        printf("local access mode: %s (restart rctld to apply)\n", enabled ? "lan" : "relay-only");
+        return 0;
+    }
 
     @autoreleasepool {
         configure_memory_limit();
@@ -2050,8 +2104,9 @@ int main(int argc, char **argv) {
 
         // Port 8080 may briefly still be held by the old SpringBoard-hosted server
         // during an upgrade respring — retry the bind instead of dying.
+        const bool localAccessEnabled = rctl_local_access_enabled();
         for (int i = 0; i < 30 && !gHttp; i++) {
-            gHttp = rctl_http_start(8080);
+            gHttp = rctl_http_start(8080, !localAccessEnabled);
             if (!gHttp) { dlog("http bind busy, retrying"); sleep(1); }
         }
         if (!gHttp) { dlog("http start FAILED"); return 1; }
@@ -2067,7 +2122,7 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_camera_keyframe_cb(on_webrtc_camera_keyframe_request);
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
-        dlog("http listening on :8080");
+        dlog(localAccessEnabled ? "http listening on LAN :8080" : "http listening on loopback :8080");
         rctl_camera_set_expired_cb(on_camera_lease_expired);
         if (!rctl_vmic_server_start()) dlog("virtual mic server start FAILED");
         if (!rctl_camera_ingest_start()) dlog("camera ingest start FAILED");

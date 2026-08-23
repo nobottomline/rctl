@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added an administrator-controlled `LAN + Relay` / `Relay only` network policy.
+  Relay-only mode binds the device API to loopback, requires an approved relay
+  identity, uses confirmation-token mutations, and includes an SSH recovery path.
+- Reworked the project README around the verified one-command VPS setup and the
+  public LAN-only package flow.
+
 ## 0.3.2
 
 - Fixed interactive `curl | sudo sh` setup by reconnecting the verified wizard

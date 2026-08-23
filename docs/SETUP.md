@@ -34,7 +34,9 @@ restored, and removed without cloning this repository or installing a compiler.
 - The public `.deb` is LAN-only. Personalized packages and deployment secrets
   are never GitHub Release assets, container layers, logs, diagnostics, or
   committed files.
-- Installing relay configuration never disables the independent LAN listener.
+- Installing relay configuration leaves LAN access enabled by default. After an
+  approved relay identity exists, the administrator may explicitly select the
+  loopback-only `Relay only` policy from the relay admin page.
 
 ## Release contract
 

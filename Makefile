@@ -106,7 +106,7 @@ test-virtual-mic:
 	@/tmp/rctl-virtual-mic-dsp-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-destructive-actions test-personalize test-update-signing-key
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-destructive-actions test-local-access test-personalize test-update-signing-key
 
 .PHONY: test-update-signing-key
 test-update-signing-key:
@@ -118,3 +118,11 @@ test-destructive-actions:
 		tests/DestructiveActionsTest.mm core/security/DestructiveActions.mm \
 		-framework Foundation -o /tmp/rctl-destructive-actions-test
 	@/tmp/rctl-destructive-actions-test
+
+.PHONY: test-local-access
+test-local-access:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore \
+		-DRCTL_RELAY_CONFIG_PLIST='@"/tmp/rctl-local-access-test.plist"' \
+		tests/LocalAccessTest.mm core/config/LocalAccess.mm \
+		-framework Foundation -o /tmp/rctl-local-access-test-bin
+	@/tmp/rctl-local-access-test-bin

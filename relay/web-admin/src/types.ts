@@ -61,6 +61,13 @@ export interface CreateDevicePackageOptions extends CreateEnrollmentOptions {
   device_name: string
 }
 
+export interface LocalAccessStatus {
+  enabled: boolean
+  mode: 'lan' | 'relay-only'
+  listen: string
+  restarting: boolean
+}
+
 export interface DevicesResponse {
   devices: Device[]
 }

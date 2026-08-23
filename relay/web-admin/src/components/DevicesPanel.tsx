@@ -13,6 +13,7 @@ import {
   ShieldQuestion,
   Trash2,
   TriangleAlert,
+  Wifi,
   type LucideProps,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -26,7 +27,7 @@ import { fmtRel, shortId } from '../lib/format'
 import { cn } from '../lib/cn'
 import type { AuditEntry, Device } from '../types'
 
-export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete' | 'details' | 'update'
+export type ActionKey = 'approve' | 'revoke' | 'copy' | 'delete' | 'details' | 'update' | 'local-access'
 
 interface Action {
   key: ActionKey
@@ -43,6 +44,13 @@ function actionsFor(device: Device, updateConfigured: boolean, updateTargetVersi
     list.push({ key: 'approve', label: 'Approve device', icon: Check })
   if (device.status === 'approved')
     list.push({ key: 'revoke', label: 'Revoke access', icon: Ban })
+  if (
+    device.status === 'approved' &&
+    device.online &&
+    device.compatible &&
+    device.features.includes('network.local_access_policy')
+  )
+    list.push({ key: 'local-access', label: 'Local network access…', icon: Wifi })
   if (
     device.status === 'approved' &&
     device.online &&

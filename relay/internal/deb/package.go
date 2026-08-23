@@ -448,6 +448,8 @@ func renderRelayPlist(values Personalization) ([]byte, error) {
 	<true/>
 	<key>DeviceName</key>
 	<string>%s</string>
+	<key>LocalAccessEnabled</key>
+	<true/>
 	<key>Relays</key>
 	<array>
 		<dict>

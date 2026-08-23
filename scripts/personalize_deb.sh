@@ -170,6 +170,8 @@ cat <<PLIST
 	<true/>
 	<key>DeviceName</key>
 	<string>$(xml_escape "$DEVICE_NAME")</string>
+	<key>LocalAccessEnabled</key>
+	<true/>
 	<key>Relays</key>
 	<array>
 PLIST

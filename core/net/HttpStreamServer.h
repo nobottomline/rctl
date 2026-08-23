@@ -10,9 +10,9 @@ extern "C" {
 
 typedef struct rctl_http_server rctl_http_server;
 
-// Start an HTTP server on `port` (0.0.0.0). Serves a WebCodecs player at "/" and
-// a live H.264 stream at "/stream". Returns NULL on failure.
-rctl_http_server *rctl_http_start(int port);
+// Start an HTTP server on `port`. `loopback_only` binds 127.0.0.1 instead of
+// every interface so relay tunneling remains available without LAN exposure.
+rctl_http_server *rctl_http_start(int port, bool loopback_only);
 
 // Push one Annex-B access unit to all connected stream clients. `pts_us` is a
 // microsecond presentation timestamp relative to the current capture session.

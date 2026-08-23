@@ -53,6 +53,13 @@ int main(void) {
         char *badUpdate = rctl_destructive_issue("device_update", "http://releases.example/update.json", &statusCode);
         assert(statusCode == 403);
         free(badUpdate);
+
+        char *localAccess = rctl_destructive_issue("local_access", "relay-only", &statusCode);
+        assert(statusCode == 200);
+        free(localAccess);
+        char *badLocalAccess = rctl_destructive_issue("local_access", "off", &statusCode);
+        assert(statusCode == 403);
+        free(badLocalAccess);
     }
     puts("DestructiveActionsTest passed");
     return 0;

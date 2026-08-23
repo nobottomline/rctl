@@ -3,7 +3,7 @@
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for process ownership and data
 flow, then read the feature document for the code being changed.
 
-- [SECURITY.md](SECURITY.md): trust boundaries and the intentional trusted-LAN model.
+- [SECURITY.md](SECURITY.md): trust boundaries, LAN/relay-only policy, and recovery.
 - [SETUP.md](SETUP.md): VPS wizard, lifecycle operations, and recovery.
 - [RELAY.md](RELAY.md): relay protocol, deployment profiles, and transport.
 - [UPDATES.md](UPDATES.md): signed transactional device updates.

@@ -15,6 +15,7 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
             @"terminal.pty",
             @"destructive.confirmation",
             @"update.transactional",
+            @"network.local_access_policy",
         ];
     });
     return features;

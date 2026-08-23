@@ -41,7 +41,7 @@ func TestPersonalizeSupportedFormats(t *testing.T) {
 				t.Fatalf("relay config missing: found=%t err=%v", found, err)
 			}
 			plist := readTarFile(t, items[2].name, items[2].data, relayConfigPath)
-			for _, wanted := range []string{"Family &amp; Travel &lt;iPad&gt;", "wss://relay.example.test/device", "enroll_test_abcdefghijklmnopqrstuvwxyz0123456789.ABCDEF"} {
+			for _, wanted := range []string{"Family &amp; Travel &lt;iPad&gt;", "wss://relay.example.test/device", "enroll_test_abcdefghijklmnopqrstuvwxyz0123456789.ABCDEF", "<key>LocalAccessEnabled</key>"} {
 				if !bytes.Contains(plist, []byte(wanted)) {
 					t.Fatalf("plist does not contain %q:\n%s", wanted, plist)
 				}

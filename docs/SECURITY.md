@@ -4,9 +4,9 @@ rctl has two deliberately different access paths. Internet control uses the
 authenticated TLS relay. Local control uses an unauthenticated HTTP service on
 the device and is only safe on a trusted LAN or through the USB tunnel.
 
-## Trusted local control
+## Local network policy
 
-`rctld` listens on `:8080` for the local browser client and API. This interface
+By default, `rctld` listens on `0.0.0.0:8080` for the local browser client and API. This interface
 is intentionally unauthenticated in the current protocol. It exposes screen and
 camera viewing, input injection, file operations, application actions, and a
 root terminal. Anyone who can reach the port can control the device.
@@ -17,15 +17,28 @@ This is an explicit product constraint, not an accidental missing middleware:
   guest, hotel, public, or otherwise untrusted Wi-Fi;
 - use `iproxy 8080:8080` for a direct USB path, or a private network whose
   members are fully trusted;
-- use the relay for internet access; installing relay configuration does not
-  disable or weaken the independent local path;
+- use the relay for internet access; installing relay configuration leaves the
+  independent local path enabled unless an administrator explicitly changes it;
 - enforce LAN isolation at the router/firewall when other clients are not
   trusted.
 
-Adding local authentication later requires an explicit compatibility and UX
-design. It must not silently break the one-file browser client or iOS 14 local
-HTTP workflow. This release therefore documents and preserves the trusted-LAN
-contract instead of changing it.
+An approved device can be changed to `Relay only` in the relay admin page. This
+binds port `8080` only to loopback, retaining the relay's on-device HTTP tunnel
+while rejecting direct LAN connections. The transition requires a one-time
+confirmation token and at least one enabled relay entry with a permanent
+`DeviceSecret`; a one-time enrollment token is not sufficient.
+
+If relay access is lost while Relay-only mode is active, recover over SSH and
+restart the daemon:
+
+```sh
+/usr/local/bin/rctld --local-access lan
+launchctl unload /Library/LaunchDaemons/com.greatlove.rctld.plist
+launchctl load /Library/LaunchDaemons/com.greatlove.rctld.plist
+```
+
+The CLI changes only the policy value and preserves device and relay secrets.
+It is an operator recovery path, not an iPad UI.
 
 ## Relay control
 

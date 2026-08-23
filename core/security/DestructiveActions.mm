@@ -95,6 +95,14 @@ bool normalize_target(const char *action, const char *target, char *out,
         strcpy(out, target);
         return true;
     }
+    if (!strcmp(action, "local_access")) {
+        if ((strcmp(target, "lan") && strcmp(target, "relay-only")) || strlen(target) >= out_len) {
+            set_reason(reason, reason_len, "invalid_local_access_mode");
+            return false;
+        }
+        strcpy(out, target);
+        return true;
+    }
     set_reason(reason, reason_len, "unsupported_action");
     return false;
 }

@@ -74,6 +74,7 @@ dpkg-deb -R "${generated}" "${EXTRACTED}"
 
 grep -F '<key>Enabled</key>' "${EXTRACTED}/${PLIST}" >/dev/null || fail "Enabled key missing"
 grep -F '<true/>' "${EXTRACTED}/${PLIST}" >/dev/null || fail "Enabled=true missing"
+grep -F '<key>LocalAccessEnabled</key>' "${EXTRACTED}/${PLIST}" >/dev/null || fail "LocalAccessEnabled key missing"
 grep -F '<string>wss://rctl.example.test/device?name=ipad&amp;mode=relay</string>' "${EXTRACTED}/${PLIST}" >/dev/null || fail "RelayURL was not XML-escaped"
 grep -F "<string>${TOKEN}</string>" "${EXTRACTED}/${PLIST}" >/dev/null || fail "EnrollToken missing"
 grep -F '<string>iPad &lt;Air&gt; &amp; Friends</string>' "${EXTRACTED}/${PLIST}" >/dev/null || fail "DeviceName was not XML-escaped"

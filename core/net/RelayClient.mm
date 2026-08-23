@@ -1,6 +1,7 @@
 #import "net/RelayClient.h"
 #import "net/WebRTCBridge.h"
 #import "protocol/Capabilities.h"
+#import "config/LocalAccess.h"
 #import <Foundation/Foundation.h>
 #import <stdlib.h>
 #import <time.h>
@@ -156,7 +157,8 @@ static NSMutableArray *g_relay_clients;
 }
 
 - (void)saveConfig:(NSDictionary *)dict {
-    @synchronized ([RCTLRelayClient class]) {
+    rctl_relay_config_lock();
+    @try {
         NSDictionary *existing = [NSDictionary dictionaryWithContentsOfFile:RCTL_RELAY_CONFIG_PLIST];
         NSMutableDictionary *root = [existing isKindOfClass:[NSDictionary class]] ? [existing mutableCopy] : [NSMutableDictionary dictionary];
         NSArray *relays = [root[@"Relays"] isKindOfClass:[NSArray class]] ? root[@"Relays"] : nil;
@@ -179,6 +181,8 @@ static NSMutableArray *g_relay_clients;
         if (![root writeToFile:RCTL_RELAY_CONFIG_PLIST atomically:YES]) {
             relay_log(@"failed to save relay config");
         }
+    } @finally {
+        rctl_relay_config_unlock();
     }
 }
 

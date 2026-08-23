@@ -276,8 +276,10 @@ normal REST calls use the bounded HTTP request/response tunnel. See `RELAY.md`
 and `TRANSPORT.md` for protocol and deployment invariants.
 
 The local `:8080` service remains intentionally independent and unauthenticated
-for LAN/USB operation. It must never be exposed directly to the public internet;
-internet clients terminate TLS and authenticate at the relay.
+for LAN/USB operation by default. An approved relay administrator may explicitly
+select Relay-only mode, which binds the same service to loopback so the on-device
+relay tunnel still works. It must never be exposed directly to the public
+internet; internet clients terminate TLS and authenticate at the relay.
 
 ---
 
@@ -323,9 +325,10 @@ internet clients terminate TLS and authenticate at the relay.
   scripts own no persistent TCC rows and therefore delete none on uninstall. TCC
   is still per-process, so this boundary must be revalidated for every supported
   jailbreak/iOS combination.
-- **`:8080` is intentionally unauthenticated.** It is only supported on a fully
-  trusted LAN or USB tunnel and must never be exposed to the internet; internet
-  access uses the authenticated TLS relay (see §6 and `docs/SECURITY.md`).
+- **`:8080` is intentionally unauthenticated.** Its default all-interface bind is
+  only supported on a fully trusted LAN or USB tunnel. Relay-only mode restricts
+  it to loopback; internet access uses the authenticated TLS relay (see §6 and
+  `docs/SECURITY.md`).
 - **The daemon is root** and exposes file read/write (`/v1/ls,pull,push,rm`), app
   launch, input injection, and a root PTY terminal. Anyone who reaches `:8080`
   controls the device.
@@ -351,7 +354,7 @@ compatibility matrix, path inventory and acceptance gates are in
   arm64e device, including authenticated forced-TURN media/control over UDP and
   TCP. Other jailbreak/iOS combinations and the bare-IP TLS profile remain
   separate qualification lanes (§6, §9).
-- Local `:8080` has no authentication by design; bind/firewall policy must keep
-  it on trusted LAN/USB networks (§6, §8).
+- Local `:8080` has no authentication by design; use trusted LAN/USB networks or
+  the explicit loopback-only policy (§6, §8).
 - Camera works only with an app foreground (§5).
 - Settings/PreferenceBundle — deferred ("we don't know what they'll be yet").

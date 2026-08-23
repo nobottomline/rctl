@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Ban, Download, Trash2 } from 'lucide-react'
+import { Ban, Check, Download, RadioTower, Trash2, Wifi, WifiOff } from 'lucide-react'
 import { toast } from 'sonner'
 import { LoginScreen } from './components/LoginScreen'
 import { Shell } from './components/Shell'
@@ -28,6 +28,12 @@ export default function App() {
     device: Device
   } | null>(null)
   const [actingConfirm, setActingConfirm] = useState(false)
+  const [localAccess, setLocalAccess] = useState<{
+    device: Device
+    current: boolean
+    selected: boolean
+  } | null>(null)
+  const [savingLocalAccess, setSavingLocalAccess] = useState(false)
   const pollRef = useRef<number | undefined>(undefined)
 
   const loadAll = useCallback(async ({ silent }: { silent?: boolean } = {}) => {
@@ -128,11 +134,38 @@ export default function App() {
         await api.approveDevice(device.id)
         toast.success(`${device.name} approved`)
       }
+      if (key === 'local-access') {
+        const policy = await api.localAccess(device.id)
+        setLocalAccess({ device, current: policy.enabled, selected: policy.enabled })
+      }
       await loadAll({ silent: true })
     } catch (err) {
       handleErr(err)
     } finally {
       setBusyId('')
+    }
+  }
+
+  async function saveLocalAccess() {
+    if (!localAccess) return
+    if (localAccess.current === localAccess.selected) {
+      setLocalAccess(null)
+      return
+    }
+    setSavingLocalAccess(true)
+    try {
+      await api.setLocalAccess(localAccess.device.id, localAccess.selected)
+      toast.success(
+        localAccess.selected
+          ? 'LAN access enabled; device is reconnecting'
+          : 'Relay-only mode enabled; device is reconnecting',
+      )
+      setLocalAccess(null)
+      window.setTimeout(() => loadAll({ silent: true }), 4500)
+    } catch (err) {
+      handleErr(err)
+    } finally {
+      setSavingLocalAccess(false)
     }
   }
 
@@ -289,6 +322,76 @@ export default function App() {
             )}
           </Button>
         </div>
+      </Modal>
+
+      <Modal
+        open={!!localAccess}
+        onOpenChange={(open) => !open && !savingLocalAccess && setLocalAccess(null)}
+        title="Local network access"
+        description={
+          localAccess
+            ? `Choose how “${localAccess.device.name}” accepts direct connections. Relay access remains available in both modes.`
+            : undefined
+        }
+        className="max-w-lg"
+      >
+        {localAccess && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-2 rounded-xl bg-surface-2 p-1 ring-1 ring-line">
+              <button
+                type="button"
+                aria-pressed={localAccess.selected}
+                onClick={() => setLocalAccess({ ...localAccess, selected: true })}
+                className={`flex min-h-24 flex-col items-start justify-between rounded-lg p-3 text-left transition-colors ${
+                  localAccess.selected ? 'bg-bg text-fg shadow-sm ring-1 ring-line-2' : 'text-muted hover:text-fg-dim'
+                }`}
+              >
+                <span className="flex w-full items-center justify-between">
+                  <Wifi className="size-4" />
+                  {localAccess.selected && <Check className="size-4 text-signal" />}
+                </span>
+                <span>
+                  <strong className="block text-[13.5px] font-medium">LAN + Relay</strong>
+                  <span className="mt-0.5 block text-[11.5px] leading-snug opacity-75">Port 8080 accepts trusted LAN clients.</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={!localAccess.selected}
+                onClick={() => setLocalAccess({ ...localAccess, selected: false })}
+                className={`flex min-h-24 flex-col items-start justify-between rounded-lg p-3 text-left transition-colors ${
+                  !localAccess.selected ? 'bg-bg text-fg shadow-sm ring-1 ring-line-2' : 'text-muted hover:text-fg-dim'
+                }`}
+              >
+                <span className="flex w-full items-center justify-between">
+                  <WifiOff className="size-4" />
+                  {!localAccess.selected && <Check className="size-4 text-signal" />}
+                </span>
+                <span>
+                  <strong className="block text-[13.5px] font-medium">Relay only</strong>
+                  <span className="mt-0.5 block text-[11.5px] leading-snug opacity-75">Port 8080 listens only inside the device.</span>
+                </span>
+              </button>
+            </div>
+
+            {!localAccess.selected && (
+              <div className="flex gap-2.5 text-[12px] leading-relaxed text-muted">
+                <RadioTower className="mt-0.5 size-4 shrink-0 text-signal" />
+                Direct Wi-Fi and USB browser connections will stop working. Keep relay access and SSH recovery available before applying this mode.
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2.5">
+              <Button variant="secondary" disabled={savingLocalAccess} onClick={() => setLocalAccess(null)}>
+                Cancel
+              </Button>
+              <Button variant="primary" loading={savingLocalAccess} onClick={saveLocalAccess}>
+                {!savingLocalAccess && (localAccess.selected ? <Wifi className="size-4" /> : <WifiOff className="size-4" />)}
+                Apply mode
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   )

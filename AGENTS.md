@@ -26,7 +26,8 @@ The main ownership boundaries are:
 ## Product Invariants
 
 - Local LAN control must continue to work when relay configuration is installed,
-  unreachable, or disabled.
+  unreachable, or disabled unless the administrator explicitly selected the
+  persisted `Relay only` policy after approval.
 - The public `.deb` must never contain relay credentials or personalized
   configuration. Personalized packages are derived from a clean public artifact.
 - Preserve the established process ownership above. In particular, live camera

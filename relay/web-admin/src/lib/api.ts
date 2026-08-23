@@ -10,6 +10,7 @@ import type {
   DiagnosticsResponse,
   Enrollment,
   EnrollmentSummary,
+  LocalAccessStatus,
   RelayStatus,
   RevokeResult,
   SessionsResponse,
@@ -106,6 +107,19 @@ async function respringDevice(id: string): Promise<unknown> {
   })
 }
 
+async function setLocalAccess(id: string, enabled: boolean): Promise<LocalAccessStatus> {
+  const base = `/proxy/devices/${encodeURIComponent(id)}`
+  const target = enabled ? 'lan' : 'relay-only'
+  const confirmation = await request<{ token: string }>(`${base}/v1/confirmation`, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'local_access', target }),
+  })
+  return request<LocalAccessStatus>(`${base}/v1/local_access`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled, token: confirmation.token }),
+  })
+}
+
 export const api = {
   login: (secret: string) =>
     request<Ok>('/api/admin/login', { method: 'POST', body: JSON.stringify({ secret }) }),
@@ -116,6 +130,9 @@ export const api = {
     request<DeviceInfo>(`/proxy/devices/${encodeURIComponent(id)}/v1/deviceinfo`),
   diagnostics: (id: string) =>
     request<DiagnosticsResponse>(`/proxy/devices/${encodeURIComponent(id)}/v1/diagnostics`),
+  localAccess: (id: string) =>
+    request<LocalAccessStatus>(`/proxy/devices/${encodeURIComponent(id)}/v1/local_access`),
+  setLocalAccess,
   respringDevice,
   updateDevice: (id: string) =>
     request<{ accepted: boolean; job_id: string }>(`/api/admin/devices/${encodeURIComponent(id)}/update`, {
