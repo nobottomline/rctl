@@ -3,6 +3,7 @@
 *.deb
 packages/
 obj/
+core/*/.stamp
 .DS_Store
 
 # Debug captures (may contain the device's screen — never commit)

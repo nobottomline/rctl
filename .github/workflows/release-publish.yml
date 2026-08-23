@@ -200,6 +200,13 @@ jobs:
             docker buildx imagetools create --tag "$versioned" "$IMAGE"
           fi
           test "$(inspect_digest "$versioned")" = "$IMAGE_DIGEST"
+          awk -v heading="## $VERSION" '
+            $0 == heading { found=1; next }
+            found && /^## / { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > changelog.md
+          test -s changelog.md
           cat > release-notes.md <<EOF
           Relay image: \`$versioned\`
 
@@ -208,7 +215,9 @@ jobs:
           Source commit: \`$SOURCE_SHA\`
 
           Fresh-host qualification report SHA-256: \`$REPORT_SHA256\`
+
           EOF
+          cat changelog.md >> release-notes.md
           gh release edit "$TAG" --verify-tag --latest --draft=false --notes-file release-notes.md
           release_attested=false
           for attempt in $(seq 1 60); do

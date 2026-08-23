@@ -11,6 +11,8 @@ Security-sensitive deployments should begin with
 unauthenticated and must remain limited to a trusted LAN or USB tunnel; use the
 authenticated TLS relay for internet access.
 
+Release changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+
 > Why jailbreak: Apple's iPhone Mirroring needs iOS 18 + the same Apple ID + a Mac + the
 > same network. App Store apps (TeamViewer / AnyDesk / RustDesk) can only *view* an iOS
 > screen, never control it. Only root on a jailbroken device enables real input injection.

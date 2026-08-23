@@ -317,6 +317,13 @@ jobs:
         run: |
           test -z "$(gh release view "$TAG" --json id --jq .id 2>/dev/null || true)" || { echo "release already exists" >&2; exit 1; }
           test "$(git rev-list -n1 "$TAG")" = "$SOURCE_SHA"
+          awk -v heading="## $VERSION" '
+            $0 == heading { found=1; next }
+            found && /^## / { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > changelog.md
+          test -s changelog.md
           printf '%s\n' \
             "Relay candidate image: \`$IMAGE\`" \
             "" \
@@ -324,4 +331,5 @@ jobs:
             "" \
             "This release is a draft pending artifact and fresh-host qualification." \
             > release-notes.md
+          cat changelog.md >> release-notes.md
           gh release create "$TAG" release/* --draft --verify-tag --title "rctl $VERSION" --notes-file release-notes.md
