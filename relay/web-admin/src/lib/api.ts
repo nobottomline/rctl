@@ -5,6 +5,9 @@ import type {
   AuditResponse,
   CreateEnrollmentOptions,
   CreateDevicePackageOptions,
+  ControllerPairing,
+  ControllerScope,
+  ControllersResponse,
   DeviceInfo,
   DevicesResponse,
   DiagnosticsResponse,
@@ -179,6 +182,26 @@ export const api = {
     request<RevokeResult>('/api/admin/sessions/revoke-others', { method: 'POST' }),
   revokeAllSessions: () =>
     request<RevokeResult>('/api/admin/sessions/revoke-all', { method: 'POST' }),
+
+  controllers: () => request<ControllersResponse>('/api/admin/controllers'),
+  createControllerPairing: (options: { name: string; scopes: ControllerScope[]; ttl_seconds: number }) =>
+    request<{ pairing: ControllerPairing }>('/api/admin/controller-pairings', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    }),
+  revokeControllerPairing: (id: string) =>
+    request<Ok>(`/api/admin/controller-pairings/${encodeURIComponent(id)}/revoke`, {
+      method: 'POST',
+    }),
+  renameController: (id: string, name: string) =>
+    request<Ok & { name: string }>(`/api/admin/controllers/${encodeURIComponent(id)}/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  revokeController: (id: string) =>
+    request<Ok>(`/api/admin/controllers/${encodeURIComponent(id)}/revoke`, {
+      method: 'POST',
+    }),
 }
 
 export const controlURL = (id: string): string =>

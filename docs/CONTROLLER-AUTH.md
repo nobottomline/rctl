@@ -61,6 +61,12 @@ a random stable public identifier stored by the relay; it is not derived from a
 server secret. The app displays the origin and relay identity before committing
 and pins both in the resulting profile.
 
+The admin client renders the QR locally; the payload is never sent to an image,
+analytics, or shortening service. The plaintext secret exists only in the
+create response and the current browser tab. Closing an unused code revokes it
+immediately through `POST /api/admin/controller-pairings/{id}/revoke`; otherwise
+it expires automatically after at most ten minutes.
+
 The app generates a P-256 signing key and submits its X.509 SubjectPublicKeyInfo
 DER as unpadded base64url together with platform, name, pairing secret, and a
 DER-encoded ECDSA/SHA-256 proof. The signed bytes are UTF-8:
@@ -126,6 +132,12 @@ Administrators can list, rename, and revoke controllers independently. Revoke
 invalidates all of that controller's tokens and closes its active HTTP streams,
 terminal and signaling WebSockets. It does not modify device enrollment,
 `DeviceSecret`, browser sessions, or another controller.
+
+The admin page deliberately separates device enrollment from controller
+pairing. Device enrollment creates a personalized iPad package or token;
+controller pairing authorizes an iOS or Android client. The default Everyday
+controller preset excludes terminal, update, and destructive-system scopes;
+Owner access must be selected explicitly.
 
 Bounded audit events record controller id, operation, scope, device id, result,
 and network metadata, never token material, signatures, nonces, public keys, QR

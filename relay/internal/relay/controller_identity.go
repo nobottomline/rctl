@@ -165,6 +165,28 @@ VALUES(?,?,?,?,?,?)`, id, hmacToken(s.cfg.SessionSecret, id+"."+secret), normali
 	writeJSON(w, http.StatusCreated, map[string]any{"pairing": payload})
 }
 
+func (s *server) handleRevokeControllerPairing(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !strings.HasPrefix(id, "pair_") || len(id) > 64 {
+		writeErr(w, http.StatusNotFound, "pairing_not_found")
+		return
+	}
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(r.Context(), `
+UPDATE controller_pairings SET revoked_at=?
+WHERE id=? AND used_at IS NULL AND revoked_at IS NULL AND expires_at>=?`, now, id, now)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "pairing_revoke_failed")
+		return
+	}
+	if changed, _ := res.RowsAffected(); changed != 1 {
+		writeErr(w, http.StatusNotFound, "pairing_not_found")
+		return
+	}
+	s.audit(r, "controller_pairing_revoked", "pairing_id", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func parseControllerPublicKey(encoded string) (*ecdsa.PublicKey, []byte, string, error) {
 	if encoded == "" || len(encoded) > 1024 {
 		return nil, nil, "", errors.New("invalid public key")

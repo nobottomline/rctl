@@ -5,19 +5,21 @@ import { LoginScreen } from './components/LoginScreen'
 import { Shell } from './components/Shell'
 import { DevicesPanel, type ActionKey } from './components/DevicesPanel'
 import { EnrollPanel } from './components/EnrollPanel'
+import { ControllersPanel } from './components/ControllersPanel'
 import { SessionsPanel } from './components/SessionsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
 import { StatusPanel } from './components/StatusPanel'
 import { Modal } from './components/ui/Modal'
 import { Button } from './components/ui/Button'
 import { api, ApiError } from './lib/api'
-import type { AuditEntry, Device, EnrollmentSummary, RelayStatus, Session } from './types'
+import type { AuditEntry, Controller, Device, EnrollmentSummary, RelayStatus, Session } from './types'
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null) // null = checking
   const [devices, setDevices] = useState<Device[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [enrollments, setEnrollments] = useState<EnrollmentSummary[]>([])
+  const [controllers, setControllers] = useState<Controller[]>([])
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [status, setStatus] = useState<RelayStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -39,15 +41,17 @@ export default function App() {
   const loadAll = useCallback(async ({ silent }: { silent?: boolean } = {}) => {
     if (!silent) setRefreshing(true)
     try {
-      const [d, s, e, st] = await Promise.all([
+      const [d, s, e, c, st] = await Promise.all([
         api.devices(),
         api.sessions(),
         api.enrollments(),
+        api.controllers(),
         api.status(),
       ])
       setDevices(d.devices || [])
       setSessions(s.sessions || [])
       setEnrollments(e.enrollments || [])
+      setControllers(c.controllers || [])
       setStatus(st)
       setAuthed(true)
     } catch (err) {
@@ -76,16 +80,18 @@ export default function App() {
     let cancelled = false
     ;(async () => {
       try {
-        const [d, s, e, st] = await Promise.all([
+        const [d, s, e, c, st] = await Promise.all([
           api.devices(),
           api.sessions(),
           api.enrollments(),
+          api.controllers(),
           api.status(),
         ])
         if (cancelled) return
         setDevices(d.devices || [])
         setSessions(s.sessions || [])
         setEnrollments(e.enrollments || [])
+        setControllers(c.controllers || [])
         setStatus(st)
         setAuthed(true)
       } catch {
@@ -226,6 +232,8 @@ export default function App() {
     setAuthed(false)
     setDevices([])
     setSessions([])
+    setEnrollments([])
+    setControllers([])
   }
 
   if (authed === null) return <BootSplash />
@@ -262,6 +270,7 @@ export default function App() {
           <ActivityPanel entries={audit} sessions={sessions} />
         </div>
         <div className="flex flex-col gap-5">
+          <ControllersPanel controllers={controllers} onChanged={() => loadAll({ silent: true })} />
           <EnrollPanel
             enrollments={enrollments}
             packageAvailable={status?.device_package_available ?? false}

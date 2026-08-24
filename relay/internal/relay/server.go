@@ -127,6 +127,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/sessions/revoke-all", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeAllSessions)))
 	mux.HandleFunc("POST /api/admin/sessions/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeSession)))
 	mux.HandleFunc("POST /api/admin/controller-pairings", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleCreateControllerPairing)))
+	mux.HandleFunc("POST /api/admin/controller-pairings/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeControllerPairing)))
 	mux.HandleFunc("GET /api/admin/controllers", s.withAdmin(s.handleListControllers))
 	mux.HandleFunc("POST /api/admin/controllers/{id}/rename", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRenameController)))
 	mux.HandleFunc("POST /api/admin/controllers/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeController)))

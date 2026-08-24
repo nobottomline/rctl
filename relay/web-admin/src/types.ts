@@ -2,6 +2,39 @@
 
 export type DeviceStatus = 'pending' | 'approved' | 'revoked'
 
+export type ControllerScope =
+  | 'screen.view'
+  | 'device.control'
+  | 'audio.listen'
+  | 'microphone.talk'
+  | 'camera'
+  | 'files.read'
+  | 'files.write'
+  | 'terminal'
+  | 'system.destructive'
+  | 'device.update'
+
+export interface ControllerPairing {
+  v: 1
+  origin: string
+  pairing_id: string
+  secret: string
+  expires_at: number
+  protocol_major: number
+  relay_id: string
+}
+
+export interface Controller {
+  id: string
+  name: string
+  platform: 'ios' | 'android'
+  status: 'active' | 'revoked'
+  scopes: ControllerScope[]
+  created_at: number
+  last_seen_at?: number
+  revoked_at?: number
+}
+
 export interface Device {
   id: string
   name: string
@@ -74,6 +107,10 @@ export interface DevicesResponse {
 
 export interface SessionsResponse {
   sessions: Session[]
+}
+
+export interface ControllersResponse {
+  controllers: Controller[]
 }
 
 export interface RevokeResult {

@@ -128,6 +128,31 @@ func TestControllerPairingRejectsBadInputsWithoutConsumption(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestControllerPairingCanBeRevokedBeforeClaim(t *testing.T) {
+	ts := newAdminSessionTestServer(t)
+	admin := ts.login(t)
+	pairing := createPairingFixture(t, ts, admin, []string{"screen.view"})
+
+	resp := controllerRequest(t, ts, admin.cookie, http.MethodPost,
+		"/api/admin/controller-pairings/"+pairing.PairingID+"/revoke", nil)
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("revoke pairing status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	body := signedClaimBody(t, pairing, newControllerKey(t), "Revoked phone", "ios")
+	claimPairing(t, ts, pairing.PairingID, body, http.StatusUnauthorized)
+
+	resp = controllerRequest(t, ts, admin.cookie, http.MethodPost,
+		"/api/admin/controller-pairings/"+pairing.PairingID+"/revoke", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		resp.Body.Close()
+		t.Fatalf("second revoke pairing status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 func TestControllerPairingConcurrentClaimIsSingleUse(t *testing.T) {
 	ts := newAdminSessionTestServer(t)
 	admin := ts.login(t)
