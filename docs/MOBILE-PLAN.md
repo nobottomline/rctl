@@ -100,7 +100,7 @@ mobile/
     Features/
     Platform/
     Realtime/
-    Packages/
+    Modules/
       RctlProtocol/             # native Swift wire models and validation
     Spikes/
       MediaProbe/               # non-shipping physical-device qualification app

@@ -4,7 +4,7 @@ The iOS controller uses Swift 6 and SwiftUI for product UI, with UIKit-owned
 WebRTC rendering, Picture in Picture, and lifecycle-sensitive media integration.
 It does not wrap the browser UI in a WebView.
 
-The first checked-in module is `Packages/RctlProtocol`, which decodes and
+The first checked-in module is `Modules/RctlProtocol`, which decodes and
 validates the shared capability fixtures. A non-shipping probe host is added for
 the pinned WebRTC media spike; the production application host follows only
 after controller authentication and the spike pass their gates.

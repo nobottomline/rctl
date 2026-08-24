@@ -32,6 +32,18 @@ function stripOpusDynEncode() {
 
 const control = readFileSync(new URL('../control', import.meta.url), 'utf8')
 const productVersion = control.match(/^Version:\s*(\S+)/m)?.[1] || 'dev'
+const protocolVersion = JSON.parse(
+  readFileSync(new URL('../protocol/version.json', import.meta.url), 'utf8'),
+) as { major: number; minor: number }
+
+if (
+  !Number.isInteger(protocolVersion.major) ||
+  protocolVersion.major < 1 ||
+  !Number.isInteger(protocolVersion.minor) ||
+  protocolVersion.minor < 0
+) {
+  throw new Error('invalid protocol/version.json')
+}
 
 export default defineConfig({
   base: './',
@@ -41,7 +53,7 @@ export default defineConfig({
   esbuild: { charset: 'ascii' },
   define: {
     __RCTL_BROWSER_VERSION__: JSON.stringify(productVersion),
-    __RCTL_PROTOCOL_MAJOR__: '1',
-    __RCTL_PROTOCOL_MINOR__: '0',
+    __RCTL_PROTOCOL_MAJOR__: String(protocolVersion.major),
+    __RCTL_PROTOCOL_MINOR__: String(protocolVersion.minor),
   },
 })

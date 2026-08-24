@@ -6,6 +6,16 @@ obj/
 core/*/.stamp
 .DS_Store
 
+# Native mobile build/user state
+mobile/**/.build/
+mobile/**/.swiftpm/
+mobile/**/DerivedData/
+mobile/**/xcuserdata/
+mobile/**/*.xcuserstate
+mobile/android/.gradle/
+mobile/android/**/build/
+mobile/android/local.properties
+
 # Debug captures (may contain the device's screen — never commit)
 *.png
 *.h264

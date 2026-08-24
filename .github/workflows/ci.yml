@@ -26,6 +26,8 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+      - name: Verify generated protocol sources
+        run: node protocol/generate.mjs --check
       - name: Scan reachable Go vulnerabilities
         working-directory: relay
         run: |
@@ -66,6 +68,15 @@ jobs:
       - name: Build client
         working-directory: ${{ matrix.project }}
         run: npm run build
+
+  mobile-ios-contracts:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify generated protocol sources
+        run: node protocol/generate.mjs --check
+      - name: Test native iOS protocol package
+        run: swift test --package-path mobile/ios/Modules/RctlProtocol
 
   container:
     runs-on: ubuntu-24.04

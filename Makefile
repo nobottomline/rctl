@@ -108,6 +108,18 @@ test-virtual-mic:
 .PHONY: test
 test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-destructive-actions test-local-access test-personalize test-update-signing-key
 
+.PHONY: protocol-generate protocol-check mobile-ios-test mobile-test
+protocol-generate:
+	@node protocol/generate.mjs
+
+protocol-check:
+	@node protocol/generate.mjs --check
+
+mobile-ios-test: protocol-check
+	@swift test --package-path mobile/ios/Modules/RctlProtocol
+
+mobile-test: mobile-ios-test
+
 .PHONY: test-update-signing-key
 test-update-signing-key:
 	@scripts/test_verify_update_signing_key.sh

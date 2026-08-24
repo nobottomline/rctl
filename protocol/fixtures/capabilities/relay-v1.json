@@ -1,0 +1,11 @@
+{
+  "product": "rctl",
+  "component": "relay",
+  "relay": { "version": "0.3.3" },
+  "protocol": { "major": 1, "minor": 0 },
+  "features": [
+    "device.http_tunnel",
+    "webrtc.signaling",
+    "capability.negotiation"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "product": "rctl",
+  "component": "daemon",
+  "daemon": { "version": "0.3.3" },
+  "browser": { "version": "0.3.3" },
+  "protocol": { "major": 1, "minor": 0 },
+  "features": [
+    "screen.webrtc",
+    "audio.playback",
+    "audio.virtual_mic",
+    "media.library"
+  ]
+}

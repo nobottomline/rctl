@@ -2,11 +2,6 @@ package relay
 
 import "net/http"
 
-const (
-	protocolMajor = 1
-	protocolMinor = 0
-)
-
 var relayFeatures = []string{
 	"device.http_tunnel",
 	"device.stream_tunnel",
