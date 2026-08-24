@@ -59,6 +59,9 @@ it is unavailable at runtime; there is no embedded legacy control-page fallback.
 `relay/web-admin` is a separate admin SPA embedded into
 `relay/internal/relay/webdist`; it is not the device control UI. `docs/` holds
 these notes + the mediaserverd class dump.
+`protocol/` owns cross-client wire versions, schemas, and fixtures. `mobile/`
+owns independent native controller products; neither directory participates in
+the device `.deb` build.
 `scripts/deploy.sh` is the one-command safe deploy.
 
 ---

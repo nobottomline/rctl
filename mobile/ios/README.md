@@ -1,0 +1,19 @@
+# iOS Controller
+
+The iOS controller uses Swift 6 and SwiftUI for product UI, with UIKit-owned
+WebRTC rendering, Picture in Picture, and lifecycle-sensitive media integration.
+It does not wrap the browser UI in a WebView.
+
+The first checked-in module is `Packages/RctlProtocol`, which decodes and
+validates the shared capability fixtures. A non-shipping probe host is added for
+the pinned WebRTC media spike; the production application host follows only
+after controller authentication and the spike pass their gates.
+
+Ordinary contributors should need Xcode and the repository only. The future app
+uses a checked-in Xcode project plus local Swift packages; generated media
+dependencies are fetched as checksum-verified immutable artifacts.
+
+Build settings live in reviewed `.xcconfig` files, schemes and test plans are
+shared, and automation calls `xcodebuild`. Bazel and project generators are not
+required unless the measured project graph later crosses the migration criteria
+in `docs/MOBILE-PLAN.md`.

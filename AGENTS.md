@@ -21,6 +21,9 @@ The main ownership boundaries are:
 - `core/`: shared native implementation used by the runtime components.
 - `web/`: device control client; `web/legacy/` is reference-only.
 - `relay/`: Go relay and its separate admin client in `relay/web-admin/`.
+- `mobile/`: independent native iOS and Android controller products.
+- `protocol/`: versioned cross-client contracts, fixtures, and deterministic
+  generated constants; it is not a shared runtime.
 - `layout/`: package-owned static files and maintainer scripts.
 
 ## Product Invariants
