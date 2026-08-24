@@ -43,6 +43,7 @@ type config struct {
 	AdminLimit          rateLimitConfig
 	DeviceLimit         rateLimitConfig
 	TunnelLimit         rateLimitConfig
+	ControllerLimit     rateLimitConfig
 }
 
 func loadConfig() (config, error) {
@@ -80,6 +81,7 @@ func loadConfig() (config, error) {
 		AdminLimit:          loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
 		DeviceLimit:         loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
 		TunnelLimit:         loadRateLimit("RCTL_RELAY_TUNNEL", 240, time.Minute),
+		ControllerLimit:     loadRateLimit("RCTL_RELAY_CONTROLLER", 20, time.Minute),
 	}
 	cfg.CookieSecure = strings.HasPrefix(cfg.PublicURL, "https://")
 	if cfg.AdminSecret == "" {

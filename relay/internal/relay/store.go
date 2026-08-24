@@ -49,10 +49,61 @@ CREATE TABLE IF NOT EXISTS audit_log (
 	detail TEXT
 );
 
+CREATE TABLE IF NOT EXISTS relay_metadata (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS controller_pairings (
+	id TEXT PRIMARY KEY,
+	secret_hash TEXT NOT NULL UNIQUE,
+	name TEXT NOT NULL,
+	scopes_json TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	used_at INTEGER,
+	revoked_at INTEGER,
+	created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS controllers (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	platform TEXT NOT NULL CHECK(platform IN ('ios','android')),
+	public_key_der BLOB NOT NULL,
+	public_key_sha256 TEXT NOT NULL UNIQUE,
+	scopes_json TEXT NOT NULL,
+	status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+	created_at INTEGER NOT NULL,
+	last_seen_at INTEGER,
+	revoked_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS controller_tokens (
+	id TEXT PRIMARY KEY,
+	controller_id TEXT NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL CHECK(kind IN ('access','refresh')),
+	secret_hash TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	generation TEXT NOT NULL,
+	revoked_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS controller_nonces (
+	controller_id TEXT NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+	nonce TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	PRIMARY KEY(controller_id, nonce)
+);
+
 CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
 CREATE INDEX IF NOT EXISTS idx_enrollments_token_hash ON enrollments(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_secret_hash ON sessions(secret_hash);
 CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_controller_pairings_expiry ON controller_pairings(expires_at);
+CREATE INDEX IF NOT EXISTS idx_controller_tokens_controller ON controller_tokens(controller_id, kind);
+CREATE INDEX IF NOT EXISTS idx_controller_tokens_expiry ON controller_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_controller_nonces_expiry ON controller_nonces(expires_at);
 `)
 	if err != nil {
 		return err

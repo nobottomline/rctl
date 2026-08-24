@@ -48,6 +48,7 @@ type adminSessionTestServer struct {
 	*httptest.Server
 	client *http.Client
 	db     *sql.DB
+	relay  *server
 }
 
 type testSession struct {
@@ -77,7 +78,10 @@ func newAdminSessionTestServer(t *testing.T) adminSessionTestServer {
 	s := &server{
 		cfg: config{
 			AdminSecret:     "admin-secret-0123456789abcdef",
+			SessionSecret:   "session-secret-0123456789abcdef",
 			SessionLifetime: 24 * time.Hour,
+			AdminLimit:      rateLimitConfig{Max: 1_000, Window: time.Minute},
+			ControllerLimit: rateLimitConfig{Max: 1_000, Window: time.Minute},
 		},
 		db:      db,
 		devices: make(map[string]*deviceConn),
@@ -89,8 +93,9 @@ func newAdminSessionTestServer(t *testing.T) adminSessionTestServer {
 	mux := http.NewServeMux()
 	s.routes(mux)
 	httpServer := httptest.NewServer(s.securityHeaders(mux))
+	s.cfg.PublicURL = httpServer.URL
 	t.Cleanup(httpServer.Close)
-	return adminSessionTestServer{Server: httpServer, client: httpServer.Client(), db: db}
+	return adminSessionTestServer{Server: httpServer, client: httpServer.Client(), db: db, relay: s}
 }
 
 func (ts adminSessionTestServer) login(t *testing.T) testSession {
