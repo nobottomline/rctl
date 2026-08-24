@@ -296,6 +296,21 @@ func TestControllerDeviceRoutesEnforceProofAndMediaScope(t *testing.T) {
 	key := newControllerKey(t)
 	claim := claimPairing(t, ts, pairing.PairingID,
 		signedClaimBody(t, pairing, key, "Probe phone", "ios"), http.StatusCreated)
+	now := time.Now().Unix()
+	for _, device := range []struct {
+		id     string
+		name   string
+		status string
+	}{
+		{id: "dev1", name: "Test iPad", status: "approved"},
+		{id: "pending1", name: "Pending iPad", status: "pending"},
+		{id: "revoked1", name: "Revoked iPad", status: "revoked"},
+	} {
+		if _, err := ts.db.Exec(`INSERT INTO devices(id,name,status,created_at,updated_at) VALUES(?,?,?,?,?)`,
+			device.id, device.name, device.status, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	req := signedControllerRequest(t, ts, key, claim.Tokens.AccessToken, http.MethodGet,
 		"/api/controller/devices", nil, time.Now(), randomControllerNonce(t))
@@ -307,7 +322,20 @@ func TestControllerDeviceRoutesEnforceProofAndMediaScope(t *testing.T) {
 		resp.Body.Close()
 		t.Fatalf("controller device list status=%d", resp.StatusCode)
 	}
+	var listed struct {
+		Devices []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
 	resp.Body.Close()
+	if len(listed.Devices) != 1 || listed.Devices[0].ID != "dev1" || listed.Devices[0].Status != "approved" {
+		t.Fatalf("native controller device list=%v", listed.Devices)
+	}
 
 	resp, err = ts.client.Get(ts.URL + "/api/controller/devices/dev1/signal")
 	if err != nil {
@@ -331,11 +359,6 @@ func TestControllerDeviceRoutesEnforceProofAndMediaScope(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	now := time.Now().Unix()
-	if _, err := ts.db.Exec(`INSERT INTO devices(id,name,status,created_at,updated_at) VALUES(?,?,?,?,?)`,
-		"dev1", "Test iPad", "approved", now, now); err != nil {
-		t.Fatal(err)
-	}
 	ts.relay.devices["dev1"] = newSignalDeviceConn()
 	req = signedControllerRequest(t, ts, key, claim.Tokens.AccessToken, http.MethodGet,
 		"/api/controller/devices/dev1/signal", nil, time.Now(), randomControllerNonce(t))

@@ -400,12 +400,25 @@ func (s *server) handleDeleteEnrollment(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) handleListDevices(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `
+	s.writeDeviceList(w, r, false)
+}
+
+func (s *server) handleListControllerDevices(w http.ResponseWriter, r *http.Request) {
+	s.writeDeviceList(w, r, true)
+}
+
+func (s *server) writeDeviceList(w http.ResponseWriter, r *http.Request, approvedOnly bool) {
+	query := `
 SELECT id, name, status, created_at, updated_at, last_seen_at, approved_at, revoked_at
      , daemon_version, browser_version, protocol_major, protocol_minor
      , capabilities_json, compatibility_error
 FROM devices
-ORDER BY updated_at DESC`)
+`
+	if approvedOnly {
+		query += "WHERE status='approved'\n"
+	}
+	query += "ORDER BY updated_at DESC"
+	rows, err := s.db.QueryContext(r.Context(), query)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "device_list_failed")
 		return

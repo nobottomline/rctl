@@ -83,6 +83,66 @@ struct ControllerRequestTests {
         }
     }
 
+    @Test("Signaling request preserves proof path while upgrading to WSS")
+    func signalingRequest() throws {
+        let key = try deterministicKey()
+        let request = try ControllerAPIClient().makeSignalingRequest(
+            origin: "https://relay.example",
+            deviceID: "ipad.air_3",
+            media: .camera,
+            accessToken: "cat_example.secret-value",
+            signingKey: key
+        )
+
+        #expect(request.url?.absoluteString ==
+            "wss://relay.example/api/controller/devices/ipad.air_3/signal?media=camera")
+        #expect(request.value(forHTTPHeaderField: "Authorization") ==
+            "Bearer cat_example.secret-value")
+        #expect(request.value(forHTTPHeaderField: "X-RCTL-Signature")?.isEmpty == false)
+        #expect(throws: ControllerClientError.invalidResponse) {
+            try ControllerAPIClient().makeSignalingRequest(
+                origin: "https://relay.example",
+                deviceID: "../admin",
+                media: .screen,
+                accessToken: "cat_example.secret-value",
+                signingKey: key
+            )
+        }
+    }
+
+    @Test("Controller device response rejects administrative and malformed rows")
+    func deviceValidation() throws {
+        let approved = try JSONDecoder().decode(ControllerDevice.self, from: Data("""
+        {
+          "id": "ipad.air_3",
+          "name": "iPad Air 3",
+          "status": "approved",
+          "online": true,
+          "daemon_version": "0.3.3",
+          "browser_version": "0.3.3",
+          "protocol_major": 1,
+          "protocol_minor": 0,
+          "features": ["screen.webrtc", "controller.scoped_sessions"],
+          "compatible": true
+        }
+        """.utf8))
+        #expect(try approved.validated() == approved)
+
+        let pending = try JSONDecoder().decode(ControllerDevice.self, from: Data("""
+        {
+          "id": "pending",
+          "name": "Pending iPad",
+          "status": "pending",
+          "online": false,
+          "features": [],
+          "compatible": true
+        }
+        """.utf8))
+        #expect(throws: ControllerClientError.invalidResponse) {
+            try pending.validated()
+        }
+    }
+
     @Test("Bearer tokens reject header injection and wrong kinds")
     func tokenValidation() throws {
         let key = try deterministicKey()

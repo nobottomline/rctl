@@ -60,6 +60,69 @@ public struct ControllerAPIClient: Sendable {
         return try await send(request, as: Envelope.self).controller.validated()
     }
 
+    public func devices(
+        origin: String,
+        accessToken: String,
+        signingKey: ControllerSigningKey,
+        allowInsecureLoopback: Bool = false
+    ) async throws -> [ControllerDevice] {
+        let request = try makeSignedRequest(
+            origin: origin,
+            path: "/api/controller/devices",
+            method: "GET",
+            token: accessToken,
+            body: Data(),
+            signingKey: signingKey,
+            expectedTokenPrefix: "cat_",
+            allowInsecureLoopback: allowInsecureLoopback
+        )
+        struct Envelope: Decodable { let devices: [ControllerDevice] }
+        return try await send(request, as: Envelope.self).devices.map { try $0.validated() }
+    }
+
+    public func makeSignalingRequest(
+        origin: String,
+        deviceID: String,
+        media: ControllerMediaRole,
+        accessToken: String,
+        signingKey: ControllerSigningKey,
+        allowInsecureLoopback: Bool = false
+    ) throws -> URLRequest {
+        guard !deviceID.isEmpty, deviceID.utf8.count <= 80,
+              deviceID.utf8.allSatisfy({ $0.isDeviceIDByte }) else {
+            throw ControllerClientError.invalidResponse
+        }
+        let queryItems = media == .camera ? [URLQueryItem(name: "media", value: "camera")] : []
+        var request = try makeSignedRequest(
+            origin: origin,
+            path: "/api/controller/devices/\(deviceID)/signal",
+            queryItems: queryItems,
+            method: "GET",
+            token: accessToken,
+            body: Data(),
+            signingKey: signingKey,
+            expectedTokenPrefix: "cat_",
+            allowInsecureLoopback: allowInsecureLoopback
+        )
+        guard let url = request.url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw ControllerClientError.invalidRelayOrigin
+        }
+        if components.scheme == "https" {
+            components.scheme = "wss"
+        } else if components.scheme == "http", allowInsecureLoopback {
+            components.scheme = "ws"
+        } else {
+            throw ControllerClientError.insecureRelayOrigin
+        }
+        guard let webSocketURL = components.url else {
+            throw ControllerClientError.invalidRelayOrigin
+        }
+        request.url = webSocketURL
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
     public func refresh(
         origin: String,
         refreshToken: String,
