@@ -19,7 +19,7 @@ public struct RctlVideoCodec: Hashable, Sendable {
 }
 
 /// Owns the vendor WebRTC factory and keeps its prefixed Objective-C API out of
-/// the rest of the application. Peer connection lifecycle will be added here.
+/// the rest of the application.
 public final class RctlPeerConnectionFactory: @unchecked Sendable {
     private let encoderFactory: LKRTCDefaultVideoEncoderFactory
     private let decoderFactory: LKRTCDefaultVideoDecoderFactory
@@ -51,5 +51,27 @@ public final class RctlPeerConnectionFactory: @unchecked Sendable {
 
     public var canReceiveVideo: Bool {
         !factory.rtpReceiverCapabilities(forKind: kLKRTCMediaStreamTrackKindVideo).codecs.isEmpty
+    }
+
+    func makePeerConnection(
+        iceServers: [LKRTCIceServer] = [],
+        delegate: LKRTCPeerConnectionDelegate
+    ) throws -> LKRTCPeerConnection {
+        let configuration = LKRTCConfiguration()
+        configuration.sdpSemantics = .unifiedPlan
+        configuration.continualGatheringPolicy = .gatherContinually
+        configuration.iceServers = iceServers
+        let constraints = LKRTCMediaConstraints(
+            mandatoryConstraints: nil,
+            optionalConstraints: nil
+        )
+        guard let peerConnection = factory.peerConnection(
+            with: configuration,
+            constraints: constraints,
+            delegate: delegate
+        ) else {
+            throw RctlRealtimeError.peerConnectionUnavailable
+        }
+        return peerConnection
     }
 }

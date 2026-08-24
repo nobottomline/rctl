@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "RctlRealtime", targets: ["RctlRealtime"]),
     ],
     dependencies: [
+        .package(path: "../RctlProtocol"),
         .package(
             url: "https://github.com/livekit/webrtc-xcframework.git",
             exact: "144.7559.14"
@@ -21,6 +22,7 @@ let package = Package(
         .target(
             name: "RctlRealtime",
             dependencies: [
+                "RctlProtocol",
                 .product(name: "LiveKitWebRTC", package: "webrtc-xcframework"),
             ]
         ),

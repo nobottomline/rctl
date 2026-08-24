@@ -9,8 +9,9 @@ The checked-in modules are:
 - `Modules/RctlProtocol`: bounded native models for the shared wire contracts;
 - `Modules/RctlClient`: QR pairing validation, P-256 request proofs,
   Secure Enclave/Keychain identity, refresh credential storage, and relay auth;
-- `Modules/RctlRealtime`: vendor-isolated WebRTC ownership and media capability
-  probes backed by an exact, checksum-verified XCFramework.
+- `Modules/RctlRealtime`: vendor-isolated signaling, PeerConnection lifecycle,
+  bounded DataChannels, and Metal video rendering backed by an exact,
+  checksum-verified XCFramework.
 
 Run all modules through `make mobile-ios-test` from the repository root. A
 non-shipping probe host is the next media-spike increment; the production

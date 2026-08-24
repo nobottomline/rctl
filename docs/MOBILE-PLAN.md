@@ -315,7 +315,8 @@ The implemented foundation now includes:
 - P-256 request proof, Secure Enclave/Keychain storage, refresh rotation, and a
   live Swift-to-Go interoperability test;
 - a vendor-isolated `RctlRealtime` module pinned to a checksum-verified upstream
-  WebRTC XCFramework with H.264 encode/decode capability tests;
+  WebRTC XCFramework, with H.264 capability tests, bounded native signaling,
+  generation-safe cleanup, scoped DataChannels, and Metal rendering;
 - root and CI checks covering all three Swift packages.
 
 The next increment is the non-shipping iOS MediaProbe and its scoped native
