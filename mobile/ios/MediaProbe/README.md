@@ -19,6 +19,11 @@ Build from the repository root with `make mobile-ios-build`, or open
 supports paste pairing and validates application lifecycle, but has no camera
 for QR capture and cannot qualify hardware decode or network behavior.
 
+Local app-level tests may launch a Debug build with
+`RCTL_MEDIAPROBE_ALLOW_INSECURE_LOOPBACK=1` or the
+`--rctl-allow-insecure-loopback` launch argument and pair only to an explicit
+loopback HTTP origin. Release builds ignore both opt-ins and require HTTPS.
+
 Before promoting the WebRTC dependency or starting the production UI, verify on
 a physical controller iPhone and controlled iPad:
 

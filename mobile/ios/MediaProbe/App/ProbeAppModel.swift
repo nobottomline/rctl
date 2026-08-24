@@ -13,6 +13,7 @@ final class ProbeAppModel: ObservableObject {
     private let api: ControllerAPIClient
     private let keychain: KeychainControllerStore
     private let profiles: ProbeProfileStore
+    private let allowInsecureLoopback: Bool
     private var accessToken: String?
     private var accessExpiresAt: Int64?
     private var restored = false
@@ -20,11 +21,13 @@ final class ProbeAppModel: ObservableObject {
     init(
         api: ControllerAPIClient = ControllerAPIClient(),
         keychain: KeychainControllerStore = KeychainControllerStore(),
-        profiles: ProbeProfileStore = ProbeProfileStore()
+        profiles: ProbeProfileStore = ProbeProfileStore(),
+        allowInsecureLoopback: Bool? = nil
     ) {
         self.api = api
         self.keychain = keychain
         self.profiles = profiles
+        self.allowInsecureLoopback = allowInsecureLoopback ?? Self.debugLoopbackEnabled
     }
 
     func restore() async {
@@ -43,12 +46,16 @@ final class ProbeAppModel: ObservableObject {
             guard let data = rawPayload.data(using: .utf8) else {
                 throw ControllerClientError.invalidPairing
             }
-            let pairing = try api.decodePairing(from: data)
+            let pairing = try api.decodePairing(
+                from: data,
+                allowInsecureLoopback: allowInsecureLoopback
+            )
             let key = try keychain.loadOrCreateSigningKey(relayID: pairing.relayID)
             let claim = try await api.claim(
                 pairing: pairing,
                 controllerName: UIDevice.current.name,
-                signingKey: key
+                signingKey: key,
+                allowInsecureLoopback: allowInsecureLoopback
             )
             let credential = ControllerRefreshCredential(pairing: pairing, claim: claim)
             try keychain.save(credential)
@@ -92,7 +99,8 @@ final class ProbeAppModel: ObservableObject {
                 deviceID: deviceID,
                 media: media,
                 accessToken: session.token,
-                signingKey: session.key
+                signingKey: session.key,
+                allowInsecureLoopback: allowInsecureLoopback
             )
         } catch ControllerClientError.invalidToken {
             let refreshed = try await ensureAccessSession(forceRefresh: true)
@@ -101,7 +109,8 @@ final class ProbeAppModel: ObservableObject {
                 deviceID: deviceID,
                 media: media,
                 accessToken: refreshed.token,
-                signingKey: refreshed.key
+                signingKey: refreshed.key,
+                allowInsecureLoopback: allowInsecureLoopback
             )
         }
     }
@@ -133,7 +142,8 @@ final class ProbeAppModel: ObservableObject {
         let tokens = try await api.refresh(
             origin: profile.origin,
             refreshToken: credential.refreshToken,
-            signingKey: key
+            signingKey: key,
+            allowInsecureLoopback: allowInsecureLoopback
         )
         let renewed = ControllerRefreshCredential(
             origin: profile.origin,
@@ -153,8 +163,18 @@ final class ProbeAppModel: ObservableObject {
         devices = try await api.devices(
             origin: profile.origin,
             accessToken: accessToken,
-            signingKey: signingKey
+            signingKey: signingKey,
+            allowInsecureLoopback: allowInsecureLoopback
         )
+    }
+
+    private static var debugLoopbackEnabled: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.environment["RCTL_MEDIAPROBE_ALLOW_INSECURE_LOOPBACK"] == "1" ||
+            ProcessInfo.processInfo.arguments.contains("--rctl-allow-insecure-loopback")
+#else
+        false
+#endif
     }
 
     private static func message(for error: Error) -> String {
