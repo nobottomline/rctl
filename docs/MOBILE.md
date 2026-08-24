@@ -91,11 +91,13 @@ rewrite.
 
 ### Connection planes
 
-- Relay REST calls use `/proxy/devices/{id}/...`.
-- Large downloads use `/stream/devices/{id}/v1/pull_stream?...`.
-- Terminal uses `/term/devices/{id}`.
-- Screen signaling uses `/signal/devices/{id}`.
-- Camera signaling uses `/signal/devices/{id}?media=camera`.
+- Native device discovery uses signed `GET /api/controller/devices`.
+- Native screen signaling uses signed
+  `/api/controller/devices/{id}/signal`.
+- Native camera signaling adds the canonical `media=camera` query.
+- Admin-browser control retains `/proxy`, `/stream`, `/term`, and `/signal`;
+  scoped native equivalents are introduced per feature rather than reusing an
+  admin cookie or exposing the relay administrator secret.
 - Direct LAN signaling uses the device `/ws/signal` endpoint.
 - `/v1/capabilities` gates optional features and protocol compatibility.
 
@@ -109,7 +111,14 @@ remain warnings or unavailable controls.
 - one H.264 RTP track on the screen PeerConnection;
 - a separate H.264 RTP track on the camera PeerConnection;
 - reliable ordered `control`, `audio`, `room-mic`, `mic-in` and `files`
-  DataChannels on the screen PeerConnection.
+  DataChannels on the screen PeerConnection. Native controller scopes are
+  authenticated by the relay and enforced again by `rctld`; browser-admin and
+  local-LAN sessions preserve the existing full-trust channel set.
+
+The legacy `files` channel is temporarily unavailable to scoped native sessions
+because its daemon-side reply destination is process-global. Native file support
+must first make transfer state and replies session-owned; failing closed avoids
+cross-controller delivery while the screen MediaProbe proceeds independently.
 
 Do not combine screen and camera into one PeerConnection until the proven
 device-side second-SSRC failure has been removed and physically qualified.

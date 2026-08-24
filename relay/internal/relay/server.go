@@ -34,6 +34,9 @@ type server struct {
 	devices map[string]*deviceConn
 	limiter *rateLimiter
 
+	controllerSignalsMu sync.Mutex
+	controllerSignals   map[string]map[string]context.CancelFunc
+
 	packageMu         sync.Mutex
 	publicPackage     []byte
 	publicPackageInfo deb.Info
@@ -154,6 +157,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/controller/pairings/{id}/claim", s.withRateLimit("controller", s.cfg.ControllerLimit, s.handleClaimControllerPairing))
 	mux.HandleFunc("POST /api/controller/token/refresh", s.withRateLimit("controller", s.cfg.ControllerLimit, s.withControllerToken("refresh", s.handleRefreshControllerToken)))
 	mux.HandleFunc("GET /api/controller/me", s.withRateLimit("controller", s.cfg.ControllerLimit, s.withControllerToken("access", s.handleControllerMe)))
+	mux.HandleFunc("GET /api/controller/devices", s.withRateLimit("controller", s.cfg.ControllerLimit, s.withControllerToken("access", s.handleListDevices)))
+	mux.HandleFunc("GET /api/controller/devices/{id}/signal", s.withRateLimit("controller", s.cfg.ControllerLimit, s.withControllerToken("access", s.handleSignalWS)))
 	mux.HandleFunc("GET /client/devices/{id}", s.withAdmin(s.handleClientWS))
 	mux.HandleFunc("GET /control/devices/{id}", s.withAdmin(s.handleControlPage))
 }

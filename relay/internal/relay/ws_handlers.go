@@ -532,7 +532,7 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 		}
 	case "webrtc_signal":
 		var event signalTunnelEvent
-		if json.Unmarshal(payload, &event) != nil {
+		if json.Unmarshal(payload, &event) != nil || !validDeviceSignalMessage(event) {
 			return true
 		}
 		dc.mu.Lock()

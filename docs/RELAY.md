@@ -309,8 +309,10 @@ https://rctl.example.com/api/admin/sessions
 https://rctl.example.com/control/devices/{device_id}
 https://rctl.example.com/proxy/devices/{device_id}/v1/info
 https://rctl.example.com/stream/devices/{device_id}/stream
+https://rctl.example.com/api/controller/devices
 wss://rctl.example.com/device
 wss://rctl.example.com/client/devices/{device_id}
+wss://rctl.example.com/api/controller/devices/{device_id}/signal
 ```
 
 The relay stores devices in SQLite and keeps online WebSocket connections in

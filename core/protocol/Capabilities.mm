@@ -16,6 +16,7 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
             @"destructive.confirmation",
             @"update.transactional",
             @"network.local_access_policy",
+            @"controller.scoped_sessions",
         ];
     });
     return features;

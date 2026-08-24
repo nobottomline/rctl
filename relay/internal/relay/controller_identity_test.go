@@ -288,6 +288,68 @@ func TestControllerProofReplayAndRefreshRotation(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestControllerDeviceRoutesEnforceProofAndMediaScope(t *testing.T) {
+	ts := newAdminSessionTestServer(t)
+	ts.relay.cfg.EnableWebRTC = true
+	admin := ts.login(t)
+	pairing := createPairingFixture(t, ts, admin, []string{"screen.view"})
+	key := newControllerKey(t)
+	claim := claimPairing(t, ts, pairing.PairingID,
+		signedClaimBody(t, pairing, key, "Probe phone", "ios"), http.StatusCreated)
+
+	req := signedControllerRequest(t, ts, key, claim.Tokens.AccessToken, http.MethodGet,
+		"/api/controller/devices", nil, time.Now(), randomControllerNonce(t))
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("controller device list status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp, err = ts.client.Get(ts.URL + "/api/controller/devices/dev1/signal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		resp.Body.Close()
+		t.Fatalf("unsigned signal status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	req = signedControllerRequest(t, ts, key, claim.Tokens.AccessToken, http.MethodGet,
+		"/api/controller/devices/dev1/signal?media=camera", nil, time.Now(), randomControllerNonce(t))
+	resp, err = ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		resp.Body.Close()
+		t.Fatalf("camera without scope status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	now := time.Now().Unix()
+	if _, err := ts.db.Exec(`INSERT INTO devices(id,name,status,created_at,updated_at) VALUES(?,?,?,?,?)`,
+		"dev1", "Test iPad", "approved", now, now); err != nil {
+		t.Fatal(err)
+	}
+	ts.relay.devices["dev1"] = newSignalDeviceConn()
+	req = signedControllerRequest(t, ts, key, claim.Tokens.AccessToken, http.MethodGet,
+		"/api/controller/devices/dev1/signal", nil, time.Now(), randomControllerNonce(t))
+	resp, err = ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusConflict {
+		resp.Body.Close()
+		t.Fatalf("unscoped daemon status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 func createPairingFixture(t *testing.T, ts adminSessionTestServer, admin testSession, scopes []string) pairingFixture {
 	t.Helper()
 	body, _ := json.Marshal(controllerPairingRequest{Name: "Owner phone", Scopes: scopes, TTLSeconds: 300})

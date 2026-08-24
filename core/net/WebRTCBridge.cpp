@@ -13,6 +13,7 @@
 // One libdatachannel PeerConnection per signaling session.
 
 #include "net/WebRTCBridge.h"
+#include "net/WebRTCPermissions.h"
 #include "net/VirtualMicServer.h"
 #include "rtc/rtc.hpp"
 #include "nlohmann/json.hpp"
@@ -366,7 +367,8 @@ static void mic_teardown() {
     }
 }
 
-static void start_session(const std::string &id, const json &ice, bool camera) {
+static void start_session(const std::string &id, const json &ice, bool camera,
+                          const rctl::WebRTCPermissions &permissions) {
     auto sess = std::make_shared<Session>();
     sess->camera = camera;
     rtc::Configuration config;
@@ -495,100 +497,124 @@ static void start_session(const std::string &id, const json &ice, bool camera) {
     // So audio rides SCTP (the DataChannel) instead: no 2nd media SSRC, no SRTP,
     // no risk to the video transport. The browser decodes the Opus frames with
     // WebCodecs and plays them. Reliable+ordered (default) -- audio needs order.
-    auto audioDc = pc->createDataChannel("audio");
-    sess->audioDc = audioDc;
-    rtc::DataChannel *adptr = audioDc.get();
-    audioDc->onOpen([id, adptr]() {
-        std::lock_guard<std::mutex> lk(g_mtx);
-        auto it = g_sessions.find(id);
-        if (it == g_sessions.end() || !it->second->audioDc || it->second->audioDc.get() != adptr) return;
-        g_audio_dcs.push_back(it->second->audioDc);
-        wlog("session " + id + " audio channel open");
-    });
-    audioDc->onClosed([adptr]() {
-        std::lock_guard<std::mutex> lk(g_mtx);
-        g_audio_dcs.erase(std::remove_if(g_audio_dcs.begin(), g_audio_dcs.end(),
-                              [adptr](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == adptr; }),
-                          g_audio_dcs.end());
-    });
+    if (permissions.audioListen) {
+        auto audioDc = pc->createDataChannel("audio");
+        sess->audioDc = audioDc;
+        rtc::DataChannel *adptr = audioDc.get();
+        audioDc->onOpen([id, adptr]() {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            auto it = g_sessions.find(id);
+            if (it == g_sessions.end() || !it->second->audioDc || it->second->audioDc.get() != adptr) return;
+            g_audio_dcs.push_back(it->second->audioDc);
+            wlog("session " + id + " audio channel open");
+        });
+        audioDc->onClosed([adptr]() {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_audio_dcs.erase(std::remove_if(g_audio_dcs.begin(), g_audio_dcs.end(),
+                                  [adptr](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == adptr; }),
+                              g_audio_dcs.end());
+        });
+    }
 
     // Room-mic channel (device -> browser): the iPad's own microphone, Opus over a
     // dedicated channel (separate encoder from the system-audio path so the two
     // sources don't share Opus state).
-    auto roomMic = pc->createDataChannel("room-mic");
-    sess->roomMic = roomMic;
-    rtc::DataChannel *rmptr = roomMic.get();
-    roomMic->onOpen([id, rmptr]() {
-        std::lock_guard<std::mutex> lk(g_mtx);
-        auto it = g_sessions.find(id);
-        if (it == g_sessions.end() || !it->second->roomMic || it->second->roomMic.get() != rmptr) return;
-        g_microom_dcs.push_back(it->second->roomMic);
-        wlog("session " + id + " room-mic channel open");
-    });
-    roomMic->onClosed([rmptr]() {
-        std::lock_guard<std::mutex> lk(g_mtx);
-        g_microom_dcs.erase(std::remove_if(g_microom_dcs.begin(), g_microom_dcs.end(),
-                              [rmptr](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == rmptr; }),
-                          g_microom_dcs.end());
-    });
+    if (permissions.audioListen) {
+        auto roomMic = pc->createDataChannel("room-mic");
+        sess->roomMic = roomMic;
+        rtc::DataChannel *rmptr = roomMic.get();
+        roomMic->onOpen([id, rmptr]() {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            auto it = g_sessions.find(id);
+            if (it == g_sessions.end() || !it->second->roomMic || it->second->roomMic.get() != rmptr) return;
+            g_microom_dcs.push_back(it->second->roomMic);
+            wlog("session " + id + " room-mic channel open");
+        });
+        roomMic->onClosed([rmptr]() {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_microom_dcs.erase(std::remove_if(g_microom_dcs.begin(), g_microom_dcs.end(),
+                                  [rmptr](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == rmptr; }),
+                              g_microom_dcs.end());
+        });
+    }
 
     // Control channel: the browser sends input (touch/keys) over this reliable,
     // ordered DataChannel instead of an HTTP round-trip per event -- low-latency
     // remote control on the same PeerConnection as the video. The device, as the
     // offerer, creates it so the data m-line is in the offer.
-    auto control = pc->createDataChannel("control");
-    sess->control = control;
-    control->onMessage([](rtc::message_variant msg) {
-        if (!std::holds_alternative<std::string>(msg)) return;
-        try {
-            json e = json::parse(std::get<std::string>(msg));
-            const std::string t = e.value("t", "");
-            if (t == "t" && g_touch_cb)
-                g_touch_cb(e.value("p", 0), e.value("i", 0), e.value("x", 0.0), e.value("y", 0.0));
-            else if (t == "k" && g_key_cb)
-                g_key_cb(e.value("pg", 0), e.value("u", 0), e.value("d", 0));
-        } catch (...) {}
-    });
+    if (permissions.deviceControl) {
+        auto control = pc->createDataChannel("control");
+        sess->control = control;
+        control->onMessage([](rtc::message_variant msg) {
+            if (!std::holds_alternative<std::string>(msg)) return;
+            try {
+                json e = json::parse(std::get<std::string>(msg));
+                const std::string t = e.value("t", "");
+                if (t == "t" && g_touch_cb)
+                    g_touch_cb(e.value("p", 0), e.value("i", 0), e.value("x", 0.0), e.value("y", 0.0));
+                else if (t == "k" && g_key_cb)
+                    g_key_cb(e.value("pg", 0), e.value("u", 0), e.value("d", 0));
+            } catch (...) {}
+        });
+    }
 
     // File transfer channel: the browser sends JSON control (get/put) + raw binary
     // chunks; we reply with JSON + raw binary chunks, all P2P. Reliable+ordered
     // (default) so bytes cannot drop or reorder.
-    auto filesDc = pc->createDataChannel("files");
-    sess->filesDc = filesDc;
-    rtc::DataChannel *fptr = filesDc.get();
-    filesDc->onOpen([id, fptr]() {
-        std::lock_guard<std::mutex> lk(g_mtx);
-        auto it = g_sessions.find(id);
-        if (it == g_sessions.end() || !it->second->filesDc || it->second->filesDc.get() != fptr) return;
-        g_files_dc = it->second->filesDc;
-        wlog("session " + id + " files channel open");
-    });
-    filesDc->onMessage([](rtc::message_variant msg) {
-        if (!g_files_cb) return;
-        if (std::holds_alternative<std::string>(msg)) {
-            const std::string &s = std::get<std::string>(msg);
-            g_files_cb(reinterpret_cast<const uint8_t *>(s.data()), s.size(), 0);
-        } else {
-            const auto &b = std::get<rtc::binary>(msg);
-            g_files_cb(reinterpret_cast<const uint8_t *>(b.data()), b.size(), 1);
-        }
-    });
-    filesDc->onClosed([fptr]() {
-        std::lock_guard<std::mutex> lk(g_mtx);
-        if (g_files_dc && g_files_dc.get() == fptr) g_files_dc.reset();
-    });
+    // Legacy file replies currently use one process-global active channel and
+    // transfer state. Do not expose that ownership model to independently scoped
+    // native controllers: a concurrent session could otherwise receive another
+    // controller's bytes. Native files stay fail-closed until the v2 channel is
+    // session-owned end to end. Admin-browser and LAN sessions remain unchanged.
+    if (!permissions.scoped && (permissions.filesRead || permissions.filesWrite)) {
+        auto filesDc = pc->createDataChannel("files");
+        sess->filesDc = filesDc;
+        rtc::DataChannel *fptr = filesDc.get();
+        filesDc->onOpen([id, fptr]() {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            auto it = g_sessions.find(id);
+            if (it == g_sessions.end() || !it->second->filesDc || it->second->filesDc.get() != fptr) return;
+            g_files_dc = it->second->filesDc;
+            wlog("session " + id + " files channel open");
+        });
+        filesDc->onMessage([permissions](rtc::message_variant msg) {
+            if (!g_files_cb) return;
+            if (std::holds_alternative<std::string>(msg)) {
+                const std::string &s = std::get<std::string>(msg);
+                std::string operation;
+                try {
+                    const auto event = json::parse(s);
+                    operation = event.value("op", "");
+                } catch (...) {
+                    return;
+                }
+                if (!rctl::webRTCFilesMessageAllowed(permissions, false, operation)) return;
+                g_files_cb(reinterpret_cast<const uint8_t *>(s.data()), s.size(), 0);
+            } else {
+                if (!rctl::webRTCFilesMessageAllowed(permissions, true, "")) return;
+                const auto &b = std::get<rtc::binary>(msg);
+                g_files_cb(reinterpret_cast<const uint8_t *>(b.data()), b.size(), 1);
+            }
+        });
+        filesDc->onClosed([fptr]() {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            if (g_files_dc && g_files_dc.get() == fptr) g_files_dc.reset();
+        });
+    }
 
     // The browser sends Opus microphone frames on mic-in. Decode once and route
     // PCM to the device speaker, app microphone input, or both. Reliable+ordered
     // matches the other audio channels and preserves simple burst semantics.
-    auto micIn = pc->createDataChannel("mic-in");
-    sess->micIn = micIn;
-    micIn->onMessage([](rtc::message_variant msg) {
-        if (!std::holds_alternative<rtc::binary>(msg)) return;
-        const auto &b = std::get<rtc::binary>(msg);
-        mic_play_opus(reinterpret_cast<const uint8_t *>(b.data()), b.size());
-    });
-    micIn->onClosed([]() { mic_teardown(); });
+    if (permissions.microphoneTalk) {
+        auto micIn = pc->createDataChannel("mic-in");
+        sess->micIn = micIn;
+        micIn->onMessage([](rtc::message_variant msg) {
+            if (!std::holds_alternative<rtc::binary>(msg)) return;
+            const auto &b = std::get<rtc::binary>(msg);
+            mic_play_opus(reinterpret_cast<const uint8_t *>(b.data()), b.size());
+        });
+        micIn->onClosed([]() { mic_teardown(); });
+    }
 
     std::shared_ptr<Session> prior;
     {
@@ -689,11 +715,25 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
         json payload = m.contains("payload") ? m["payload"] : json::array();
         json ice = payload;
         bool camera = false;
+        rctl::WebRTCPermissions permissions = rctl::legacyWebRTCPermissions();
         if (payload.is_object()) {
             ice = payload.contains("ice") ? payload["ice"] : json::array();
             camera = payload.value("role", std::string("screen")) == "camera";
+            if (payload.contains("scopes")) {
+                std::vector<std::string> scopes;
+                if (payload["scopes"].is_array()) {
+                    for (const auto &scope : payload["scopes"]) {
+                        if (scope.is_string()) scopes.push_back(scope.get<std::string>());
+                    }
+                }
+                permissions = rctl::scopedWebRTCPermissions(scopes);
+            }
         }
-        start_session(id, ice, camera);
+        if ((camera && !permissions.camera) || (!camera && !permissions.screenView)) {
+            wlog("session open rejected by scoped media permission " + id);
+            return;
+        }
+        start_session(id, ice, camera, permissions);
         return;
     }
     if (kind == "close") {

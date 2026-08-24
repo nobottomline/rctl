@@ -105,8 +105,14 @@ test-virtual-mic:
 		core/audio/VirtualMicDSP.cpp -o /tmp/rctl-virtual-mic-dsp-test
 	@/tmp/rctl-virtual-mic-dsp-test
 
+.PHONY: test-webrtc-permissions
+test-webrtc-permissions:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/WebRTCPermissionsTest.cpp \
+		core/net/WebRTCPermissions.cpp -o /tmp/rctl-webrtc-permissions-test
+	@/tmp/rctl-webrtc-permissions-test
+
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-destructive-actions test-local-access test-personalize test-update-signing-key
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key
 
 .PHONY: protocol-generate protocol-check mobile-ios-test mobile-test
 protocol-generate:

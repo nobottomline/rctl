@@ -418,6 +418,7 @@ func (s *server) handleRevokeController(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "controller_revoke_failed")
 		return
 	}
+	s.closeControllerSignals(r.PathValue("id"))
 	s.audit(r, "controller_revoked", "controller_id", r.PathValue("id"))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

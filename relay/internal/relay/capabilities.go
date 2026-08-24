@@ -7,6 +7,7 @@ var relayFeatures = []string{
 	"device.stream_tunnel",
 	"device.terminal_tunnel",
 	"webrtc.signaling",
+	"controller.native_signaling",
 	"admin.audit",
 	"capability.negotiation",
 	"update.orchestration",

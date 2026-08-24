@@ -8,6 +8,7 @@
     "screen.webrtc",
     "audio.playback",
     "audio.virtual_mic",
+    "controller.scoped_sessions",
     "media.library"
   ]
 }

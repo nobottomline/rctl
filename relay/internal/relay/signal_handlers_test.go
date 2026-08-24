@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,75 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+func TestControllerSignalScopes(t *testing.T) {
+	principal := controllerPrincipal{
+		ControllerID: "ctl_1",
+		Scopes: map[string]struct{}{
+			"device.control": {},
+			"screen.view":    {},
+		},
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/controller/devices/dev1/signal", nil)
+	r = r.WithContext(context.WithValue(r.Context(), controllerContextKey{}, principal))
+
+	scopes, controllerID, ok := controllerSignalScopes(r, "screen")
+	if !ok || controllerID != "ctl_1" || len(scopes) != 2 ||
+		scopes[0] != "device.control" || scopes[1] != "screen.view" {
+		t.Fatalf("unexpected screen authorization: scopes=%v controller=%q ok=%t", scopes, controllerID, ok)
+	}
+	if _, _, ok := controllerSignalScopes(r, "camera"); ok {
+		t.Fatal("screen-only controller was authorized for camera")
+	}
+
+	adminRequest := httptest.NewRequest(http.MethodGet, "/signal/devices/dev1", nil)
+	adminScopes, adminID, ok := controllerSignalScopes(adminRequest, "screen")
+	if !ok || adminScopes != nil || adminID != "" {
+		t.Fatalf("legacy admin path changed: scopes=%v controller=%q ok=%t", adminScopes, adminID, ok)
+	}
+}
+
+func TestSignalOpenPayloadScopesAreExplicitOnlyForControllers(t *testing.T) {
+	adminPayload, err := json.Marshal(signalOpenPayload{Role: "screen", ICE: json.RawMessage(`[]`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(adminPayload) != `{"role":"screen","ice":[]}` {
+		t.Fatalf("admin payload unexpectedly changed: %s", adminPayload)
+	}
+	controllerPayload, err := json.Marshal(signalOpenPayload{
+		Role: "screen", ICE: json.RawMessage(`[]`), Scopes: []string{"screen.view"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if json.Unmarshal(controllerPayload, &decoded) != nil || decoded["scopes"] == nil {
+		t.Fatalf("controller payload omitted scopes: %s", controllerPayload)
+	}
+}
+
+func TestRevokingControllerCancelsItsSignalSessions(t *testing.T) {
+	s := &server{}
+	first := false
+	second := false
+	other := false
+	s.registerControllerSignal("ctl_1", "sig_1", func() { first = true })
+	s.registerControllerSignal("ctl_1", "sig_2", func() { second = true })
+	s.registerControllerSignal("ctl_2", "sig_3", func() { other = true })
+
+	s.closeControllerSignals("ctl_1")
+	if !first || !second || other {
+		t.Fatalf("unexpected cancellation first=%t second=%t other=%t", first, second, other)
+	}
+	s.controllerSignalsMu.Lock()
+	_, revokedStillRegistered := s.controllerSignals["ctl_1"]
+	_, otherStillRegistered := s.controllerSignals["ctl_2"]
+	s.controllerSignalsMu.Unlock()
+	if revokedStillRegistered || !otherStillRegistered {
+		t.Fatalf("unexpected registry state revoked=%t other=%t", revokedStillRegistered, otherStillRegistered)
+	}
+}
 
 func newSignalDeviceConn() *deviceConn {
 	return &deviceConn{
@@ -25,12 +95,12 @@ func TestSignalControlMessageRoutesToSession(t *testing.T) {
 	ch := make(chan signalTunnelEvent, 4)
 	dc.registerSignal("sig_1", ch)
 
-	if !dc.handleControlMessage([]byte(`{"type":"webrtc_signal","id":"sig_1","kind":"sdp","payload":{"x":1}}`)) {
+	if !dc.handleControlMessage([]byte(`{"type":"webrtc_signal","id":"sig_1","kind":"offer","payload":{"sdp":"v=0"}}`)) {
 		t.Fatal("handleControlMessage did not consume webrtc_signal")
 	}
 	select {
 	case ev := <-ch:
-		if ev.Kind != "sdp" || string(ev.Payload) != `{"x":1}` {
+		if ev.Kind != "offer" || string(ev.Payload) != `{"sdp":"v=0"}` {
 			t.Fatalf("unexpected event: %+v", ev)
 		}
 	default:
@@ -49,6 +119,32 @@ func TestSignalControlMessageRoutesToSession(t *testing.T) {
 	dc.mu.Unlock()
 	if stillThere {
 		t.Fatal("close did not unregister the signal session")
+	}
+}
+
+func TestControllerSignalMessagesFailClosed(t *testing.T) {
+	valid := []signalClientMessage{
+		{Kind: "answer", Payload: json.RawMessage(`{"sdp":"v=0"}`)},
+		{Kind: "candidate", Payload: json.RawMessage(`{"candidate":"candidate:1","mid":"0"}`)},
+	}
+	for _, message := range valid {
+		if !validControllerSignalMessage(message) {
+			t.Fatalf("valid message rejected: %+v", message)
+		}
+	}
+	invalid := []signalClientMessage{
+		{Kind: "open", Payload: json.RawMessage(`{"role":"screen"}`)},
+		{Kind: "offer", Payload: json.RawMessage(`{"sdp":"v=0"}`)},
+		{Kind: "ready", Payload: json.RawMessage(`[]`)},
+		{Kind: "answer", Payload: json.RawMessage(`{"sdp":""}`)},
+		{Kind: "candidate", Payload: json.RawMessage(`{"candidate":""}`)},
+		{Kind: "candidate", Payload: json.RawMessage(`null`)},
+		{Kind: "unknown", Payload: json.RawMessage(`{}`)},
+	}
+	for _, message := range invalid {
+		if validControllerSignalMessage(message) {
+			t.Fatalf("invalid message accepted: %+v", message)
+		}
 	}
 }
 

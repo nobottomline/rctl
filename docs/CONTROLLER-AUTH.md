@@ -121,6 +121,24 @@ use `GET` with an empty body. The relay accepts a bounded clock skew, atomically
 records each `(controller, nonce)`, and rejects replay. Signature verification
 occurs before scope checks and before opening a device tunnel.
 
+Native device discovery is `GET /api/controller/devices`. Screen and camera
+signaling use `GET /api/controller/devices/{id}/signal` with the optional
+canonical `media=camera` query. A controller signs the WebSocket upgrade exactly
+like any other GET request. The relay requires `screen.view` or `camera`, then
+places the authenticated controller's sorted scopes in the protected
+relay-to-device open message. It refuses native signaling to a daemon that does
+not advertise `controller.scoped_sessions`; silently trusting an older daemon
+would expose every P2P DataChannel regardless of scope.
+
+The device creates `control` only for `device.control`, `audio` and `room-mic`
+only for `audio.listen`, and `mic-in` only for `microphone.talk`. Scoped native
+sessions do not yet receive the legacy `files` DataChannel: its device reply
+path has process-global transfer ownership and cannot safely isolate concurrent
+controllers. `files.read` and `files.write` are reserved for the session-owned
+native file protocol increment; until then they fail closed. Missing, malformed,
+unknown, or self-asserted scopes grant nothing. Admin-browser and local-LAN
+sessions omit the scopes field and preserve their existing full-access behavior.
+
 Refresh uses the same proof format with the refresh token id. On success the old
 refresh token and every access token from its generation are revoked before the
 new pair is returned. Applications serialize refresh per relay profile and
@@ -129,9 +147,11 @@ discard an ambiguous response rather than retrying an old token concurrently.
 ## Lifecycle
 
 Administrators can list, rename, and revoke controllers independently. Revoke
-invalidates all of that controller's tokens and closes its active HTTP streams,
-terminal and signaling WebSockets. It does not modify device enrollment,
-`DeviceSecret`, browser sessions, or another controller.
+invalidates all of that controller's tokens and cancels its active native
+signaling WebSockets immediately. Future long-lived native tunnel routes must
+join the same controller-owned cancellation registry before release. Revoke
+does not modify device enrollment, `DeviceSecret`, browser sessions, or another
+controller.
 
 The admin page deliberately separates device enrollment from controller
 pairing. Device enrollment creates a personalized iPad package or token;

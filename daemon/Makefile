@@ -34,6 +34,7 @@ rctld_FILES = main.mm \
               ../core/net/HttpStreamServer.mm \
               ../core/net/Term.mm \
               ../core/net/WebRTCBridge.cpp \
+              ../core/net/WebRTCPermissions.cpp \
               ../core/net/CameraIngest.mm \
               ../core/net/MpegTsRecorder.cpp \
               ../core/net/MediaLibrary.mm \

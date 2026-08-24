@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 
 	"nhooyr.io/websocket"
 )
@@ -26,8 +27,49 @@ type signalClientMessage struct {
 }
 
 type signalOpenPayload struct {
-	Role string          `json:"role"`
-	ICE  json.RawMessage `json:"ice"`
+	Role   string          `json:"role"`
+	ICE    json.RawMessage `json:"ice"`
+	Scopes []string        `json:"scopes,omitempty"`
+}
+
+const (
+	signalSDPMaxBytes       = 262_144
+	signalCandidateMaxBytes = 4_096
+	signalMIDMaxBytes       = 256
+)
+
+func validControllerSignalMessage(message signalClientMessage) bool {
+	switch message.Kind {
+	case "answer":
+		var payload struct {
+			SDP *string `json:"sdp"`
+		}
+		return json.Unmarshal(message.Payload, &payload) == nil &&
+			payload.SDP != nil && len(*payload.SDP) > 0 && len(*payload.SDP) <= signalSDPMaxBytes
+	case "candidate":
+		var payload struct {
+			Candidate *string `json:"candidate"`
+			MID       *string `json:"mid"`
+		}
+		return json.Unmarshal(message.Payload, &payload) == nil &&
+			payload.Candidate != nil && payload.MID != nil &&
+			len(*payload.Candidate) > 0 && len(*payload.Candidate) <= signalCandidateMaxBytes &&
+			len(*payload.MID) <= signalMIDMaxBytes
+	default:
+		return false
+	}
+}
+
+func validDeviceSignalMessage(message signalTunnelEvent) bool {
+	if message.Kind == "close" {
+		return len(message.Payload) == 0 || string(message.Payload) == "null"
+	}
+	clientMessage := signalClientMessage{Kind: message.Kind, Payload: message.Payload}
+	if message.Kind == "offer" {
+		clientMessage.Kind = "answer"
+	}
+	return (message.Kind == "offer" || message.Kind == "candidate") &&
+		validControllerSignalMessage(clientMessage)
 }
 
 // handleSignalWS bridges a browser WebRTC signaling websocket to an approved,
@@ -36,6 +78,19 @@ type signalOpenPayload struct {
 func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.EnableWebRTC {
 		writeErr(w, http.StatusNotFound, "webrtc_disabled")
+		return
+	}
+	role := r.URL.Query().Get("media")
+	if role == "" {
+		role = "screen"
+	}
+	if role != "screen" && role != "camera" {
+		writeErr(w, http.StatusBadRequest, "invalid_media_role")
+		return
+	}
+	scopes, controllerID, ok := controllerSignalScopes(r, role)
+	if !ok {
+		writeErr(w, http.StatusForbidden, "insufficient_scope")
 		return
 	}
 	deviceID := r.PathValue("id")
@@ -48,12 +103,8 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "device_not_approved")
 		return
 	}
-	role := r.URL.Query().Get("media")
-	if role == "" {
-		role = "screen"
-	}
-	if role != "screen" && role != "camera" {
-		writeErr(w, http.StatusBadRequest, "invalid_media_role")
+	if controllerID != "" && !hasFeature(dc.features, "controller.scoped_sessions") {
+		writeErr(w, http.StatusConflict, "device_scoped_sessions_not_supported")
 		return
 	}
 
@@ -65,6 +116,16 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
 	sessionID := "sig_" + randomHex(12)
+	sessionContext := r.Context()
+	if controllerID != "" {
+		var cancelControllerSignal context.CancelFunc
+		sessionContext, cancelControllerSignal = context.WithCancel(r.Context())
+		s.registerControllerSignal(controllerID, sessionID, cancelControllerSignal)
+		defer func() {
+			s.unregisterControllerSignal(controllerID, sessionID)
+			cancelControllerSignal()
+		}()
+	}
 	eventCh := make(chan signalTunnelEvent, 32)
 	dc.registerSignal(sessionID, eventCh)
 	defer func() {
@@ -79,31 +140,37 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	// the browser in "ready". Nil when TURN/STUN isn't configured (host-only ICE).
 	ice := s.iceServersJSON(sessionID)
 
-	openCtx, cancel := context.WithTimeout(r.Context(), s.cfg.WriteTimeout)
-	openPayload, _ := json.Marshal(signalOpenPayload{Role: role, ICE: ice})
+	openCtx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
+	openPayload, _ := json.Marshal(signalOpenPayload{Role: role, ICE: ice, Scopes: scopes})
 	err = dc.writeJSON(openCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "open", Payload: openPayload})
 	cancel()
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "device_write_failed")
 		return
 	}
-	_ = wsjsonWrite(r.Context(), ws, signalClientMessage{Kind: "ready", Payload: ice})
-	s.audit(r, "webrtc_signal_open", "device_id", deviceID, "session_id", sessionID, "media", role)
+	_ = wsjsonWrite(sessionContext, ws, signalClientMessage{Kind: "ready", Payload: ice})
+	auditFields := []any{"device_id", deviceID, "session_id", sessionID, "media", role}
+	if controllerID != "" {
+		auditFields = append(auditFields, "controller_id", controllerID, "scopes", scopes)
+	}
+	s.audit(r, "webrtc_signal_open", auditFields...)
 
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
 		for {
-			_, payload, err := ws.Read(r.Context())
+			messageType, payload, err := ws.Read(sessionContext)
 			if err != nil {
 				return
 			}
 			var msg signalClientMessage
-			if json.Unmarshal(payload, &msg) != nil || msg.Kind == "" {
-				continue
+			if messageType != websocket.MessageText || json.Unmarshal(payload, &msg) != nil ||
+				!validControllerSignalMessage(msg) {
+				_ = ws.Close(websocket.StatusUnsupportedData, "invalid signaling message")
+				return
 			}
 			out := signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: msg.Kind, Payload: msg.Payload}
-			writeCtx, cancel := context.WithTimeout(r.Context(), s.cfg.WriteTimeout)
+			writeCtx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
 			err = dc.writeJSON(writeCtx, out)
 			cancel()
 			if err != nil {
@@ -121,7 +188,7 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			if event.Kind == "close" {
 				return
 			}
-			writeCtx, cancel := context.WithTimeout(r.Context(), s.cfg.WriteTimeout)
+			writeCtx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
 			err := wsjsonWrite(writeCtx, ws, signalClientMessage{Kind: event.Kind, Payload: event.Payload})
 			cancel()
 			if err != nil {
@@ -129,10 +196,66 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-readDone:
 			return
-		case <-r.Context().Done():
+		case <-sessionContext.Done():
 			return
 		}
 	}
+}
+
+func (s *server) registerControllerSignal(controllerID, sessionID string, cancel context.CancelFunc) {
+	s.controllerSignalsMu.Lock()
+	defer s.controllerSignalsMu.Unlock()
+	if s.controllerSignals == nil {
+		s.controllerSignals = make(map[string]map[string]context.CancelFunc)
+	}
+	if s.controllerSignals[controllerID] == nil {
+		s.controllerSignals[controllerID] = make(map[string]context.CancelFunc)
+	}
+	s.controllerSignals[controllerID][sessionID] = cancel
+}
+
+func (s *server) unregisterControllerSignal(controllerID, sessionID string) {
+	s.controllerSignalsMu.Lock()
+	defer s.controllerSignalsMu.Unlock()
+	sessions := s.controllerSignals[controllerID]
+	delete(sessions, sessionID)
+	if len(sessions) == 0 {
+		delete(s.controllerSignals, controllerID)
+	}
+}
+
+func (s *server) closeControllerSignals(controllerID string) {
+	s.controllerSignalsMu.Lock()
+	sessions := s.controllerSignals[controllerID]
+	delete(s.controllerSignals, controllerID)
+	s.controllerSignalsMu.Unlock()
+	for _, cancel := range sessions {
+		cancel()
+	}
+}
+
+// An admin-authenticated browser has the legacy full-trust path and therefore
+// omits scopes from the device open envelope. A native controller must have the
+// scope that exposes the selected media track; all of its scopes are forwarded
+// to the authenticated device so it can omit unauthorized P2P DataChannels.
+func controllerSignalScopes(r *http.Request, role string) ([]string, string, bool) {
+	principal, isController := controllerFromContext(r.Context())
+	if !isController {
+		return nil, "", true
+	}
+	required := "screen.view"
+	if role == "camera" {
+		required = "camera"
+	}
+	if _, allowed := principal.Scopes[required]; !allowed {
+		return nil, principal.ControllerID, false
+	}
+	scopes := make([]string, 0, len(principal.Scopes))
+	for scope := range principal.Scopes {
+		scopes = append(scopes, scope)
+	}
+	sort.Strings(scopes)
+	return scopes, principal.ControllerID, true
 }
 
 func (dc *deviceConn) registerSignal(id string, ch chan signalTunnelEvent) {

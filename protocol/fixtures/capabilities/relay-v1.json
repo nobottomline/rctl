@@ -5,6 +5,7 @@
   "protocol": { "major": 1, "minor": 0 },
   "features": [
     "device.http_tunnel",
+    "controller.native_signaling",
     "webrtc.signaling",
     "capability.negotiation"
   ]
