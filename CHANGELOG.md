@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+## 0.3.3
+
 - Added an administrator-controlled `LAN + Relay` / `Relay only` network policy.
   Relay-only mode binds the device API to loopback, requires an approved relay
   identity, uses confirmation-token mutations, and includes an SSH recovery path.
+- Replaced opaque setup pauses with numbered, color-aware lifecycle progress,
+  per-stage timing, terminal spinners, plain CI logs, and signal-aware
+  cancellation that preserves rollback behavior.
 - Reworked the project README around the verified one-command VPS setup and the
   public LAN-only package flow.
 
