@@ -82,6 +82,7 @@ jobs:
         run: |
           swift test --package-path mobile/ios/Modules/RctlProtocol
           swift test --package-path mobile/ios/Modules/RctlClient
+          swift test --package-path mobile/ios/Modules/RctlRealtime
 
   container:
     runs-on: ubuntu-24.04

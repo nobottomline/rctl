@@ -119,6 +119,7 @@ protocol-check:
 mobile-ios-test: protocol-check
 	@swift test --package-path mobile/ios/Modules/RctlProtocol
 	@swift test --package-path mobile/ios/Modules/RctlClient
+	@swift test --package-path mobile/ios/Modules/RctlRealtime
 
 mobile-test: mobile-ios-test
 

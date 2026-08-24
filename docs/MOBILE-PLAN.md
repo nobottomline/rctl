@@ -307,13 +307,18 @@ release metadata declares the supported protocol major/minor range.
 
 ## Current Increment
 
-The first implementation establishes:
+The implemented foundation now includes:
 
-- the `mobile/` ownership boundary;
-- canonical protocol version consumption by C, Go, Vite, and Swift;
-- capabilities fixtures;
-- a native Swift protocol package with compatibility and validation tests;
-- root/CI drift checks.
+- the `mobile/` ownership boundary and canonical cross-runtime protocol data;
+- bounded Swift wire models with fixture and compatibility tests;
+- relay-issued controller identities, scoped pairing, rename, and revocation;
+- P-256 request proof, Secure Enclave/Keychain storage, refresh rotation, and a
+  live Swift-to-Go interoperability test;
+- a vendor-isolated `RctlRealtime` module pinned to a checksum-verified upstream
+  WebRTC XCFramework with H.264 encode/decode capability tests;
+- root and CI checks covering all three Swift packages.
 
-Controller authentication is the next increment. WebRTC application scaffolding
-does not begin until that identity contract is reviewable.
+The next increment is the non-shipping iOS MediaProbe and its scoped native
+signaling path. The WebRTC artifact remains provisional until the probe renders
+the real iPad H.264 stream, exercises DataChannels, and passes the lifecycle and
+sustained-runtime checks in Phase 3.

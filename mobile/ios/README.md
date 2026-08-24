@@ -8,11 +8,13 @@ The checked-in modules are:
 
 - `Modules/RctlProtocol`: bounded native models for the shared wire contracts;
 - `Modules/RctlClient`: QR pairing validation, P-256 request proofs,
-  Secure Enclave/Keychain identity, refresh credential storage, and relay auth.
+  Secure Enclave/Keychain identity, refresh credential storage, and relay auth;
+- `Modules/RctlRealtime`: vendor-isolated WebRTC ownership and media capability
+  probes backed by an exact, checksum-verified XCFramework.
 
-Run both through `make mobile-ios-test` from the repository root. A non-shipping
-probe host is added for the pinned WebRTC media spike; the production application
-host follows only after controller authentication and the spike pass their gates.
+Run all modules through `make mobile-ios-test` from the repository root. A
+non-shipping probe host is the next media-spike increment; the production
+application host follows only after the real device path passes its gate.
 
 Ordinary contributors should need Xcode and the repository only. The future app
 uses a checked-in Xcode project plus local Swift packages; generated media
