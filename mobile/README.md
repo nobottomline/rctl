@@ -1,8 +1,9 @@
 # Native Mobile Controllers
 
-`mobile/` contains the planned native iOS and Android controller applications.
-They are independent products in the rctl monorepo and consume the versioned
-contracts in `protocol/`.
+`mobile/` contains the native controller work for iOS and Android. They are
+independent products in the rctl monorepo and consume the versioned contracts
+in `protocol/`. The iOS protocol, identity, realtime modules, and MediaProbe are
+implemented; neither mobile controller is a shipping product yet.
 
 - `ios/`: Swift/SwiftUI application, UIKit-hosted realtime media surfaces, and
   local Swift packages.

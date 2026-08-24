@@ -114,7 +114,7 @@ test-webrtc-permissions:
 .PHONY: test
 test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key
 
-.PHONY: protocol-generate protocol-check mobile-ios-test mobile-test
+.PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-build mobile-test
 protocol-generate:
 	@node protocol/generate.mjs
 
@@ -127,7 +127,12 @@ mobile-ios-test: protocol-check
 	@swift test --package-path mobile/ios/Modules/RctlClient
 	@swift test --package-path mobile/ios/Modules/RctlRealtime
 
-mobile-test: mobile-ios-test
+mobile-ios-build:
+	@xcodebuild -project mobile/ios/RctlMobile.xcodeproj -scheme 'RCTL MediaProbe' \
+		-configuration Debug -destination 'generic/platform=iOS Simulator' \
+		-derivedDataPath mobile/ios/.derivedData CODE_SIGNING_ALLOWED=NO build
+
+mobile-test: mobile-ios-test mobile-ios-build
 
 .PHONY: test-update-signing-key
 test-update-signing-key:

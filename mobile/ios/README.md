@@ -13,13 +13,16 @@ The checked-in modules are:
   bounded DataChannels, and Metal video rendering backed by an exact,
   checksum-verified XCFramework.
 
-Run all modules through `make mobile-ios-test` from the repository root. A
-non-shipping probe host is the next media-spike increment; the production
-application host follows only after the real device path passes its gate.
+`RctlMobile.xcodeproj` is the checked-in application graph. Its shared
+`RCTL MediaProbe` scheme hosts the non-shipping physical-device qualification
+app in `MediaProbe/`. Run package tests with `make mobile-ios-test`, build the
+app with `make mobile-ios-build`, or run both with `make mobile-test`.
 
-Ordinary contributors should need Xcode and the repository only. The future app
-uses a checked-in Xcode project plus local Swift packages; generated media
-dependencies are fetched as checksum-verified immutable artifacts.
+Ordinary contributors need Xcode and the repository only. The project consumes
+local Swift packages; the sole generated media dependency is fetched at an
+exact revision as a checksum-verified immutable artifact. No relay origin,
+pairing payload, controller credential, signing identity, or captured media is
+stored in the project.
 
 Build settings live in reviewed `.xcconfig` files, schemes and test plans are
 shared, and automation calls `xcodebuild`. Bazel and project generators are not

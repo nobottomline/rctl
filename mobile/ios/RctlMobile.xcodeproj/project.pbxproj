@@ -1,0 +1,351 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* MediaProbeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* MediaProbeApp.swift */; };
+		A10000000000000000000002 /* ProbeProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ProbeProfileStore.swift */; };
+		A10000000000000000000003 /* ProbeAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* ProbeAppModel.swift */; };
+		A10000000000000000000004 /* ProbeRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* ProbeRootView.swift */; };
+		A10000000000000000000005 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* PairingView.swift */; };
+		A10000000000000000000006 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* QRScannerView.swift */; };
+		A10000000000000000000007 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* DeviceListView.swift */; };
+		A10000000000000000000008 /* RemoteSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* RemoteSessionModel.swift */; };
+		A10000000000000000000009 /* RemoteVideoRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* RemoteVideoRepresentable.swift */; };
+		A1000000000000000000000A /* RemoteControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* RemoteControlView.swift */; };
+		A1000000000000000000000B /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* PrivacyInfo.xcprivacy */; };
+		A1000000000000000000000C /* RctlClient in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000001 /* RctlClient */; };
+		A1000000000000000000000D /* RctlProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000002 /* RctlProtocol */; };
+		A1000000000000000000000E /* RctlRealtime in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000003 /* RctlRealtime */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* MediaProbeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaProbeApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* ProbeProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProbeProfileStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* ProbeAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProbeAppModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* ProbeRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProbeRootView.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* RemoteSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* RemoteVideoRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoRepresentable.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* RemoteControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A2000000000000000000000C /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A2000000000000000000000D /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		A2000000000000000000000E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		A2000000000000000000000F /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		A20000000000000000000010 /* RCTL MediaProbe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "RCTL MediaProbe.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000C /* RctlClient in Frameworks */,
+				A1000000000000000000000D /* RctlProtocol in Frameworks */,
+				A1000000000000000000000E /* RctlRealtime in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000002 /* MediaProbe */,
+				A40000000000000000000008 /* Config */,
+				A40000000000000000000009 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000000000000000000002 /* MediaProbe */ = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000003 /* App */,
+				A40000000000000000000004 /* Features */,
+				A40000000000000000000007 /* Resources */,
+			);
+			path = MediaProbe;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000003 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* MediaProbeApp.swift */,
+				A20000000000000000000003 /* ProbeAppModel.swift */,
+				A20000000000000000000002 /* ProbeProfileStore.swift */,
+				A20000000000000000000004 /* ProbeRootView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000004 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000005 /* Pairing */,
+				A40000000000000000000006 /* Devices */,
+				A4000000000000000000000A /* Remote */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000005 /* Pairing */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000005 /* PairingView.swift */,
+				A20000000000000000000006 /* QRScannerView.swift */,
+			);
+			path = Pairing;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000006 /* Devices */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000007 /* DeviceListView.swift */,
+			);
+			path = Devices;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000007 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000B /* Info.plist */,
+				A2000000000000000000000C /* PrivacyInfo.xcprivacy */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000008 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000F /* Base.xcconfig */,
+				A2000000000000000000000D /* Debug.xcconfig */,
+				A2000000000000000000000E /* Release.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000009 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000010 /* RCTL MediaProbe.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A4000000000000000000000A /* Remote */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000A /* RemoteControlView.swift */,
+				A20000000000000000000008 /* RemoteSessionModel.swift */,
+				A20000000000000000000009 /* RemoteVideoRepresentable.swift */,
+			);
+			path = Remote;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* RCTL MediaProbe */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000000000000000000002 /* Build configuration list for PBXNativeTarget "RCTL MediaProbe" */;
+			buildPhases = (
+				A30000000000000000000002 /* Sources */,
+				A30000000000000000000001 /* Frameworks */,
+				A30000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "RCTL MediaProbe";
+			packageProductDependencies = (
+				A90000000000000000000001 /* RctlClient */,
+				A90000000000000000000002 /* RctlProtocol */,
+				A90000000000000000000003 /* RctlRealtime */,
+			);
+			productName = MediaProbe;
+			productReference = A20000000000000000000010 /* RCTL MediaProbe.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A60000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					A50000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = A80000000000000000000001 /* Build configuration list for PBXProject "RctlMobile" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A40000000000000000000001;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AA0000000000000000000001 /* XCLocalSwiftPackageReference "Modules/RctlClient" */,
+				AA0000000000000000000002 /* XCLocalSwiftPackageReference "Modules/RctlProtocol" */,
+				AA0000000000000000000003 /* XCLocalSwiftPackageReference "Modules/RctlRealtime" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A40000000000000000000009 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50000000000000000000001 /* RCTL MediaProbe */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A30000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000B /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A30000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* MediaProbeApp.swift in Sources */,
+				A10000000000000000000002 /* ProbeProfileStore.swift in Sources */,
+				A10000000000000000000003 /* ProbeAppModel.swift in Sources */,
+				A10000000000000000000004 /* ProbeRootView.swift in Sources */,
+				A10000000000000000000005 /* PairingView.swift in Sources */,
+				A10000000000000000000006 /* QRScannerView.swift in Sources */,
+				A10000000000000000000007 /* DeviceListView.swift in Sources */,
+				A10000000000000000000008 /* RemoteSessionModel.swift in Sources */,
+				A10000000000000000000009 /* RemoteVideoRepresentable.swift in Sources */,
+				A1000000000000000000000A /* RemoteControlView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A70000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A2000000000000000000000D /* Debug.xcconfig */;
+			buildSettings = {
+				ONLY_ACTIVE_ARCH = YES;
+			};
+			name = Debug;
+		};
+		A70000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A2000000000000000000000E /* Release.xcconfig */;
+			buildSettings = {
+			};
+			name = Release;
+		};
+		A70000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = MediaProbe/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nobottomline.rctl.MediaProbe;
+				PRODUCT_NAME = "RCTL MediaProbe";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A70000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = MediaProbe/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nobottomline.rctl.MediaProbe;
+				PRODUCT_NAME = "RCTL MediaProbe";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A80000000000000000000001 /* Build configuration list for PBXProject "RctlMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A70000000000000000000001 /* Debug */,
+				A70000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000000000000000000002 /* Build configuration list for PBXNativeTarget "RCTL MediaProbe" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A70000000000000000000003 /* Debug */,
+				A70000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AA0000000000000000000001 /* XCLocalSwiftPackageReference "Modules/RctlClient" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/RctlClient;
+		};
+		AA0000000000000000000002 /* XCLocalSwiftPackageReference "Modules/RctlProtocol" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/RctlProtocol;
+		};
+		AA0000000000000000000003 /* XCLocalSwiftPackageReference "Modules/RctlRealtime" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/RctlRealtime;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A90000000000000000000001 /* RctlClient */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA0000000000000000000001 /* XCLocalSwiftPackageReference "Modules/RctlClient" */;
+			productName = RctlClient;
+		};
+		A90000000000000000000002 /* RctlProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA0000000000000000000002 /* XCLocalSwiftPackageReference "Modules/RctlProtocol" */;
+			productName = RctlProtocol;
+		};
+		A90000000000000000000003 /* RctlRealtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA0000000000000000000003 /* XCLocalSwiftPackageReference "Modules/RctlRealtime" */;
+			productName = RctlRealtime;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A60000000000000000000001 /* Project object */;
+}

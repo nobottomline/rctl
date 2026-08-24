@@ -95,15 +95,13 @@ Simulator and physical devices.
 mobile/
   README.md
   ios/
-    RctlMobile.xcodeproj/       # production host, added after the media spike
-    App/
-    Features/
-    Platform/
-    Realtime/
+    RctlMobile.xcodeproj/       # checked-in app graph and shared schemes
+    Config/                     # reviewed build settings
+    MediaProbe/                 # non-shipping qualification host
     Modules/
       RctlProtocol/             # native Swift wire models and validation
-    Spikes/
-      MediaProbe/               # non-shipping physical-device qualification app
+      RctlClient/               # controller identity and signed relay client
+      RctlRealtime/             # WebRTC lifecycle and Metal renderer boundary
   android/
     gradlew
     app/
@@ -280,6 +278,7 @@ Root convenience commands orchestrate but do not merge toolchains:
 ```text
 make protocol-check
 make mobile-ios-test
+make mobile-ios-build
 make mobile-test
 ```
 
@@ -317,9 +316,18 @@ The implemented foundation now includes:
 - a vendor-isolated `RctlRealtime` module pinned to a checksum-verified upstream
   WebRTC XCFramework, with H.264 capability tests, bounded native signaling,
   generation-safe cleanup, scoped DataChannels, and Metal rendering;
-- root and CI checks covering all three Swift packages.
+- a checked-in Xcode project and non-shipping MediaProbe covering QR/paste
+  pairing, Keychain restore, approved-device discovery, screen/camera sessions,
+  channel visibility, and a bounded control command;
+- root and CI checks covering all three Swift packages and the application
+  target.
 
-The next increment is the non-shipping iOS MediaProbe and its scoped native
-signaling path. The WebRTC artifact remains provisional until the probe renders
-the real iPad H.264 stream, exercises DataChannels, and passes the lifecycle and
-sustained-runtime checks in Phase 3.
+The WebRTC artifact remains provisional until MediaProbe renders the real iPad
+H.264 screen and camera streams, exercises scoped DataChannels, and passes the
+lifecycle, network-path, and sustained-runtime checks in Phase 3. A successful
+Simulator launch is not that qualification.
+
+Production identity work also requires a recoverable refresh rotation protocol.
+The relay currently invalidates the previous refresh generation before the
+client can durably commit its replacement; process death in that narrow interval
+must be recoverable without weakening replay detection.

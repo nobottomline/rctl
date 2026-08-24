@@ -1,7 +1,9 @@
 # Native Mobile Controller Architecture
 
-Status: planned architecture. This document defines the intended iOS and
-Android controller clients; it does not describe shipping mobile binaries yet.
+Status: architecture in implementation. The iOS contract, identity, realtime
+modules, and non-shipping MediaProbe exist; Android and both shipping product
+clients remain planned. This document does not describe a released mobile
+binary.
 
 ## Decision
 

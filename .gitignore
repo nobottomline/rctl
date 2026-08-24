@@ -10,6 +10,7 @@ core/*/.stamp
 mobile/**/.build/
 mobile/**/.swiftpm/
 mobile/**/DerivedData/
+mobile/**/.derivedData*/
 mobile/**/xcuserdata/
 mobile/**/*.xcuserstate
 mobile/android/.gradle/
