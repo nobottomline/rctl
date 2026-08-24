@@ -2,7 +2,7 @@ Package: com.greatlove.rctl
 Name: rctl
 Version: 0.3.4
 Architecture: iphoneos-arm
-Description: Low-latency remote control for jailbroken iOS — live screen + touch/keyboard injection, controllable from a browser. Successor to Veency, modeled on scrcpy.
+Description: Secure remote control for jailbroken iOS devices.
 Maintainer: GreatLove
 Author: GreatLove
 Section: Tweaks
