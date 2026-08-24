@@ -120,6 +120,12 @@ major/minor, and stable feature flags. The relay includes the same metadata in
 the authenticated device hello and admin API. Version and minor differences are
 warnings; only a protocol-major mismatch rejects a connection.
 
+**Native controller clients.** The planned iOS and Android applications remain
+clients of these same relay, signaling, REST and DataChannel contracts. They do
+not replace the web client or move media ownership out of the existing device
+processes. The native-first stack, controller enrollment model and delivery
+gates are defined in `docs/MOBILE.md`.
+
 **Destructive actions.** File deletion, package removal, tweak toggles, respring,
 and update start require `POST application/json` plus a short-lived one-time token
 bound to the exact action and normalized target. System/package databases, rctl

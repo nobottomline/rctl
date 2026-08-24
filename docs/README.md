@@ -8,6 +8,8 @@ flow, then read the feature document for the code being changed.
 - [RELAY.md](RELAY.md): relay protocol, deployment profiles, and transport.
 - [UPDATES.md](UPDATES.md): signed transactional device updates.
 - [TRANSPORT.md](TRANSPORT.md): WebRTC/DataChannel architecture.
+- [MOBILE.md](MOBILE.md): native iOS/Android controller architecture, authentication,
+  media ownership, and delivery gates.
 - [MEDIA.md](MEDIA.md), [CAM.md](CAM.md), [AUDIO.md](AUDIO.md), and
   [VIRTUAL_MIC.md](VIRTUAL_MIC.md): media ownership and lifecycle.
 - [TERMINAL.md](TERMINAL.md): terminal protocol and relay tunneling.
