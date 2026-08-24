@@ -132,10 +132,16 @@ installs only to `/usr/local/bin/rctl-setup` before executing it.
 The pipeline stdin contains the script itself, so interactive bootstrap opens
 the verified Go wizard on the caller's controlling `/dev/tty`. Without a real
 terminal it fails before deployment mutation and requires complete flags plus
-`--yes`. Ordinary output is human-readable: preflight uses `[pass]`, `[warn]`,
-and `[fail]`, while long operations print `==>` progress stages for image pull,
-service health, HTTPS, and persistence checks. JSON is emitted only by an
-explicit `preflight --json` or `doctor --json` command.
+`--yes`. The bootstrap reports release-manifest, binary, package, provenance,
+and wizard-launch stages while downloads themselves remain quiet and bounded.
+Ordinary wizard output is human-readable: preflight uses `[pass]`, `[warn]`,
+and `[fail]`, while long operations show numbered `RUN`, `OK`, and `FAIL`
+stages with per-stage and total durations for image pull, service health,
+HTTPS, and persistence checks. Interactive terminals receive concise color and
+in-place status updates; redirected logs and CI output remain plain,
+line-oriented text. JSON is emitted only by an explicit `preflight --json` or
+`doctor --json` command. `Ctrl+C` and `SIGTERM` cancel lifecycle contexts so an
+operation that has already mutated state can run its normal rollback path.
 The interactive URL prompt accepts either `relay.example.com` or the equivalent
 `https://relay.example.com`; configuration files and flags remain strict and
 require the full HTTPS origin.
@@ -268,7 +274,9 @@ images. This stop is mandatory even when target and rollback reference the same
 image digest, because no process may retain SQLite or WAL handles across state
 replacement. A same-version rerun is an idempotent health check only when
 configuration and every artifact hash still match that immutable release;
-conflicting artifacts with the same version are rejected. Downgrades are
+its interactive confirmation is `verify` and the displayed plan explicitly
+states that no managed files or services will change. Conflicting artifacts
+with the same version are rejected. Downgrades are
 rejected and intentional rollback uses `restore`. `--dry-run` performs no image
 pull, backup, or service operation.
 

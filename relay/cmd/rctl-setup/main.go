@@ -10,9 +10,11 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/signal"
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	setup "github.com/nobottomline/rctl/relay/internal/setup"
@@ -274,16 +276,17 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		CoturnImage: coturnImage, PublicPackageSource: *publicPackage, ExpectedConfig: expectedConfig,
 		DefaultUpdateManifestURL: stableUpdateManifestURL(),
 	}
-	manager := setup.UpgradeManager{Progress: textProgress(output)}
+	progress := newCLIProgress(output)
+	manager := setup.UpgradeManager{Progress: progress.Step}
 	plan, err := manager.Plan(options)
 	if err != nil {
 		fmt.Fprintln(errorsOutput, "upgrade plan:", err)
 		return 1
 	}
 	if plan.AlreadyCurrent {
-		fmt.Fprintf(output, "\nPlan: verify already-current release %s\nManaged files: %d\n", plan.ToVersion, len(plan.Files))
+		fmt.Fprintf(output, "\nPlan\n  Action: verify the existing deployment\n  Release: %s (already installed)\n  Managed files: %d\n  Changes: none\n", plan.ToVersion, len(plan.Files))
 	} else {
-		fmt.Fprintf(output, "\nPlan: upgrade %s to %s\nManaged files: %d\nA verified backup and automatic rollback are mandatory.\n", plan.FromVersion, plan.ToVersion, len(plan.Files))
+		fmt.Fprintf(output, "\nPlan\n  Action: upgrade %s to %s\n  Managed files: %d\n  Recovery: verified backup with automatic rollback\n", plan.FromVersion, plan.ToVersion, len(plan.Files))
 	}
 	if *dryRun {
 		fmt.Fprintln(output, "Upgrade dry run complete. No images, services, or files were changed.")
@@ -294,16 +297,21 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 			fmt.Fprintln(errorsOutput, "upgrade requires an interactive terminal or --yes")
 			return 2
 		}
-		answer, promptErr := prompt(bufio.NewReader(input), output, "Type upgrade to continue", "")
-		if promptErr != nil || answer != "upgrade" {
+		confirmation := "upgrade"
+		if plan.AlreadyCurrent {
+			confirmation = "verify"
+		}
+		answer, promptErr := prompt(bufio.NewReader(input), output, "Type "+confirmation+" to continue", "")
+		if promptErr != nil || answer != confirmation {
 			fmt.Fprintln(errorsOutput, "upgrade cancelled; the host was not changed")
 			return 1
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := lifecycleContext(30 * time.Minute)
 	defer cancel()
 	result, err := manager.Upgrade(ctx, options)
 	if err != nil {
+		progress.Fail(lifecycleFailureSummary(err, "Upgrade", "Deployment verification"))
 		fmt.Fprintln(errorsOutput, "upgrade:", err)
 		if result.Backup != "" {
 			fmt.Fprintln(errorsOutput, "Pre-upgrade backup:", result.Backup)
@@ -311,10 +319,11 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		return 1
 	}
 	if result.AlreadyCurrent {
-		fmt.Fprintf(output, "Release %s is already current and healthy.\n", result.ToVersion)
+		progress.Success(fmt.Sprintf("Release %s is current and healthy", result.ToVersion))
 		return 0
 	}
-	fmt.Fprintf(output, "Upgrade to %s verified. Pre-upgrade backup: %s\n", result.ToVersion, result.Backup)
+	progress.Success(fmt.Sprintf("Upgrade to %s verified", result.ToVersion))
+	fmt.Fprintf(output, "Pre-upgrade backup: %s\n", result.Backup)
 	return 0
 }
 
@@ -646,10 +655,12 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 			return 1
 		}
 	}
-	installCtx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	progress := newCLIProgress(output)
+	installCtx, cancel := lifecycleContext(12 * time.Minute)
 	defer cancel()
-	result, err := (setup.Installer{Progress: textProgress(output)}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version, PublicPackageSource: *publicPackage})
+	result, err := (setup.Installer{Progress: progress.Step}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version, PublicPackageSource: *publicPackage})
 	if err != nil {
+		progress.Fail(lifecycleFailureSummary(err, "Installation", "Installation"))
 		fmt.Fprintln(errorsOutput, "install:", err)
 		return 1
 	}
@@ -658,9 +669,11 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		return 0
 	}
 	if result.Fresh {
-		fmt.Fprintf(output, "\nRelay installation verified.\nAdmin URL: %s/admin/\nAdmin password (shown once): %s\n", strings.TrimSuffix(cfg.PublicURL, "/"), result.AdminSecret)
+		progress.Success("Relay installation verified")
+		fmt.Fprintf(output, "Admin URL: %s/admin/\nAdmin password (shown once): %s\n", strings.TrimSuffix(cfg.PublicURL, "/"), result.AdminSecret)
 	} else {
-		fmt.Fprintf(output, "Relay installation is healthy and unchanged: %s/admin/\n", strings.TrimSuffix(cfg.PublicURL, "/"))
+		progress.Success("Relay installation is healthy and unchanged")
+		fmt.Fprintf(output, "Admin URL: %s/admin/\n", strings.TrimSuffix(cfg.PublicURL, "/"))
 	}
 	return 0
 }
@@ -682,10 +695,23 @@ func prompt(reader *bufio.Reader, output io.Writer, label, defaultValue string) 
 	return line, nil
 }
 
-func textProgress(output io.Writer) setup.ProgressFunc {
-	return func(message string) {
-		fmt.Fprintf(output, "==> %s\n", message)
+func lifecycleContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	signalContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancelTimeout := context.WithTimeout(signalContext, timeout)
+	return ctx, func() {
+		cancelTimeout()
+		stopSignals()
 	}
+}
+
+func lifecycleFailureSummary(err error, cancelledOperation, failedOperation string) string {
+	if errors.Is(err, context.Canceled) {
+		return cancelledOperation + " cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return failedOperation + " timed out"
+	}
+	return failedOperation + " failed"
 }
 
 func inferPublicIPv4(rawURL string) string {
@@ -729,7 +755,7 @@ func printInstallPlan(w io.Writer, cfg setup.Config, owned, dryRun bool) {
 	if dryRun {
 		action += " (dry run)"
 	}
-	fmt.Fprintf(w, "\nPlan: %s\nOrigin: %s\nProfile: %s\nTURN: %t\nDevice packages: %t\nDevice updates: %s\nRelay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.DevicePackages, cfg.DeviceUpdateChannel, displayPinnedImage(cfg.RelayImage))
+	fmt.Fprintf(w, "\nPlan\n  Action: %s\n  Origin: %s\n  Profile: %s\n  TURN: %t\n  Device packages: %t\n  Device updates: %s\n  Relay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.DevicePackages, cfg.DeviceUpdateChannel, displayPinnedImage(cfg.RelayImage))
 }
 
 func displayPinnedImage(image string) string {

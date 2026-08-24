@@ -14,6 +14,10 @@ fail() {
   exit 1
 }
 
+progress() {
+  printf '  [bootstrap] %s\n' "$*"
+}
+
 [ "$(id -u)" -eq 0 ] || fail "run through sudo (curl ... | sudo sh)"
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 
@@ -56,6 +60,8 @@ cleanup() {
 }
 trap cleanup 0 HUP INT TERM
 
+printf '\nrctl setup\n\n'
+
 download() {
   curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
     --retry 3 --connect-timeout 15 --max-time 300 "$1" --output "$2"
@@ -73,6 +79,7 @@ fetch_asset() {
   fi
 }
 
+progress "Downloading the release manifest"
 fetch_asset "SHA256SUMS" "$work/SHA256SUMS"
 
 package_asset="$(awk '$2 ~ /^rctl_[0-9]+\.[0-9]+\.[0-9]+_iphoneos-arm\.deb$/ { if (found) exit 2; print $2; found=1 } END { if (!found) exit 1 }' "$work/SHA256SUMS")" || \
@@ -96,12 +103,16 @@ verify_asset() {
   [ "$actual" = "$expected" ] || fail "checksum mismatch for ${name}"
 }
 
-for name in "$asset" "$package_asset"; do
-  fetch_asset "$name" "$work/${name}"
-  verify_asset "$name"
-done
+progress "Downloading and verifying the setup binary"
+fetch_asset "$asset" "$work/${asset}"
+verify_asset "$asset"
+
+progress "Downloading and verifying the public device package"
+fetch_asset "$package_asset" "$work/${package_asset}"
+verify_asset "$package_asset"
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  progress "Verifying GitHub build provenance"
   for name in "$asset" "$package_asset"; do
     gh attestation verify "$work/${name}" --repo "$REPOSITORY" >/dev/null || \
       fail "GitHub build provenance verification failed for ${name}"
@@ -130,9 +141,11 @@ run_setup() {
 }
 
 if [ -e /var/lib/rctl/setup/ownership.json ]; then
+  progress "Starting the verified upgrade wizard"
   run_setup upgrade "$@" --public-package "$work/$package_asset" || \
     fail "upgrade failed; the previous setup binary remains active"
 else
+  progress "Starting the verified installation wizard"
   run_setup install "$@" --public-package "$work/$package_asset" || \
     fail "installation failed; no setup binary was activated"
 fi

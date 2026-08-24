@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"flag"
 	"io"
 	"strings"
@@ -148,5 +150,17 @@ func TestInstallPlanAbbreviatesPinnedImage(t *testing.T) {
 	got := displayPinnedImage(image)
 	if strings.Contains(got, strings.Repeat("a", 64)) || !strings.Contains(got, "aaaaaaaaaaaa... (pinned)") {
 		t.Fatalf("display image=%q", got)
+	}
+}
+
+func TestLifecycleFailureSummary(t *testing.T) {
+	if got := lifecycleFailureSummary(context.Canceled, "Upgrade", "Verification"); got != "Upgrade cancelled" {
+		t.Fatalf("cancel summary=%q", got)
+	}
+	if got := lifecycleFailureSummary(context.DeadlineExceeded, "Upgrade", "Verification"); got != "Verification timed out" {
+		t.Fatalf("timeout summary=%q", got)
+	}
+	if got := lifecycleFailureSummary(errors.New("broken"), "Upgrade", "Verification"); got != "Verification failed" {
+		t.Fatalf("failure summary=%q", got)
 	}
 }
