@@ -1,0 +1,4 @@
+{
+  "kind": "answer",
+  "payload": { "sdp": "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=rctl-answer\r\nt=0 0\r\n" }
+}

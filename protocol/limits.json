@@ -5,6 +5,7 @@
   "file_control_json_bytes": 4096,
   "file_chunk_bytes": 65536,
   "file_path_utf8_bytes": 1023,
+  "file_size_integer_max": 9007199254740991,
   "opus_packet_bytes": 4000,
   "features_count": 128,
   "feature_utf8_bytes": 96
