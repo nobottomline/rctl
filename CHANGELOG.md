@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.4
+
+- Added the native mobile-controller protocol, QR pairing flow, proof-of-possession
+  identities, least-privilege media scopes, and recoverable controller sessions.
+- Added the iOS MediaProbe qualification app with native device discovery,
+  WebRTC signaling, H.264 rendering, and bounded control DataChannels.
+- Formalized versioned JSON wire contracts shared by relay, browser, and native
+  clients, including forward-compatible capability validation.
+
 ## 0.3.3
 
 - Added an administrator-controlled `LAN + Relay` / `Relay only` network policy.
