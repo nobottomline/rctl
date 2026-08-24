@@ -115,7 +115,7 @@ export class CameraTransport {
       if (event.candidate && ws.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify({
           kind: 'candidate',
-          payload: { candidate: event.candidate.candidate, mid: event.candidate.sdpMid },
+          payload: { candidate: event.candidate.candidate, mid: event.candidate.sdpMid || '0' },
         }))
     }
     pc.onconnectionstatechange = () => {

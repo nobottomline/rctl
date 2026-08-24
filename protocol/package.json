@@ -1,0 +1,13 @@
+{
+  "name": "@rctl/protocol-contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs",
+    "test": "node check.mjs"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0"
+  }
+}

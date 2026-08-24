@@ -1,0 +1,23 @@
+{
+  "fixtures": [
+    { "schema": "capabilities.schema.json", "path": "capabilities/device-v1.json", "valid": true },
+    { "schema": "capabilities.schema.json", "path": "capabilities/relay-v1.json", "valid": true },
+    { "schema": "capabilities.schema.json", "path": "capabilities/future-minor-v1.json", "valid": true },
+    { "schema": "capabilities.schema.json", "path": "capabilities/invalid-major-zero.json", "valid": false },
+    { "schema": "control.schema.json", "path": "control/touch.json", "valid": true },
+    { "schema": "control.schema.json", "path": "control/key.json", "valid": true },
+    { "schema": "control.schema.json", "path": "control/future-field.json", "valid": true },
+    { "schema": "control.schema.json", "path": "control/invalid-touch-range.json", "valid": false },
+    { "schema": "signaling.schema.json", "path": "signaling/ready.json", "valid": true },
+    { "schema": "signaling.schema.json", "path": "signaling/offer.json", "valid": true },
+    { "schema": "signaling.schema.json", "path": "signaling/candidate.json", "valid": true },
+    { "schema": "signaling.schema.json", "path": "signaling/candidate-null-mid.json", "valid": false },
+    { "schema": "signaling.schema.json", "path": "signaling/invalid-kind.json", "valid": false },
+    { "schema": "files-control.schema.json", "path": "files/get.json", "valid": true },
+    { "schema": "files-control.schema.json", "path": "files/put.json", "valid": true },
+    { "schema": "files-control.schema.json", "path": "files/get-meta.json", "valid": true },
+    { "schema": "files-control.schema.json", "path": "files/get-eof.json", "valid": true },
+    { "schema": "files-control.schema.json", "path": "files/future-field.json", "valid": true },
+    { "schema": "files-control.schema.json", "path": "files/invalid-empty-path.json", "valid": false }
+  ]
+}

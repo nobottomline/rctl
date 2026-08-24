@@ -1,0 +1,5 @@
+{
+  "op": "get",
+  "path": "/var/mobile/Media/example.mov",
+  "priority": "interactive"
+}

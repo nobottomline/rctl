@@ -900,7 +900,10 @@ export class ControlEngine {
     }, 7000)
     pc.onicecandidate = (e) => {
       if (e.candidate && ws.readyState === 1)
-        ws.send(JSON.stringify({ kind: 'candidate', payload: { candidate: e.candidate.candidate, mid: e.candidate.sdpMid } }))
+        ws.send(JSON.stringify({
+          kind: 'candidate',
+          payload: { candidate: e.candidate.candidate, mid: e.candidate.sdpMid || '0' },
+        }))
     }
     ws.onmessage = async (ev) => {
       let m: { kind?: string; payload?: unknown }

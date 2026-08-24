@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nobottomline/rctl/protocol/schemas/files-control.schema.json",
+  "title": "rctl files DataChannel control message v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["op", "path"],
+      "properties": {
+        "op": { "const": "get" },
+        "path": { "$ref": "#/$defs/path" }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["op", "path", "size"],
+      "properties": {
+        "op": { "const": "put" },
+        "path": { "$ref": "#/$defs/path" },
+        "size": { "$ref": "#/$defs/size" }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["op"],
+      "properties": { "op": { "enum": ["put_eof", "cancel"] } },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["op", "name", "size"],
+      "properties": {
+        "op": { "const": "get_meta" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "size": { "$ref": "#/$defs/size" }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": { "const": "get_eof" },
+        "cancelled": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["op", "bytes"],
+      "properties": {
+        "op": { "const": "put_ok" },
+        "bytes": { "$ref": "#/$defs/size" }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["op", "msg"],
+      "properties": {
+        "op": { "const": "err" },
+        "msg": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "additionalProperties": true
+    }
+  ],
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 1023 },
+    "size": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+  }
+}

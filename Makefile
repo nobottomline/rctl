@@ -114,6 +114,7 @@ protocol-generate:
 
 protocol-check:
 	@node protocol/generate.mjs --check
+	@cd protocol && { [ -d node_modules ] || npm ci; } && npm test
 
 mobile-ios-test: protocol-check
 	@swift test --package-path mobile/ios/Modules/RctlProtocol

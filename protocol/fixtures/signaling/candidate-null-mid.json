@@ -1,0 +1,8 @@
+{
+  "kind": "candidate",
+  "payload": {
+    "candidate": "candidate:2 1 UDP 2122252543 192.0.2.11 54322 typ host",
+    "mid": null,
+    "usernameFragment": "rejected-before-forwarding"
+  }
+}

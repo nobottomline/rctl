@@ -27,7 +27,10 @@ jobs:
           go test ./...
           go vet ./...
       - name: Verify generated protocol sources
-        run: node protocol/generate.mjs --check
+        run: |
+          node protocol/generate.mjs --check
+          npm ci --prefix protocol
+          npm test --prefix protocol
       - name: Scan reachable Go vulnerabilities
         working-directory: relay
         run: |

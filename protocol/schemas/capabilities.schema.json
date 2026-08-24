@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nobottomline/rctl/protocol/schemas/capabilities.schema.json",
+  "title": "rctl component capabilities v1",
+  "type": "object",
+  "required": ["product", "component", "protocol", "features"],
+  "properties": {
+    "product": { "const": "rctl" },
+    "component": { "enum": ["daemon", "relay"] },
+    "daemon": { "$ref": "#/$defs/componentBuild" },
+    "browser": { "$ref": "#/$defs/componentBuild" },
+    "relay": { "$ref": "#/$defs/componentBuild" },
+    "protocol": { "$ref": "#/$defs/protocolVersion" },
+    "features": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 96,
+        "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "component": { "const": "daemon" } }, "required": ["component"] },
+      "then": {
+        "properties": { "daemon": true, "browser": true },
+        "required": ["daemon", "browser"]
+      }
+    },
+    {
+      "if": { "properties": { "component": { "const": "relay" } }, "required": ["component"] },
+      "then": {
+        "properties": { "relay": true },
+        "required": ["relay"]
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "componentBuild": {
+      "type": "object",
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": true
+    },
+    "protocolVersion": {
+      "type": "object",
+      "required": ["major", "minor"],
+      "properties": {
+        "major": { "type": "integer", "minimum": 1 },
+        "minor": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    }
+  }
+}

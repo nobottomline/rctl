@@ -1,0 +1,7 @@
+{
+  "kind": "candidate",
+  "payload": {
+    "candidate": "candidate:1 1 UDP 2122260223 192.0.2.1 50000 typ host",
+    "mid": "0"
+  }
+}

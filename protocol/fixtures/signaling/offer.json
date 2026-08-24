@@ -1,0 +1,6 @@
+{
+  "kind": "offer",
+  "payload": {
+    "sdp": "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=rctl\r\nt=0 0\r\n"
+  }
+}

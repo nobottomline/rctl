@@ -1,0 +1,8 @@
+{
+  "product": "rctl",
+  "component": "daemon",
+  "daemon": { "version": "0.3.3" },
+  "browser": { "version": "0.3.3" },
+  "protocol": { "major": 0, "minor": 0 },
+  "features": []
+}

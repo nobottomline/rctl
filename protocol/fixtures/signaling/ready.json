@@ -1,0 +1,11 @@
+{
+  "kind": "ready",
+  "payload": [
+    { "urls": ["stun:stun.example.test:3478"] },
+    {
+      "urls": "turn:turn.example.test:3478?transport=udp",
+      "username": "temporary-user",
+      "credential": "temporary-credential"
+    }
+  ]
+}

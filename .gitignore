@@ -15,6 +15,7 @@ mobile/**/*.xcuserstate
 mobile/android/.gradle/
 mobile/android/**/build/
 mobile/android/local.properties
+protocol/node_modules/
 
 # Debug captures (may contain the device's screen — never commit)
 *.png

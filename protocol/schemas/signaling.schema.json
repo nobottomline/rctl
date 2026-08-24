@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nobottomline/rctl/protocol/schemas/signaling.schema.json",
+  "title": "rctl controller-facing signaling message v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["kind", "payload"],
+      "properties": {
+        "kind": { "const": "ready" },
+        "payload": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/iceServer" }
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["kind", "payload"],
+      "properties": {
+        "kind": { "enum": ["offer", "answer"] },
+        "payload": {
+          "type": "object",
+          "required": ["sdp"],
+          "properties": {
+            "sdp": { "type": "string", "minLength": 1, "maxLength": 262144 }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["kind", "payload"],
+      "properties": {
+        "kind": { "const": "candidate" },
+        "payload": {
+          "type": "object",
+          "required": ["candidate", "mid"],
+          "properties": {
+            "candidate": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "mid": { "type": "string", "maxLength": 256 }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  ],
+  "$defs": {
+    "iceServer": {
+      "type": "object",
+      "required": ["urls"],
+      "properties": {
+        "urls": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 2048 },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+            }
+          ]
+        },
+        "username": { "type": "string", "maxLength": 256 },
+        "credential": { "type": "string", "maxLength": 1024 }
+      },
+      "additionalProperties": true
+    }
+  }
+}

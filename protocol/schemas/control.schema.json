@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nobottomline/rctl/protocol/schemas/control.schema.json",
+  "title": "rctl control DataChannel message v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["t", "p", "i", "x", "y"],
+      "properties": {
+        "t": { "const": "t" },
+        "p": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "i": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": ["t", "pg", "u", "d"],
+      "properties": {
+        "t": { "const": "k" },
+        "pg": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "u": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "d": { "type": "integer", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": true
+    }
+  ]
+}
