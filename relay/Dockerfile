@@ -19,6 +19,7 @@ COPY web/package*.json ./
 RUN npm ci
 COPY web/ ./
 COPY control /src/control
+COPY protocol/version.json /src/protocol/version.json
 RUN npm run build
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
