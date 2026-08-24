@@ -19,7 +19,7 @@ struct QRScannerView: UIViewControllerRepresentable {
 @MainActor
 final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
     private let captureSession = AVCaptureSession()
-    private let sessionQueue = DispatchQueue(label: "com.nobottomline.rctl.mediaprobe.qr")
+    private let sessionQueue = DispatchQueue(label: "com.greatlove.rctl.mediaprobe.qr")
     private let onCode: @MainActor (String) -> Void
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var delivered = false

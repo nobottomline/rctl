@@ -18,6 +18,13 @@ The checked-in modules are:
 app in `MediaProbe/`. Run package tests with `make mobile-ios-test`, build the
 app with `make mobile-ios-build`, or run both with `make mobile-test`.
 
+Apple signing is machine-local. Copy `Config/Local.xcconfig.example` to
+`Config/Local.xcconfig` and set `DEVELOPMENT_TEAM`, or select a team in Xcode
+and move the resulting value into that ignored file. Never commit a personal
+team identifier or provisioning material. Product identifiers use the
+`com.greatlove.rctl` namespace; `nobottomline` is reserved for GitHub and GHCR
+coordinates.
+
 Ordinary contributors need Xcode and the repository only. The project consumes
 local Swift packages; the sole generated media dependency is fetched at an
 exact revision as a checksum-verified immutable artifact. No relay origin,

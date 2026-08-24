@@ -10,3 +10,6 @@ SWIFT_TREAT_WARNINGS_AS_ERRORS = YES
 ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES
 CODE_SIGN_STYLE = Automatic
 DEVELOPMENT_TEAM =
+
+// Optional per-machine signing settings. This file is intentionally ignored.
+#include? "Local.xcconfig"

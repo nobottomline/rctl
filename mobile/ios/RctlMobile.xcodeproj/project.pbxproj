@@ -266,9 +266,12 @@
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = MediaProbe/Resources/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.nobottomline.rctl.MediaProbe;
+				PRODUCT_BUNDLE_IDENTIFIER = com.greatlove.rctl.mediaprobe;
 				PRODUCT_NAME = "RCTL MediaProbe";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -281,9 +284,12 @@
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = MediaProbe/Resources/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.nobottomline.rctl.MediaProbe;
+				PRODUCT_BUNDLE_IDENTIFIER = com.greatlove.rctl.mediaprobe;
 				PRODUCT_NAME = "RCTL MediaProbe";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;

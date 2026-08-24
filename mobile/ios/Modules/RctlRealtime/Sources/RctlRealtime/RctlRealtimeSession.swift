@@ -14,7 +14,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private let factory: RctlPeerConnectionFactory
     private let urlSession: URLSession
     private let eventHandler: EventHandler
-    private let queue = DispatchQueue(label: "com.nobottomline.rctl.realtime.session")
+    private let queue = DispatchQueue(label: "com.greatlove.rctl.realtime.session")
 
     private var generation: UInt64 = 0
     private var running = false

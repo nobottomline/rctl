@@ -8,7 +8,7 @@ public struct KeychainControllerStore: Sendable {
     private let preferSecureEnclave: Bool
 
     public init(
-        namespace: String = "com.nobottomline.rctl.controller",
+        namespace: String = "com.greatlove.rctl.controller",
         preferSecureEnclave: Bool = true
     ) {
         keyService = namespace + ".keys"

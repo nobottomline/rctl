@@ -13,6 +13,7 @@ mobile/**/DerivedData/
 mobile/**/.derivedData*/
 mobile/**/xcuserdata/
 mobile/**/*.xcuserstate
+mobile/ios/Config/Local.xcconfig
 mobile/android/.gradle/
 mobile/android/**/build/
 mobile/android/local.properties

@@ -6,7 +6,7 @@ import Testing
 struct KeychainControllerStoreTests {
     @Test("Key and refresh credential survive a store round trip")
     func roundTrip() throws {
-        let namespace = "com.nobottomline.rctl.tests.\(UUID().uuidString)"
+        let namespace = "com.greatlove.rctl.tests.\(UUID().uuidString)"
         let relayID = "relay-test-\(UUID().uuidString)"
         let store = KeychainControllerStore(namespace: namespace, preferSecureEnclave: false)
         defer { try? store.deleteProfile(relayID: relayID) }
