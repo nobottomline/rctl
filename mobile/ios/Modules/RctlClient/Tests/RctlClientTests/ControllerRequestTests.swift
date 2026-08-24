@@ -127,6 +127,27 @@ struct ControllerRequestTests {
         }
         """.utf8))
         #expect(try approved.validated() == approved)
+        #expect(approved.supportsNativeControllerSessions)
+        #expect(approved.supports(.screen))
+        #expect(!approved.supports(.camera))
+
+        let legacy = try JSONDecoder().decode(ControllerDevice.self, from: Data("""
+        {
+          "id": "legacy.ipad",
+          "name": "Legacy iPad",
+          "status": "approved",
+          "online": true,
+          "daemon_version": "0.3.3",
+          "browser_version": "0.3.3",
+          "protocol_major": 1,
+          "protocol_minor": 0,
+          "features": ["screen.webrtc", "camera.live"],
+          "compatible": true
+        }
+        """.utf8))
+        #expect(!legacy.supportsNativeControllerSessions)
+        #expect(!legacy.supports(.screen))
+        #expect(!legacy.supports(.camera))
 
         let pending = try JSONDecoder().decode(ControllerDevice.self, from: Data("""
         {

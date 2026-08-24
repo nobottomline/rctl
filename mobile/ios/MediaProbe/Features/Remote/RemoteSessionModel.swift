@@ -38,7 +38,7 @@ final class RemoteSessionModel: ObservableObject {
             try session.start(with: request)
         } catch {
             state = .failed
-            errorMessage = "Could not start the media session."
+            errorMessage = ProbeAppModel.message(for: error)
         }
     }
 

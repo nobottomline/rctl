@@ -1,6 +1,8 @@
 import Foundation
 
 public struct ControllerDevice: Codable, Equatable, Identifiable, Sendable {
+    public static let scopedSessionsFeature = "controller.scoped_sessions"
+
     public let id: String
     public let name: String
     public let status: String
@@ -42,6 +44,18 @@ public struct ControllerDevice: Codable, Equatable, Identifiable, Sendable {
             throw ControllerClientError.invalidResponse
         }
         return self
+    }
+
+    public var supportsNativeControllerSessions: Bool {
+        features.contains(Self.scopedSessionsFeature)
+    }
+
+    public func supports(_ media: ControllerMediaRole) -> Bool {
+        let feature = switch media {
+        case .screen: "screen.webrtc"
+        case .camera: "camera.live"
+        }
+        return supportsNativeControllerSessions && features.contains(feature)
     }
 }
 

@@ -92,6 +92,26 @@ final class ProbeAppModel: ObservableObject {
     }
 
     func signalingRequest(deviceID: String, media: ControllerMediaRole) async throws -> URLRequest {
+        guard let device = devices.first(where: { $0.id == deviceID }) else {
+            throw SessionPreflightError.deviceUnavailable
+        }
+        guard device.online else {
+            throw SessionPreflightError.deviceOffline
+        }
+        guard device.compatible else {
+            throw SessionPreflightError.incompatibleDevice(device.compatibilityError)
+        }
+        guard device.supportsNativeControllerSessions else {
+            throw SessionPreflightError.deviceUpdateRequired(device.daemonVersion)
+        }
+        guard device.supports(media) else {
+            throw SessionPreflightError.unsupportedMedia(media)
+        }
+        let requiredScope: ControllerScope = media == .camera ? .camera : .screenView
+        guard profile?.controller.scopes.contains(requiredScope) == true else {
+            throw SessionPreflightError.missingScope(requiredScope)
+        }
+
         let session = try await ensureAccessSession(forceRefresh: false)
         do {
             return try api.makeSignalingRequest(
@@ -177,8 +197,10 @@ final class ProbeAppModel: ObservableObject {
 #endif
     }
 
-    private static func message(for error: Error) -> String {
+    static func message(for error: Error) -> String {
         switch error {
+        case let error as SessionPreflightError:
+            error.localizedDescription
         case ControllerClientError.expiredPairing:
             "The pairing code expired. Create a new one in relay admin."
         case ControllerClientError.incompatibleProtocol:
@@ -193,6 +215,41 @@ final class ProbeAppModel: ObservableObject {
             "The local controller credential is missing or damaged. Reset this profile and pair again."
         default:
             "The request could not be completed."
+        }
+    }
+
+    private enum SessionPreflightError: LocalizedError {
+        case deviceUnavailable
+        case deviceOffline
+        case incompatibleDevice(String?)
+        case deviceUpdateRequired(String?)
+        case unsupportedMedia(ControllerMediaRole)
+        case missingScope(ControllerScope)
+
+        var errorDescription: String? {
+            switch self {
+            case .deviceUnavailable:
+                "This device is no longer available. Refresh the device list."
+            case .deviceOffline:
+                "The iPad is offline. Wait for it to reconnect and try again."
+            case let .incompatibleDevice(reason):
+                reason ?? "The iPad uses an incompatible protocol version."
+            case let .deviceUpdateRequired(version):
+                if let version {
+                    "Update rctld \(version) before using the native controller. Browser control remains available."
+                } else {
+                    "Update rctld before using the native controller. Browser control remains available."
+                }
+            case let .unsupportedMedia(media):
+                switch media {
+                case .screen:
+                    "This rctld build does not support native screen streaming."
+                case .camera:
+                    "This rctld build does not support native camera streaming."
+                }
+            case let .missingScope(scope):
+                "This controller does not have the \(scope.rawValue) permission. Pair it again with the required access."
+            }
         }
     }
 

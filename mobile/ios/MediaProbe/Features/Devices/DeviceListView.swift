@@ -24,7 +24,7 @@ struct DeviceListView: View {
                         Spacer()
                     }
                 }
-                .disabled(!device.online || !device.compatible)
+                .disabled(!device.online || !device.compatible || !device.supportsNativeControllerSessions)
             }
             .overlay {
                 if model.devices.isEmpty, !model.isBusy {
@@ -80,6 +80,10 @@ struct DeviceListView: View {
     private func status(for device: ControllerDevice) -> String {
         if !device.compatible { return device.compatibilityError ?? "Incompatible protocol" }
         if !device.online { return "Offline" }
+        if !device.supportsNativeControllerSessions {
+            if let version = device.daemonVersion { return "Update required · rctld \(version)" }
+            return "Update required"
+        }
         if let version = device.daemonVersion { return "Online · rctld \(version)" }
         return "Online"
     }
