@@ -190,7 +190,7 @@ func TestControllerPairingConcurrentClaimIsSingleUse(t *testing.T) {
 	}
 }
 
-func TestControllerProofReplayAndRefreshRotation(t *testing.T) {
+func TestControllerProofReplayAndRecoverableRefresh(t *testing.T) {
 	ts := newAdminSessionTestServer(t)
 	admin := ts.login(t)
 	pairing := createPairingFixture(t, ts, admin, []string{"screen.view"})
@@ -234,36 +234,79 @@ func TestControllerProofReplayAndRefreshRotation(t *testing.T) {
 		resp.Body.Close()
 		t.Fatalf("refresh status=%d", resp.StatusCode)
 	}
-	var rotated struct {
+	var refreshed struct {
 		Tokens controllerTokenPair `json:"tokens"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&rotated); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&refreshed); err != nil {
 		resp.Body.Close()
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if rotated.Tokens.AccessToken == claim.Tokens.AccessToken || rotated.Tokens.RefreshToken == claim.Tokens.RefreshToken {
-		t.Fatal("refresh did not rotate both tokens")
+	if refreshed.Tokens.AccessToken == claim.Tokens.AccessToken {
+		t.Fatal("refresh did not replace the access token")
+	}
+	if refreshed.Tokens.RefreshToken != claim.Tokens.RefreshToken ||
+		refreshed.Tokens.RefreshExpiresAt < claim.Tokens.RefreshExpiresAt {
+		t.Fatal("refresh credential was not renewed in place")
 	}
 
-	for _, oldToken := range []string{claim.Tokens.AccessToken, claim.Tokens.RefreshToken} {
-		path, method := "/api/controller/me", http.MethodGet
-		if strings.HasPrefix(oldToken, "crt_") {
-			path, method = "/api/controller/token/refresh", http.MethodPost
-		}
-		req = signedControllerRequest(t, ts, key, oldToken, method, path, nil, time.Now(), randomControllerNonce(t))
-		resp, err = ts.client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != http.StatusUnauthorized {
-			resp.Body.Close()
-			t.Fatalf("old token %q status=%d", oldToken[:4], resp.StatusCode)
-		}
+	req = signedControllerRequest(t, ts, key, claim.Tokens.AccessToken, http.MethodGet,
+		"/api/controller/me", nil, time.Now(), randomControllerNonce(t))
+	resp, err = ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
 		resp.Body.Close()
+		t.Fatalf("replaced access status=%d", resp.StatusCode)
 	}
+	resp.Body.Close()
 
-	req = signedControllerRequest(t, ts, key, rotated.Tokens.AccessToken, http.MethodGet,
+	// A client that dies after relay commit but before saving the response can
+	// repeat refresh with the same sender-constrained credential and a new nonce.
+	refreshReq = signedControllerRequest(t, ts, key, claim.Tokens.RefreshToken, http.MethodPost,
+		"/api/controller/token/refresh", nil, time.Now(), randomControllerNonce(t))
+	resp, err = ts.client.Do(refreshReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("recoverable refresh status=%d", resp.StatusCode)
+	}
+	var recovered struct {
+		Tokens controllerTokenPair `json:"tokens"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&recovered); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if recovered.Tokens.RefreshToken != claim.Tokens.RefreshToken ||
+		recovered.Tokens.AccessToken == refreshed.Tokens.AccessToken {
+		t.Fatal("recoverable refresh returned an invalid token set")
+	}
+	var tokenRows int
+	if err := ts.db.QueryRow(`SELECT COUNT(*) FROM controller_tokens WHERE controller_id=?`,
+		claim.Controller.ID).Scan(&tokenRows); err != nil {
+		t.Fatal(err)
+	}
+	if tokenRows != 2 {
+		t.Fatalf("refresh left %d token rows, want current access and refresh only", tokenRows)
+	}
+	req = signedControllerRequest(t, ts, key, refreshed.Tokens.AccessToken, http.MethodGet,
+		"/api/controller/me", nil, time.Now(), randomControllerNonce(t))
+	resp, err = ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		resp.Body.Close()
+		t.Fatalf("superseded access status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	req = signedControllerRequest(t, ts, key, recovered.Tokens.AccessToken, http.MethodGet,
 		"/api/controller/me", nil, time.Now(), randomControllerNonce(t))
 	resp, err = ts.client.Do(req)
 	if err != nil {
@@ -271,11 +314,11 @@ func TestControllerProofReplayAndRefreshRotation(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		t.Fatalf("rotated access status=%d", resp.StatusCode)
+		t.Fatalf("refreshed access status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	req = signedControllerRequest(t, ts, key, rotated.Tokens.AccessToken, http.MethodGet,
+	req = signedControllerRequest(t, ts, key, recovered.Tokens.AccessToken, http.MethodGet,
 		"/api/controller/me", nil, time.Now().Add(-5*time.Minute), randomControllerNonce(t))
 	resp, err = ts.client.Do(req)
 	if err != nil {

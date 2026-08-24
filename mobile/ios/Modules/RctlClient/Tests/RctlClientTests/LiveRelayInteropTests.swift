@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Live Go relay interoperability", .serialized)
 struct LiveRelayInteropTests {
-    @Test("Swift claim, signed request, and rotation match Go")
+    @Test("Swift claim, signed request, and refresh recovery match Go")
     func roundTrip() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let origin = environment["RCTL_CONTROLLER_TEST_ORIGIN"],
@@ -51,27 +51,35 @@ struct LiveRelayInteropTests {
             allowInsecureLoopback: true
         )
 
-        let beforeRotation = try await client.controllerInfo(
+        let beforeRefresh = try await client.controllerInfo(
             origin: pairing.origin,
             accessToken: claim.tokens.accessToken,
             signingKey: key,
             allowInsecureLoopback: true
         )
-        #expect(beforeRotation.id == claim.controller.id)
+        #expect(beforeRefresh.id == claim.controller.id)
 
-        let rotated = try await client.refresh(
+        let refreshed = try await client.refresh(
             origin: pairing.origin,
             refreshToken: claim.tokens.refreshToken,
             signingKey: key,
             allowInsecureLoopback: true
         )
-        let afterRotation = try await client.controllerInfo(
+        #expect(refreshed.refreshToken == claim.tokens.refreshToken)
+        let recovered = try await client.refresh(
             origin: pairing.origin,
-            accessToken: rotated.accessToken,
+            refreshToken: claim.tokens.refreshToken,
             signingKey: key,
             allowInsecureLoopback: true
         )
-        #expect(afterRotation.id == claim.controller.id)
+        #expect(recovered.refreshToken == claim.tokens.refreshToken)
+        let afterRefresh = try await client.controllerInfo(
+            origin: pairing.origin,
+            accessToken: recovered.accessToken,
+            signingKey: key,
+            allowInsecureLoopback: true
+        )
+        #expect(afterRefresh.id == claim.controller.id)
 
         _ = try await adminRequest(
             admin,

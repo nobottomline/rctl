@@ -282,9 +282,10 @@ Add a separate controller identity and session model:
 4. The relay consumes the pairing secret atomically and creates a controller
    record. Pairing secrets are stored hashed, expire within minutes and never
    appear in normal access URLs or logs.
-5. The relay issues a hashed, rotatable opaque refresh credential bound to the
-   controller key. Access credentials are short lived. Refresh requires proof of
-   possession and rotates the refresh credential.
+5. The relay issues a hashed opaque refresh credential sender-constrained to the
+   controller key. Access credentials are short lived. Refresh requires a fresh
+   proof of possession, replaces outstanding access credentials, and renews the
+   refresh credential's inactivity expiry without changing its secret.
 6. Each controller can be listed, renamed and revoked independently. Revocation
    closes its signaling, terminal and stream sessions without rotating the iPad
    `DeviceSecret` or other controllers.
@@ -470,8 +471,8 @@ service.
 
 1. Inventory every REST, signaling and DataChannel message used by `web/`.
 2. Add versioned schemas, size limits, state diagrams and golden fixtures.
-3. Implement controller pairing, scoped credentials, rotation, revocation and
-   audit events in the relay.
+3. Implement controller pairing, scoped credentials, recoverable refresh,
+   revocation and audit events in the relay.
 4. Add a synthetic device/relay test harness that contains no personal data.
 
 ### Phase 1: media feasibility spike

@@ -88,10 +88,19 @@ after the create response.
 
 ## Tokens And Request Proof
 
-Claim returns an access token valid for ten minutes and a refresh token valid
-for thirty days. Tokens are independent high-entropy opaque values stored only
-as keyed hashes. Refresh rotates both tokens atomically; replaying a replaced
-refresh token fails and may revoke its token family.
+Claim returns an access token valid for ten minutes and a refresh token with a
+thirty-day inactivity lifetime. Tokens are independent high-entropy opaque
+values stored only as keyed hashes. The refresh token is sender-constrained to
+the controller's registered P-256 key. Successful refresh extends its inactivity
+expiry and atomically replaces every outstanding access token for that
+controller; the refresh secret itself remains stable.
+
+This follows the sender-constrained refresh-token option in
+[RFC 9700 section 4.14.2](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14.2).
+A copied refresh token cannot be used without a fresh proof from the registered
+private key. Keeping the bound token stable also makes an ambiguously completed
+refresh recoverable after process death without storing recoverable replacement
+secrets on the relay.
 
 Every controller request includes:
 
@@ -139,10 +148,12 @@ native file protocol increment; until then they fail closed. Missing, malformed,
 unknown, or self-asserted scopes grant nothing. Admin-browser and local-LAN
 sessions omit the scopes field and preserve their existing full-access behavior.
 
-Refresh uses the same proof format with the refresh token id. On success the old
-refresh token and every access token from its generation are revoked before the
-new pair is returned. Applications serialize refresh per relay profile and
-discard an ambiguous response rather than retrying an old token concurrently.
+Refresh uses the same proof format with the refresh token id. On success every
+previous access token is removed before a new access token is returned together
+with the unchanged refresh token and renewed inactivity expiry. Applications
+serialize refresh per relay profile. If a response is lost, the application may
+retry the same refresh credential with a fresh timestamp, nonce, and signature;
+the exact original request remains a rejected nonce replay.
 
 ## Lifecycle
 
@@ -175,9 +186,9 @@ messages documented above, and stores only the refresh credential and either a
 wrapped Secure Enclave key reference or software fallback key in the
 non-migrating iOS Data Protection Keychain.
 The access token remains an in-memory session concern. Refresh calls must be
-serialized by the application session coordinator; the low-level API does not
-retry an ambiguously completed rotation.
+serialized by the application session coordinator; retry policy remains above
+the low-level API.
 
 `LiveRelayInteropTests` is an opt-in end-to-end contract check. Against a local
 ephemeral Go relay it performs pairing, a signed identity request, refresh-token
-rotation, a second signed request, and administrative revocation.
+recovery, a second signed request, and administrative revocation.

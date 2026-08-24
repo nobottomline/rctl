@@ -28,6 +28,7 @@ const (
 type controllerPrincipal struct {
 	ControllerID string
 	TokenID      string
+	TokenExpires int64
 	Generation   string
 	Name         string
 	Platform     string
@@ -96,6 +97,7 @@ WHERE t.id=? AND t.revoked_at IS NULL AND c.status='active'`, tokenID).Scan(
 		return controllerPrincipal{}, errors.New("invalid token")
 	}
 	principal.TokenID = tokenID
+	principal.TokenExpires = expiresAt
 
 	timestamp, err := strconv.ParseInt(r.Header.Get("X-RCTL-Timestamp"), 10, 64)
 	if err != nil || absDuration(now.Sub(time.Unix(timestamp, 0))) > controllerClockSkew {
@@ -252,21 +254,31 @@ func (s *server) handleRefreshControllerToken(w http.ResponseWriter, r *http.Req
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(r.Context(), `UPDATE controller_tokens SET revoked_at=? WHERE id=? AND kind='refresh' AND revoked_at IS NULL`, now.Unix(), principal.TokenID)
+	refreshExpiresAt := now.Add(controllerRefreshTTL).Unix()
+	if principal.TokenExpires > refreshExpiresAt {
+		refreshExpiresAt = principal.TokenExpires
+	}
+	res, err := tx.ExecContext(r.Context(), `
+UPDATE controller_tokens SET expires_at=?
+WHERE id=? AND controller_id=? AND kind='refresh' AND revoked_at IS NULL
+  AND EXISTS(SELECT 1 FROM controllers WHERE id=? AND status='active')`,
+		refreshExpiresAt, principal.TokenID, principal.ControllerID, principal.ControllerID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "refresh_failed")
 		return
 	}
 	if changed, _ := res.RowsAffected(); changed != 1 {
-		writeErr(w, http.StatusUnauthorized, "refresh_replayed")
+		writeErr(w, http.StatusUnauthorized, "controller_unauthorized")
 		return
 	}
-	if _, err := tx.ExecContext(r.Context(), `UPDATE controller_tokens SET revoked_at=? WHERE controller_id=? AND generation=? AND revoked_at IS NULL`,
-		now.Unix(), principal.ControllerID, principal.Generation); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM controller_tokens WHERE controller_id=? AND kind='access'`,
+		principal.ControllerID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "refresh_failed")
 		return
 	}
-	tokens, err := s.createControllerTokens(r.Context(), tx, principal.ControllerID, now)
+	accessToken, accessExpiresAt, err := s.createControllerAccessToken(
+		r.Context(), tx, principal.ControllerID, principal.Generation, now,
+	)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "refresh_failed")
 		return
@@ -276,6 +288,11 @@ func (s *server) handleRefreshControllerToken(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	s.audit(r, "controller_tokens_rotated", "controller_id", principal.ControllerID)
-	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens})
+	s.audit(r, "controller_access_refreshed", "controller_id", principal.ControllerID)
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": controllerTokenPair{
+		AccessToken:      accessToken,
+		AccessExpiresAt:  accessExpiresAt,
+		RefreshToken:     bearerToken(r),
+		RefreshExpiresAt: refreshExpiresAt,
+	}})
 }

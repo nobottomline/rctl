@@ -165,20 +165,22 @@ Deliverables:
 
 - admin-created, single-use, short-lived QR pairing requests;
 - P-256 controller key creation in Secure Enclave/Keychain and Android Keystore;
-- proof-of-possession access and rotating refresh credentials;
+- proof-of-possession access and renewable sender-constrained refresh
+  credentials;
 - explicit scopes, controller list/rename/revoke, and bounded audit records;
 - prompt active-session termination after revocation;
 - recovery that never requires storing the relay admin password in the app.
 
 Security tests cover replay, concurrent consumption, expiry, origin confusion,
-key substitution, rotation races, scope escalation, log redaction, rate limits,
-and database migration/rollback.
+key substitution, refresh recovery races, scope escalation, log redaction, rate
+limits, and database migration/rollback.
 
 Current implementation: relay identity storage, one-time claim, proof-of-
-possession tokens, rotation, list/rename/revoke APIs, local admin QR flow, and
-the Swift `RctlClient` cryptography/Keychain package are complete. The native
-application coordinator, active transport closure, and scope-aware native
-device routes remain before Phase 1 can meet its exit criteria.
+possession tokens, recoverable refresh, list/rename/revoke APIs, local admin QR
+flow, and the Swift `RctlClient` cryptography/Keychain package are complete. The
+MediaProbe coordinator, active signaling closure, and scope-aware native device
+routes are also implemented. Physical qualification and the shipping app remain
+before Phase 1 can meet its product exit criteria.
 
 Exit criteria:
 
@@ -311,8 +313,8 @@ The implemented foundation now includes:
 - the `mobile/` ownership boundary and canonical cross-runtime protocol data;
 - bounded Swift wire models with fixture and compatibility tests;
 - relay-issued controller identities, scoped pairing, rename, and revocation;
-- P-256 request proof, Secure Enclave/Keychain storage, refresh rotation, and a
-  live Swift-to-Go interoperability test;
+- P-256 request proof, Secure Enclave/Keychain storage, recoverable
+  sender-constrained refresh, and a live Swift-to-Go interoperability test;
 - a vendor-isolated `RctlRealtime` module pinned to a checksum-verified upstream
   WebRTC XCFramework, with H.264 capability tests, bounded native signaling,
   generation-safe cleanup, scoped DataChannels, and Metal rendering;
@@ -327,7 +329,7 @@ H.264 screen and camera streams, exercises scoped DataChannels, and passes the
 lifecycle, network-path, and sustained-runtime checks in Phase 3. A successful
 Simulator launch is not that qualification.
 
-Production identity work also requires a recoverable refresh rotation protocol.
-The relay currently invalidates the previous refresh generation before the
-client can durably commit its replacement; process death in that narrow interval
-must be recoverable without weakening replay detection.
+Refresh recovery now keeps the P-256-bound refresh secret stable, renews its
+thirty-day inactivity expiry, and replaces only short-lived access credentials.
+A client can therefore recover a lost response with a fresh signed request while
+an exact nonce replay still fails.

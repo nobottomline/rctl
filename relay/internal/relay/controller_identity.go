@@ -333,6 +333,29 @@ func (s *server) createControllerTokens(ctx context.Context, tx *sql.Tx, control
 	}, nil
 }
 
+func (s *server) createControllerAccessToken(
+	ctx context.Context,
+	tx *sql.Tx,
+	controllerID string,
+	generation string,
+	now time.Time,
+) (string, int64, error) {
+	accessID, accessSecret, err := newTokenPair("cat")
+	if err != nil {
+		return "", 0, err
+	}
+	accessToken := accessID + "." + accessSecret
+	accessExpiresAt := now.Add(controllerAccessTTL).Unix()
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO controller_tokens(id,controller_id,kind,secret_hash,expires_at,created_at,generation)
+VALUES(?,?,?,?,?,?,?)`, accessID, controllerID, "access",
+		hmacToken(s.cfg.SessionSecret, accessToken), accessExpiresAt, now.Unix(), generation)
+	if err != nil {
+		return "", 0, err
+	}
+	return accessToken, accessExpiresAt, nil
+}
+
 func (s *server) handleListControllers(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT id,name,platform,scopes_json,status,created_at,last_seen_at,revoked_at FROM controllers ORDER BY created_at DESC`)
 	if err != nil {

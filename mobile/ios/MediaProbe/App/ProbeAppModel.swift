@@ -135,14 +135,14 @@ final class ProbeAppModel: ObservableObject {
             refreshToken: credential.refreshToken,
             signingKey: key
         )
-        let rotated = ControllerRefreshCredential(
+        let renewed = ControllerRefreshCredential(
             origin: profile.origin,
             relayID: profile.relayID,
             controller: profile.controller,
             refreshToken: tokens.refreshToken,
             refreshExpiresAt: tokens.refreshExpiresAt
         )
-        try keychain.save(rotated)
+        try keychain.save(renewed)
         accessToken = tokens.accessToken
         accessExpiresAt = tokens.accessExpiresAt
         return AccessSession(profile: profile, token: tokens.accessToken, key: key)

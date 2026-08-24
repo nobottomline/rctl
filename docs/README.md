@@ -15,7 +15,8 @@ flow, then read the feature document for the code being changed.
 - [MOBILE-DESIGN.md](MOBILE-DESIGN.md): native information architecture,
   interaction model, visual system, states, and accessibility gates.
 - [CONTROLLER-AUTH.md](CONTROLLER-AUTH.md): native pairing, P-256 proof of
-  possession, scoped tokens, rotation, replay protection, and revocation.
+  possession, scoped tokens, recoverable refresh, replay protection, and
+  revocation.
 - [MEDIA.md](MEDIA.md), [CAM.md](CAM.md), [AUDIO.md](AUDIO.md), and
   [VIRTUAL_MIC.md](VIRTUAL_MIC.md): media ownership and lifecycle.
 - [TERMINAL.md](TERMINAL.md): terminal protocol and relay tunneling.
