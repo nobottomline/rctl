@@ -147,3 +147,17 @@ The app stores private keys and refresh credentials in Keychain/Keystore. Access
 tokens are memory-only when practical. Deleting a relay profile deletes its key
 and tokens locally; losing a phone is recovered by revoking that controller from
 the relay admin page and pairing a replacement.
+
+The iOS implementation lives in `mobile/ios/Modules/RctlClient`. It rejects
+non-HTTPS production origins and protocol-major mismatches before creating a
+key, exports the CryptoKit P-256 public key as RFC 5480 SPKI, signs the exact
+messages documented above, and stores only the refresh credential and either a
+wrapped Secure Enclave key reference or software fallback key in the
+non-migrating iOS Data Protection Keychain.
+The access token remains an in-memory session concern. Refresh calls must be
+serialized by the application session coordinator; the low-level API does not
+retry an ambiguously completed rotation.
+
+`LiveRelayInteropTests` is an opt-in end-to-end contract check. Against a local
+ephemeral Go relay it performs pairing, a signed identity request, refresh-token
+rotation, a second signed request, and administrative revocation.

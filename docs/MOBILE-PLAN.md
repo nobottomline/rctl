@@ -176,6 +176,12 @@ Security tests cover replay, concurrent consumption, expiry, origin confusion,
 key substitution, rotation races, scope escalation, log redaction, rate limits,
 and database migration/rollback.
 
+Current implementation: relay identity storage, one-time claim, proof-of-
+possession tokens, rotation, list/rename/revoke APIs, local admin QR flow, and
+the Swift `RctlClient` cryptography/Keychain package are complete. The native
+application coordinator, active transport closure, and scope-aware native
+device routes remain before Phase 1 can meet its exit criteria.
+
 Exit criteria:
 
 - losing one phone does not rotate an iPad `DeviceSecret`;

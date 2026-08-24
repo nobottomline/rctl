@@ -78,8 +78,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify generated protocol sources
         run: node protocol/generate.mjs --check
-      - name: Test native iOS protocol package
-        run: swift test --package-path mobile/ios/Modules/RctlProtocol
+      - name: Test native iOS packages
+        run: |
+          swift test --package-path mobile/ios/Modules/RctlProtocol
+          swift test --package-path mobile/ios/Modules/RctlClient
 
   container:
     runs-on: ubuntu-24.04
