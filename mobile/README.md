@@ -9,7 +9,8 @@ contracts in `protocol/`.
 - `android/`: Kotlin/Compose application with Android View-hosted realtime media.
 
 Read `docs/MOBILE.md` for architecture and `docs/MOBILE-PLAN.md` for delivery
-order and qualification gates.
+order and qualification gates. `docs/MOBILE-DESIGN.md` defines the shared
+product behavior and the platform-native visual direction.
 
 Mobile builds are not part of the device `.deb` build. Never commit signing
 identities, provisioning profiles, keystores, relay origins, pairing payloads,
