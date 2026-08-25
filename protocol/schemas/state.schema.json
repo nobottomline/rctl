@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nobottomline/rctl/protocol/schemas/state.schema.json",
+  "title": "rctl state DataChannel message v1",
+  "type": "object",
+  "required": ["v", "orientation"],
+  "properties": {
+    "v": { "const": 1 },
+    "orientation": { "type": "integer", "minimum": 1, "maximum": 4 }
+  },
+  "additionalProperties": true
+}

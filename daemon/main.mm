@@ -1857,6 +1857,7 @@ static void *ipc_thread(void *unused) {
                 rctl_webrtc_push_au(buf + 9, len - 9, buf[0] != 0, read_be64(buf + 1));
             } else if (type == RCTL_MSG_ORIENT && len >= 1) {
                 rctl_http_set_orientation(gHttp, buf[0]);
+                rctl_webrtc_set_orientation(buf[0]);
             } else if (type == RCTL_MSG_REPLY && len >= 4) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 deliver_reply(reqid, buf + 4, len - 4);

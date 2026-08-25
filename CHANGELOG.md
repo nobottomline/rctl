@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added native iOS aspect-fit multitouch control with safe `View` / `Control`
+  modes, system controls, and a compact responsive control dock.
+- Added a versioned WebRTC state DataChannel for automatic screen orientation
+  and orientation-correct native input mapping.
 - Promoted the native iOS qualification host to the RCTL Controller product,
   hardened relay ICE bootstrap diagnostics, and added decoded-frame telemetry.
 - Added bounded Core Image/Metal presentation for native WebRTC video and aligned

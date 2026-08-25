@@ -12,7 +12,11 @@ the browser client:
 - open scoped screen or camera signaling over WSS;
 - negotiate WebRTC, render decoded H.264 through Core Image/Metal, and report
   DataChannel state;
-- send the Home HID command when the scoped control channel is open.
+- render fixed-framebuffer video upright from the versioned state channel;
+- map bounded multitouch through aspect-fit and orientation transforms;
+- require an explicit `Control` mode before forwarding touches or system actions;
+- send Home, lock, volume, Control Center, and Notification Center commands over
+  the scoped control channel.
 
 Build from the repository root with `make mobile-ios-build`, or open
 `RctlMobile.xcodeproj` and run the shared `RCTL Controller` scheme. Simulator
@@ -33,7 +37,7 @@ controlled iPad:
 4. Repeated connect, mode switch, background/foreground, and force-close cleanup.
 5. At least 30 minutes of video with frame, thermal, memory, and reconnect data.
 
-The current product slice does not yet implement coordinate input, audio
+The current product slice does not yet implement keyboard/clipboard input, audio
 consumers, files, statistics export, or automatic reconnect policy. These are
 tracked product increments; a successful build is not a release qualification.
 

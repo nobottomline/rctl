@@ -4,5 +4,5 @@ package relay
 
 const (
 	protocolMajor = 1
-	protocolMinor = 0
+	protocolMinor = 1
 )

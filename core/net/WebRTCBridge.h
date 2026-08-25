@@ -24,6 +24,9 @@ void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyframe, uint64_
 void rctl_webrtc_push_camera_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us);
 void rctl_webrtc_push_audio(const int16_t *pcm, int frames, int channels, int rate, uint64_t pts_us);
 void rctl_webrtc_push_mic(const int16_t *pcm, int frames, int channels, int rate);
+// Publishes UIInterfaceOrientation (1...4) to connected viewers over the
+// reliable state DataChannel. The most recent value is sent when a viewer joins.
+void rctl_webrtc_set_orientation(uint8_t orientation);
 
 // Fires when the WebRTC video-viewer count crosses zero, so the daemon keeps the
 // capture pipeline awake while a WebRTC viewer is watching (OR-ed with /stream).

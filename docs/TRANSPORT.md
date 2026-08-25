@@ -143,6 +143,7 @@ For the WebRTC path it currently:
 - sends encoded access units on the H.264 RTP track;
 - accepts control input on the `control` DataChannel;
 - exposes audio and bounded file operations on separate DataChannels;
+- publishes versioned orientation state on the `state` DataChannel;
 - keep local LAN HTTP mode unchanged.
 
 The `.deb` installed on a device must continue to work locally even when relay

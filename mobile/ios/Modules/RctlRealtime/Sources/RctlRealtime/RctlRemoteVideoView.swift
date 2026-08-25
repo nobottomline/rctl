@@ -53,6 +53,14 @@ public final class RctlRemoteVideoView: UIView {
         newTrack?.add(renderer)
         newTrack?.add(frameObserver)
     }
+
+    public func normalizedRemotePoint(for point: CGPoint, clamped: Bool = false) -> CGPoint? {
+        presentationView.normalizedRemotePoint(for: point, clamped: clamped)
+    }
+
+    public func setDeviceOrientation(_ orientation: Int?) {
+        presentationView.setDeviceOrientation(orientation)
+    }
 }
 
 private final class FirstFrameRenderer: NSObject, LKRTCVideoRenderer, @unchecked Sendable {

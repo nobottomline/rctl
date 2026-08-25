@@ -13,6 +13,9 @@ final class RctlMetalVideoView: UIView {
     private let outputColorSpace = CGColorSpaceCreateDeviceRGB()
     private var loggedFirstFrame = false
     private var loggedMissingDrawable = false
+    private var sourceSize = CGSize.zero
+    private var sourceRotation = 0
+    private var deviceRotation: Int?
 
     override class var layerClass: AnyClass {
         CAMetalLayer.self
@@ -82,9 +85,12 @@ final class RctlMetalVideoView: UIView {
             return
         }
 
+        sourceSize = CGSize(width: CGFloat(frame.width), height: CGFloat(frame.height))
+        sourceRotation = deviceRotation ?? frame.rotation.rawValue
+
         let target = CGRect(origin: .zero, size: metalLayer.drawableSize)
         var image = CIImage(cvPixelBuffer: rtcBuffer.pixelBuffer)
-            .oriented(forExifOrientation: exifOrientation(for: frame.rotation.rawValue))
+            .oriented(forExifOrientation: exifOrientation(for: sourceRotation))
         image = image.transformed(
             by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
         )
@@ -112,8 +118,18 @@ final class RctlMetalVideoView: UIView {
         if !loggedFirstFrame {
             loggedFirstFrame = true
             RctlMetalVideoRenderer.logger.info(
-                "Presented first Metal frame: \(frame.width)x\(frame.height) rotation=\(frame.rotation.rawValue) drawable=\(Int(target.width))x\(Int(target.height))"
+                "Presented first Metal frame: \(frame.width)x\(frame.height) frameRotation=\(frame.rotation.rawValue) displayRotation=\(self.sourceRotation) drawable=\(Int(target.width))x\(Int(target.height))"
             )
+        }
+    }
+
+    func setDeviceOrientation(_ orientation: Int?) {
+        deviceRotation = switch orientation {
+        case 1: 0
+        case 2: 180
+        case 3: 270
+        case 4: 90
+        default: nil
         }
     }
 
@@ -131,6 +147,14 @@ final class RctlMetalVideoView: UIView {
         )
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    func normalizedRemotePoint(for point: CGPoint, clamped: Bool) -> CGPoint? {
+        RctlRemoteVideoGeometry(
+            sourceSize: sourceSize,
+            rotation: sourceRotation,
+            viewportSize: bounds.size
+        ).normalizedRemotePoint(for: point, clamped: clamped)
     }
 
     private func exifOrientation(for rotation: Int) -> Int32 {

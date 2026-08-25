@@ -17,6 +17,7 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
             @"update.transactional",
             @"network.local_access_policy",
             @"controller.scoped_sessions",
+            @"state.orientation",
         ];
     });
     return features;

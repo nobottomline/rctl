@@ -6,7 +6,7 @@ import RctlProtocol
 public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     public typealias EventHandler = @Sendable (RctlRealtimeEvent) -> Void
 
-    private static let acceptedChannels = Set(["control", "audio", "room-mic", "mic-in"])
+    private static let acceptedChannels = Set(["control", "audio", "room-mic", "mic-in", "state"])
     private static let maximumPendingCandidates = 256
     private static let maximumControlBufferedBytes: UInt64 = 64 * 1_024
     private static let connectionTimeout: TimeInterval = 15
@@ -33,6 +33,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private var channels: [String: LKRTCDataChannel] = [:]
     private var videoTrack: LKRTCVideoTrack?
     private var firstVideoFrameReceived = false
+    private var orientation: Int?
     private var connectionTimeoutWorkItem: DispatchWorkItem?
     private var disconnectWorkItem: DispatchWorkItem?
 #if canImport(UIKit)
@@ -75,11 +76,13 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
             let previousView = self.videoView
             self.videoView = view
             let track = self.videoTrack
+            let orientation = self.orientation
             let generation = self.generation
             DispatchQueue.main.async {
                 if previousView !== view {
                     previousView?.setTrack(nil)
                 }
+                view.setDeviceOrientation(orientation)
                 view.setTrack(track) { [weak self] in
                     self?.queue.async {
                         self?.handleFirstVideoFrameLocked(generation: generation)
@@ -126,6 +129,39 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         }
     }
 
+    public func enqueueControl(_ message: ControlMessage, after delay: TimeInterval = 0) {
+        guard let data = try? WireJSON.encode(message) else { return }
+        let mayDropForBackpressure: Bool
+        if case let .touch(phase, _, _, _) = message {
+            mayDropForBackpressure = phase == 1
+        } else {
+            mayDropForBackpressure = false
+        }
+
+        queue.async { [weak self] in
+            guard let self else { return }
+            let scheduledGeneration = self.generation
+            let send = DispatchWorkItem { [weak self] in
+                guard let self,
+                      self.generation == scheduledGeneration,
+                      let channel = self.channels["control"],
+                      channel.readyState == .open else {
+                    return
+                }
+                if mayDropForBackpressure,
+                   channel.bufferedAmount > Self.maximumControlBufferedBytes {
+                    return
+                }
+                _ = channel.sendData(LKRTCDataBuffer(data: data, isBinary: false))
+            }
+            if delay > 0 {
+                self.queue.asyncAfter(deadline: .now() + delay, execute: send)
+            } else {
+                send.perform()
+            }
+        }
+    }
+
     private func startLocked(with request: URLRequest) {
         guard !running else {
             emit(.failure(.alreadyRunning))
@@ -143,6 +179,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         iceConnectionState = "new"
         iceGatheringState = "new"
         firstVideoFrameReceived = false
+        orientation = nil
         emit(.connection(.signaling))
 
         let task = urlSession.webSocketTask(with: request)
@@ -648,8 +685,23 @@ extension RctlRealtimeSession: LKRTCDataChannelDelegate {
     }
 
     public func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
-        // Media and file payloads get dedicated bounded consumers. The base
-        // session intentionally does not copy or queue them on the UI thread.
+        guard dataChannel.label == "state", !buffer.isBinary else { return }
+        let data = buffer.data
+        queue.async { [weak self, weak dataChannel] in
+            guard let self, let dataChannel,
+                  self.channels["state"] === dataChannel,
+                  let state = try? WireJSON.decode(RemoteStateMessage.self, from: data) else {
+                return
+            }
+            self.orientation = state.orientation
+#if canImport(UIKit)
+            let view = self.videoView
+            DispatchQueue.main.async {
+                view?.setDeviceOrientation(state.orientation)
+            }
+#endif
+            self.emit(.orientation(state.orientation))
+        }
     }
 
     private static func channelState(_ state: LKRTCDataChannelState) -> RctlRealtimeChannelState {

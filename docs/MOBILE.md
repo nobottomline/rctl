@@ -61,7 +61,7 @@ moves into a Rust `rctl-core` does not match the current repository:
 1. The realtime transport is already a standard WebRTC PeerConnection. A Rust
    networking runtime would either wrap libwebrtc through another FFI boundary
    or reimplement behavior that libwebrtc and the platforms already own.
-2. The custom wire surface is small: signaling JSON, REST resources, five named
+2. The custom wire surface is small: signaling JSON, REST resources, six named
    DataChannels, compact control JSON, Opus frames and the file channel framing.
    It needs a contract and fixtures before it needs a runtime abstraction.
 3. Reconnection, audio sessions, PiP, background execution, permission prompts,
@@ -112,10 +112,12 @@ remain warnings or unavailable controls.
 
 - one H.264 RTP track on the screen PeerConnection;
 - a separate H.264 RTP track on the camera PeerConnection;
-- reliable ordered `control`, `audio`, `room-mic`, `mic-in` and `files`
-  DataChannels on the screen PeerConnection. Native controller scopes are
-  authenticated by the relay and enforced again by `rctld`; browser-admin and
-  local-LAN sessions preserve the existing full-trust channel set.
+- reliable ordered `control`, `audio`, `room-mic`, `mic-in`, and `files`
+  DataChannels on the screen PeerConnection;
+- a reliable ordered `state` DataChannel on both screen and camera
+  PeerConnections. Native controller scopes are authenticated by the relay and
+  enforced again by `rctld`; browser-admin and local-LAN sessions preserve the
+  existing full-trust channel set.
 
 The legacy `files` channel is temporarily unavailable to scoped native sessions
 because its daemon-side reply destination is process-global. Native file support
@@ -139,6 +141,9 @@ decoder. Metal or Vulkan is justified only by a measured rendering limitation.
 - `mic-in`: one raw Opus packet per binary message, mono 48 kHz.
 - `files`: UTF-8 JSON control messages plus ordered binary chunks as documented
   in `web/src/lib/files.ts` and mirrored by `rctld`.
+- `state`: versioned UTF-8 JSON device state. Version 1 carries the current
+  `UIInterfaceOrientation` so fixed-portrait H.264 buffers render upright and
+  input maps back to framebuffer coordinates without a privileged HTTP poll.
 
 These formats currently rely on ordering and implicit message context. Before a
 mobile release, assign each format an explicit schema version, maximum message

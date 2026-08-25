@@ -59,6 +59,7 @@ struct Session {
     std::shared_ptr<rtc::DataChannel> filesDc;
     std::shared_ptr<rtc::DataChannel> micIn;
     std::shared_ptr<rtc::DataChannel> roomMic;
+    std::shared_ptr<rtc::DataChannel> stateDc;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
@@ -68,6 +69,8 @@ static std::vector<std::shared_ptr<rtc::DataChannel>> g_audio_dcs;
 // Room-mic (listen to the iPad mic): device->browser over its own channel + its own
 // Opus encoder, kept separate from the system-output "audio" path.
 static std::vector<std::shared_ptr<rtc::DataChannel>> g_microom_dcs;
+static std::vector<std::shared_ptr<rtc::DataChannel>> g_state_dcs;
+static uint8_t g_orientation = 1;
 static OpusEncoder *g_micEnc = nullptr;
 static std::vector<int16_t> g_micPcm;
 // File transfer rides its own reliable+ordered "files" DataChannel (P2P, so it
@@ -217,6 +220,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     if (dead->audioDc) dead->audioDc->resetCallbacks();
     if (dead->micIn)   dead->micIn->resetCallbacks();
     if (dead->roomMic) dead->roomMic->resetCallbacks();
+    if (dead->stateDc) dead->stateDc->resetCallbacks();
     if (dead->track)   dead->track->resetCallbacks();
     if (dead->pc)      dead->pc->resetCallbacks();
     // Purge from the global send lists; the onClosed that normally does this is
@@ -245,6 +249,12 @@ static void destroy_session(std::shared_ptr<Session> dead) {
             g_microom_dcs.erase(std::remove_if(g_microom_dcs.begin(), g_microom_dcs.end(),
                                   [rp](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == rp; }),
                               g_microom_dcs.end());
+        }
+        if (dead->stateDc) {
+            rtc::DataChannel *sp = dead->stateDc.get();
+            g_state_dcs.erase(std::remove_if(g_state_dcs.begin(), g_state_dcs.end(),
+                                  [sp](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == sp; }),
+                              g_state_dcs.end());
         }
         if (dead->filesDc && g_files_dc && g_files_dc.get() == dead->filesDc.get()) g_files_dc.reset();
     }
@@ -478,6 +488,34 @@ static void start_session(const std::string &id, const json &ice, bool camera,
         wlog("session " + id + (camera ? " camera" : " screen") + " track closed");
     });
 
+    // Runtime state is separate from encoded media because this H.264 sender
+    // works with fixed portrait buffers and RTP therefore reports rotation=0.
+    // A small ordered channel makes orientation explicit for native clients and
+    // avoids granting them the relay's broad HTTP proxy surface.
+    auto stateDc = pc->createDataChannel("state");
+    sess->stateDc = stateDc;
+    rtc::DataChannel *sptr = stateDc.get();
+    stateDc->onOpen([id, sptr]() {
+        std::shared_ptr<rtc::DataChannel> dc;
+        uint8_t orientation = 1;
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            auto it = g_sessions.find(id);
+            if (it == g_sessions.end() || !it->second->stateDc || it->second->stateDc.get() != sptr) return;
+            dc = it->second->stateDc;
+            g_state_dcs.push_back(dc);
+            orientation = g_orientation;
+        }
+        try { dc->send(json{{"v", 1}, {"orientation", orientation}}.dump()); } catch (...) {}
+        wlog("session " + id + " state channel open");
+    });
+    stateDc->onClosed([sptr]() {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_state_dcs.erase(std::remove_if(g_state_dcs.begin(), g_state_dcs.end(),
+                              [sptr](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == sptr; }),
+                          g_state_dcs.end());
+    });
+
     // Camera gets a dedicated PeerConnection. The iOS libsrtp/mbedtls build has
     // proven unreliable with a second media SSRC on the screen connection; one
     // H.264 track per connection keeps native RTP/NACK/PLI without that failure.
@@ -683,6 +721,21 @@ extern "C" void rctl_webrtc_set_input_cb(void (*touch)(int, int, double, double)
 
 extern "C" void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *, size_t, int)) {
     g_files_cb = cb;
+}
+
+extern "C" void rctl_webrtc_set_orientation(uint8_t orientation) {
+    if (orientation < 1 || orientation > 4) return;
+    std::vector<std::shared_ptr<rtc::DataChannel>> channels;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_orientation = orientation;
+        channels = g_state_dcs;
+    }
+    const std::string message = json{{"v", 1}, {"orientation", orientation}}.dump();
+    for (const auto &dc : channels) {
+        if (!dc || !dc->isOpen()) continue;
+        try { dc->send(message); } catch (...) {}
+    }
 }
 
 extern "C" void rctl_webrtc_files_send_text(const char *s) {

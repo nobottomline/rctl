@@ -24,6 +24,8 @@
     { "schema": "files-control.schema.json", "path": "files/put-ok.json", "valid": true },
     { "schema": "files-control.schema.json", "path": "files/error.json", "valid": true },
     { "schema": "files-control.schema.json", "path": "files/future-field.json", "valid": true },
-    { "schema": "files-control.schema.json", "path": "files/invalid-empty-path.json", "valid": false }
+    { "schema": "files-control.schema.json", "path": "files/invalid-empty-path.json", "valid": false },
+    { "schema": "state.schema.json", "path": "state/orientation.json", "valid": true },
+    { "schema": "state.schema.json", "path": "state/invalid-orientation.json", "valid": false }
   ]
 }

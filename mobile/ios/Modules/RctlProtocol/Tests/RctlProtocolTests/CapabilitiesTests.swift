@@ -11,7 +11,7 @@ struct CapabilitiesTests {
         #expect(capabilities.component == "daemon")
         #expect(capabilities.daemon?.version == "0.3.3")
         #expect(capabilities.features.contains("screen.webrtc"))
-        #expect(WireProtocolVersion.current.compatibility(with: capabilities.protocolVersion) == .compatible)
+        #expect(WireProtocolVersion.current.compatibility(with: capabilities.protocolVersion).canConnect)
     }
 
     @Test("Relay fixture decodes and validates")
@@ -28,7 +28,7 @@ struct CapabilitiesTests {
         let capabilities = try fixture("future-minor-v1.json")
         let compatibility = WireProtocolVersion.current.compatibility(with: capabilities.protocolVersion)
 
-        #expect(compatibility == .minorDifference(local: 0, remote: 7))
+        #expect(compatibility == .minorDifference(local: WireProtocolVersion.current.minor, remote: 7))
         #expect(compatibility.canConnect)
         #expect(capabilities.features.contains("future.unknown_feature"))
     }

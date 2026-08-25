@@ -2,4 +2,4 @@
 #pragma once
 
 #define RCTL_PROTOCOL_MAJOR 1
-#define RCTL_PROTOCOL_MINOR 0
+#define RCTL_PROTOCOL_MINOR 1
