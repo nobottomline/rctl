@@ -241,6 +241,29 @@ actions use LocalAuthentication at the point of use, not only at application
 launch. Ordinary display names, relay metadata and cached capabilities may live
 in a normal application database; secrets and media content may not.
 
+### iOS visual system
+
+The controller uses a small RCTL-owned visual layer instead of styling every
+screen independently. Semantic colors, compact button treatments, interaction
+states, haptics, and domain glyphs live beside the feature that owns them. The
+remote viewport uses the same charcoal, amber, mint, and danger semantics as the
+web operator console without copying browser layout into a native application.
+
+Use native SwiftUI/UIKit behavior for navigation, menus, sheets, focus,
+accessibility, Dynamic Type, and destructive confirmations. SF Symbols are the
+default for standard Apple actions whose meaning users already know. RCTL-owned
+glyphs or reviewed asset-catalog icons are appropriate for product-specific
+concepts; an external icon or component package must have a pinned stable
+release, an acceptable license, accessibility support, and clear maintenance
+value. Appearance alone is not enough reason to add a runtime dependency.
+
+The live viewport keeps only frequent actions in its persistent chrome. Source,
+`View` / `Control`, Home, and session tools remain reachable at phone widths;
+less frequent hardware actions use a scrollable sheet. Fixed viewport chrome
+caps extreme text growth and substitutes labeled controls with accessible icons
+when space is exhausted. Content sheets remain fully scalable and switch to a
+single-column layout at accessibility sizes.
+
 ## Android Architecture
 
 Use a single-activity Compose application with feature modules and

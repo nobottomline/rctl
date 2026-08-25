@@ -246,7 +246,8 @@ Current iOS implementation includes authenticated discovery/signaling, bounded
 Metal video presentation, automatic orientation over the versioned `state`
 DataChannel, aspect-fit multitouch mapping, explicit `View` / `Control` safety
 modes, Home, lock, volume, Control Center, Notification Center, source switching,
-and inline reconnect states. Keyboard, clipboard, audio controls, Talk, quality,
+inline reconnect states, and responsive RCTL-owned operator chrome with haptics
+and accessibility fallbacks. Keyboard, clipboard, audio controls, Talk, quality,
 and diagnostics remain subsequent increments rather than placeholder controls.
 
 Then add files, Photos, camera/recording, PiP, terminal, update, and destructive

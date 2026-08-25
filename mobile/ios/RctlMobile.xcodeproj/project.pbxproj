@@ -21,6 +21,9 @@
 		A1000000000000000000000C /* RctlClient in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000001 /* RctlClient */; };
 		A1000000000000000000000D /* RctlProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000002 /* RctlProtocol */; };
 		A1000000000000000000000E /* RctlRealtime in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000003 /* RctlRealtime */; };
+		A1000000000000000000000F /* RemoteDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* RemoteDesignSystem.swift */; };
+		A10000000000000000000010 /* RemoteControlChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* RemoteControlChrome.swift */; };
+		A10000000000000000000011 /* RemoteToolsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* RemoteToolsSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +43,9 @@
 		A2000000000000000000000E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		A2000000000000000000000F /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		A20000000000000000000010 /* RCTL Controller.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "RCTL Controller.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000011 /* RemoteDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesignSystem.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* RemoteControlChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlChrome.swift; sourceTree = "<group>"; };
+		A20000000000000000000013 /* RemoteToolsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteToolsSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -144,7 +150,10 @@
 			isa = PBXGroup;
 			children = (
 				A2000000000000000000000A /* RemoteControlView.swift */,
+				A20000000000000000000012 /* RemoteControlChrome.swift */,
+				A20000000000000000000011 /* RemoteDesignSystem.swift */,
 				A20000000000000000000008 /* RemoteSessionModel.swift */,
+				A20000000000000000000013 /* RemoteToolsSheet.swift */,
 				A20000000000000000000009 /* RemoteVideoRepresentable.swift */,
 			);
 			path = Remote;
@@ -240,6 +249,9 @@
 				A10000000000000000000008 /* RemoteSessionModel.swift in Sources */,
 				A10000000000000000000009 /* RemoteVideoRepresentable.swift in Sources */,
 				A1000000000000000000000A /* RemoteControlView.swift in Sources */,
+				A1000000000000000000000F /* RemoteDesignSystem.swift in Sources */,
+				A10000000000000000000010 /* RemoteControlChrome.swift in Sources */,
+				A10000000000000000000011 /* RemoteToolsSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

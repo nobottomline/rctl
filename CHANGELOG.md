@@ -4,6 +4,8 @@
 
 - Added native iOS aspect-fit multitouch control with safe `View` / `Control`
   modes, system controls, and a compact responsive control dock.
+- Added the native RCTL operator visual system, responsive remote-session chrome,
+  haptic feedback, accessible compact modes, and a dedicated session-tools sheet.
 - Added a versioned WebRTC state DataChannel for automatic screen orientation
   and orientation-correct native input mapping.
 - Promoted the native iOS qualification host to the RCTL Controller product,

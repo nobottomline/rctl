@@ -15,8 +15,10 @@ the browser client:
 - render fixed-framebuffer video upright from the versioned state channel;
 - map bounded multitouch through aspect-fit and orientation transforms;
 - require an explicit `Control` mode before forwarding touches or system actions;
+- present a responsive RCTL operator console with persistent source, safety-mode,
+  Home, and session-tool controls;
 - send Home, lock, volume, Control Center, and Notification Center commands over
-  the scoped control channel.
+  the scoped control channel, with confirmation for device lock.
 
 Build from the repository root with `make mobile-ios-build`, or open
 `RctlMobile.xcodeproj` and run the shared `RCTL Controller` scheme. Simulator
