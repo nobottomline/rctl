@@ -4,15 +4,15 @@ import RctlClient
 import UIKit
 
 @MainActor
-final class ProbeAppModel: ObservableObject {
-    @Published private(set) var profile: ProbeProfile?
+final class ControllerAppModel: ObservableObject {
+    @Published private(set) var profile: ControllerProfile?
     @Published private(set) var devices: [ControllerDevice] = []
     @Published private(set) var isBusy = false
     @Published var presentedError: String?
 
     private let api: ControllerAPIClient
     private let keychain: KeychainControllerStore
-    private let profiles: ProbeProfileStore
+    private let profiles: ControllerProfileStore
     private let allowInsecureLoopback: Bool
     private var accessToken: String?
     private var accessExpiresAt: Int64?
@@ -21,7 +21,7 @@ final class ProbeAppModel: ObservableObject {
     init(
         api: ControllerAPIClient = ControllerAPIClient(),
         keychain: KeychainControllerStore = KeychainControllerStore(),
-        profiles: ProbeProfileStore = ProbeProfileStore(),
+        profiles: ControllerProfileStore = ControllerProfileStore(),
         allowInsecureLoopback: Bool? = nil
     ) {
         self.api = api
@@ -59,7 +59,7 @@ final class ProbeAppModel: ObservableObject {
             )
             let credential = ControllerRefreshCredential(pairing: pairing, claim: claim)
             try keychain.save(credential)
-            let newProfile = ProbeProfile(
+            let newProfile = ControllerProfile(
                 origin: pairing.origin,
                 relayID: pairing.relayID,
                 controller: claim.controller
@@ -190,7 +190,7 @@ final class ProbeAppModel: ObservableObject {
 
     private static var debugLoopbackEnabled: Bool {
 #if DEBUG
-        ProcessInfo.processInfo.environment["RCTL_MEDIAPROBE_ALLOW_INSECURE_LOOPBACK"] == "1" ||
+        ProcessInfo.processInfo.environment["RCTL_CONTROLLER_ALLOW_INSECURE_LOOPBACK"] == "1" ||
             ProcessInfo.processInfo.arguments.contains("--rctl-allow-insecure-loopback")
 #else
         false
@@ -254,7 +254,7 @@ final class ProbeAppModel: ObservableObject {
     }
 
     private struct AccessSession {
-        let profile: ProbeProfile
+        let profile: ControllerProfile
         let token: String
         let key: ControllerSigningKey
     }

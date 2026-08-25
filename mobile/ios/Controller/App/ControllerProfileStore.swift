@@ -1,26 +1,26 @@
 import Foundation
 import RctlClient
 
-struct ProbeProfile: Codable, Equatable, Sendable {
+struct ControllerProfile: Codable, Equatable, Sendable {
     let origin: String
     let relayID: String
     let controller: PairedController
 }
 
-struct ProbeProfileStore {
+struct ControllerProfileStore {
     private let defaults: UserDefaults
-    private let key = "rctl.mediaprobe.profile.v1"
+    private let key = "rctl.controller.profile.v1"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
-    func load() -> ProbeProfile? {
+    func load() -> ControllerProfile? {
         guard let data = defaults.data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(ProbeProfile.self, from: data)
+        return try? JSONDecoder().decode(ControllerProfile.self, from: data)
     }
 
-    func save(_ profile: ProbeProfile) throws {
+    func save(_ profile: ControllerProfile) throws {
         defaults.set(try JSONEncoder().encode(profile), forKey: key)
     }
 

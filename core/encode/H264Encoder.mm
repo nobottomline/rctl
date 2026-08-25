@@ -145,11 +145,13 @@ static OSStatus configure_session(rctl_encoder *e) {
     VTSessionSetProperty(e->session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
     VTSessionSetProperty(e->session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
     set_int(e->session, kVTCompressionPropertyKey_MaxFrameDelayCount, 0); // emit each frame ASAP (low latency)
-    // High profile (CABAC) — much better quality per bitrate than Baseline.
+    // The WebRTC offer advertises Constrained Baseline. Keep the encoded
+    // bitstream in the Baseline family as well: native receivers may reject
+    // High/CABAC frames even though browsers often tolerate that mismatch.
     VTSessionSetProperty(e->session, kVTCompressionPropertyKey_ProfileLevel,
-                         kVTProfileLevel_H264_High_AutoLevel);
+                         kVTProfileLevel_H264_Baseline_AutoLevel);
     VTSessionSetProperty(e->session, kVTCompressionPropertyKey_H264EntropyMode,
-                         kVTH264EntropyMode_CABAC);
+                         kVTH264EntropyMode_CAVLC);
     // Downscaling = the remote (WebRTC) profile: NACK + PLI recover from loss and
     // the browser pulls a keyframe on join, so use a long GOP. A periodic
     // full-intra frame is large and briefly saturates the uplink -- a visible

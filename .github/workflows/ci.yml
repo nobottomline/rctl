@@ -83,9 +83,9 @@ jobs:
           swift test --package-path mobile/ios/Modules/RctlProtocol
           swift test --package-path mobile/ios/Modules/RctlClient
           swift test --package-path mobile/ios/Modules/RctlRealtime
-      - name: Build iOS MediaProbe
+      - name: Build RCTL Controller for iOS
         run: |
-          xcodebuild -project mobile/ios/RctlMobile.xcodeproj -scheme 'RCTL MediaProbe' \
+          xcodebuild -project mobile/ios/RctlMobile.xcodeproj -scheme 'RCTL Controller' \
             -configuration Debug -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath mobile/ios/.derivedData CODE_SIGNING_ALLOWED=NO build
 

@@ -12,11 +12,12 @@ final class RemoteSessionModel: ObservableObject {
     @Published var media: ControllerMediaRole = .screen
 
     let session: RctlRealtimeSession
-    private let appModel: ProbeAppModel
+    private let appModel: ControllerAppModel
     private let deviceID: String
     private var suspended = false
+    private var connectionAttempt: UInt64 = 0
 
-    init(appModel: ProbeAppModel, deviceID: String) {
+    init(appModel: ControllerAppModel, deviceID: String) {
         self.appModel = appModel
         self.deviceID = deviceID
         let router = EventRouter()
@@ -28,6 +29,8 @@ final class RemoteSessionModel: ObservableObject {
 
     func connect() async {
         suspended = false
+        connectionAttempt &+= 1
+        let currentAttempt = connectionAttempt
         session.stop()
         state = .signaling
         videoAvailable = false
@@ -35,20 +38,24 @@ final class RemoteSessionModel: ObservableObject {
         errorMessage = nil
         do {
             let request = try await appModel.signalingRequest(deviceID: deviceID, media: media)
+            guard !suspended, connectionAttempt == currentAttempt else { return }
             try session.start(with: request)
         } catch {
+            guard !suspended, connectionAttempt == currentAttempt else { return }
             state = .failed
-            errorMessage = ProbeAppModel.message(for: error)
+            errorMessage = ControllerAppModel.message(for: error)
         }
     }
 
     func disconnect() {
+        connectionAttempt &+= 1
         suspended = false
         session.stop()
     }
 
     func suspend() {
         guard !suspended else { return }
+        connectionAttempt &+= 1
         suspended = true
         videoAvailable = false
         session.stop()
@@ -87,7 +94,7 @@ final class RemoteSessionModel: ObservableObject {
         switch event {
         case let .connection(value):
             state = value
-        case .videoTrackAvailable:
+        case .firstVideoFrame:
             videoAvailable = true
         case let .channel(label, value):
             channelStates[label] = value

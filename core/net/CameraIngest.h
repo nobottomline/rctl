@@ -12,6 +12,8 @@ extern "C" {
 bool rctl_camera_ingest_start(void);
 void rctl_camera_set_expired_cb(void (*callback)(void));
 uint64_t rctl_camera_set_enabled(bool enabled, int position, int fps, int bitrate_bps);
+// Toggle capture without changing the last selected position/quality profile.
+uint64_t rctl_camera_set_active(bool enabled);
 void rctl_camera_renew_lease(void);
 bool rctl_camera_is_enabled(void);
 char *rctl_camera_status_json(void);

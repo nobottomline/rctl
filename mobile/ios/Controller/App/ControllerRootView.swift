@@ -1,7 +1,7 @@
 import SwiftUI
 
-struct ProbeRootView: View {
-    @ObservedObject var model: ProbeAppModel
+struct ControllerRootView: View {
+    @ObservedObject var model: ControllerAppModel
 
     var body: some View {
         Group {

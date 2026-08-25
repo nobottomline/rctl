@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Promoted the native iOS qualification host to the RCTL Controller product,
+  hardened relay ICE bootstrap diagnostics, and added decoded-frame telemetry.
+- Added bounded Core Image/Metal presentation for native WebRTC video and aligned
+  the device encoder with its advertised H.264 Baseline profile.
+- Made native camera tracks own a fail-closed capture lease, so Camera starts on
+  first viewer, renews while connected, and stops when the last viewer leaves.
+
 ## 0.3.4
 
 - Added the native mobile-controller protocol, QR pairing flow, proof-of-possession

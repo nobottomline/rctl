@@ -1,5 +1,6 @@
 @preconcurrency import Foundation
 @preconcurrency import LiveKitWebRTC
+import OSLog
 import RctlProtocol
 
 public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
@@ -10,6 +11,8 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private static let maximumControlBufferedBytes: UInt64 = 64 * 1_024
     private static let connectionTimeout: TimeInterval = 15
     private static let disconnectGrace: TimeInterval = 5
+    private static let videoDiagnosticDelay: TimeInterval = 5
+    private static let logger = Logger(subsystem: "com.greatlove.rctl.controller", category: "WebRTC")
 
     private let factory: RctlPeerConnectionFactory
     private let urlSession: URLSession
@@ -20,10 +23,16 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private var running = false
     private var webSocket: URLSessionWebSocketTask?
     private var peerConnection: LKRTCPeerConnection?
+    private var readyReceived = false
     private var remoteDescriptionReady = false
     private var pendingCandidates: [LKRTCIceCandidate] = []
+    private var localCandidateCount = 0
+    private var remoteCandidateCount = 0
+    private var iceConnectionState = "new"
+    private var iceGatheringState = "new"
     private var channels: [String: LKRTCDataChannel] = [:]
     private var videoTrack: LKRTCVideoTrack?
+    private var firstVideoFrameReceived = false
     private var connectionTimeoutWorkItem: DispatchWorkItem?
     private var disconnectWorkItem: DispatchWorkItem?
 #if canImport(UIKit)
@@ -63,22 +72,31 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     public func attachVideo(to view: RctlRemoteVideoView) {
         queue.async { [weak self, weak view] in
             guard let self, let view else { return }
+            let previousView = self.videoView
             self.videoView = view
             let track = self.videoTrack
+            let generation = self.generation
             DispatchQueue.main.async {
-                view.setTrack(track)
+                if previousView !== view {
+                    previousView?.setTrack(nil)
+                }
+                view.setTrack(track) { [weak self] in
+                    self?.queue.async {
+                        self?.handleFirstVideoFrameLocked(generation: generation)
+                    }
+                }
             }
         }
     }
 
     @MainActor
-    public func detachVideo() {
-        queue.async { [weak self] in
+    public func detachVideo(from view: RctlRemoteVideoView) {
+        queue.async { [weak self, weak view] in
             guard let self else { return }
-            let view = self.videoView
+            guard let view, self.videoView === view else { return }
             self.videoView = nil
             DispatchQueue.main.async {
-                view?.setTrack(nil)
+                view.setTrack(nil)
             }
         }
     }
@@ -116,29 +134,25 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         generation &+= 1
         let currentGeneration = generation
         running = true
+        readyReceived = false
         remoteDescriptionReady = false
         pendingCandidates.removeAll(keepingCapacity: true)
         channels.removeAll(keepingCapacity: true)
+        localCandidateCount = 0
+        remoteCandidateCount = 0
+        iceConnectionState = "new"
+        iceGatheringState = "new"
+        firstVideoFrameReceived = false
         emit(.connection(.signaling))
-
-        do {
-            let delegate = self
-            peerConnection = try factory.makePeerConnection(delegate: delegate)
-        } catch let error as RctlRealtimeError {
-            failLocked(error, generation: currentGeneration)
-            return
-        } catch {
-            failLocked(.peerConnectionUnavailable, generation: currentGeneration)
-            return
-        }
 
         let task = urlSession.webSocketTask(with: request)
         webSocket = task
         task.resume()
         receiveNext(on: task, generation: currentGeneration)
         let timeout = DispatchWorkItem { [weak self] in
-            self?.failLocked(
-                .negotiationFailed("connection timed out"),
+            guard let self else { return }
+            self.failLocked(
+                .negotiationFailed(self.timeoutDescriptionLocked()),
                 generation: currentGeneration
             )
         }
@@ -182,15 +196,26 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     }
 
     private func handleSignalingLocked(_ message: SignalingMessage, generation currentGeneration: UInt64) throws {
-        guard let peerConnection else { throw RctlRealtimeError.peerConnectionUnavailable }
         switch message {
         case let .ready(servers):
-            let configuration = peerConnection.configuration
-            configuration.iceServers = try Self.makeIceServers(servers)
-            guard peerConnection.setConfiguration(configuration) else {
-                throw RctlRealtimeError.negotiationFailed("ICE configuration was rejected")
+            guard !readyReceived else { throw RctlRealtimeError.invalidSignalingResponse }
+            readyReceived = true
+            let iceServers = try Self.makeIceServers(servers)
+            if let peerConnection {
+                let configuration = peerConnection.configuration
+                configuration.iceServers = iceServers
+                guard peerConnection.setConfiguration(configuration) else {
+                    throw RctlRealtimeError.negotiationFailed("ICE configuration was rejected")
+                }
+            } else {
+                peerConnection = try factory.makePeerConnection(
+                    iceServers: iceServers,
+                    delegate: self
+                )
             }
+            Self.logger.debug("Signaling ready with \(servers.count, privacy: .public) ICE server entries")
         case let .offer(sdp):
+            let peerConnection = try ensurePeerConnectionLocked()
             emit(.connection(.connecting))
             let description = LKRTCSessionDescription(type: .offer, sdp: sdp)
             peerConnection.setRemoteDescription(description) { [weak self] error in
@@ -209,6 +234,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         case let .candidate(candidate, mid):
             let value = candidate.hasPrefix("a=") ? String(candidate.dropFirst(2)) : candidate
             let iceCandidate = LKRTCIceCandidate(sdp: value, sdpMLineIndex: 0, sdpMid: mid)
+            remoteCandidateCount += 1
             if remoteDescriptionReady {
                 addCandidateLocked(iceCandidate, generation: currentGeneration)
             } else {
@@ -220,6 +246,16 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         case .answer:
             throw RctlRealtimeError.invalidSignalingResponse
         }
+    }
+
+    private func ensurePeerConnectionLocked() throws -> LKRTCPeerConnection {
+        if let peerConnection {
+            return peerConnection
+        }
+        let peerConnection = try factory.makePeerConnection(delegate: self)
+        self.peerConnection = peerConnection
+        Self.logger.debug("Created host-only peer for signaling endpoint without ready")
+        return peerConnection
     }
 
     private func flushPendingCandidatesLocked(generation currentGeneration: UInt64) {
@@ -296,6 +332,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
 
     private func failLocked(_ error: RctlRealtimeError, generation currentGeneration: UInt64) {
         guard running, generation == currentGeneration else { return }
+        Self.logger.error("Realtime session failed: \(Self.failureKind(error), privacy: .public)")
         emit(.failure(error))
         emit(.connection(.failed))
         stopLocked(emitClosed: false)
@@ -334,7 +371,26 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         webSocket?.cancel(with: .goingAway, reason: nil)
         webSocket = nil
         pendingCandidates.removeAll(keepingCapacity: false)
+        readyReceived = false
         remoteDescriptionReady = false
+    }
+
+    private func timeoutDescriptionLocked() -> String {
+        "connection timed out (ICE \(iceConnectionState), gathering \(iceGatheringState), " +
+            "candidates local=\(localCandidateCount) remote=\(remoteCandidateCount))"
+    }
+
+    private static func failureKind(_ error: RctlRealtimeError) -> String {
+        switch error {
+        case .alreadyRunning: "already-running"
+        case .invalidSignalingResponse: "invalid-signaling"
+        case .peerConnectionUnavailable: "peer-unavailable"
+        case .negotiationFailed: "negotiation"
+        case .signalingFailed: "signaling"
+        case .signalingClosed: "signaling-closed"
+        case .controlChannelUnavailable: "control-unavailable"
+        case .controlBackpressure: "control-backpressure"
+        }
     }
 
     private func emit(_ event: RctlRealtimeEvent) {
@@ -401,13 +457,26 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
 
     public func peerConnectionShouldNegotiate(_ peerConnection: LKRTCPeerConnection) {}
 
-    public func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {}
+    public func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {
+        queue.async { [weak self] in
+            guard let self, self.running, self.peerConnection === peerConnection else { return }
+            self.iceConnectionState = Self.iceConnectionStateName(newState)
+            Self.logger.debug("ICE connection state: \(self.iceConnectionState, privacy: .public)")
+        }
+    }
 
-    public func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {}
+    public func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {
+        queue.async { [weak self] in
+            guard let self, self.running, self.peerConnection === peerConnection else { return }
+            self.iceGatheringState = Self.iceGatheringStateName(newState)
+            Self.logger.debug("ICE gathering state: \(self.iceGatheringState, privacy: .public)")
+        }
+    }
 
     public func peerConnection(_ peerConnection: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {
         queue.async { [weak self] in
             guard let self, self.running else { return }
+            self.localCandidateCount += 1
             self.sendSignalingLocked(
                 .candidate(candidate: candidate.sdp, mid: candidate.sdpMid ?? "0"),
                 generation: self.generation
@@ -458,6 +527,10 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
                 self.disconnectWorkItem?.cancel()
                 self.disconnectWorkItem = nil
                 self.emit(.connection(.connected))
+                let generation = self.generation
+                self.queue.asyncAfter(deadline: .now() + Self.videoDiagnosticDelay) { [weak self] in
+                    self?.logInboundVideoStatsLocked(generation: generation)
+                }
             case .disconnected:
                 self.emit(.connection(.disconnected))
                 if self.disconnectWorkItem == nil {
@@ -484,13 +557,81 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
     private func adoptVideoTrackLocked(_ track: LKRTCVideoTrack) {
         guard running, videoTrack?.trackId != track.trackId else { return }
         videoTrack = track
+        firstVideoFrameReceived = false
 #if canImport(UIKit)
         let view = videoView
+        let generation = generation
         DispatchQueue.main.async {
-            view?.setTrack(track)
+            view?.setTrack(track) { [weak self] in
+                self?.queue.async {
+                    self?.handleFirstVideoFrameLocked(generation: generation)
+                }
+            }
         }
 #endif
-        emit(.videoTrackAvailable)
+        Self.logger.debug("Remote video track attached; waiting for decoded frame")
+    }
+
+    private func handleFirstVideoFrameLocked(generation currentGeneration: UInt64) {
+        guard running, generation == currentGeneration, !firstVideoFrameReceived else { return }
+        firstVideoFrameReceived = true
+        Self.logger.info("First remote video frame decoded")
+        emit(.firstVideoFrame)
+    }
+
+    private func logInboundVideoStatsLocked(generation currentGeneration: UInt64) {
+        guard running, generation == currentGeneration, let peerConnection else { return }
+        let frameReceived = firstVideoFrameReceived
+        peerConnection.statistics { report in
+            let inboundVideo = report.statistics.values.first { statistic in
+                guard statistic.type == "inbound-rtp" else { return false }
+                let kind = statistic.values["kind"] as? String
+                    ?? statistic.values["mediaType"] as? String
+                return kind == "video"
+            }
+            let values = inboundVideo?.values ?? [:]
+            let packets = Self.statisticInteger(values["packetsReceived"])
+            let bytes = Self.statisticInteger(values["bytesReceived"])
+            let frames = Self.statisticInteger(values["framesReceived"])
+            let decoded = Self.statisticInteger(values["framesDecoded"])
+            Self.logger.info(
+                "Inbound video after 5s: callback=\(frameReceived, privacy: .public) packets=\(packets, privacy: .public) bytes=\(bytes, privacy: .public) frames=\(frames, privacy: .public) decoded=\(decoded, privacy: .public)"
+            )
+        }
+    }
+
+    private static func statisticInteger(_ value: Any?) -> UInt64 {
+        switch value {
+        case let number as NSNumber:
+            number.uint64Value
+        case let string as String:
+            UInt64(string) ?? 0
+        default:
+            0
+        }
+    }
+
+    private static func iceConnectionStateName(_ state: LKRTCIceConnectionState) -> String {
+        switch state {
+        case .new: "new"
+        case .checking: "checking"
+        case .connected: "connected"
+        case .completed: "completed"
+        case .failed: "failed"
+        case .disconnected: "disconnected"
+        case .closed: "closed"
+        case .count: "invalid"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func iceGatheringStateName(_ state: LKRTCIceGatheringState) -> String {
+        switch state {
+        case .new: "new"
+        case .gathering: "gathering"
+        case .complete: "complete"
+        @unknown default: "unknown"
+        }
     }
 }
 

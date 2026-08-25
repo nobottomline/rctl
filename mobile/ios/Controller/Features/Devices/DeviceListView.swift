@@ -2,7 +2,7 @@ import RctlClient
 import SwiftUI
 
 struct DeviceListView: View {
-    @ObservedObject var model: ProbeAppModel
+    @ObservedObject var model: ControllerAppModel
     @State private var resetConfirmation = false
 
     var body: some View {

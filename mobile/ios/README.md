@@ -10,13 +10,13 @@ The checked-in modules are:
 - `Modules/RctlClient`: QR pairing validation, P-256 request proofs,
   Secure Enclave/Keychain identity, refresh credential storage, and relay auth;
 - `Modules/RctlRealtime`: vendor-isolated signaling, PeerConnection lifecycle,
-  bounded DataChannels, and Metal video rendering backed by an exact,
+  bounded DataChannels, and hardware-accelerated video rendering backed by an exact,
   checksum-verified XCFramework.
 
 `RctlMobile.xcodeproj` is the checked-in application graph. Its shared
-`RCTL MediaProbe` scheme hosts the non-shipping physical-device qualification
-app in `MediaProbe/`. Run package tests with `make mobile-ios-test`, build the
-app with `make mobile-ios-build`, or run both with `make mobile-test`.
+`RCTL Controller` scheme builds the native application in `Controller/`. Run
+package tests with `make mobile-ios-test`, build the app with
+`make mobile-ios-build`, or run both with `make mobile-test`.
 
 Apple signing is machine-local. Copy `Config/Local.xcconfig.example` to
 `Config/Local.xcconfig` and set `DEVELOPMENT_TEAM`, or select a team in Xcode

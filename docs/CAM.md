@@ -124,6 +124,13 @@ tab closes, crashes, loses the relay, or is suspended long enough, the daemon
 stops camera and recording and resumes the screen. Capture is always off after a
 daemon restart.
 
+Opening the dedicated WebRTC camera track is also a capture lease. This lets
+native controllers start camera without issuing a separate REST request. The
+first open track enables the last selected camera profile, the daemon renews its
+lease while at least one track remains open, and the last closed track disables
+capture. REST and native clients therefore share one fail-closed lifecycle and a
+temporary camera reconnection preserves the selected front/back position.
+
 The browser separately watches decoded video progress. If camera desired state
 is `live` but `HTMLVideoElement.currentTime` stops advancing, it rebuilds only the
 camera signaling and PeerConnection; control, terminal and file channels remain

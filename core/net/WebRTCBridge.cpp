@@ -43,6 +43,7 @@ static void (*g_send)(const char *) = nullptr;
 struct SessionSender { void (*fn)(void *ctx, const char *json); void *ctx; };
 static std::map<std::string, SessionSender> g_session_send;
 static void (*g_viewer_cb)(bool) = nullptr;
+static void (*g_camera_viewer_cb)(bool) = nullptr;
 static void (*g_keyframe_cb)(void) = nullptr;
 static void (*g_camera_keyframe_cb)(void) = nullptr;
 static void (*g_touch_cb)(int phase, int finger, double x, double y) = nullptr;
@@ -152,7 +153,8 @@ static void retire_track(const std::string &id) {
                        tracks.end());
         lastGone = (before > 0 && tracks.empty());
     }
-    if (!camera && lastGone && g_viewer_cb) g_viewer_cb(false);
+    auto viewerCb = camera ? g_camera_viewer_cb : g_viewer_cb;
+    if (lastGone && viewerCb) viewerCb(false);
 }
 
 // Build the libdatachannel ICE config from the RTCIceServer list the relay mints
@@ -246,7 +248,8 @@ static void destroy_session(std::shared_ptr<Session> dead) {
         }
         if (dead->filesDc && g_files_dc && g_files_dc.get() == dead->filesDc.get()) g_files_dc.reset();
     }
-    if (!dead->camera && lastGone && g_viewer_cb) g_viewer_cb(false);
+    auto viewerCb = dead->camera ? g_camera_viewer_cb : g_viewer_cb;
+    if (lastGone && viewerCb) viewerCb(false);
     if (dead->micIn) mic_teardown();   // its onClosed is detached above
     // `dead` drops at the caller: callbacks detached + none in flight -> safe.
 }
@@ -453,25 +456,25 @@ static void start_session(const std::string &id, const json &ice, bool camera,
             firstViewer = tracks.empty();
             tracks.push_back(it->second->track);
         }
-        if (!camera && firstViewer && g_viewer_cb) g_viewer_cb(true);
+        auto viewerCb = camera ? g_camera_viewer_cb : g_viewer_cb;
+        if (firstViewer && viewerCb) viewerCb(true);
         wlog("session " + id + (camera ? " camera" : " screen") + " track open");
     });
-    track->onClosed([id, tptr]() {
+    track->onClosed([id, tptr, camera]() {
         bool lastGone = false;
-        bool camera = false;
         {
             std::lock_guard<std::mutex> lk(g_mtx);
-            auto it = g_sessions.find(id);
-            camera = it != g_sessions.end() && it->second->camera;
             auto &tracks = camera ? g_camera_tracks : g_tracks;
+            size_t before = tracks.size();
             tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                               [tptr](const std::shared_ptr<rtc::Track> &t) {
                                   return t.get() == tptr;
                               }),
                           tracks.end());
-            lastGone = tracks.empty();
+            lastGone = before > 0 && tracks.empty();
         }
-        if (!camera && lastGone && g_viewer_cb) g_viewer_cb(false);
+        auto viewerCb = camera ? g_camera_viewer_cb : g_viewer_cb;
+        if (lastGone && viewerCb) viewerCb(false);
         wlog("session " + id + (camera ? " camera" : " screen") + " track closed");
     });
 
@@ -658,6 +661,10 @@ extern "C" void rctl_webrtc_set_sender(void (*send)(const char *)) {
 
 extern "C" void rctl_webrtc_set_viewer_cb(void (*cb)(bool)) {
     g_viewer_cb = cb;
+}
+
+extern "C" void rctl_webrtc_set_camera_viewer_cb(void (*cb)(bool)) {
+    g_camera_viewer_cb = cb;
 }
 
 extern "C" void rctl_webrtc_set_keyframe_cb(void (*cb)(void)) {

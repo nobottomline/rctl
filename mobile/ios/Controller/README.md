@@ -1,8 +1,8 @@
-# RCTL MediaProbe
+# RCTL Controller
 
-`MediaProbe` is a non-shipping iOS host for qualifying the native controller
-path against a real relay and controlled iPad. It is deliberately small but it
-uses production boundaries rather than fake services:
+`Controller` is the native iOS application for managing approved rctl devices.
+The current product slice uses the same authenticated relay and WebRTC paths as
+the browser client:
 
 - scan or paste the relay admin's one-time controller pairing JSON;
 - create and retain the P-256 controller identity in Keychain;
@@ -10,22 +10,22 @@ uses production boundaries rather than fake services:
   memory only;
 - list only approved devices through signed controller requests;
 - open scoped screen or camera signaling over WSS;
-- negotiate WebRTC, render H.264 through the vendor Metal view, and report
+- negotiate WebRTC, render decoded H.264 through Core Image/Metal, and report
   DataChannel state;
 - send the Home HID command when the scoped control channel is open.
 
 Build from the repository root with `make mobile-ios-build`, or open
-`RctlMobile.xcodeproj` and run the shared `RCTL MediaProbe` scheme. Simulator
-supports paste pairing and validates application lifecycle, but has no camera
-for QR capture and cannot qualify hardware decode or network behavior.
+`RctlMobile.xcodeproj` and run the shared `RCTL Controller` scheme. Simulator
+supports paste pairing and validates application lifecycle, but physical devices
+are required to qualify QR capture, hardware decode, and network behavior.
 
 Local app-level tests may launch a Debug build with
-`RCTL_MEDIAPROBE_ALLOW_INSECURE_LOOPBACK=1` or the
+`RCTL_CONTROLLER_ALLOW_INSECURE_LOOPBACK=1` or the
 `--rctl-allow-insecure-loopback` launch argument and pair only to an explicit
 loopback HTTP origin. Release builds ignore both opt-ins and require HTTPS.
 
-Before promoting the WebRTC dependency or starting the production UI, verify on
-a physical controller iPhone and controlled iPad:
+Before distributing the application, verify on a physical controller iPhone and
+controlled iPad:
 
 1. QR claim, process restart, Keychain restore, and refresh recovery.
 2. Screen and camera H.264 rendering over direct ICE and TURN relay paths.
@@ -33,9 +33,9 @@ a physical controller iPhone and controlled iPad:
 4. Repeated connect, mode switch, background/foreground, and force-close cleanup.
 5. At least 30 minutes of video with frame, thermal, memory, and reconnect data.
 
-The probe does not yet implement coordinate input, audio consumers, files,
-statistics export, or production reconnect policy. Those remain product
-increments and must not be inferred from a successful probe build.
+The current product slice does not yet implement coordinate input, audio
+consumers, files, statistics export, or automatic reconnect policy. These are
+tracked product increments; a successful build is not a release qualification.
 
 Refresh keeps the sender-constrained secret stable while renewing its inactivity
 expiry and replacing the access token. A process that dies before committing the

@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct PairingView: View {
-    @ObservedObject var model: ProbeAppModel
+    @ObservedObject var model: ControllerAppModel
     @State private var scannerPresented = false
 
     var body: some View {
@@ -37,7 +37,7 @@ struct PairingView: View {
                 Spacer()
             }
             .padding(24)
-            .navigationTitle("RCTL MediaProbe")
+            .navigationTitle("RCTL Controller")
             .overlay {
                 if model.isBusy { ProgressView() }
             }

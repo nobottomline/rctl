@@ -317,7 +317,9 @@ static bool audio_capture_set(bool on, char *err, size_t errsz);
 static int gSessionGen = 0;                     // bumped per transition (serialized on gAuto)
 static bool gStreamViewers = false;             // any /stream client
 static bool gWebrtcViewers = false;             // any WebRTC video channel
+static bool gCameraWebrtcViewers = false;        // any WebRTC camera channel
 static bool gCameraLive = false;                 // camera owns the hardware encoder budget
+static int gCameraLeaseGen = 0;
 static void send_media_state(bool screen_capture, bool keep_awake) {
     uint8_t state[2] = { screen_capture ? (uint8_t)1 : (uint8_t)0,
                          keep_awake ? (uint8_t)1 : (uint8_t)0 };
@@ -352,13 +354,45 @@ static void on_webrtc_keyframe_request(void) {
 static void on_webrtc_camera_keyframe_request(void) {
     notify_post("com.greatlove.rctl.cam.keyframe");
 }
+static void renew_webrtc_camera_lease(int generation) {
+    AFTER(10.0, ^{
+        if (!gCameraWebrtcViewers || generation != gCameraLeaseGen) return;
+        rctl_camera_renew_lease();
+        renew_webrtc_camera_lease(generation);
+    });
+}
 static void on_camera_lease_expired(void) {
     dispatch_async(gAuto, ^{
+        if (gCameraWebrtcViewers) {
+            // A live native/WebRTC viewer owns the lease. Recover if the
+            // watchdog raced a delayed renewal instead of leaving a black feed.
+            gCameraLive = true;
+            apply_active();
+            rctl_camera_set_active(true);
+            return;
+        }
         gCameraLive = false;
         // Let the foreground app tear down AVCapture/VideoToolbox before asking
         // SpringBoard to recreate its screen encoder. Re-enabling camera during
         // the grace period cancels the resume through the state check.
         AFTER(0.75, ^{ if (!gCameraLive) apply_active(); });
+    });
+}
+static void on_webrtc_camera_viewers(bool any) {
+    dispatch_async(gAuto, ^{
+        if (gCameraWebrtcViewers == any) return;
+        gCameraWebrtcViewers = any;
+        int generation = ++gCameraLeaseGen;
+        if (any) {
+            gCameraLive = true;
+            apply_active();
+            rctl_camera_set_active(true);
+            renew_webrtc_camera_lease(generation);
+        } else {
+            rctl_camera_set_active(false);
+            gCameraLive = false;
+            AFTER(0.75, ^{ if (!gCameraLive) apply_active(); });
+        }
     });
 }
 static void on_webrtc_viewers(bool any) {
@@ -2118,6 +2152,7 @@ int main(int argc, char **argv) {
         rctl_http_set_rest(gHttp, rest_handler, NULL);
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too
+        rctl_webrtc_set_camera_viewer_cb(on_webrtc_camera_viewers);
         rctl_webrtc_set_keyframe_cb(on_webrtc_keyframe_request); // browser PLI -> force a keyframe
         rctl_webrtc_set_camera_keyframe_cb(on_webrtc_camera_keyframe_request);
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel

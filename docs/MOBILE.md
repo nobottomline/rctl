@@ -1,9 +1,9 @@
 # Native Mobile Controller Architecture
 
 Status: architecture in implementation. The iOS contract, identity, realtime
-modules, and non-shipping MediaProbe exist; Android and both shipping product
-clients remain planned. This document does not describe a released mobile
-binary.
+modules, and the first RCTL Controller product slice exist; Android and public
+mobile distribution remain planned. This document does not describe a released
+mobile binary.
 
 ## Decision
 
@@ -120,7 +120,7 @@ remain warnings or unavailable controls.
 The legacy `files` channel is temporarily unavailable to scoped native sessions
 because its daemon-side reply destination is process-global. Native file support
 must first make transfer state and replies session-owned; failing closed avoids
-cross-controller delivery while the screen MediaProbe proceeds independently.
+cross-controller delivery while the native screen controller proceeds independently.
 
 Do not combine screen and camera into one PeerConnection until the proven
 device-side second-SSRC failure has been removed and physically qualified.
@@ -215,11 +215,13 @@ RctlMobileApp
     BackgroundTransferStore
 ```
 
-The initial video renderer should use the upstream WebRTC Objective-C SDK's
-Metal-backed renderer inside `UIViewRepresentable`. PiP requires a dedicated
-renderer path compatible with `AVSampleBufferDisplayLayer` and
+Keep transport and hardware decode in the upstream WebRTC Objective-C SDK. The
+pinned SDK's Metal view accepted decoded frames without presenting them during
+physical-device validation, so the controller uses a bounded Core Image/Metal
+surface for decoded `CVPixelBuffer` presentation inside `UIViewRepresentable`.
+PiP requires a dedicated renderer path compatible with `AVSampleBufferDisplayLayer` and
 `AVPictureInPictureVideoCallViewController`; implement it after the base renderer
-passes the media spike. Do not make a custom `MTKView` the default merely because
+passes media qualification. Do not make a custom `MTKView` the default merely because
 it is available.
 
 Use `AVAudioEngine` or the appropriate AudioUnit path for Opus playback and
@@ -475,9 +477,10 @@ service.
    revocation and audit events in the relay.
 4. Add a synthetic device/relay test harness that contains no personal data.
 
-### Phase 1: media feasibility spike
+### Phase 1: media qualification
 
-Build disposable native iOS and Android probes, not production navigation:
+Qualify the native iOS and Android media implementations before broadening the
+production navigation:
 
 1. Pair and authenticate to a test relay.
 2. Answer the device-created screen offer and render H.264 for 30 minutes.

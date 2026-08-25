@@ -17,7 +17,7 @@ public enum RctlRealtimeChannelState: String, Equatable, Sendable {
 
 public enum RctlRealtimeEvent: Equatable, Sendable {
     case connection(RctlRealtimeConnectionState)
-    case videoTrackAvailable
+    case firstVideoFrame
     case channel(label: String, state: RctlRealtimeChannelState)
     case failure(RctlRealtimeError)
 }

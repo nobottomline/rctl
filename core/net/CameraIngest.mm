@@ -236,6 +236,15 @@ uint64_t rctl_camera_set_enabled(bool enabled, int position, int fps, int bitrat
     return generation;
 }
 
+uint64_t rctl_camera_set_active(bool enabled) {
+    pthread_mutex_lock(&g_camera_lock);
+    int position = g_camera_position;
+    int fps = g_camera_fps;
+    int bitrate = g_camera_bitrate;
+    pthread_mutex_unlock(&g_camera_lock);
+    return rctl_camera_set_enabled(enabled, position, fps, bitrate);
+}
+
 void rctl_camera_renew_lease(void) {
     pthread_mutex_lock(&g_camera_lock);
     if (g_camera_enabled) g_camera_lease_deadline_ms = camera_now_ms() + 30000;

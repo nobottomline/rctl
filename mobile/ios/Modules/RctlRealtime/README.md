@@ -1,23 +1,23 @@
 # RctlRealtime
 
-Native WebRTC boundary for the iOS controller and the non-shipping MediaProbe.
+Native WebRTC boundary for RCTL Controller.
 No SwiftUI view owns a peer connection. `RctlRealtimeSession` owns signaling,
 offer/answer negotiation, bounded pre-offer ICE candidates, connection
 generations, remote tracks, DataChannels, timeouts, and deterministic cleanup.
-`RctlRemoteVideoView` contains the vendor Metal renderer behind an rctl-owned
-UIKit API.
+`RctlRemoteVideoView` keeps transport and hardware decode in WebRTC, then
+presents its decoded `CVPixelBuffer` through a bounded Core Image/Metal surface.
+The rctl-owned UIKit boundary owns only presentation and renderer lifecycle.
 
-The current exact `LiveKitWebRTC` dependency is a media-spike input, not a final
-distribution decision. It contains a symbol-prefixed build of upstream WebRTC,
-not the LiveKit client SDK. SwiftPM verifies the binary artifact checksum;
-package version, revision, artifact digest, and source-build commit are recorded
-in `WebRTCDependency.swift`.
+The exact `LiveKitWebRTC` dependency contains a symbol-prefixed build of
+upstream WebRTC, not the LiveKit client SDK. SwiftPM verifies the binary
+artifact checksum; package version, revision, artifact digest, and source-build
+commit are recorded in `WebRTCDependency.swift`.
 
 `RctlPeerConnectionFactory` is the only application boundary allowed to own
 vendor WebRTC objects. UI and feature modules consume rctl models and session
-APIs instead of importing `LiveKitWebRTC` directly. The dependency can be
-promoted only after the physical-device MediaProbe verifies H.264 decode,
-Metal rendering, DataChannels, lifecycle cleanup, and sustained thermals.
+APIs instead of importing `LiveKitWebRTC` directly. Release qualification must
+verify H.264 decode, video rendering, DataChannels, lifecycle cleanup, relay
+TURN paths, and sustained thermals on physical devices.
 
 The session accepts a pre-authorized `URLRequest`; controller credentials and
 request signing remain owned by `RctlClient`. Plaintext WebSocket signaling is

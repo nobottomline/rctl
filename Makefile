@@ -128,7 +128,7 @@ mobile-ios-test: protocol-check
 	@swift test --package-path mobile/ios/Modules/RctlRealtime
 
 mobile-ios-build:
-	@xcodebuild -project mobile/ios/RctlMobile.xcodeproj -scheme 'RCTL MediaProbe' \
+	@xcodebuild -project mobile/ios/RctlMobile.xcodeproj -scheme 'RCTL Controller' \
 		-configuration Debug -destination 'generic/platform=iOS Simulator' \
 		-derivedDataPath mobile/ios/.derivedData CODE_SIGNING_ALLOWED=NO build
 

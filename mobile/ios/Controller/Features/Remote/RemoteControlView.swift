@@ -7,7 +7,7 @@ struct RemoteControlView: View {
     let device: ControllerDevice
     @StateObject private var model: RemoteSessionModel
 
-    init(appModel: ProbeAppModel, device: ControllerDevice) {
+    init(appModel: ControllerAppModel, device: ControllerDevice) {
         self.device = device
         _model = StateObject(wrappedValue: RemoteSessionModel(appModel: appModel, deviceID: device.id))
     }

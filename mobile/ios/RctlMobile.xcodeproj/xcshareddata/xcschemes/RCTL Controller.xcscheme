@@ -16,8 +16,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A50000000000000000000001"
-               BuildableName = "RCTL MediaProbe.app"
-               BlueprintName = "RCTL MediaProbe"
+               BuildableName = "RCTL Controller.app"
+               BlueprintName = "RCTL Controller"
                ReferencedContainer = "container:RctlMobile.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -45,8 +45,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A50000000000000000000001"
-            BuildableName = "RCTL MediaProbe.app"
-            BlueprintName = "RCTL MediaProbe"
+            BuildableName = "RCTL Controller.app"
+            BlueprintName = "RCTL Controller"
             ReferencedContainer = "container:RctlMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -62,8 +62,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A50000000000000000000001"
-            BuildableName = "RCTL MediaProbe.app"
-            BlueprintName = "RCTL MediaProbe"
+            BuildableName = "RCTL Controller.app"
+            BlueprintName = "RCTL Controller"
             ReferencedContainer = "container:RctlMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

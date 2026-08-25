@@ -28,6 +28,9 @@ void rctl_webrtc_push_mic(const int16_t *pcm, int frames, int channels, int rate
 // Fires when the WebRTC video-viewer count crosses zero, so the daemon keeps the
 // capture pipeline awake while a WebRTC viewer is watching (OR-ed with /stream).
 void rctl_webrtc_set_viewer_cb(void (*cb)(bool any));
+// Camera uses an independent capture pipeline and therefore has a separate
+// zero-crossing callback from the screen viewer count.
+void rctl_webrtc_set_camera_viewer_cb(void (*cb)(bool any));
 
 // The browser can ask (via RTCP PLI) for an intra frame; the bridge invokes this
 // so the daemon forces the encoder to emit a keyframe.

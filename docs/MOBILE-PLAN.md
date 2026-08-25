@@ -40,8 +40,11 @@ Native does not mean UIKit-only or Android Views-only.
   PiP surfaces, and other lifecycle-sensitive views are hosted through UIKit.
 - Android uses Kotlin and Jetpack Compose for application UI. Upstream WebRTC
   renderers are hosted through `AndroidView` and platform media APIs.
-- iOS starts with WebRTC's `RTCMTLVideoView`; it uses Metal through the upstream
-  renderer. A custom Metal decoder/render graph requires measured evidence.
+- iOS keeps H.264 transport and hardware decode in upstream WebRTC, then uses a
+  bounded Core Image/Metal presentation surface. This narrow custom renderer is
+  justified by physical-device evidence that the pinned SDK's Metal view
+  accepted decoded frames but presented a black surface. It is not a custom
+  decoder or jitter buffer.
 - Android starts with the upstream EGL renderer and hardware decoder. A custom
   Vulkan/OpenGL pipeline requires measured evidence.
 - No Flutter, React Native, Kotlin Multiplatform, Compose Multiplatform, or Rust
@@ -97,11 +100,11 @@ mobile/
   ios/
     RctlMobile.xcodeproj/       # checked-in app graph and shared schemes
     Config/                     # reviewed build settings
-    MediaProbe/                 # non-shipping qualification host
+    Controller/                 # native iOS application
     Modules/
       RctlProtocol/             # native Swift wire models and validation
       RctlClient/               # controller identity and signed relay client
-      RctlRealtime/             # WebRTC lifecycle and Metal renderer boundary
+      RctlRealtime/             # WebRTC lifecycle and renderer boundary
   android/
     gradlew
     app/
@@ -178,7 +181,7 @@ limits, and database migration/rollback.
 Current implementation: relay identity storage, one-time claim, proof-of-
 possession tokens, recoverable refresh, list/rename/revoke APIs, local admin QR
 flow, and the Swift `RctlClient` cryptography/Keychain package are complete. The
-MediaProbe coordinator, active signaling closure, and scope-aware native device
+Controller coordinator, active signaling closure, and scope-aware native device
 routes are also implemented. Physical qualification and the shipping app remain
 before Phase 1 can meet its product exit criteria.
 
@@ -207,9 +210,10 @@ Exit criteria:
 - H.264 hardware decode and custom DataChannels are present;
 - license and symbol audits pass.
 
-## Phase 3: Native Media Spikes
+## Phase 3: Native Media Qualification
 
-Build deliberately small iOS and Android probes before product navigation.
+Qualify deliberately small iOS and Android media slices before expanding the
+product navigation.
 
 Required scenarios on physical phones:
 
@@ -223,7 +227,7 @@ Required scenarios on physical phones:
    foreground/background, interruption, and reconnect.
 8. Collect WebRTC stats, CPU, memory, thermal, battery, freezes, and queue depth.
 
-The spike is successful only on the real iPad path. A local synthetic stream or
+Qualification succeeds only on the real iPad path. A local synthetic stream or
 successful compilation is not qualification.
 
 ## Phase 4: iOS Vertical Product Slice
@@ -317,14 +321,14 @@ The implemented foundation now includes:
   sender-constrained refresh, and a live Swift-to-Go interoperability test;
 - a vendor-isolated `RctlRealtime` module pinned to a checksum-verified upstream
   WebRTC XCFramework, with H.264 capability tests, bounded native signaling,
-  generation-safe cleanup, scoped DataChannels, and Metal rendering;
-- a checked-in Xcode project and non-shipping MediaProbe covering QR/paste
+  generation-safe cleanup, scoped DataChannels, and platform rendering;
+- a checked-in Xcode project and RCTL Controller product slice covering QR/paste
   pairing, Keychain restore, approved-device discovery, screen/camera sessions,
   channel visibility, and a bounded control command;
 - root and CI checks covering all three Swift packages and the application
   target.
 
-The WebRTC artifact remains provisional until MediaProbe renders the real iPad
+The WebRTC integration remains release-gated until RCTL Controller renders the real iPad
 H.264 screen and camera streams, exercises scoped DataChannels, and passes the
 lifecycle, network-path, and sustained-runtime checks in Phase 3. A successful
 Simulator launch is not that qualification.
