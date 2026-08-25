@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 import RctlClient
 import RctlProtocol
 import RctlRealtime
@@ -30,8 +31,43 @@ enum RemoteHardwareAction {
     }
 }
 
+enum RemoteKeyboardKey: String, CaseIterable, Identifiable {
+    case escape
+    case tab
+    case enter
+    case backspace
+    case deleteForward
+    case left
+    case up
+    case down
+    case right
+
+    var id: Self { self }
+
+    fileprivate var usage: Int {
+        switch self {
+        case .escape: 0x29
+        case .tab: 0x2b
+        case .enter: 0x28
+        case .backspace: 0x2a
+        case .deleteForward: 0x4c
+        case .left: 0x50
+        case .up: 0x52
+        case .down: 0x51
+        case .right: 0x4f
+        }
+    }
+}
+
+enum RemoteTextInputResult: Equatable {
+    case sent(characterCount: Int)
+    case rejected(message: String)
+}
+
 @MainActor
 final class RemoteSessionModel: ObservableObject {
+    private static let textKeyInterval = 0.040
+
     @Published private(set) var state: RctlRealtimeConnectionState = .idle
     @Published private(set) var videoAvailable = false
     @Published private(set) var channelStates: [String: RctlRealtimeChannelState] = [:]
@@ -44,6 +80,7 @@ final class RemoteSessionModel: ObservableObject {
     private let deviceID: String
     private var suspended = false
     private var connectionAttempt: UInt64 = 0
+    private var keyboardAvailableAt: TimeInterval = 0
 
     var canControl: Bool {
         media == .screen && channelStates["control"] == .open
@@ -84,6 +121,7 @@ final class RemoteSessionModel: ObservableObject {
         connectionAttempt &+= 1
         suspended = false
         interactionMode = .view
+        cancelKeyboardInput()
         session.stop()
     }
 
@@ -93,6 +131,7 @@ final class RemoteSessionModel: ObservableObject {
         suspended = true
         videoAvailable = false
         interactionMode = .view
+        cancelKeyboardInput()
         session.stop()
     }
 
@@ -109,12 +148,17 @@ final class RemoteSessionModel: ObservableObject {
     func selectMedia(_ value: ControllerMediaRole) async {
         guard media != value else { return }
         interactionMode = .view
+        cancelKeyboardInput()
         media = value
         await connect()
     }
 
     func setInteractionMode(_ value: RemoteInteractionMode) {
-        interactionMode = value == .control && canControl ? .control : .view
+        let resolvedValue: RemoteInteractionMode = value == .control && canControl ? .control : .view
+        if interactionMode == .control, resolvedValue != .control {
+            cancelKeyboardInput()
+        }
+        interactionMode = resolvedValue
     }
 
     func sendTouch(phase: Int, finger: Int, x: Double, y: Double) {
@@ -134,6 +178,83 @@ final class RemoteSessionModel: ObservableObject {
         }
     }
 
+    func sendKeyboard(_ key: RemoteKeyboardKey) {
+        guard interactionMode == .control, canControl else { return }
+        enqueueKeyTap(
+            usage: key.usage,
+            at: reserveKeyboardWindow(duration: Self.textKeyInterval)
+        )
+    }
+
+    func sendText(_ text: String) -> RemoteTextInputResult {
+        guard interactionMode == .control, canControl else {
+            return .rejected(message: "Control mode is required for keyboard input.")
+        }
+        guard !text.isEmpty else {
+            return .rejected(message: "Enter text before sending.")
+        }
+
+        let strokes: [HIDKeyStroke]
+        do {
+            strokes = try HIDKeyboard.strokes(for: text)
+        } catch let error as HIDKeyboardMappingError {
+            switch error {
+            case let .tooLong(maximumCharacters):
+                return .rejected(message: "Text is limited to \(maximumCharacters) characters per send.")
+            case let .unsupportedCharacter(character):
+                return .rejected(message: "The character '\(character)' needs clipboard support, which is not available yet.")
+            }
+        } catch {
+            return .rejected(message: "The text could not be converted to keyboard input.")
+        }
+
+        let baseDelay = reserveKeyboardWindow(
+            duration: Double(strokes.count) * Self.textKeyInterval
+        )
+        for (index, stroke) in strokes.enumerated() {
+            let start = baseDelay + Double(index) * Self.textKeyInterval
+            if stroke.requiresShift {
+                session.enqueueKeyboardControl(
+                    .key(page: HIDKeyboard.page, usage: HIDKeyboard.leftShift, down: true),
+                    after: start
+                )
+            }
+            enqueueKeyTap(
+                usage: stroke.usage,
+                at: start + (stroke.requiresShift ? 0.006 : 0)
+            )
+            if stroke.requiresShift {
+                session.enqueueKeyboardControl(
+                    .key(page: HIDKeyboard.page, usage: HIDKeyboard.leftShift, down: false),
+                    after: start + 0.024
+                )
+            }
+        }
+        return .sent(characterCount: strokes.count)
+    }
+
+    private func enqueueKeyTap(usage: Int, at delay: Double) {
+        session.enqueueKeyboardControl(
+            .keyTap(page: HIDKeyboard.page, usage: usage),
+            after: delay
+        )
+    }
+
+    private func reserveKeyboardWindow(duration: TimeInterval) -> TimeInterval {
+        let now = ProcessInfo.processInfo.systemUptime
+        let start = max(now, keyboardAvailableAt)
+        keyboardAvailableAt = start + duration
+        return start - now
+    }
+
+    private func cancelKeyboardInput() {
+        keyboardAvailableAt = 0
+        session.cancelQueuedKeyboardControl()
+        session.enqueueControl(
+            .key(page: HIDKeyboard.page, usage: HIDKeyboard.leftShift, down: false)
+        )
+    }
+
     private func handle(_ event: RctlRealtimeEvent) {
         switch event {
         case let .connection(value):
@@ -145,6 +266,7 @@ final class RemoteSessionModel: ObservableObject {
         case let .channel(label, value):
             channelStates[label] = value
             if label == "control", value != .open {
+                cancelKeyboardInput()
                 interactionMode = .view
             }
         case let .failure(error):

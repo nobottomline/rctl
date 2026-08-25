@@ -26,7 +26,9 @@ Key:
 - `pg`: HID usage page. Current clients use keyboard `7`, consumer `12`, and
   rctl SpringBoard actions `240`.
 - `u`: HID usage.
-- `d`: `1` press, `0` release.
+- `d`: `1` press, `0` release, `2` atomic press and release. Text and ordinary
+  non-modifier keys use `2` so a lost or delayed release cannot leave a key held;
+  modifiers use explicit ordered `1` / `0` transitions.
 
 Receivers reject binary, oversized, malformed, non-finite, out-of-range, or
 unknown messages without invoking input. Move events may be coalesced before

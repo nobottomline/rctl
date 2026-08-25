@@ -93,6 +93,12 @@ orientation, sound, Talk, and camera. Controls fade after inactivity and return
 on a single tap that is not forwarded to the device. A visible locked-control
 state prevents the reveal gesture from becoming an accidental remote touch.
 
+On iOS, keyboard opens an inline composer above the system keyboard rather than
+covering the viewport with a destination sheet. A horizontally scrollable key
+row exposes Escape, Tab, Return, Backspace, Forward Delete, and arrows. Text is
+sent only on an explicit command; unsupported input remains in the composer with
+an actionable error instead of partially mutating the controlled device.
+
 Use SF Symbols on iOS and Material Symbols on Android for familiar actions.
 Icon buttons have stable 44-point/48-dp targets, accessibility labels, selected
 state, and a tooltip on pointer-capable devices. Text buttons are reserved for

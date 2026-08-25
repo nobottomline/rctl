@@ -64,6 +64,7 @@ struct RemoteControlDock: View {
     let selectMedia: (ControllerMediaRole) -> Void
     let selectMode: (RemoteInteractionMode) -> Void
     let home: () -> Void
+    let showKeyboard: () -> Void
     let showTools: () -> Void
 
     var body: some View {
@@ -72,13 +73,15 @@ struct RemoteControlDock: View {
                 sourceSelector
                 modeSelector
                 homeButton
+                keyboardButton
                 toolsButton
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 compactSourceMenu
-                modeSelector
+                compactModeSelector
                 homeButton
+                keyboardButton
                 toolsButton
             }
         }
@@ -109,6 +112,14 @@ struct RemoteControlDock: View {
     }
 
     private var modeSelector: some View {
+        modeSelector(width: 154)
+    }
+
+    private var compactModeSelector: some View {
+        modeSelector(width: 106)
+    }
+
+    private func modeSelector(width: CGFloat) -> some View {
         HStack(spacing: 2) {
             modeButton(.view, title: "View", symbol: "eye")
             modeButton(.control, title: "Control", symbol: "hand.tap")
@@ -118,7 +129,7 @@ struct RemoteControlDock: View {
         .overlay {
             RoundedRectangle(cornerRadius: 8).strokeBorder(RemotePalette.line, lineWidth: 1)
         }
-        .frame(width: 154)
+        .frame(width: width)
         .accessibilityElement(children: .contain)
         .accessibilityHint("View mode blocks all remote input")
     }
@@ -218,6 +229,21 @@ struct RemoteControlDock: View {
         }
         .buttonStyle(RemoteIconButtonStyle())
         .accessibilityLabel("Session controls")
+    }
+
+    private var keyboardButton: some View {
+        Button {
+            RemoteHaptics.selection()
+            showKeyboard()
+        } label: {
+            Image(systemName: "keyboard")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 46, height: 46)
+        }
+        .buttonStyle(RemoteIconButtonStyle())
+        .disabled(!controlsEnabled)
+        .opacity(controlsEnabled ? 1 : 0.42)
+        .accessibilityLabel("Keyboard")
     }
 
     private var controlsEnabled: Bool {

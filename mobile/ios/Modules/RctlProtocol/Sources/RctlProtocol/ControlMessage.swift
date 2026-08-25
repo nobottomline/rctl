@@ -3,6 +3,7 @@ import Foundation
 public enum ControlMessage: ValidatedWireMessage, Encodable {
     case touch(phase: Int, finger: Int, x: Double, y: Double)
     case key(page: Int, usage: Int, down: Bool)
+    case keyTap(page: Int, usage: Int)
 
     public static let maximumJSONBytes = WireLimits.controlJSONBytes
 
@@ -29,18 +30,18 @@ public enum ControlMessage: ValidatedWireMessage, Encodable {
             )
         case "k":
             let down = try values.decode(Int.self, forKey: .down)
-            guard down == 0 || down == 1 else {
+            guard (0...2).contains(down) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .down,
                     in: values,
-                    debugDescription: "key down must be 0 or 1"
+                    debugDescription: "key down must be 0, 1, or 2"
                 )
             }
-            self = .key(
-                page: try values.decode(Int.self, forKey: .page),
-                usage: try values.decode(Int.self, forKey: .usage),
-                down: down == 1
-            )
+            let page = try values.decode(Int.self, forKey: .page)
+            let usage = try values.decode(Int.self, forKey: .usage)
+            self = down == 2
+                ? .keyTap(page: page, usage: usage)
+                : .key(page: page, usage: usage, down: down == 1)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -64,6 +65,11 @@ public enum ControlMessage: ValidatedWireMessage, Encodable {
             try values.encode(page, forKey: .page)
             try values.encode(usage, forKey: .usage)
             try values.encode(down ? 1 : 0, forKey: .down)
+        case let .keyTap(page, usage):
+            try values.encode("k", forKey: .type)
+            try values.encode(page, forKey: .page)
+            try values.encode(usage, forKey: .usage)
+            try values.encode(2, forKey: .down)
         }
     }
 
@@ -79,7 +85,7 @@ public enum ControlMessage: ValidatedWireMessage, Encodable {
             guard x.isFinite, (0...1).contains(x), y.isFinite, (0...1).contains(y) else {
                 throw WireValidationError.invalidField("touch.coordinates")
             }
-        case let .key(page, usage, _):
+        case let .key(page, usage, _), let .keyTap(page, usage):
             guard (0...65_535).contains(page) else {
                 throw WireValidationError.invalidField("key.page")
             }

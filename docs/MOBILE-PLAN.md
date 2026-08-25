@@ -247,8 +247,10 @@ Metal video presentation, automatic orientation over the versioned `state`
 DataChannel, aspect-fit multitouch mapping, explicit `View` / `Control` safety
 modes, Home, lock, volume, Control Center, Notification Center, source switching,
 inline reconnect states, and responsive RCTL-owned operator chrome with haptics
-and accessibility fallbacks. Keyboard, clipboard, audio controls, Talk, quality,
-and diagnostics remain subsequent increments rather than placeholder controls.
+and accessibility fallbacks. Bounded ASCII text composition, atomic key taps,
+and mobile-only special keys are also implemented and physically qualified over
+the relay path. Unicode clipboard, audio controls, Talk, quality, and diagnostics
+remain subsequent increments rather than placeholder controls.
 
 Then add files, Photos, camera/recording, PiP, terminal, update, and destructive
 system actions. Destructive actions display the full normalized target, request

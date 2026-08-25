@@ -8,9 +8,11 @@ struct WireMessagesTests {
     func controlFixtures() throws {
         let touch = try decode(ControlMessage.self, "control/touch.json")
         let future = try decode(ControlMessage.self, "control/future-field.json")
+        let keyTap = try decode(ControlMessage.self, "control/key-tap.json")
 
         #expect(touch == .touch(phase: 1, finger: 2, x: 0.125, y: 0.875))
         #expect(future == .touch(phase: 1, finger: 2, x: 0.25, y: 0.75))
+        #expect(keyTap == .keyTap(page: 7, usage: 40))
         #expect(throws: (any Error).self) {
             try decode(ControlMessage.self, "control/invalid-touch-range.json")
         }
@@ -87,6 +89,9 @@ struct WireMessagesTests {
         )
         #expect(try WireJSON.decode(ControlMessage.self, from: encoded) ==
             .key(page: 7, usage: 40, down: true))
+        let tap = try WireJSON.encode(ControlMessage.keyTap(page: 7, usage: 40))
+        #expect(try WireJSON.decode(ControlMessage.self, from: tap) ==
+            .keyTap(page: 7, usage: 40))
 
         #expect(throws: WireValidationError.invalidField("touch.coordinates")) {
             try WireJSON.encode(ControlMessage.touch(phase: 0, finger: 0, x: .infinity, y: 0))
@@ -97,6 +102,24 @@ struct WireMessagesTests {
             maximum: WireLimits.controlJSONBytes
         )) {
             try WireJSON.decode(ControlMessage.self, from: oversized)
+        }
+    }
+
+    @Test("ASCII text maps to the device HID contract")
+    func hidKeyboardMapping() throws {
+        #expect(try HIDKeyboard.strokes(for: "aA1! \n") == [
+            HIDKeyStroke(usage: 0x04),
+            HIDKeyStroke(usage: 0x04, requiresShift: true),
+            HIDKeyStroke(usage: 0x1e),
+            HIDKeyStroke(usage: 0x1e, requiresShift: true),
+            HIDKeyStroke(usage: 0x2c),
+            HIDKeyStroke(usage: 0x28),
+        ])
+        #expect(throws: HIDKeyboardMappingError.unsupportedCharacter("Ж")) {
+            try HIDKeyboard.strokes(for: "hello Ж")
+        }
+        #expect(throws: HIDKeyboardMappingError.tooLong(maximumCharacters: 4)) {
+            try HIDKeyboard.strokes(for: "12345", maximumCharacters: 4)
         }
     }
 

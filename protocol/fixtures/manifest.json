@@ -6,6 +6,7 @@
     { "schema": "capabilities.schema.json", "path": "capabilities/invalid-major-zero.json", "valid": false },
     { "schema": "control.schema.json", "path": "control/touch.json", "valid": true },
     { "schema": "control.schema.json", "path": "control/key.json", "valid": true },
+    { "schema": "control.schema.json", "path": "control/key-tap.json", "valid": true },
     { "schema": "control.schema.json", "path": "control/future-field.json", "valid": true },
     { "schema": "control.schema.json", "path": "control/invalid-kind.json", "valid": false },
     { "schema": "control.schema.json", "path": "control/invalid-touch-range.json", "valid": false },

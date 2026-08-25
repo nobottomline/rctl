@@ -22,7 +22,7 @@
         "t": { "const": "k" },
         "pg": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "u": { "type": "integer", "minimum": 0, "maximum": 65535 },
-        "d": { "type": "integer", "minimum": 0, "maximum": 1 }
+        "d": { "type": "integer", "minimum": 0, "maximum": 2 }
       },
       "additionalProperties": true
     }

@@ -14,6 +14,7 @@ struct RemoteControlView: View {
     let device: ControllerDevice
     @StateObject private var model: RemoteSessionModel
     @State private var presentedSheet: SheetDestination?
+    @State private var keyboardPresented = false
 
     init(appModel: ControllerAppModel, device: ControllerDevice) {
         self.device = device
@@ -44,15 +45,35 @@ struct RemoteControlView: View {
             )
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            RemoteControlDock(
-                media: model.media,
-                interactionMode: model.interactionMode,
-                canControl: model.canControl,
-                selectMedia: { value in Task { await model.selectMedia(value) } },
-                selectMode: model.setInteractionMode,
-                home: { model.sendHardware(.home) },
-                showTools: { presentedSheet = .tools }
-            )
+            if keyboardPresented {
+                RemoteKeyboardPanel(
+                    sendText: model.sendText,
+                    sendKey: model.sendKeyboard,
+                    dismiss: { keyboardPresented = false }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                RemoteControlDock(
+                    media: model.media,
+                    interactionMode: model.interactionMode,
+                    canControl: model.canControl,
+                    selectMedia: { value in
+                        keyboardPresented = false
+                        Task { await model.selectMedia(value) }
+                    },
+                    selectMode: { value in
+                        if value != .control { keyboardPresented = false }
+                        model.setInteractionMode(value)
+                    },
+                    home: { model.sendHardware(.home) },
+                    showKeyboard: { keyboardPresented = controlsEnabled },
+                    showTools: {
+                        keyboardPresented = false
+                        presentedSheet = .tools
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
@@ -81,6 +102,10 @@ struct RemoteControlView: View {
             }
         }
         .onDisappear { model.disconnect() }
+        .onChange(of: controlsEnabled) { enabled in
+            if !enabled { keyboardPresented = false }
+        }
+        .animation(.easeOut(duration: 0.18), value: keyboardPresented)
     }
 
     @ViewBuilder

@@ -17,6 +17,8 @@ the browser client:
 - require an explicit `Control` mode before forwarding touches or system actions;
 - present a responsive RCTL operator console with persistent source, safety-mode,
   Home, and session-tool controls;
+- type bounded ASCII text and send Escape, Tab, Return, deletion, and arrow keys
+  through the scoped control channel;
 - send Home, lock, volume, Control Center, and Notification Center commands over
   the scoped control channel, with confirmation for device lock.
 
@@ -36,10 +38,11 @@ controlled iPad:
 1. QR claim, process restart, Keychain restore, and refresh recovery.
 2. Screen and camera H.264 rendering over direct ICE and TURN relay paths.
 3. Expected scoped DataChannels and rejection of unavailable scopes.
-4. Repeated connect, mode switch, background/foreground, and force-close cleanup.
-5. At least 30 minutes of video with frame, thermal, memory, and reconnect data.
+4. Touch, paced text input, special keys, and mode gating in foreground apps.
+5. Repeated connect, mode switch, background/foreground, and force-close cleanup.
+6. At least 30 minutes of video with frame, thermal, memory, and reconnect data.
 
-The current product slice does not yet implement keyboard/clipboard input, audio
+The current product slice does not yet implement Unicode clipboard input, audio
 consumers, files, statistics export, or automatic reconnect policy. These are
 tracked product increments; a successful build is not a release qualification.
 

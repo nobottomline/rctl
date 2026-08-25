@@ -20,6 +20,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.greatlove.rctl.realtime.session")
 
     private var generation: UInt64 = 0
+    private var keyboardGeneration: UInt64 = 0
     private var running = false
     private var webSocket: URLSessionWebSocketTask?
     private var peerConnection: LKRTCPeerConnection?
@@ -130,6 +131,18 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     }
 
     public func enqueueControl(_ message: ControlMessage, after delay: TimeInterval = 0) {
+        enqueueControl(message, after: delay, cancellableKeyboardInput: false)
+    }
+
+    public func enqueueKeyboardControl(_ message: ControlMessage, after delay: TimeInterval = 0) {
+        enqueueControl(message, after: delay, cancellableKeyboardInput: true)
+    }
+
+    private func enqueueControl(
+        _ message: ControlMessage,
+        after delay: TimeInterval,
+        cancellableKeyboardInput: Bool
+    ) {
         guard let data = try? WireJSON.encode(message) else { return }
         let mayDropForBackpressure: Bool
         if case let .touch(phase, _, _, _) = message {
@@ -141,9 +154,14 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             let scheduledGeneration = self.generation
+            let scheduledKeyboardGeneration = cancellableKeyboardInput
+                ? self.keyboardGeneration
+                : nil
             let send = DispatchWorkItem { [weak self] in
                 guard let self,
                       self.generation == scheduledGeneration,
+                      scheduledKeyboardGeneration == nil
+                        || self.keyboardGeneration == scheduledKeyboardGeneration,
                       let channel = self.channels["control"],
                       channel.readyState == .open else {
                     return
@@ -159,6 +177,12 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
             } else {
                 send.perform()
             }
+        }
+    }
+
+    public func cancelQueuedKeyboardControl() {
+        queue.async { [weak self] in
+            self?.keyboardGeneration &+= 1
         }
     }
 

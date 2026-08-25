@@ -24,6 +24,7 @@
 		A1000000000000000000000F /* RemoteDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* RemoteDesignSystem.swift */; };
 		A10000000000000000000010 /* RemoteControlChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* RemoteControlChrome.swift */; };
 		A10000000000000000000011 /* RemoteToolsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* RemoteToolsSheet.swift */; };
+		A10000000000000000000012 /* RemoteKeyboardPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* RemoteKeyboardPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +47,7 @@
 		A20000000000000000000011 /* RemoteDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesignSystem.swift; sourceTree = "<group>"; };
 		A20000000000000000000012 /* RemoteControlChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlChrome.swift; sourceTree = "<group>"; };
 		A20000000000000000000013 /* RemoteToolsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteToolsSheet.swift; sourceTree = "<group>"; };
+		A20000000000000000000014 /* RemoteKeyboardPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeyboardPanel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -152,6 +154,7 @@
 				A2000000000000000000000A /* RemoteControlView.swift */,
 				A20000000000000000000012 /* RemoteControlChrome.swift */,
 				A20000000000000000000011 /* RemoteDesignSystem.swift */,
+				A20000000000000000000014 /* RemoteKeyboardPanel.swift */,
 				A20000000000000000000008 /* RemoteSessionModel.swift */,
 				A20000000000000000000013 /* RemoteToolsSheet.swift */,
 				A20000000000000000000009 /* RemoteVideoRepresentable.swift */,
@@ -252,6 +255,7 @@
 				A1000000000000000000000F /* RemoteDesignSystem.swift in Sources */,
 				A10000000000000000000010 /* RemoteControlChrome.swift in Sources */,
 				A10000000000000000000011 /* RemoteToolsSheet.swift in Sources */,
+				A10000000000000000000012 /* RemoteKeyboardPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

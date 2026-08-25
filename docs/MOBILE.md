@@ -150,6 +150,13 @@ mobile release, assign each format an explicit schema version, maximum message
 size, state diagram and golden malformed-input fixtures. Do not silently change
 the existing version-1 bytes.
 
+The native iOS text composer maps at most 256 ASCII characters to keyboard-page
+HID usages. Ordinary keys use the existing atomic `d=2` transition and are paced
+at 40 ms; modifiers remain explicit ordered press/release messages. Unsupported
+Unicode fails visibly instead of being dropped or transliterated. Full Unicode
+input belongs to the future scoped clipboard contract so it can preserve text
+semantics without assuming that the controller and iPad keyboard layouts match.
+
 ## Repository Layout
 
 Add mobile clients without moving established directories:
