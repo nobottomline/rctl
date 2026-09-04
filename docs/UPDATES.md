@@ -5,10 +5,11 @@ PreferenceBundle, prompt, or other UI on the iPad. The update path is disabled
 when the relay is configured with `device_update_channel: off`. Official wizard
 installations use a signed, version-bound stable catalog by default.
 
-The public Cydia/Sileo/Zebra feed is a separate distribution channel. Relay
-installations should continue to use this transactional updater. A release is
-eligible for the public APT ledger only after its qualification report proves
-the real package-manager upgrade and recovery paths; see `APT-REPOSITORY.md`.
+The public Cydia/Installer/Sileo/Zebra feed is a separate distribution channel.
+Relay installations should continue to use this transactional updater. A
+release is eligible for the public APT ledger only after its qualification
+report proves the real package-manager upgrade and recovery paths; see
+`APT-REPOSITORY.md`.
 
 ## Security model
 

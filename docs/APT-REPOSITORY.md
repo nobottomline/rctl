@@ -6,9 +6,9 @@ The public LAN-only package is available from the APT source:
 https://nobottomline.github.io/rctl-repo/
 ```
 
-The feed is compatible with Cydia, Sileo, Zebra, and other package managers that
-consume the standard flat Debian APT repository format. A custom domain is not
-required; GitHub Pages provides the public HTTPS origin.
+The feed is compatible with Cydia, Installer, Sileo, Zebra, and other package
+managers that consume the standard flat Debian APT repository format. A custom
+domain is not required; GitHub Pages provides the public HTTPS origin.
 
 ## Ownership boundary
 

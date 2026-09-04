@@ -4,7 +4,7 @@ Self-hosted remote control for jailbroken iOS devices.
 
 [![Latest release](https://img.shields.io/github/v/release/nobottomline/rctl)](https://github.com/nobottomline/rctl/releases/latest)
 [![CI](https://github.com/nobottomline/rctl/actions/workflows/ci.yml/badge.svg)](https://github.com/nobottomline/rctl/actions/workflows/ci.yml)
-[![APT repository](https://img.shields.io/badge/APT-Cydia%20%7C%20Sileo%20%7C%20Zebra-168568)](https://nobottomline.github.io/rctl-repo/)
+[![APT repository](https://img.shields.io/badge/APT-package%20repository-168568)](https://nobottomline.github.io/rctl-repo/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-3b4553)](LICENSE)
 [![Qualified platform](https://img.shields.io/badge/qualified-iPadOS%2014.4%20rootful-111111)](docs/PORTABILITY.md)
 
@@ -34,7 +34,7 @@ supported until their physical-device qualification matrix passes.
 
 | Profile | Status | Installation |
 | --- | --- | --- |
-| Local network, rootful iOS 14 | Public | [Cydia/Sileo/Zebra repository](https://nobottomline.github.io/rctl-repo/) |
+| Local network, rootful iOS 14 | Public | [Cydia/Installer/Sileo/Zebra repository](https://nobottomline.github.io/rctl-repo/) |
 | Self-hosted internet relay | Available | Private package produced by the VPS wizard |
 | Rootless iOS 15+ | Not yet supported | Tracked in [portability](docs/PORTABILITY.md) |
 
@@ -61,7 +61,8 @@ packages intentionally remain separate.
 ### Local network
 
 Open the **[rctl package repository](https://nobottomline.github.io/rctl-repo/)**
-on the jailbroken device, choose Cydia, Sileo, or Zebra, and install `rctl`.
+on the jailbroken device, choose Cydia, Installer, Sileo, or Zebra, and install
+`rctl`.
 The same verified public `.deb` is attached to the
 [latest GitHub release](https://github.com/nobottomline/rctl/releases/latest).
 
