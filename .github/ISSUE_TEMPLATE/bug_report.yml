@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible rctl defect without private device or relay data.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, device identifiers, personal media, private hostnames, or personalized packages. Report security issues privately from the Security tab.
+  - type: input
+    id: version
+    attributes:
+      label: rctl version
+      placeholder: 0.3.2
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Installation profile
+      options:
+        - Public LAN-only package
+        - Personalized self-hosted relay package
+        - Development build
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Device environment
+      description: Device model, iOS version, jailbreak, injector, and rootful/rootless scheme.
+      placeholder: iPad11,3; iPadOS 14.4; unc0ver; Substitute; rootful
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest repeatable sequence.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Remove all secrets, personal data, device IDs, addresses, and relay URLs.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I reproduced this on a device I own or am authorized to test.
+          required: true
+        - label: I removed credentials, identifiers, addresses, and personal data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
