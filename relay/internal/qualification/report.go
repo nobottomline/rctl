@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	ReportSchema   = 2
+	ReportSchema   = 3
 	maxReportBytes = 1 << 20
 )
 
@@ -48,6 +48,8 @@ type Checks struct {
 	InterruptedRecovery    bool `json:"interrupted_recovery"`
 	DeviceUpdate           bool `json:"device_update"`
 	DeviceUpdateRollback   bool `json:"device_update_rollback"`
+	PackageManagerUpgrade  bool `json:"package_manager_upgrade"`
+	PackageManagerRecovery bool `json:"package_manager_recovery"`
 	UninstallKeepData      bool `json:"uninstall_keep_data"`
 	UninstallDeleteData    bool `json:"uninstall_delete_data"`
 }
@@ -172,6 +174,7 @@ func failedChecks(checks Checks) []string {
 		{"upgrade_rollback", checks.UpgradeRollback},
 		{"reset_admin", checks.ResetAdmin}, {"interrupted_recovery", checks.InterruptedRecovery},
 		{"device_update", checks.DeviceUpdate}, {"device_update_rollback", checks.DeviceUpdateRollback},
+		{"package_manager_upgrade", checks.PackageManagerUpgrade}, {"package_manager_recovery", checks.PackageManagerRecovery},
 		{"uninstall_keep_data", checks.UninstallKeepData}, {"uninstall_delete_data", checks.UninstallDeleteData},
 	}
 	missing := make([]string, 0)

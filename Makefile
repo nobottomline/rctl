@@ -112,7 +112,7 @@ test-webrtc-permissions:
 	@/tmp/rctl-webrtc-permissions-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish
 
 .PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-build mobile-test
 protocol-generate:
@@ -137,6 +137,10 @@ mobile-test: mobile-ios-test mobile-ios-build
 .PHONY: test-update-signing-key
 test-update-signing-key:
 	@scripts/test_verify_update_signing_key.sh
+
+.PHONY: test-apt-publish
+test-apt-publish:
+	@scripts/test_publish_apt_release.sh
 
 .PHONY: test-destructive-actions
 test-destructive-actions:

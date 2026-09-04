@@ -7,6 +7,8 @@ flow, then read the feature document for the code being changed.
 - [SETUP.md](SETUP.md): VPS wizard, lifecycle operations, and recovery.
 - [RELAY.md](RELAY.md): relay protocol, deployment profiles, and transport.
 - [UPDATES.md](UPDATES.md): signed transactional device updates.
+- [APT-REPOSITORY.md](APT-REPOSITORY.md): public Cydia/Sileo/Zebra feed,
+  signing, release synchronization, and relay-package isolation.
 - [TRANSPORT.md](TRANSPORT.md): WebRTC/DataChannel architecture.
 - [MOBILE.md](MOBILE.md): native iOS/Android controller architecture, authentication,
   media ownership, and delivery gates.

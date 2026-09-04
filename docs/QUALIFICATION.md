@@ -56,14 +56,14 @@ assets.
 ## Qualification report
 
 The report is privacy-safe evidence binding the external acceptance run to the
-exact artifacts under review. Schema 2 is strict: unknown fields, trailing
+exact artifacts under review. Schema 3 is strict: unknown fields, trailing
 JSON, symlinks, oversized input, malformed identities, reports older than 30
 days, reports over five minutes in the future, and any false or missing check
 are rejected.
 
 ```json
 {
-  "schema": 2,
+  "schema": 3,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",
@@ -94,6 +94,8 @@ are rejected.
     "interrupted_recovery": true,
     "device_update": true,
     "device_update_rollback": true,
+    "package_manager_upgrade": true,
+    "package_manager_recovery": true,
     "uninstall_keep_data": true,
     "uninstall_delete_data": true
   }
@@ -141,6 +143,12 @@ The checks have the following minimum evidence contract:
   public package while preserving relay identity and both control paths;
   `device_update_rollback`: an injected post-install verification failure made
   the watchdog restore the prior working package and reconnect automatically.
+- `package_manager_upgrade`: the prior public package and a personalized relay
+  package were each upgraded through the real Cydia/Sileo/Zebra APT/dpkg path on
+  the supported jailbreak, with package version, SpringBoard IPC, LAN control,
+  relay identity, and relay control verified afterward; `package_manager_recovery`:
+  an injected failed package-manager update left SpringBoard bootable and the
+  documented signed updater or SSH recovery path restored a verified package.
 - `uninstall_keep_data` and `uninstall_delete_data`: each explicit retention
   mode removed only owned resources, produced a valid recovery backup, and
   respectively preserved or removed the managed data directory.

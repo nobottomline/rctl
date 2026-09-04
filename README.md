@@ -67,9 +67,10 @@ constraints, and recovery, see the [setup guide](docs/SETUP.md).
 
 ### Local network only
 
-Download `rctl_<version>_iphoneos-arm.deb` from the
-[latest release](https://github.com/nobottomline/rctl/releases/latest), install it
-with the device package manager, and open:
+Add `https://nobottomline.github.io/rctl-repo/` as a source in Cydia, Sileo,
+Zebra, or another APT-compatible jailbreak package manager, then install `rctl`.
+The exact same public package remains available from the
+[latest release](https://github.com/nobottomline/rctl/releases/latest). Open:
 
 ```text
 http://<device-ip>:8080/
@@ -77,7 +78,9 @@ http://<device-ip>:8080/
 
 The public package contains no relay address or credentials. It remains a simple
 LAN-only artifact and can later be replaced by a personalized package without
-changing the control client.
+changing the control client. Repository signing, release synchronization, and
+the separation from personalized packages are documented in
+[docs/APT-REPOSITORY.md](docs/APT-REPOSITORY.md).
 
 ## Network Access Modes
 

@@ -18,7 +18,7 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
 	checksums := strings.Repeat("b", 64)
 	image := "ghcr.io/nobottomline/rctl-relay@sha256:" + strings.Repeat("c", 64)
 	raw := []byte(`{
-  "schema": 2,
+  "schema": 3,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",
@@ -37,6 +37,7 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
     "upgrade_rollback": true,
     "reset_admin": true, "interrupted_recovery": true,
     "device_update": true, "device_update_rollback": true,
+    "package_manager_upgrade": true, "package_manager_recovery": true,
     "uninstall_keep_data": true, "uninstall_delete_data": true
   }
 }`)

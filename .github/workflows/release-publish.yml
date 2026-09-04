@@ -36,6 +36,7 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-24.04
+    environment: apt-repository-publish
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -243,3 +244,22 @@ jobs:
             cmp "$artifact" "$anonymous/$name"
             gh release verify-asset "$TAG" "$anonymous/$name"
           done < <(find downloaded -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+      - name: Publish release to the APT repository ledger
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RCTL_APT_REPO_DEPLOY_KEY: ${{ secrets.RCTL_APT_REPO_DEPLOY_KEY }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          test -n "$RCTL_APT_REPO_DEPLOY_KEY" || {
+            echo "APT repository deploy key is not configured" >&2
+            exit 1
+          }
+          key="$(mktemp)"
+          known_hosts="$(mktemp)"
+          trap 'rm -f "$key" "$known_hosts"' EXIT
+          printf '%s\n' "$RCTL_APT_REPO_DEPLOY_KEY" > "$key"
+          chmod 0600 "$key"
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$known_hosts"
+          test -s "$known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes"
+          scripts/publish_apt_release.sh "$TAG"

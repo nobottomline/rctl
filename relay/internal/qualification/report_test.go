@@ -22,7 +22,8 @@ func validReport() (Report, Expected) {
 		PackagePersonalization: true, DeviceEnrollment: true, RelayControl: true, LANControl: true,
 		RelayRestart: true, Doctor: true, BackupRestore: true, RelayUpgrade: true,
 		UpgradeRollback: true, ResetAdmin: true, InterruptedRecovery: true,
-		DeviceUpdate: true, DeviceUpdateRollback: true, UninstallKeepData: true, UninstallDeleteData: true,
+		DeviceUpdate: true, DeviceUpdateRollback: true, PackageManagerUpgrade: true, PackageManagerRecovery: true,
+		UninstallKeepData: true, UninstallDeleteData: true,
 	}
 	return Report{
 		Schema: ReportSchema, Product: "rctl", Tag: "v1.2.3", Version: "1.2.3", SourceSHA: commit,
@@ -80,7 +81,8 @@ func TestValidateRejectsEveryIncompleteCheck(t *testing.T) {
 		{"backup_restore", &checks.BackupRestore}, {"relay_upgrade", &checks.RelayUpgrade},
 		{"upgrade_rollback", &checks.UpgradeRollback}, {"reset_admin", &checks.ResetAdmin},
 		{"interrupted_recovery", &checks.InterruptedRecovery}, {"device_update", &checks.DeviceUpdate},
-		{"device_update_rollback", &checks.DeviceUpdateRollback}, {"uninstall_keep_data", &checks.UninstallKeepData},
+		{"device_update_rollback", &checks.DeviceUpdateRollback}, {"package_manager_upgrade", &checks.PackageManagerUpgrade},
+		{"package_manager_recovery", &checks.PackageManagerRecovery}, {"uninstall_keep_data", &checks.UninstallKeepData},
 		{"uninstall_delete_data", &checks.UninstallDeleteData},
 	}
 	for _, test := range tests {
