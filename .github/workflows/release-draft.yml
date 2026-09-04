@@ -157,10 +157,6 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: third_party/webrtc/.lib
-          key: webrtc-ios-${{ runner.arch }}-${{ hashFiles('third_party/webrtc/build-ios.sh') }}
       - name: Install pinned toolchain and build public package
         env:
           THEOS_COMMIT: 5280bd038207e14f8bd76f5417aa2fe641c03228
