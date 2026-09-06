@@ -28,8 +28,8 @@ Local verification on 2026-09-06: rootful and rootless packages both built and
 passed `release_check.sh`; `make test` passed, including staging, relocated-path
 protection, and rootless update rejection. The rootless Mach-O payloads have an
 iOS 15.0 deployment target, the expected rootless rpaths, and the daemon's
-existing media entitlements. Physical installation and runtime are not yet
-verified.
+existing media entitlements. Initial physical-device observations are recorded
+below; runtime qualification is not complete.
 
 ## First Install
 
@@ -79,8 +79,8 @@ record the foreground app and whether another audio/camera session was active.
 
 | Area | Checks | Initial status |
 | --- | --- | --- |
-| Installation | Install output; daemon launch; ElleKit injection; respring | Not tested |
-| Screen/input | Video; taps; swipe; keyboard; buttons; orientation | Not tested |
+| Installation | Install output; daemon launch; ElleKit injection; respring | User completed installation; LAN API and SpringBoard screenshot path respond |
+| Screen/input | Video; taps; swipe; keyboard; buttons; orientation | Capture geometry fails; some console actions work (user report); input matrix pending |
 | Lifecycle | Lock/unlock; app switch; Home; browser disconnect/reconnect | Not tested |
 | Still camera | Front/rear with a foreground app; native camera indicator | Not tested |
 | Live camera | Front/rear; rotation; recording/download; stop/disconnect cleanup | Not tested |
@@ -94,6 +94,45 @@ Signed transactional updates and personalized relay delivery are deliberately
 unavailable in this test lane. An update request returns
 `rootless_updates_not_qualified` instead of attempting to install a rootful
 release. Upgrade/rollback qualification must precede enabling these features.
+
+### Screen Geometry Failure (2026-09-07)
+
+Observed with `0.3.4~rootless1`, iPadOS 15.5 and ElleKit 1.2 on an iPad Pro:
+
+- A direct `/v1/screenshot` response is 2048x2732. Its lower portion is black,
+  and part of the display is clipped before the browser processes the PNG.
+- In landscape, `/orient` returns `3`. After the operator physically rotates
+  the device to portrait, it returns `1`; orientation observation is working
+  for this transition.
+- In portrait, the raw PNG still contains sideways content and the same black
+  lower region. This rules out browser rotation alone and demonstrates a
+  mismatch between capture coordinates and UIKit portrait coordinates.
+- The browser applies its normal interface-orientation rotation to those
+  already incorrect pixels, explaining the sideways downloaded screenshot.
+
+`core/capture/ScreenCapture.mm` sizes the render surface from
+`UIScreen.nativeBounds` and passes it directly to
+`CARenderServerRenderDisplay`. That assumes the render server uses the same
+portrait-native geometry. The evidence is consistent with a landscape-native
+panel coordinate system on this device, not with an incorrect orientation
+notification. The exact display geometry/rotation API still needs on-device
+validation; do not infer a universal offset from the iOS version or rootless
+packaging scheme.
+
+The repair should obtain the renderer's full geometry, then normalize captured
+pixels to the existing canonical coordinate system before encoding or exporting
+PNG. Keep screen rendering, screenshots and touch mapping consistent. A CSS
+rotation, changing `/orient`, or cropping black pixels cannot recover pixels
+already clipped by the undersized render surface. Qualify all four orientations,
+in-session rotation and corner taps on both this device and the original
+rootful lane before calling it fixed. No capture fix has been installed yet.
+
+There is currently no REST action to change the device's interface orientation.
+`GET /orient` is read-only, and the browser's rotate control changes only its
+presentation. A device-orientation action is requested follow-up work: distinguish
+it from rotation lock and viewer rotation, keep it SpringBoard-owned, and report
+unsupported/failed requests explicitly. It must not serve as a workaround for
+the capture-geometry defect.
 
 ## Diagnostics and Recovery
 
