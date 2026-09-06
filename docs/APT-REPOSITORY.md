@@ -10,6 +10,14 @@ The feed is compatible with Cydia, Installer, Sileo, Zebra, and other package
 managers that consume the standard flat Debian APT repository format. A custom
 domain is not required; GitHub Pages provides the public HTTPS origin.
 
+The published feed currently advertises only `iphoneos-arm` (rootful). Sileo on
+Dopamine/rootless expects `iphoneos-arm64` and can reject this feed with
+`Didn't find architectures` followed by `Could not find release file`, even
+when the server returns the Release file successfully. Package-manager format
+compatibility is not a claim of rootless runtime support. Use the separate
+[manual rootless test build](ROOTLESS.md) until that lane is qualified; do not
+add an unsupported architecture to Release just to suppress Sileo's check.
+
 ## Ownership boundary
 
 The source monorepo is the only build and qualification authority. The separate

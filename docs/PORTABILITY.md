@@ -6,9 +6,10 @@ The release package is currently qualified only on iPad11,3, iOS 14.4, rootful
 unc0ver and Substitute. It must not be advertised as rootless or iOS 15/16
 compatible until the runtime matrix below passes on physical hardware.
 
-The architecture is portable, but the package is not yet path-neutral. The
-current rootful `.deb` uses `iphoneos-arm`, depends on `mobilesubstrate`, installs
-code below `/Library` and `/usr/local`, and re-signs it from maintainer scripts.
+An experimental rootless build lane is available for manual Dopamine testing.
+It is not a qualified release. See [Rootless Testing](ROOTLESS.md) for the build,
+installation, recovery, and result checklist. The rootful lane retains its
+existing deployment target and installation paths.
 
 ## Build lanes
 
@@ -19,9 +20,15 @@ Keep one package identifier and produce separate artifacts:
 | Rootful | default | 14.0 | `iphoneos-arm` | Substitute |
 | Rootless | `THEOS_PACKAGE_SCHEME=rootless` | 15.0 | `iphoneos-arm64` | ElleKit |
 
-Do not build both schemes in the same object tree without `make clean`. Rootless
-v2 may use a relocated jailbreak root, so runtime code must use Theos/libroot
-path helpers rather than hard-coding `/var/jb`.
+`mk/native-target.mk` selects the target for every native subproject. Rootless
+uses separate `.theos/obj/rootless*` objects, `.theos/_rootless` staging, and
+`packages/rootless/` output. The rootful default output is unchanged. Never
+override these directories to share objects between schemes.
+
+Runtime package paths use Theos/libroot via `core/platform/Paths.h`. The Dopamine
+package and maintainer scripts use the standard `/var/jb` installation alias;
+runtime library resolution also supports libroot's relocated prefix. This does
+not qualify other bootstrap variants such as RootHide.
 
 ## Path ownership
 
@@ -33,24 +40,33 @@ Paths fall into three groups and must not be prefixed indiscriminately:
 | Persistent user data | relay preferences, recordings, media cache | keep under `/var/mobile` |
 | Ephemeral/system | `/tmp`, `/var/run`, `/var/mobile/Media`, Apple frameworks | keep in the root filesystem namespace |
 
-Current rootless blockers found in the codebase:
+The experimental lane now prefixes the loader's media library, playback-audio
+payload and injection paths, package database access, package tools, shell, and
+diagnostics. The daemon supplies the bootstrap's executable search path to its
+children. File deletion protects the resolved jailbreak root and its ancestors.
 
-- `layout/`, all native Makefiles and top-level staging assume rootful install
-  destinations.
-- `rctlapp` hard-codes the manually loaded `rctlappmedia.dylib` path.
-- daemon audio activation hard-codes the inactive payload, injector directory,
-  `ldid` and `killall` paths.
-- `postinst`, `prerm`, `deploy.sh`, `audio.sh` and `release_check.sh` assume
-  `/Library/MobileSubstrate` and rootful launchd locations.
-- the LaunchDaemon embeds `/usr/local/bin/rctld` in `ProgramArguments`.
-- injector detection partly understands `/var/jb`, but diagnostics and tweak
-  counting still prefer rootful paths.
-- package dependencies and the entitlement/signing flow have only been proven
-  with Substitute/unc0ver.
+`scripts/stage_package.py` finalizes rootless dependencies, launchd arguments,
+and maintainer scripts before Theos prefixes the payload. Rootless executables
+are signed at build time; installation and audio activation preserve those
+signatures instead of applying the rootful on-device re-signing workaround.
 
-The web client, relay preferences, media files, loopback ports and Unix sockets
-are data/runtime state and should not move merely because the code package is
-rootless.
+The web client is a package asset: rootless installs it at
+`/var/jb/usr/local/share/rctl/web/index.html`; rootful retains
+`/var/mobile/rctl/index.html`. Relay identity, recordings, media caches, loopback
+ports, and Unix sockets retain their existing locations.
+
+Still unqualified or intentionally unavailable:
+
+- Every physical-device runtime check below, including ElleKit loading and
+  the existing private API behavior on iOS 15.5.
+- Rootless transactional updates: the capability is omitted, the API returns
+  `501 rootless_updates_not_qualified`, and the updater executable rejects use.
+  The signed release catalog currently contains rootful artifacts.
+- Rootless personalization, relay-wizard delivery, and automated recovery
+  deployment. The existing personalization/deploy scripts reject this lane.
+- `scripts/audio.sh` is a rootful operator helper, not the rootless test entry
+  point. Exercise audio through the web control client.
+- Publishing rootless artifacts to the APT feed or public releases.
 
 ## Private API policy
 

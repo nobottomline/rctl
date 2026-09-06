@@ -1,7 +1,7 @@
 # rctld — root daemon (transport + automation API). Installed to /usr/local/bin,
 # launched by /Library/LaunchDaemons/com.greatlove.rctld.plist (shipped via layout/).
 
-TARGET := iphone:clang:14.5:14.0
+include ../mk/native-target.mk
 # Keep the daemon arm64-only. On iOS 14 arm64e devices, the arm64e tool slice
 # can hit pointer-auth failures while loading Objective-C metadata from the
 # optional relay client. The SpringBoard tweaks still build arm64e separately.
@@ -20,9 +20,9 @@ OPUS := $(WEBRTC)/.lib/ios/opus-install
 ifeq ($(wildcard $(DC)/build-ios/libdatachannel.a),)
 $(error WebRTC static libs not found; run 'make deps' first - see third_party/webrtc/README.md)
 endif
-# Theos SDKs ship no libc++ headers (the pre-existing ObjC code never used the
-# STL); libdatachannel is heavy C++, so pull libc++ headers from the Xcode SDK.
-LIBCPP := $(shell xcrun --sdk iphoneos --show-sdk-path)/usr/include/c++/v1
+# Prefer the selected SDK's libc++ headers. Older stripped SDKs need the Xcode
+# fallback; mixing both header sets causes Clang module-definition conflicts.
+LIBCPP := $(if $(wildcard $(ISYSROOT)/usr/include/c++/v1/__config),$(ISYSROOT),$(shell xcrun --sdk iphoneos --show-sdk-path))/usr/include/c++/v1
 
 TOOL_NAME = rctld
 rctld_FILES = main.mm \
@@ -52,5 +52,8 @@ rctld_LDFLAGS = $(DC)/build-ios/libdatachannel.a \
                 -lc++ -lsqlite3
 rctld_FRAMEWORKS = Foundation IOKit AudioToolbox AVFoundation ImageIO CoreGraphics CoreMedia
 rctld_INSTALL_PATH = /usr/local/bin
+ifeq ($(THEOS_PACKAGE_SCHEME),rootless)
+rctld_CODESIGN_FLAGS = -Sentitlements.plist
+endif
 
 include $(THEOS)/makefiles/tool.mk

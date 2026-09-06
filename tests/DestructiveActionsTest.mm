@@ -18,6 +18,13 @@ int main(void) {
         expect_path_denied("/private/var/lib/dpkg/status");
         expect_path_denied("/var/mobile/rctl/index.html");
         expect_path_denied("/private/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist");
+#if defined(RCTL_ROOTLESS)
+        expect_path_denied("/var/jb/usr/bin/dpkg");
+        expect_path_denied("/private/var/jb/usr/local/bin/rctld");
+        expect_path_denied("/private/preboot/rctl-test/jb/usr/local/bin/rctld");
+        expect_path_denied("/private/preboot/rctl-test/jb/var/lib/dpkg/status");
+        expect_path_denied("/private/preboot/rctl-test");
+#endif
 
         char reason[96] = {};
         assert(rctl_destructive_path_allowed("/var/mobile/Media/test.jpg", reason, sizeof(reason)));

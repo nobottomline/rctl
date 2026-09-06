@@ -2,9 +2,12 @@
 # On removal/upgrade, stop the daemon and respring (frees port 8080).
 set -e
 
-PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
-AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
-AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist
+RCTL_PREFIX=''
+PATH="$RCTL_PREFIX/usr/local/bin:$RCTL_PREFIX/usr/bin:$RCTL_PREFIX/bin:$RCTL_PREFIX/usr/sbin:$RCTL_PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+PLIST=$RCTL_PREFIX/Library/LaunchDaemons/com.greatlove.rctld.plist
+AUDIO_ACTIVE_DYLIB=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
+AUDIO_ACTIVE_PLIST=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist
 AUDIO_CAPTURE_MARKER=/tmp/rctl-audio-capture
 AUDIO_TONE_MARKER=/tmp/rctl-audio-tone
 RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
@@ -15,7 +18,11 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
         cp "$RELAY_PREF" "$RELAY_PREF_BACKUP" 2>/dev/null || true
         chmod 0600 "$RELAY_PREF_BACKUP" 2>/dev/null || true
     fi
-    [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
+    if [ -n "$RCTL_PREFIX" ]; then
+        launchctl bootout system/com.greatlove.rctld 2>/dev/null || true
+    else
+        [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
+    fi
     audio_was_active=0
     [ -e "$AUDIO_ACTIVE_DYLIB" ] && audio_was_active=1
     [ -e "$AUDIO_ACTIVE_PLIST" ] && audio_was_active=1

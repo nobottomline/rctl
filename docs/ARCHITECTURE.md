@@ -64,6 +64,11 @@ owns independent native controller products; neither directory participates in
 the device `.deb` build.
 `scripts/deploy.sh` is the one-command safe deploy.
 
+That deploy path is qualified for rootful only. The experimental rootless lane
+uses `scripts/build-rootless.sh` and manual installation; see
+[`ROOTLESS.md`](ROOTLESS.md). Its code and static web client live below the
+jailbreak root, while personal data and sockets retain their existing paths.
+
 ---
 
 ## 2. Data flow

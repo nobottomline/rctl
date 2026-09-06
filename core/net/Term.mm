@@ -7,6 +7,7 @@
 //   raw PTY bytes, including ANSI colors and cursor-control sequences.
 
 #import "net/Term.h"
+#import "platform/Paths.h"
 #import "net/WebRTCBridge.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <pthread.h>
@@ -184,6 +185,9 @@ static void *term_pty_loop(void *arg) {
 }
 
 static bool spawn_term(struct term_session *t, uint16_t cols, uint16_t rows) {
+    // Resolve jailbreak paths in the parent, before forking the threaded daemon.
+    const char *shell = RCTL_ROOT_PATH("/bin/sh");
+    if (!shell || access(shell, X_OK) != 0) return false;
     struct winsize ws;
     memset(&ws, 0, sizeof(ws));
     ws.ws_col = cols ? cols : 100;
@@ -195,10 +199,9 @@ static bool spawn_term(struct term_session *t, uint16_t cols, uint16_t rows) {
         setenv("HOME", "/var/root", 1);
         setenv("USER", "root", 1);
         setenv("LOGNAME", "root", 1);
-        setenv("SHELL", "/bin/sh", 1);
-        setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
+        setenv("SHELL", shell, 1);
         chdir("/var/root");
-        execl("/bin/sh", "-sh", NULL);
+        execl(shell, "-sh", NULL);
         _exit(127);
     }
     t->child = pid;
