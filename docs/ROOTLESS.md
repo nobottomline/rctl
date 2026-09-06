@@ -36,18 +36,41 @@ verified.
 1. Keep physical access to the iPad. Record its model, iOS version, Dopamine
    version, and ElleKit version. If a terminal is already available,
    `dpkg --print-architecture` should report `iphoneos-arm64`.
-2. Transfer the exact test `.deb` to the iPad using AirDrop or another local
+2. In Sileo, confirm that **ElleKit** (package identifier `ellekit`) is installed.
+   A working package manager or Filza installation does not establish that
+   tweak injection is installed. If missing, refresh the official source
+   <https://ellekit.space/> (add it if absent), install ElleKit, and follow the
+   package manager's restart instructions. Filza's `dpkg -i` installation does
+   not download dependencies automatically.
+3. Transfer the exact test `.deb` to the iPad using AirDrop or another local
    file-transfer method. Open it in Filza and use its package installation
    action. Inspect the installation output for errors. Installation resprings
    SpringBoard; do not interrupt it.
-3. On a trusted Wi-Fi network, open `http://<ipad-ip>:8080/` in a browser. Local
+4. On a trusted Wi-Fi network, open `http://<ipad-ip>:8080/` in a browser. Local
    access has the same unauthenticated trusted-LAN policy as the rootful build.
-4. Test screen display, orientation, taps, typing, and Home first. Then proceed
+5. Test screen display, orientation, taps, typing, and Home first. Then proceed
    with media and the remaining functions below.
 
 Do not force an architecture mismatch, rename a rootful package's architecture,
 or use the rootful `scripts/deploy.sh`/`scripts/audio.sh` helpers on this device.
 No relay configuration is required for this first LAN test.
+
+### Missing ElleKit After Unpacking
+
+`depends on ellekit; however: Package ellekit is not installed` means dpkg
+unpacked rctl but left it unconfigured. Its `postinst` was not run. Install
+ElleKit from the official source, then retry the same rctl file in Filza to
+complete configuration. Do not use `--force-depends` or remove the dependency.
+The official [ElleKit package index](https://ellekit.space/Packages) lists
+`ellekit` for `iphoneos-arm64`; the dependency name is intentional.
+
+If Sileo's **Open in Sileo** route instead reports `Unsupported file` for a path
+under `/var/jb/var/cache/apt/archives/`, local-file import failed separately from
+dependency configuration. The message alone does not establish a corrupt deb
+or its exact filesystem cause. Use Sileo for the ElleKit dependency, then
+Filza for the already downloaded rctl test package. The rootful public feed
+does not contain this rootless prerelease, so refreshing that feed cannot make
+Sileo download it.
 
 ## Test Record
 
