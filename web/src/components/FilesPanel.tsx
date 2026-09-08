@@ -116,7 +116,7 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
       ) : (
         <div className="divide-y divide-line/60">
           {sorted.map((e) => (
-            <div key={e.name} className="flex items-center gap-2.5 px-3 py-2.5 transition-colors active:bg-fg/5">
+            <div key={e.name} className="flex items-center gap-2.5 px-3 py-2.5 transition-colors hover:bg-fg/[0.05] active:bg-fg/[0.07]">
               <button
                 onClick={() => e.dir && load(join(path, e.name))}
                 disabled={!e.dir}
@@ -192,14 +192,14 @@ function DeleteDialog({
           <button
             onClick={onCancel}
             disabled={busy}
-            className="rounded-lg bg-fg/8 px-3 py-1.5 text-[12px] font-medium text-fg-dim disabled:opacity-50"
+            className="rounded-lg bg-fg/8 px-3 py-1.5 text-[12px] font-medium text-fg-dim transition-colors hover:bg-fg/12 disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
             disabled={busy}
-            className="rounded-lg bg-danger px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-60"
+            className="rounded-lg bg-danger px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-danger/85 disabled:opacity-60"
           >
             {busy ? 'Deleting…' : 'Delete'}
           </button>
@@ -221,7 +221,7 @@ function Breadcrumb({ path, onNav }: { path: string; onNav: (p: string) => void 
             onClick={() => onNav(c.full)}
             className={cn(
               'rounded px-1.5 py-0.5 text-[12px] transition-colors',
-              i === crumbs.length - 1 ? 'font-semibold text-fg' : 'text-muted active:bg-fg/10',
+              i === crumbs.length - 1 ? 'font-semibold text-fg hover:bg-fg/5' : 'text-muted hover:bg-fg/8 hover:text-fg active:bg-fg/10',
             )}
           >
             {c.name}
@@ -252,7 +252,7 @@ function ToolBtn({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="grid size-8 shrink-0 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors active:bg-fg/15"
+      className="grid size-8 shrink-0 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors hover:bg-fg/12 hover:text-fg active:bg-fg/15"
     >
       <span className={cn(spin && 'animate-spin')}>{children}</span>
     </button>
@@ -277,7 +277,7 @@ function RowBtn({
       aria-label={title}
       className={cn(
         'grid size-8 shrink-0 place-items-center rounded-lg transition-colors',
-        danger ? 'text-danger active:bg-danger/15' : 'text-muted active:bg-fg/10',
+        danger ? 'text-danger hover:bg-danger/10 active:bg-danger/15' : 'text-muted hover:bg-fg/10 hover:text-fg active:bg-fg/15',
       )}
     >
       {children}
