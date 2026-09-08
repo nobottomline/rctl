@@ -285,7 +285,7 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
                     key={`${asset.id}:${generation}`}
                     src={rctlPath(`/v1/media_thumb?id=${encodeURIComponent(asset.id)}&v=${generation}`)}
                     video={asset.type === 'video'}
-                    className="size-full object-cover transition duration-200 group-active:scale-[0.98] group-active:opacity-80"
+                    className="size-full object-cover transition-opacity duration-150 group-active:opacity-80"
                   />
                 </button>
                 <button

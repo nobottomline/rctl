@@ -3,6 +3,8 @@ import { Camera, Check, Circle, Copy, Download, SwitchCamera, X } from 'lucide-r
 import { api, apiDo, apiJSON, destructivePost } from '../lib/rctl'
 import type { FileTransfer } from '../lib/files'
 import { Sheet } from './Sheet'
+import { OptionMenu } from './OptionMenu'
+import { copyText } from '../lib/clipboard'
 import { cn } from '../lib/cn'
 import { CameraTransport } from '../lib/camera'
 import { cameraRecordingToMp4 } from '../lib/cameraRecording'
@@ -100,7 +102,7 @@ function Btn({ onClick, children, primary }: { onClick: () => void; children: Re
       onClick={onClick}
       className={cn(
         'inline-flex h-9 shrink-0 items-center rounded-lg px-3 text-[12px] font-medium transition-colors',
-        primary ? 'bg-signal font-semibold text-on-signal active:opacity-80' : 'bg-fg/8 text-fg active:bg-fg/15',
+        primary ? 'bg-signal font-semibold text-on-signal hover:bg-signal-hi active:opacity-80' : 'bg-fg/8 text-fg hover:bg-fg/12 active:bg-fg/15',
       )}
     >
       {children}
@@ -121,22 +123,32 @@ function KV({ k, v }: { k: string; v?: string | number }) {
 
 function CopyRow({ k, v }: { k: string; v?: string }) {
   const [copied, setCopied] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const active = useRef(false)
+  useEffect(() => {
+    active.current = true
+    return () => { active.current = false; if (timer.current) clearTimeout(timer.current) }
+  }, [])
   if (!v) return null
-  const copy = () => {
-    navigator.clipboard
-      ?.writeText(v)
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1200)
-      })
-      .catch(() => {})
+  const copy = async () => {
+    const ok = await copyText(v)
+    if (!active.current) return
+    if (timer.current) clearTimeout(timer.current)
+    setCopied(ok)
+    setFailed(!ok)
+    timer.current = setTimeout(() => { setCopied(false); setFailed(false) }, 1600)
   }
   return (
-    <button onClick={copy} className="flex w-full items-center gap-2 text-left">
+    <div className="flex w-full items-center gap-2 text-left">
       <span className="w-11 shrink-0 text-[9.5px] uppercase tracking-wide text-muted">{k}</span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-fg-dim">{v}</span>
-      {copied ? <Check className="size-3.5 shrink-0 text-online" /> : <Copy className="size-3.5 shrink-0 text-faint" />}
-    </button>
+      <span className="min-w-0 flex-1 select-text truncate font-mono text-[12px] text-fg-dim">{v}</span>
+      <button type="button" onClick={copy} aria-label={`Copy ${k}`} title={copied ? 'Copied' : failed ? 'Copy failed. Select the text to copy manually.' : `Copy ${k}`}
+        className="grid size-7 shrink-0 place-items-center rounded-md text-muted transition-colors hover:bg-fg/8 hover:text-fg active:bg-fg/12">
+        {copied ? <Check className="size-3.5 text-online" /> : <Copy className="size-3.5" />}
+      </button>
+      <span role="status" className="sr-only">{copied ? `${k} copied` : failed ? `Could not copy ${k}. Select the text to copy manually.` : ''}</span>
+    </div>
   )
 }
 
@@ -199,9 +211,13 @@ function OrientationCard() {
     return () => { active = false }
   }, [])
   return <Card title="Device orientation">
-    <select aria-label="Device orientation" className={FIELD} value={value} disabled={!supported || busy}
-      onChange={async (event) => {
-        const orientation = Number(event.target.value)
+    <OptionMenu label="Device orientation" value={String(value)} disabled={!supported || busy}
+      options={[
+        ['0', 'Automatic'], ['1', 'Portrait'], ['2', 'Portrait upside down'],
+        ['3', 'Landscape left'], ['4', 'Landscape right'],
+      ]}
+      onChange={async (next) => {
+        const orientation = Number(next)
         setBusy(true); setError('')
         try {
           const response = await api('/v1/orientation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orientation }) })
@@ -209,13 +225,7 @@ function OrientationCard() {
           setValue(orientation)
         } catch (e) { setError(e instanceof Error ? e.message : 'Request failed.') }
         finally { setBusy(false) }
-      }}>
-      <option value={0}>Automatic</option>
-      <option value={1}>Portrait</option>
-      <option value={2}>Portrait upside down</option>
-      <option value={3}>Landscape left</option>
-      <option value={4}>Landscape right</option>
-    </select>
+      }} />
     {!supported && <p className="mt-2 text-xs text-muted">Unavailable on this device.</p>}
     {error && <p role="alert" className="mt-2 text-xs text-red-500">{error}</p>}
   </Card>

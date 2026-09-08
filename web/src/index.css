@@ -213,11 +213,6 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  button:not(:disabled):not(.cursor-default):hover,
-  a[download]:hover {
-    outline: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-    outline-offset: -1px;
-  }
   button:not(:disabled):not(.cursor-default) { cursor: pointer; }
 }
 

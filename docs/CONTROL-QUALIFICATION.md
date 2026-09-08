@@ -84,6 +84,17 @@ all intermittent noise is eliminated. Remaining work includes sustained device
 listening, source selection across simultaneous AudioUnits/AudioQueues, and
 bounded browser playout queues. Do not tune gains to conceal invalid PCM.
 
+### Web Interaction Follow-up
+
+Orientation uses the existing Radix dropdown dependency with radio selection,
+keyboard navigation, Escape dismissal and focus restoration. Hover styling is
+component-scoped and colour-only, not a global button outline or scale transform.
+Identifier rows are selectable text; only their fixed-size copy buttons act on
+click. Successful text copying shows a temporary checkmark; failed copying never
+does. Plain HTTP uses a checked text-copy fallback. Clipboard tests and browser
+checks cover failure, focus restoration, mobile menu placement and stable hover
+metrics. This web-only update does not change native input or orientation IPC.
+
 ### Remaining Qualification
 
 - Confirm no recurring Listen noise over sustained playback and silence.
