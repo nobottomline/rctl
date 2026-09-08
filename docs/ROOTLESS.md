@@ -16,7 +16,7 @@ scripts/build-rootless.sh
 ```
 
 The script builds all components, runs the public-package audit, and prints the
-exact path in `packages/rootless/`. The version has a `~rootless3` prerelease
+exact path in `packages/rootless/`. The version has a `~rootless6` prerelease
 suffix. Objects and staging are isolated from the default rootful lane. The
 package identifier remains `com.greatlove.rctl`, with `iphoneos-arm64`
 architecture and dependencies on `ellekit` and `firmware (>= 15.0)`.
@@ -44,8 +44,10 @@ below; runtime qualification is not complete.
    not download dependencies automatically.
 3. Transfer the exact test `.deb` to the iPad using AirDrop or another local
    file-transfer method. Open it in Filza and use its package installation
-   action. Inspect the installation output for errors. Installation resprings
-   SpringBoard; do not interrupt it.
+   action. Inspect the installation output for errors. After dpkg has exited,
+   use the package manager's Restart SpringBoard action. A direct terminal
+   installation prints a reminder instead; run `sudo sbreload` only after the
+   installation command has completed. Do not interrupt dpkg with a respring.
 4. On a trusted Wi-Fi network, open `http://<ipad-ip>:8080/` in a browser. Local
    access has the same unauthenticated trusted-LAN policy as the rootful build.
 5. Test screen display, orientation, taps, typing, and Home first. Then proceed
@@ -154,14 +156,66 @@ Both rootful (iOS 14, arm64/arm64e) and rootless packages build and pass public
 package audits. The old device's configured SSH tunnel was unavailable, so
 physical rootful regression and the full corner/input matrix remain pending.
 
-There is currently no REST action to change the device's interface orientation.
 `GET /orient` is read-only, and the browser's rotate control changes only its
-presentation. A device-orientation action is requested follow-up work: distinguish
-it from rotation lock and viewer rotation, keep it SpringBoard-owned, and report
-unsupported/failed requests explicitly. It must not serve as a workaround for
-the capture-geometry defect.
+presentation. The subsequently added `/v1/orientation` action is a separate,
+SpringBoard-owned device control. It is not a workaround for the capture-geometry
+defect and must remain distinct from viewer rotation.
 
 ## Diagnostics and Recovery
+
+### Sileo Upgrade Qualification (2026-09-08)
+
+A real Sileo 2.5.1 upgrade on iPadOS 15.5 / Dopamine / ElleKit 1.2 exposed a
+package lifecycle defect that a successful build and `apt-get update` did not:
+
+1. A temporary, signed LAN APT source offered `0.3.4~rootless4` over the
+   installed `0.3.4~rootless3`. Sileo displayed the correct candidate, queued
+   only rctl, and downloaded the DEB through its normal repository path.
+2. After confirming the transaction, Sileo exited, dpkg/APT were no longer
+   running, the package remained `install ok half-configured`, and the daemon
+   was absent. SpringBoard remained bootable.
+3. An independent SSH session completed `sudo dpkg --configure
+   com.greatlove.rctl`. Package status returned to `install ok installed` and
+   the LAN API recovered. No new SpringBoard crash report appeared during this
+   run. This is recovery evidence, not a successful Sileo upgrade.
+
+Both old maintainer scripts forcibly killed SpringBoard during the transaction.
+The rootless scripts now request `finish:restart` through the package manager's
+`CYDIA` descriptor instead. Sileo implements this protocol and supplies `CYDIA`
+alongside `SILEO`; its finish action runs after the transaction. Without a valid
+open descriptor, the scripts print a manual respring instruction and never
+restart the rootless GUI themselves. Rootful behavior is unchanged. References:
+[APTWrapper](https://github.com/Sileo/Sileo/blob/main/Sileo/Backend/APT%20Wrapper/APTWrapper.swift),
+[RootHelper](https://github.com/Sileo/Sileo/blob/main/SileoRootDaemon/RootHelper.swift).
+
+The correction was installed as `rootless5` through SSH, followed by an explicit
+`sbreload` after dpkg exited. `rootless6` is the matching next-version candidate
+for the repeat Sileo upgrade. Host tests exercise the real restart functions
+under both macOS sh and Linux dash: valid, absent, malformed, and closed finish
+descriptors, plus the unchanged rootful restart branch. **The corrected Sileo
+upgrade and clean Sileo installation are still pending physical validation.**
+
+The installed *old* `prerm` runs before a new package can replace it. Therefore
+an upgrade from `rootless1` through `rootless4` can still encounter the old
+respring behavior. Keep SSH and the previous DEB available. If no package
+transaction remains active and rctl is half-configured, finish configuration
+with the command above; do not delete dpkg locks, force dependencies, or reboot
+mid-transaction. For the initial migration, install the corrected package from
+an independent SSH terminal, then restart SpringBoard after completion.
+
+The temporary source also confirmed that Sileo requires a `Components` field
+in a flat repository's `Release`; architecture matching alone is insufficient.
+The public repository generator already emits that field. A rootless DEB must
+be admitted separately with actual `iphoneos-arm64` metadata and qualification;
+do not advertise that architecture while serving only the rootful package.
+
+No public release, relay deployment, or old-device update is qualified by this
+local test. The full-release workflow remains gated by its relay/VPS checks.
+A separately scoped LAN-only release path must retain artifact provenance,
+checksums, and physical install/upgrade/recovery gates rather than marking
+unperformed relay checks as passed.
+
+### Runtime Diagnostics
 
 The existing logs remain `/tmp/rctld.log`, `/tmp/rctld.err.log`, and
 `/tmp/rctld.out.log`. Crash reports remain under the system CrashReporter
