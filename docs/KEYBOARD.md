@@ -35,8 +35,9 @@ On the iPadOS 15.5 / Dopamine test target with a connected Magic Keyboard:
   and platform-application entitlements did not resolve this standalone-process
   failure. This does not prove that every process or jailbreak rejects the API.
 - A separate system-dispatch probe found one keyboard service and submitted a
-  short W down/up pair with its registry sender. No game-delivery success has
-  been confirmed for this probe; it is not a production backend.
+  short W down/up pair with its registry sender. The operator confirmed no
+  movement here either. This was a standalone entitled process, not a test of
+  dispatch from SpringBoard or backboardd; it is not a production backend.
 
 No input contents or personal device identifiers were logged. The native input
 route and native package were not changed by this investigation.
@@ -73,3 +74,6 @@ one Shift release after blur, Control release when a field gains focus, no
 forwarded local UI/form keystrokes, and restored forwarding after a screen click.
 These checks establish browser behavior only, not game HID delivery or
 device-side release after network loss.
+The updated HTML was deployed atomically with a backup and compared byte-for-byte
+with the local build. A fresh browser session without interception confirmed the
+new client and advancing decoded video frames. No native package was replaced.
