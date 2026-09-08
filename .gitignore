@@ -24,6 +24,7 @@ protocol/node_modules/
 *.h264
 *.bin
 .playwright-mcp/
+.playwright-cli/
 
 # Secrets / keys — never commit
 .env
