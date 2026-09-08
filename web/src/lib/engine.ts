@@ -35,9 +35,6 @@ export function codeToUsage(c: string): number {
   )
 }
 
-// HID modifier usages — held (press/release) rather than tapped.
-export const MOD_USAGES = new Set([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
-
 // Big-endian 64-bit µs PTS from the 8-byte /stream payload header.
 function ptsFromPayload(d: Uint8Array): number {
   const hi = d[0] * 16777216 + (d[1] << 16) + (d[2] << 8) + d[3]

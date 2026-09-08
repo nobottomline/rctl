@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { ControlEngine, codeToUsage, MOD_USAGES, type DiagStats, type MacroEvent } from '../lib/engine'
+import { ControlEngine, codeToUsage, type DiagStats, type MacroEvent } from '../lib/engine'
+import { KeyboardState } from '../lib/keyboardState'
 import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
 import { MicTalk, micSupported } from '../lib/mic'
@@ -95,6 +96,7 @@ export function useControl(
       return 0
     }
     const onDown = (e: PointerEvent) => {
+      stage.focus({ preventScroll: true })
       const f = allocFinger()
       ptrs.set(e.pointerId, { finger: f, lastMove: 0 })
       try {
@@ -126,36 +128,42 @@ export function useControl(
     stage.addEventListener('pointerup', onUp)
     stage.addEventListener('pointercancel', onUp)
 
-    // ---- keyboard: forward physical keystrokes (skip Console form fields) ----
+    // ---- keyboard: preserve local form/menu navigation and release on blur ----
+    const keyboard = new KeyboardState((usage, down) => engine.key(usage, down))
     const inField = (t: EventTarget | null) => {
-      const tag = (t as HTMLElement | null)?.tagName
-      return tag === 'INPUT' || tag === 'TEXTAREA'
+      return t instanceof HTMLElement && (
+        t.isContentEditable || !!t.closest('input, textarea, select, button, a, [role="dialog"], [role="menu"]')
+      )
     }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (inField(e.target)) return
+      if (e.defaultPrevented || e.isComposing || inField(e.target)) return
       const u = codeToUsage(e.code)
       if (!u) return
       e.preventDefault()
-      // Modifiers held; regular keys as one atomic tap (d=2) so a lost release
-      // can't trigger iOS auto-repeat.
-      if (MOD_USAGES.has(u)) {
-        if (!e.repeat) engine.key(u, 1)
-      } else engine.key(u, 2)
+      keyboard.down(u, e.repeat)
     }
     const onKeyUp = (e: KeyboardEvent) => {
-      if (inField(e.target)) return
       const u = codeToUsage(e.code)
       if (!u) return
-      e.preventDefault()
-      if (MOD_USAGES.has(u)) engine.key(u, 0)
+      // A forwarded modifier must be released even when focus has moved to UI.
+      const released = keyboard.up(u)
+      if (released && !inField(e.target)) e.preventDefault()
     }
+    const releaseKeys = () => keyboard.release()
+    const onVisibility = () => { if (document.hidden) releaseKeys() }
+    const onFocus = (e: FocusEvent) => { if (inField(e.target)) releaseKeys() }
     addEventListener('keydown', onKeyDown)
     addEventListener('keyup', onKeyUp)
+    addEventListener('blur', releaseKeys)
+    addEventListener('pagehide', releaseKeys)
+    addEventListener('focusin', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
 
     const onResize = () => engine.applyOrient()
     addEventListener('resize', onResize)
 
     return () => {
+      releaseKeys()
       engine.stop()
       stage.removeEventListener('pointerdown', onDown)
       stage.removeEventListener('pointermove', onMove)
@@ -163,6 +171,10 @@ export function useControl(
       stage.removeEventListener('pointercancel', onUp)
       removeEventListener('keydown', onKeyDown)
       removeEventListener('keyup', onKeyUp)
+      removeEventListener('blur', releaseKeys)
+      removeEventListener('pagehide', releaseKeys)
+      removeEventListener('focusin', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
       removeEventListener('resize', onResize)
       try {
         video.remove()
