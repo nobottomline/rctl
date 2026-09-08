@@ -49,6 +49,37 @@ Relevant upstream interfaces:
 Current upstream source is a reference, not proof of an iPadOS 15.5 kernel's
 exact implementation.
 
+## Upstream Follow-up (2026-09-08)
+
+Apple's [keyboard and mouse gaming session](https://developer.apple.com/videos/play/wwdc2020/10617/)
+distinguishes UIKit input from the Game Controller framework's `GCKeyboard`
+callbacks and polled key state. Successful text insertion does not establish
+that a game's polled W state changes. This is a plausible explanation for the
+reported Minecraft behavior, not an instrumented finding about Minecraft's
+particular implementation.
+
+The upstream [ioscpy input implementation](https://github.com/lautarovculic/ioscpy/blob/main/device/tweak/InputInjector.mm)
+dispatches keyboard events from SpringBoard using
+`IOHIDEventSystemClientDispatchEvent`, without a digitizer/fabricated sender ID.
+This differs from both our current UIKit route and the earlier standalone
+system-dispatch probe. Its code is a useful next experiment, not proof of game
+support on the target jailbreak. A rootless-only build of this exclusive route
+compiled and passed the package audit locally, but was not installed or retained
+in production source while the Sileo upgrade defect was being investigated.
+Do not dual-dispatch as a fallback after an apparently accepted event.
+
+The existing remote typing path also failed to edit Sileo's Add Source field in
+this run; the `sileo://source/` URL handler opened the correct prefilled dialog.
+Include this real focused-field case in the next input regression test, alongside
+ordinary app text fields and single passcode digits (without recording a code).
+
+System shortcuts have a separate host boundary: macOS may consume Cmd+Tab and
+Cmd+Q before a browser receives them. Test the device chord directly first, then
+provide an explicit controller action if it works. Apple's
+[iPad keyboard shortcuts](https://support.apple.com/en-lamr/102393)
+documents Cmd+Tab as app switching; Cmd+Q is not a universal iPadOS force-quit
+contract. Do not equate an HTTP 200 response with either shortcut taking effect.
+
 ## Required before held-key support ships
 
 1. Establish and test a genuine hardware-keyboard delivery path in the process
