@@ -16,7 +16,7 @@ scripts/build-rootless.sh
 ```
 
 The script builds all components, runs the public-package audit, and prints the
-exact path in `packages/rootless/`. The version has a `~rootless1` prerelease
+exact path in `packages/rootless/`. The version has a `~rootless2` prerelease
 suffix. Objects and staging are isolated from the default rootful lane. The
 package identifier remains `com.greatlove.rctl`, with `iphoneos-arm64`
 architecture and dependencies on `ellekit` and `firmware (>= 15.0)`.
@@ -80,7 +80,7 @@ record the foreground app and whether another audio/camera session was active.
 | Area | Checks | Initial status |
 | --- | --- | --- |
 | Installation | Install output; daemon launch; ElleKit injection; respring | User completed installation; LAN API and SpringBoard screenshot path respond |
-| Screen/input | Video; taps; swipe; keyboard; buttons; orientation | Capture geometry fails; some console actions work (user report); input matrix pending |
+| Screen/input | Video; taps; swipe; keyboard; buttons; orientation | rootless2: WebRTC, four orientations, PNG and selected app/tab taps verified; full input matrix pending |
 | Lifecycle | Lock/unlock; app switch; Home; browser disconnect/reconnect | Not tested |
 | Still camera | Front/rear with a foreground app; native camera indicator | Not tested |
 | Live camera | Front/rear; rotation; recording/download; stop/disconnect cleanup | Not tested |
@@ -110,22 +110,49 @@ Observed with `0.3.4~rootless1`, iPadOS 15.5 and ElleKit 1.2 on an iPad Pro:
 - The browser applies its normal interface-orientation rotation to those
   already incorrect pixels, explaining the sideways downloaded screenshot.
 
-`core/capture/ScreenCapture.mm` sizes the render surface from
-`UIScreen.nativeBounds` and passes it directly to
-`CARenderServerRenderDisplay`. That assumes the render server uses the same
-portrait-native geometry. The evidence is consistent with a landscape-native
-panel coordinate system on this device, not with an incorrect orientation
-notification. The exact display geometry/rotation API still needs on-device
-validation; do not infer a universal offset from the iOS version or rootless
-packaging scheme.
+The old `core/capture/ScreenCapture.mm` sized the render surface from
+`UIScreen.nativeBounds` and passed it directly to `CARenderServerRenderDisplay`.
+The wrong assumption was that these APIs use the same portrait-native geometry.
+A read-only on-device CADisplay probe confirmed the mismatch independently of
+the interface orientation:
 
-The repair should obtain the renderer's full geometry, then normalize captured
-pixels to the existing canonical coordinate system before encoding or exporting
-PNG. Keep screen rendering, screenshots and touch mapping consistent. A CSS
-rotation, changing `/orient`, or cropping black pixels cannot recover pixels
-already clipped by the undersized render surface. Qualify all four orientations,
-in-session rotation and corner taps on both this device and the original
-rootful lane before calling it fixed. No capture fix has been installed yet.
+| Property | Value |
+| --- | --- |
+| UIScreen.nativeBounds | 2048x2732 |
+| UIScreen.fixedCoordinateSpace.bounds | 1024x1366 points |
+| CADisplay.bounds / frame | 2732x2048 pixels |
+| CADisplay.nativeOrientation | rot270 |
+
+This is a panel-coordinate issue, not a screen-diagonal threshold, a rootless
+filesystem issue, or an incorrect orientation notification. Never hard-code
+the correction by model, diagonal or iOS version.
+
+`rootless2` reads geometry from the same main CADisplay it renders. A
+capture-owned native surface preserves the entire panel; for nonzero panel
+offsets, Accelerate/vImage losslessly normalizes BGRA pixels into a second
+surface in UIKit's fixed coordinate system. Both the encoder and PNG writer
+consume that canonical surface. The browser orientation protocol and touch
+coordinates are unchanged. Zero-offset displays retain the direct-surface path
+without the extra allocation or copy. Surfaces are released with their capture
+context; a failed normalization drops the frame rather than encoding stale data.
+
+Private geometry access is guarded. Unavailable metadata keeps the previous
+UIKit-only fallback; present but inconsistent dimensions/unknown rotation values
+fail capture setup with a diagnostic instead of guessing or crashing SpringBoard.
+A CSS rotation, changing `/orient`, or cropping black pixels cannot recover
+pixels already clipped by the undersized render surface.
+
+Verification on the new device: clean remove/install under a crash/timeout
+watchdog, full raw portrait PNG, browser `Save frame` landscape PNG (2732x2048),
+WebRTC orientation transitions through 1/4/3/2 in one session without reloading,
+opening Sileo by tapping its icon, and selecting bottom tabs in landscape and
+upside-down portrait. A sample after roughly 695 seconds showed 20,850 video
+frames, consistent with 30 fps; this is not a complete memory/thermal soak test.
+The host suite tests all four pixel rotations, padded row strides, channel/alpha
+preservation, geometry validation and the original 1668x2224 zero-offset case.
+Both rootful (iOS 14, arm64/arm64e) and rootless packages build and pass public
+package audits. The old device's configured SSH tunnel was unavailable, so
+physical rootful regression and the full corner/input matrix remain pending.
 
 There is currently no REST action to change the device's interface orientation.
 `GET /orient` is read-only, and the browser's rotate control changes only its

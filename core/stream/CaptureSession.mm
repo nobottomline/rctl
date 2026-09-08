@@ -8,7 +8,7 @@
 #import <time.h>
 
 struct rctl_session {
-    IOSurfaceRef surface;
+    rctl_capture *capture;
     rctl_encoder *enc;
     dispatch_queue_t queue;
     dispatch_source_t timer;
@@ -36,16 +36,17 @@ rctl_session *rctl_session_start(int fps, int bitrate, double scale, rctl_nal_cb
 
     // Capture full screen at native resolution; the encoder GPU-downscales.
     size_t w = 0, h = 0;
-    IOSurfaceRef surf = rctl_capture_create_surface(1.0, &w, &h);
-    if (!surf) { fprintf(stderr, "[session] no surface\n"); return NULL; }
+    rctl_capture *capture = rctl_capture_create(&w, &h);
+    if (!capture) { fprintf(stderr, "[session] no surface\n"); return NULL; }
 
     int dstW = (int)(((size_t)(w * scale)) & ~1UL);
     int dstH = (int)(((size_t)(h * scale)) & ~1UL);
     rctl_encoder *enc = rctl_encoder_create((int)w, (int)h, dstW, dstH, fps, bitrate, cb, ctx);
-    if (!enc) { CFRelease(surf); return NULL; }
+    if (!enc) { rctl_capture_destroy(capture); return NULL; }
 
     rctl_session *s = (rctl_session *)calloc(1, sizeof(rctl_session));
-    s->surface = surf;
+    if (!s) { rctl_encoder_destroy(enc); rctl_capture_destroy(capture); return NULL; }
+    s->capture = capture;
     s->enc = enc;
     if (gPtsBaseUs == 0) gPtsBaseUs = now_us();
     s->startUs = gPtsBaseUs;   // continue the PTS timeline, don't reset it (RTP continuity)
@@ -56,8 +57,8 @@ rctl_session *rctl_session_start(int fps, int bitrate, double scale, rctl_nal_cb
     dispatch_source_set_timer(s->timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)interval),
                               interval, interval / 10);
     dispatch_source_set_event_handler(s->timer, ^{
-        rctl_capture_render(s->surface);
-        rctl_encoder_encode(s->enc, s->surface, now_us() - s->startUs);
+        IOSurfaceRef surface = rctl_capture_render(s->capture);
+        if (surface) rctl_encoder_encode(s->enc, surface, now_us() - s->startUs);
         if ((s->frames % 450) == 0) rctl_capture_undim(); // keep the screen on (~every 15s)
         s->frames++;
     });
@@ -76,15 +77,15 @@ void rctl_session_request_keyframe(rctl_session *s) {
 }
 
 int rctl_session_snapshot_png(rctl_session *s, const char *path) {
-    if (!s || !s->queue || !s->surface || !path) return -1;
+    if (!s || !s->queue || !s->capture || !path) return -1;
     // Run on the capture queue: serialized with the render+encode loop, so the
     // grab never races the render server. Render one fresh native-res frame, then
     // encode it losslessly. The PNG pass briefly pauses the stream -- acceptable
     // for an occasional screenshot, and the device user's UI is never blocked.
     __block int rc = -1;
     dispatch_sync(s->queue, ^{
-        rctl_capture_render(s->surface);
-        rc = rctl_surface_to_png(s->surface, path);
+        IOSurfaceRef surface = rctl_capture_render(s->capture);
+        rc = rctl_surface_to_png(surface, path);
     });
     return rc;
 }
@@ -97,7 +98,7 @@ void rctl_session_stop(rctl_session *s) {
         s->timer = NULL;
     }
     if (s->enc) { rctl_encoder_destroy(s->enc); s->enc = NULL; }
-    if (s->surface) { CFRelease(s->surface); s->surface = NULL; }
+    if (s->capture) { rctl_capture_destroy(s->capture); s->capture = NULL; }
     fprintf(stderr, "[session] stopped after %lld frames\n", (long long)s->frames);
     free(s);
 }

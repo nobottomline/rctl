@@ -193,6 +193,15 @@ video capture because restarting mediaserverd can stall the current H.264 sessio
 
 **Orientation.** Screen: the foreground app's `FBSOrientationObserver
 activeInterfaceOrientation` (correct even for force-orientation apps), debounced.
+Panel geometry is a separate, fixed transform: `UIScreen.nativeBounds` and
+`CARenderServerRenderDisplay` do not always share axes. Capture reads the main
+`CADisplay.bounds` and `nativeOrientation`, renders the complete native surface,
+and normalizes nonzero panel offsets with lossless vImage quarter turns before
+encoding or PNG export. The resulting pixels and touch coordinates keep their
+existing UIKit fixed-space contract; clients still apply interface orientation.
+The extra surface is capture-owned and freed at stop; zero-offset panels keep
+the original direct path. See `ROOTLESS.md` for the measured rot270 iPad Pro
+case and remaining physical regression checks.
 Camera: set the capture connection's `videoOrientation` to the app's
 `statusBarOrientation` (UIInterfaceOrientation 1..4 maps 1:1 to
 AVCaptureVideoOrientation). FX overlays: size to `fixedCoordinateSpace.bounds` and
