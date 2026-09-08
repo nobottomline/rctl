@@ -122,6 +122,9 @@ colors, cursor movement, Ctrl-C, and resize. See `docs/TERMINAL.md`.
 brightness/openurl/apps/files/say/sound/flash/banner/camera/script/audio_capture/
 audio_output) — curl- and script-friendly, separate from the realtime plane,
 shares the IPC action path where SpringBoard context is required.
+The JSON macro executor supports a bounded input-action subset, not arbitrary
+REST requests. Device orientation, playback pause/export, and the current
+qualification gaps are documented in [`CONTROL-QUALIFICATION.md`](CONTROL-QUALIFICATION.md).
 
 **Compatibility.** `/v1/capabilities` reports daemon/browser versions, protocol
 major/minor, and stable feature flags. The relay includes the same metadata in
