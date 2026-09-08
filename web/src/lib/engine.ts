@@ -57,7 +57,8 @@ function codecFromAU(au: Uint8Array): string | null {
 
 // A recorded input event: a touch ('t': phase p, finger i, normalized x/y) or a
 // key ('k': HID usage u, down d). `t` is ms since the recording started.
-export type MacroEvent = { t: number; k: 't' | 'k'; p?: number; i?: number; x?: number; y?: number; u?: number; d?: number }
+export type { MacroEvent } from './macroPlayback'
+import { MacroPlayback, type MacroEvent, type PlaybackState } from './macroPlayback'
 
 export type DiagStats = {
   fps: number
@@ -108,7 +109,7 @@ export class ControlEngine {
   private recT0 = 0
   private recPaused = false
   private recPausedAt = 0
-  private playToken = 0 // bumped to cancel an in-flight play()
+  private playback = new MacroPlayback()
 
   // ---- local /stream (WebCodecs) decode state -----------------------------
   private dec: VideoDecoder | null = null
@@ -240,6 +241,7 @@ export class ControlEngine {
   }
 
   stop() {
+    this.stopPlay()
     this.stopped = true
     if (this.orientTimer) clearInterval(this.orientTimer)
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
@@ -508,44 +510,34 @@ export class ControlEngine {
   // are the raw native-portrait surface; only the browser knows how the screen is
   // held, so it does the rotation here -- the same DEG[effOrient] the live overlay
   // uses for display.
-  private downloadRotated(src: CanvasImageSource, sw: number, sh: number) {
-    if (!sw || !sh) return
+  private rotatedBlob(src: CanvasImageSource, sw: number, sh: number): Promise<Blob> {
+    if (!sw || !sh) return Promise.reject(new Error('No screen frame is available.'))
     const deg = DEG[this.effOrient()] || 0
     const r90 = deg === 90 || deg === -90
     const t = document.createElement('canvas')
     t.width = r90 ? sh : sw
     t.height = r90 ? sw : sh
     const x = t.getContext('2d')
-    if (!x) return
+    if (!x) return Promise.reject(new Error('Screenshot rendering is unavailable.'))
     x.translate(t.width / 2, t.height / 2)
     x.rotate((deg * Math.PI) / 180)
     x.drawImage(src, -sw / 2, -sh / 2)
-    this.downloadHref(t.toDataURL('image/png'))
-  }
-
-  private downloadHref(href: string) {
-    const a = document.createElement('a')
-    a.download = `rctl-${Date.now()}.png`
-    a.href = href
-    a.click()
+    return new Promise((resolve, reject) => t.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Screenshot encoding failed.')), 'image/png'))
   }
 
   // Local fallback: save the current <video> frame (stream quality, but upright).
   screenshot() {
     const v = this.video
-    if (v.videoWidth && v.videoHeight) this.downloadRotated(v, v.videoWidth, v.videoHeight)
+    return this.rotatedBlob(v, v.videoWidth, v.videoHeight)
   }
 
   // Full-res device PNG (the raw native-portrait framebuffer): save it rotated to
   // the current orientation. When already upright (portrait) keep the original
   // bytes untouched; otherwise rotate through a canvas so a landscape screen isn't
   // saved sideways.
-  async saveOrientedBlob(blob: Blob) {
+  async orientedBlob(blob: Blob): Promise<Blob> {
     if (!(DEG[this.effOrient()] || 0)) {
-      const u = URL.createObjectURL(blob)
-      this.downloadHref(u)
-      setTimeout(() => URL.revokeObjectURL(u), 1500)
-      return
+      return blob
     }
     const url = URL.createObjectURL(blob)
     try {
@@ -555,9 +547,7 @@ export class ControlEngine {
         i.onerror = rej
         i.src = url
       })
-      this.downloadRotated(img, img.naturalWidth, img.naturalHeight)
-    } catch {
-      /* ignore */
+      return await this.rotatedBlob(img, img.naturalWidth, img.naturalHeight)
     } finally {
       URL.revokeObjectURL(url)
     }
@@ -592,26 +582,20 @@ export class ControlEngine {
   }
 
   stopPlay() {
-    this.playToken++ // invalidates any in-flight play() loop
+    this.playback.stop()
   }
+  pausePlay() { this.playback.pause() }
+  resumePlay() { this.playback.resume() }
 
   // Replay a recorded macro with its original timing. Cancellable: the wait is
   // sliced so stopPlay() (or starting a record) aborts within ~50ms. Replays
   // aren't captured (rec stays null during play). Resolves when done or aborted.
-  async play(macro: MacroEvent[]) {
+  async play(macro: MacroEvent[], state: (state: PlaybackState) => void) {
     if (!macro.length || this.rec) return
-    const token = ++this.playToken
-    const start = performance.now()
-    for (const e of macro) {
-      while (this.playToken === token && !this.stopped) {
-        const remaining = e.t - (performance.now() - start)
-        if (remaining <= 0) break
-        await new Promise((r) => setTimeout(r, Math.min(remaining, 50)))
-      }
-      if (this.playToken !== token || this.stopped) return // cancelled
+    await this.playback.play(macro, (e) => {
       if (e.k === 't') this.sendTouchNorm(e.p ?? 1, e.x ?? 0, e.y ?? 0, e.i ?? 0)
       else this.key(e.u ?? 0, e.d ?? 0)
-    }
+    }, state)
   }
 
   // ---- local /stream (WebCodecs) path -------------------------------------

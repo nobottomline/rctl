@@ -4,6 +4,7 @@ import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
 import { MicTalk, micSupported } from '../lib/mic'
 import { api, apiJSON } from '../lib/rctl'
+import { macroScript } from '../lib/macroPlayback'
 
 const REC_PATH = '/var/mobile/rctl/mic-recording.m4a'
 
@@ -43,13 +44,16 @@ export function useControl(
   const [micRec, setMicRec] = useState({ recording: false, seconds: 0, bytes: 0 })
   const recBlob = useRef<{ bytes: number; blob: Blob } | null>(null) // the fetched .m4a, cached for instant re-save
   const [savingRec, setSavingRec] = useState(false)
+  const [micRecordError, setMicRecordError] = useState('')
+  const [micRecordBusy, setMicRecordBusy] = useState(false)
+  const micMutation = useRef(false)
   const [listening, setListening] = useState(false)
   const [audioBusy, setAudioBusy] = useState(false)
   const [deviceSpeaker, setDeviceSpeaker] = useState(true)
   const [brightness, setBrightness] = useState(0.5)
   const brBusy = useRef(false)
   const brPend = useRef<number | null>(null)
-  const [recMode, setRecMode] = useState<'idle' | 'recording' | 'paused' | 'playing'>('idle')
+  const [recMode, setRecMode] = useState<'idle' | 'recording' | 'paused' | 'playing' | 'pausing' | 'play-paused'>('idle')
   const [macroLen, setMacroLen] = useState(0)
   const macroRef = useRef<MacroEvent[]>([])
 
@@ -248,7 +252,8 @@ export function useControl(
     const eng = engineRef.current
     if (!eng || !macroRef.current.length) return
     setRecMode('playing')
-    await eng.play(macroRef.current)
+    await eng.play(macroRef.current, (state) => setRecMode((current) =>
+      current === 'playing' || current === 'pausing' || current === 'play-paused' ? state : current))
     // only fall back to idle if we're still the active playback (a fresh record
     // may have taken over and switched the mode)
     setRecMode((m) => (m === 'playing' ? 'idle' : m))
@@ -260,16 +265,16 @@ export function useControl(
   // (downscaled + H.264, the stream's quality) only if the device can't oblige.
   const captureScreenshot = async () => {
     const eng = engineRef.current
+    if (!eng) throw new Error('Device is not connected.')
     try {
       const r = await api('/v1/screenshot')
       if (r.ok) {
-        await eng?.saveOrientedBlob(await r.blob()) // full-res PNG, rotated upright
-        return
+        return await eng.orientedBlob(await r.blob())
       }
     } catch {
       /* fall through to the local capture */
     }
-    eng?.screenshot()
+    return eng.screenshot()
   }
 
   // Listen toggle: start browser playback (needs this user gesture to unblock
@@ -315,7 +320,7 @@ export function useControl(
     const tick = async () => {
       try {
         const j = (await apiJSON('/v1/mic_record')) as { recording?: boolean; seconds?: number; bytes?: number }
-        if (alive) setMicRec({ recording: !!j.recording, seconds: j.seconds || 0, bytes: j.bytes || 0 })
+        if (alive && !micMutation.current && j) setMicRec({ recording: !!j.recording, seconds: j.seconds || 0, bytes: j.bytes || 0 })
       } catch {
         /* ignore */
       }
@@ -344,6 +349,26 @@ export function useControl(
     }
   }
 
+  const mutateMicRecording = async (query: string) => {
+    if (micMutation.current) return
+    micMutation.current = true
+    setMicRecordBusy(true)
+    setMicRecordError('')
+    try {
+      const response = await api(`/v1/mic_record?${query}`)
+      if (!response.ok) throw new Error('Microphone recording failed. Check the device audio session and available storage.')
+      const status = await apiJSON<{ recording: boolean; seconds: number; bytes: number }>('/v1/mic_record')
+      if (!status) throw new Error('Could not confirm recording status.')
+      recBlob.current = null
+      setMicRec(status)
+    } catch (error) {
+      setMicRecordError(error instanceof Error ? error.message : 'Recording request failed.')
+    } finally {
+      micMutation.current = false
+      setMicRecordBusy(false)
+    }
+  }
+
   return {
     status,
     orient,
@@ -363,19 +388,14 @@ export function useControl(
     },
     listenMic: { active: listeningMic, toggle: toggleListenMic },
     micRecord: {
+      busy: micRecordBusy,
+      error: micRecordError,
       recording: micRec.recording,
       seconds: micRec.seconds,
       bytes: micRec.bytes,
       saving: savingRec,
-      start: async () => {
-        recBlob.current = null // a new recording invalidates the cached download
-        await api('/v1/mic_record?on=1').catch(() => {})
-        setMicRec((s) => ({ ...s, recording: true }))
-      },
-      stop: async () => {
-        await api('/v1/mic_record?on=0').catch(() => {})
-        setMicRec((s) => ({ ...s, recording: false }))
-      },
+      start: () => mutateMicRecording('on=1'),
+      stop: () => mutateMicRecording('on=0'),
       // Pull the finished .m4a over the P2P files channel, cache it, and download.
       // Re-saving uses the cache so the click -> download stays synchronous (Safari
       // only permits a download inside the user-gesture window).
@@ -394,17 +414,16 @@ export function useControl(
         }
         setSavingRec(false)
       },
-      discard: async () => {
-        recBlob.current = null
-        await api('/v1/mic_record?discard=1').catch(() => {})
-        setMicRec({ recording: false, seconds: 0, bytes: 0 })
-      },
+      discard: () => mutateMicRecording('discard=1'),
     },
     toggleStats: () => setStatsOn((v) => !v),
     setQuality: (scale: number, fps: number, bitrate: number) =>
       engineRef.current?.setQuality(scale, fps, bitrate),
     screenshot: captureScreenshot,
     record: {
+      exportScript: () => downloadBlob(new Blob([JSON.stringify(macroScript(macroRef.current), null, 2)], { type: 'application/json' }), 'rctl-macro.json'),
+      pausePlay: () => engineRef.current?.pausePlay(),
+      resumePlay: () => engineRef.current?.resumePlay(),
       mode: recMode,
       count: macroLen,
       start: startRecord,

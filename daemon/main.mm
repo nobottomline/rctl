@@ -41,6 +41,7 @@
 #import "net/RelayClient.h"
 #import "config/LocalAccess.h"
 #import "ipc/Ipc.h"
+#import "input/ScriptValidation.h"
 #import "net/WebRTCBridge.h"
 #import "net/CameraIngest.h"
 #import "net/MediaActivityPolicy.h"
@@ -875,16 +876,22 @@ static void schedule_button(const char *name, double t0) {
 // POST /v1/script body: {"actions":[{"type":"launch","bundle":".."},{"type":"wait","ms":1500},
 //   {"type":"tap","x":0.5,"y":0.9},{"type":"type","text":"hi"},{"type":"button","name":"home"}]}
 static char *run_script(const char *body, int *status) {
+    if (!body || !body[0]) { *status = 400; return strdup("{\"error\":\"script_body_required\"}"); }
     NSData *d = [NSData dataWithBytes:body length:strlen(body)];
     id obj = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
     NSArray *actions = [obj isKindOfClass:[NSDictionary class]] ? obj[@"actions"]
                      : [obj isKindOfClass:[NSArray class]] ? obj : nil;
     if (![actions isKindOfClass:[NSArray class]]) { *status = 400; return strdup("{\"error\":\"expected {actions:[...]}\"}"); }
+    if (!rctl_script_valid(actions)) { *status = 400; return strdup("{\"error\":\"invalid_or_unsupported_script_action\"}"); }
     __block double t = 0;
     for (NSDictionary *a in actions) {
         if (![a isKindOfClass:[NSDictionary class]]) continue;
         NSString *type = a[@"type"];
         if      ([type isEqual:@"wait"])  { t += [a[@"ms"] doubleValue] / 1000.0; }
+        else if ([type isEqual:@"input"]) { rctl_ipc_input event = { [a[@"phase"] intValue], [a[@"id"] intValue], [a[@"x"] doubleValue], [a[@"y"] doubleValue] };
+                                            AFTER(t, ^{ send_to_sb(RCTL_MSG_INPUT, &event, sizeof event); }); }
+        else if ([type isEqual:@"input_key"]) { int p = a[@"p"] ? [a[@"p"] intValue] : 7, u = [a[@"u"] intValue], dn = a[@"d"] ? [a[@"d"] intValue] : 2;
+                                                AFTER(t, ^{ ipc_key(p, u, dn); }); }
         else if ([type isEqual:@"tap"])   { schedule_tap([a[@"x"] doubleValue], [a[@"y"] doubleValue], t); t += 0.12; }
         else if ([type isEqual:@"swipe"]) { double ms = [a[@"ms"] doubleValue]; if (ms <= 0) ms = 300;
                                             schedule_swipe([a[@"x1"] doubleValue],[a[@"y1"] doubleValue],
@@ -1028,7 +1035,11 @@ static char *rctl_tweaks_json(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *dirs = @[ RCTL_ROOT_PATH_NS(@"/Library/MobileSubstrate/DynamicLibraries"),
                        RCTL_ROOT_PATH_NS(@"/usr/lib/TweakInject") ];
+    NSMutableSet *visited = [NSMutableSet set];
     for (NSString *dir in dirs) {
+        NSString *resolved = [dir stringByResolvingSymlinksInPath];
+        if ([visited containsObject:resolved]) continue;
+        [visited addObject:resolved];
         for (NSString *f in ([fm contentsOfDirectoryAtPath:dir error:nil] ?: @[])) {
             BOOL disabled = [f hasSuffix:@".plist.disabled"];   // toggled off by us
             if (!disabled && ![[f pathExtension] isEqualToString:@"plist"]) continue;
@@ -1462,6 +1473,24 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
             char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
             return out;
         }
+    } else if (!strcmp(path, "/v1/orientation")) {
+        uint8_t target = 255;
+        if (!strcmp(method, "POST") && !strcmp(content_type, "application/json")) {
+            NSData *data = body && body_len > 0 ? [NSData dataWithBytes:body length:body_len] : nil;
+            id request = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            id value = [request isKindOfClass:[NSDictionary class]] ? request[@"orientation"] : nil;
+            if (![value isKindOfClass:[NSNumber class]] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID() ||
+                !isfinite([value doubleValue]) || [value doubleValue] != [value intValue] || [value intValue] < 0 || [value intValue] > 4) {
+                *status = 400; return strdup("{\"error\":\"orientation_must_be_integer_0_to_4\"}");
+            }
+            target = [value intValue];
+        } else if (strcmp(method, "GET")) {
+            *status = 405; return strdup("{\"error\":\"use_get_or_post_json\"}");
+        }
+        char *result = sb_query(RCTL_Q_ORIENTATION, (const char *)&target, 1, 2.0);
+        if (!result) { *status = 504; return strdup("{\"error\":\"no_reply_from_device\"}"); }
+        if (strstr(result, "\"error\"")) *status = 503;
+        return result;
     } else if (!strcmp(path, "/v1/deviceinfo")) {
         char *info = sb_query(RCTL_Q_DEVINFO, NULL, 0, 1.5);
         if (info) return info;            // SB already returns JSON
@@ -1680,7 +1709,7 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
             if (onp[0] == '1') {
                 g_micRecordWant = true;
                 rctl_mic_refresh();
-                if (!rctl_mic_record_start()) { g_micRecordWant = false; rctl_mic_refresh(); *status = 500; return strdup("{\"error\":\"record start failed\"}"); }
+                if (!g_micCapturing || !rctl_mic_record_start()) { g_micRecordWant = false; rctl_mic_refresh(); *status = 500; return strdup("{\"error\":\"record start failed\"}"); }
             } else {
                 rctl_mic_record_stop();
                 g_micRecordWant = false;
@@ -2081,6 +2110,20 @@ static void rctl_mic_refresh(void) {
 static bool rctl_mic_record_start(void) {
     pthread_mutex_lock(&g_recLock);
     if (g_recording) { pthread_mutex_unlock(&g_recLock); return true; }
+    // Rootless packages do not install the web client in this data directory.
+    NSString *directory = [@RCTL_MIC_REC_PATH stringByDeletingLastPathComponent];
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES
+                                                 attributes:@{NSFilePosixPermissions: @0755} error:nil]) {
+        dlog("micrec: recording directory unavailable");
+        pthread_mutex_unlock(&g_recLock);
+        return false;
+    }
+    struct stat existing;
+    if (lstat(RCTL_MIC_REC_PATH, &existing) == 0 && !S_ISREG(existing.st_mode)) {
+        dlog("micrec: refusing non-regular recording target");
+        pthread_mutex_unlock(&g_recLock);
+        return false;
+    }
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)RCTL_MIC_REC_PATH, strlen(RCTL_MIC_REC_PATH), false);
     AudioStreamBasicDescription aac; memset(&aac, 0, sizeof aac);
     aac.mFormatID = kAudioFormatMPEG4AAC; aac.mSampleRate = 48000; aac.mChannelsPerFrame = 1;
@@ -2093,7 +2136,13 @@ static bool rctl_mic_record_start(void) {
     pcm.mChannelsPerFrame = 1; pcm.mBitsPerChannel = 16; pcm.mBytesPerFrame = 2; pcm.mFramesPerPacket = 1; pcm.mBytesPerPacket = 2;
     st = ExtAudioFileSetProperty(g_recFile, kExtAudioFileProperty_ClientDataFormat, sizeof pcm, &pcm);
     if (st != noErr) { char l[80]; snprintf(l, sizeof l, "micrec: client fmt %d", (int)st); dlog(l); ExtAudioFileDispose(g_recFile); g_recFile = NULL; pthread_mutex_unlock(&g_recLock); return false; }
-    ExtAudioFileWriteAsync(g_recFile, 0, NULL);   // prime the async writer thread
+    chmod(RCTL_MIC_REC_PATH, 0600);
+    st = ExtAudioFileWriteAsync(g_recFile, 0, NULL);   // prime the async writer thread
+    if (st != noErr) {
+        dlog("micrec: writer initialization failed");
+        ExtAudioFileDispose(g_recFile); g_recFile = NULL;
+        pthread_mutex_unlock(&g_recLock); return false;
+    }
     g_recFrames = 0;
     g_recording = true;
     pthread_mutex_unlock(&g_recLock);

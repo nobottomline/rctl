@@ -352,12 +352,18 @@ static void post_key(int page, int usage, int down) {
     if (!ev) return;
     // Keyboard keys are delivered to the focused app via _enqueueHIDEvent;
     // Consumer buttons (Home/Power/Volume) are system events — dispatch only.
+    if (_SetSenderID) _SetSenderID(ev, kFallbackSenderID);
+    bool enqueued = false;
     if (page == 0x07) {
         UIApplication *app = [UIApplication sharedApplication];
-        ((void (*)(id, SEL, IOHIDEventRef))objc_msgSend)(app, NSSelectorFromString(@"_enqueueHIDEvent:"), ev);
+        SEL enqueue = NSSelectorFromString(@"_enqueueHIDEvent:");
+        if ([app respondsToSelector:enqueue]) {
+            ((void (*)(id, SEL, IOHIDEventRef))objc_msgSend)(app, enqueue, ev);
+            enqueued = true;
+        }
     }
-    if (_SetSenderID) _SetSenderID(ev, kFallbackSenderID);
-    _ClientDispatch(gClient, ev);
+    // Dispatching the same keyboard event again duplicates input in SpringBoard.
+    if (!enqueued) _ClientDispatch(gClient, ev);
     CFRelease(ev);
 }
 

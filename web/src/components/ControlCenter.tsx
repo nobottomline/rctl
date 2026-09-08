@@ -118,7 +118,7 @@ export default function ControlCenter({
       <div className="flex gap-1.5 pt-0.5">
         <Launch icon={Wand2} label="Console" onClick={onConsole} />
         <Launch icon={Boxes} label="System" onClick={onSystem} />
-        <Launch icon={Images} label="Photos" onClick={onMedia} />
+        <Launch icon={Images} label="Media" onClick={onMedia} />
         <Launch icon={FolderOpen} label="Files" onClick={onFiles} />
         <Launch icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
       </div>
@@ -172,6 +172,7 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
         {r.recording ? (
           <button
             onClick={r.stop}
+            disabled={r.busy}
             className="flex items-center justify-center gap-1.5 rounded-lg bg-red-500 px-2 py-2 text-[12px] font-medium text-white"
           >
             <span className="size-2.5 rounded-full bg-white/90 animate-pulse" />
@@ -180,6 +181,7 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
         ) : (
           <button
             onClick={r.start}
+            disabled={r.busy}
             className="flex items-center justify-center gap-1.5 rounded-lg bg-fg/8 px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-red-500 active:text-white"
           >
             <span className="size-2.5 rounded-full bg-red-500" />
@@ -195,6 +197,7 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
           />
         )}
       </div>
+      {r.error && <p role="alert" className="mt-2 text-xs text-red-500">{r.error}</p>}
       {!r.recording && r.bytes > 0 && (
         <div className="mt-1.5 flex items-center gap-1.5">
           <button
