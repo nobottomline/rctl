@@ -90,6 +90,9 @@ jobs:
           xcodebuild -project mobile/ios/RctlMobile.xcodeproj -scheme 'RCTL Controller' \
             -configuration Debug -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath mobile/ios/.derivedData CODE_SIGNING_ALLOWED=NO build
+      - name: Test controller lifecycle on an isolated simulator
+        timeout-minutes: 15
+        run: bash scripts/test-mobile-ios.sh
 
   container:
     runs-on: ubuntu-24.04

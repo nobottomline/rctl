@@ -46,6 +46,26 @@ The current product slice does not yet implement Unicode clipboard input, audio
 consumers, files, statistics export, or automatic reconnect policy. These are
 tracked product increments; a successful build is not a release qualification.
 
+## Lifecycle Regression Tests
+
+`make mobile-ios-app-test` runs the shared scheme's `ControllerTests` target on
+a temporary iOS 16+ simulator and deletes only that simulator afterward. Xcode,
+Node.js, and an installed iOS simulator runtime are required. The script uses
+ad-hoc simulator signing for Keychain; no Apple account or team is needed.
+`make mobile-test` includes both package tests and these application tests.
+
+The tests hold HTTP responses with `URLProtocol` and use isolated Keychain and
+UserDefaults namespaces. They cover profile removal during refresh/device-list
+requests, stale operation cleanup, shared concurrent refresh, terminal control
+cleanup, and explicit control re-arming after transient disconnection. No real
+relay or physical device is contacted.
+
+Realtime package tests also exercise foreign PeerConnection callbacks through a
+loopback WebSocket endpoint and invalidate already queued main-thread events.
+Peer ownership checks happen on the transport queue; public start/stop invalidate
+event delivery synchronously, and the app receives events directly on MainActor.
+Refresh results are committed only to the profile generation that requested them.
+
 Refresh keeps the sender-constrained secret stable while renewing its inactivity
 expiry and replacing the access token. A process that dies before committing the
 response to Keychain can safely repeat the operation with a fresh signed nonce.

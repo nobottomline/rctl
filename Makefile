@@ -161,7 +161,7 @@ test-rootless-paths:
 		-framework Foundation -o /tmp/rctl-rootless-update-test
 	@/tmp/rctl-rootless-update-test
 
-.PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-build mobile-test
+.PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-app-test mobile-ios-build mobile-test
 protocol-generate:
 	@node protocol/generate.mjs
 
@@ -179,7 +179,10 @@ mobile-ios-build:
 		-configuration Debug -destination 'generic/platform=iOS Simulator' \
 		-derivedDataPath mobile/ios/.derivedData CODE_SIGNING_ALLOWED=NO build
 
-mobile-test: mobile-ios-test mobile-ios-build
+mobile-ios-app-test:
+	@bash scripts/test-mobile-ios.sh
+
+mobile-test: mobile-ios-test mobile-ios-build mobile-ios-app-test
 
 .PHONY: test-update-signing-key
 test-update-signing-key:

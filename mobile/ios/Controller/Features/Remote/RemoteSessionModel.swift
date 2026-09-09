@@ -83,7 +83,7 @@ final class RemoteSessionModel: ObservableObject {
     private var keyboardAvailableAt: TimeInterval = 0
 
     var canControl: Bool {
-        media == .screen && channelStates["control"] == .open
+        state == .connected && media == .screen && channelStates["control"] == .open
     }
 
     init(appModel: ControllerAppModel, deviceID: String) {
@@ -100,7 +100,8 @@ final class RemoteSessionModel: ObservableObject {
         suspended = false
         connectionAttempt &+= 1
         let currentAttempt = connectionAttempt
-        session.stop()
+        cancelKeyboardInput()
+        session.stop(notify: false)
         state = .signaling
         videoAvailable = false
         channelStates = [:]
@@ -110,6 +111,9 @@ final class RemoteSessionModel: ObservableObject {
             let request = try await appModel.signalingRequest(deviceID: deviceID, media: media)
             guard !suspended, connectionAttempt == currentAttempt else { return }
             try session.start(with: request)
+        } catch is CancellationError {
+            guard !suspended, connectionAttempt == currentAttempt else { return }
+            handle(.connection(.closed))
         } catch {
             guard !suspended, connectionAttempt == currentAttempt else { return }
             state = .failed
@@ -123,6 +127,7 @@ final class RemoteSessionModel: ObservableObject {
         interactionMode = .view
         cancelKeyboardInput()
         session.stop()
+        handle(.connection(.closed))
     }
 
     func suspend() {
@@ -133,6 +138,7 @@ final class RemoteSessionModel: ObservableObject {
         interactionMode = .view
         cancelKeyboardInput()
         session.stop()
+        handle(.connection(.closed))
     }
 
     func resume() async {
@@ -255,10 +261,18 @@ final class RemoteSessionModel: ObservableObject {
         )
     }
 
-    private func handle(_ event: RctlRealtimeEvent) {
+    func handle(_ event: RctlRealtimeEvent) {
         switch event {
         case let .connection(value):
             state = value
+            if value != .connected {
+                interactionMode = .view
+                cancelKeyboardInput()
+            }
+            if value == .failed || value == .closed || value == .idle {
+                channelStates = [:]
+                videoAvailable = false
+            }
         case .firstVideoFrame:
             videoAvailable = true
         case .orientation:
@@ -274,13 +288,12 @@ final class RemoteSessionModel: ObservableObject {
         }
     }
 
-    private final class EventRouter: @unchecked Sendable {
+    @MainActor
+    private final class EventRouter {
         weak var owner: RemoteSessionModel?
 
         func send(_ event: RctlRealtimeEvent) {
-            Task { @MainActor [weak self] in
-                self?.owner?.handle(event)
-            }
+            owner?.handle(event)
         }
     }
 }

@@ -16,7 +16,8 @@ The checked-in modules are:
 `RctlMobile.xcodeproj` is the checked-in application graph. Its shared
 `RCTL Controller` scheme builds the native application in `Controller/`. Run
 package tests with `make mobile-ios-test`, build the app with
-`make mobile-ios-build`, or run both with `make mobile-test`.
+`make mobile-ios-build`, run isolated simulator lifecycle tests with
+`make mobile-ios-app-test`, or run all checks with `make mobile-test`.
 
 Apple signing is machine-local. Copy `Config/Local.xcconfig.example` to
 `Config/Local.xcconfig` and set `DEVELOPMENT_TEAM`, or select a team in Xcode

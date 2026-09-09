@@ -4,7 +4,7 @@ import OSLog
 import RctlProtocol
 
 public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
-    public typealias EventHandler = @Sendable (RctlRealtimeEvent) -> Void
+    public typealias EventHandler = @MainActor @Sendable (RctlRealtimeEvent) -> Void
 
     private static let acceptedChannels = Set(["control", "audio", "room-mic", "mic-in", "state"])
     private static let maximumPendingCandidates = 256
@@ -16,10 +16,11 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
 
     private let factory: RctlPeerConnectionFactory
     private let urlSession: URLSession
-    private let eventHandler: EventHandler
+    private let eventDelivery: RealtimeEventDelivery
     private let queue = DispatchQueue(label: "com.greatlove.rctl.realtime.session")
 
     private var generation: UInt64 = 0
+    private var eventRevision: UInt64 = 0
     private var keyboardGeneration: UInt64 = 0
     private var running = false
     private var webSocket: URLSessionWebSocketTask?
@@ -48,7 +49,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     ) {
         self.factory = factory
         self.urlSession = urlSession
-        self.eventHandler = eventHandler
+        self.eventDelivery = RealtimeEventDelivery(handler: eventHandler)
         super.init()
     }
 
@@ -58,14 +59,23 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
 
     public func start(with request: URLRequest) throws {
         try Self.validateWebSocketRequest(request)
-        queue.async { [weak self] in
-            self?.startLocked(with: request)
+        eventDelivery.advance { revision in
+            queue.async { [weak self] in
+                guard let self, self.eventDelivery.isCurrent(revision) else { return }
+                self.eventRevision = revision
+                self.startLocked(with: request)
+            }
         }
     }
 
-    public func stop() {
-        queue.async { [weak self] in
-            self?.stopLocked(emitClosed: true)
+    public func stop(notify: Bool = true) {
+        eventDelivery.advance { revision in
+            queue.async { [weak self] in
+                guard let self else { return }
+                self.eventRevision = revision
+                self.stopLocked(emitClosed: false)
+                if notify { self.emit(.connection(.closed)) }
+            }
         }
     }
 
@@ -395,8 +405,8 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         guard running, generation == currentGeneration else { return }
         Self.logger.error("Realtime session failed: \(Self.failureKind(error), privacy: .public)")
         emit(.failure(error))
-        emit(.connection(.failed))
         stopLocked(emitClosed: false)
+        emit(.connection(.failed))
     }
 
     private func stopLocked(emitClosed: Bool) {
@@ -410,6 +420,9 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     }
 
     private func stopResources() {
+        for label in channels.keys {
+            emit(.channel(label: label, state: .closed))
+        }
         channels.values.forEach {
             $0.delegate = nil
             $0.close()
@@ -455,10 +468,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     }
 
     private func emit(_ event: RctlRealtimeEvent) {
-        let eventHandler = eventHandler
-        DispatchQueue.main.async {
-            eventHandler(event)
-        }
+        eventDelivery.emit(event, revision: eventRevision)
     }
 
     private static func safeMessage(_ error: Error?) -> String {
@@ -510,7 +520,8 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
     public func peerConnection(_ peerConnection: LKRTCPeerConnection, didAdd stream: LKRTCMediaStream) {
         guard let track = stream.videoTracks.first else { return }
         queue.async { [weak self] in
-            self?.adoptVideoTrackLocked(track)
+            guard let self, self.running, self.peerConnection === peerConnection else { return }
+            self.adoptVideoTrackLocked(track)
         }
     }
 
@@ -536,7 +547,7 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
 
     public func peerConnection(_ peerConnection: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {
         queue.async { [weak self] in
-            guard let self, self.running else { return }
+            guard let self, self.running, self.peerConnection === peerConnection else { return }
             self.localCandidateCount += 1
             self.sendSignalingLocked(
                 .candidate(candidate: candidate.sdp, mid: candidate.sdpMid ?? "0"),
@@ -549,7 +560,7 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
 
     public func peerConnection(_ peerConnection: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {
         queue.async { [weak self] in
-            guard let self, self.running else {
+            guard let self, self.running, self.peerConnection === peerConnection else {
                 dataChannel.close()
                 return
             }
@@ -570,13 +581,14 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
     ) {
         guard let track = rtpReceiver.track as? LKRTCVideoTrack else { return }
         queue.async { [weak self] in
-            self?.adoptVideoTrackLocked(track)
+            guard let self, self.running, self.peerConnection === peerConnection else { return }
+            self.adoptVideoTrackLocked(track)
         }
     }
 
     public func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCPeerConnectionState) {
         queue.async { [weak self] in
-            guard let self, self.running else { return }
+            guard let self, self.running, self.peerConnection === peerConnection else { return }
             switch newState {
             case .new:
                 self.emit(.connection(.connecting))

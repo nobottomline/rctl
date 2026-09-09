@@ -17,6 +17,8 @@ final class ControllerAppModel: ObservableObject {
     private var accessToken: String?
     private var accessExpiresAt: Int64?
     private var restored = false
+    private var profileRevision: UInt64 = 0
+    private var refreshOperation: (id: UUID, task: Task<AccessSession, Error>)?
 
     init(
         api: ControllerAPIClient = ControllerAPIClient(),
@@ -40,8 +42,10 @@ final class ControllerAppModel: ObservableObject {
 
     func pair(using rawPayload: String) async {
         guard !isBusy else { return }
+        invalidateProfileRequests()
+        let revision = profileRevision
         isBusy = true
-        defer { isBusy = false }
+        defer { if profileRevision == revision { isBusy = false } }
         do {
             guard let data = rawPayload.data(using: .utf8) else {
                 throw ControllerClientError.invalidPairing
@@ -57,6 +61,7 @@ final class ControllerAppModel: ObservableObject {
                 signingKey: key,
                 allowInsecureLoopback: allowInsecureLoopback
             )
+            try requireCurrentProfile(revision)
             let credential = ControllerRefreshCredential(pairing: pairing, claim: claim)
             try keychain.save(credential)
             let newProfile = ControllerProfile(
@@ -68,30 +73,40 @@ final class ControllerAppModel: ObservableObject {
             profile = newProfile
             accessToken = claim.tokens.accessToken
             accessExpiresAt = claim.tokens.accessExpiresAt
-            try await loadDevices(accessToken: claim.tokens.accessToken, signingKey: key)
+            try await loadDevices(
+                session: AccessSession(profile: newProfile, token: claim.tokens.accessToken, key: key),
+                revision: revision
+            )
         } catch {
-            presentedError = Self.message(for: error)
+            if profileRevision == revision, !(error is CancellationError), !Task.isCancelled {
+                presentedError = Self.message(for: error)
+            }
         }
     }
 
     func refreshDevices() async {
         guard profile != nil, !isBusy else { return }
+        let revision = profileRevision
         isBusy = true
-        defer { isBusy = false }
+        defer { if profileRevision == revision { isBusy = false } }
         do {
             let session = try await ensureAccessSession(forceRefresh: accessToken == nil)
             do {
-                try await loadDevices(accessToken: session.token, signingKey: session.key)
+                try await loadDevices(session: session, revision: revision)
             } catch ControllerClientError.http(status: 401, code: _) {
+                try requireCurrentProfile(revision)
                 let refreshed = try await ensureAccessSession(forceRefresh: true)
-                try await loadDevices(accessToken: refreshed.token, signingKey: refreshed.key)
+                try await loadDevices(session: refreshed, revision: revision)
             }
         } catch {
-            presentedError = Self.message(for: error)
+            if profileRevision == revision, !(error is CancellationError), !Task.isCancelled {
+                presentedError = Self.message(for: error)
+            }
         }
     }
 
     func signalingRequest(deviceID: String, media: ControllerMediaRole) async throws -> URLRequest {
+        let revision = profileRevision
         guard let device = devices.first(where: { $0.id == deviceID }) else {
             throw SessionPreflightError.deviceUnavailable
         }
@@ -113,6 +128,7 @@ final class ControllerAppModel: ObservableObject {
         }
 
         let session = try await ensureAccessSession(forceRefresh: false)
+        try requireCurrentProfile(revision)
         do {
             return try api.makeSignalingRequest(
                 origin: session.profile.origin,
@@ -124,6 +140,7 @@ final class ControllerAppModel: ObservableObject {
             )
         } catch ControllerClientError.invalidToken {
             let refreshed = try await ensureAccessSession(forceRefresh: true)
+            try requireCurrentProfile(revision)
             return try api.makeSignalingRequest(
                 origin: refreshed.profile.origin,
                 deviceID: deviceID,
@@ -137,6 +154,7 @@ final class ControllerAppModel: ObservableObject {
 
     func resetProfile() {
         guard let relayID = profile?.relayID else { return }
+        invalidateProfileRequests()
         do {
             try keychain.deleteProfile(relayID: relayID)
             profiles.remove()
@@ -150,42 +168,72 @@ final class ControllerAppModel: ObservableObject {
     }
 
     private func ensureAccessSession(forceRefresh: Bool) async throws -> AccessSession {
+        try Task.checkCancellation()
         guard let profile else { throw ControllerClientError.corruptCredential }
+        let revision = profileRevision
         let key = try keychain.loadOrCreateSigningKey(relayID: profile.relayID)
         let minimumLifetime = Int64(Date().timeIntervalSince1970) + 30
         if !forceRefresh, let accessToken, let accessExpiresAt, accessExpiresAt > minimumLifetime {
             return AccessSession(profile: profile, token: accessToken, key: key)
         }
-        guard let credential = try keychain.loadCredential(relayID: profile.relayID) else {
-            throw ControllerClientError.corruptCredential
+        if refreshOperation == nil {
+            guard let credential = try keychain.loadCredential(relayID: profile.relayID) else {
+                throw ControllerClientError.corruptCredential
+            }
+            let task = Task { @MainActor in
+                let tokens = try await api.refresh(
+                    origin: profile.origin,
+                    refreshToken: credential.refreshToken,
+                    signingKey: key,
+                    allowInsecureLoopback: allowInsecureLoopback
+                )
+                try requireCurrentProfile(revision)
+                let renewed = ControllerRefreshCredential(
+                    origin: profile.origin,
+                    relayID: profile.relayID,
+                    controller: profile.controller,
+                    refreshToken: tokens.refreshToken,
+                    refreshExpiresAt: tokens.refreshExpiresAt
+                )
+                try keychain.save(renewed)
+                accessToken = tokens.accessToken
+                accessExpiresAt = tokens.accessExpiresAt
+                return AccessSession(profile: profile, token: tokens.accessToken, key: key)
+            }
+            refreshOperation = (UUID(), task)
         }
-        let tokens = try await api.refresh(
-            origin: profile.origin,
-            refreshToken: credential.refreshToken,
-            signingKey: key,
-            allowInsecureLoopback: allowInsecureLoopback
-        )
-        let renewed = ControllerRefreshCredential(
-            origin: profile.origin,
-            relayID: profile.relayID,
-            controller: profile.controller,
-            refreshToken: tokens.refreshToken,
-            refreshExpiresAt: tokens.refreshExpiresAt
-        )
-        try keychain.save(renewed)
-        accessToken = tokens.accessToken
-        accessExpiresAt = tokens.accessExpiresAt
-        return AccessSession(profile: profile, token: tokens.accessToken, key: key)
+        guard let operation = refreshOperation else { throw CancellationError() }
+        defer {
+            if refreshOperation?.id == operation.id { refreshOperation = nil }
+        }
+        let session = try await operation.task.value
+        try requireCurrentProfile(revision)
+        return session
     }
 
-    private func loadDevices(accessToken: String, signingKey: ControllerSigningKey) async throws {
-        guard let profile else { throw ControllerClientError.corruptCredential }
-        devices = try await api.devices(
-            origin: profile.origin,
-            accessToken: accessToken,
-            signingKey: signingKey,
+    private func loadDevices(session: AccessSession, revision: UInt64) async throws {
+        try requireCurrentProfile(revision)
+        let loaded = try await api.devices(
+            origin: session.profile.origin,
+            accessToken: session.token,
+            signingKey: session.key,
             allowInsecureLoopback: allowInsecureLoopback
         )
+        try requireCurrentProfile(revision)
+        devices = loaded
+    }
+
+    private func requireCurrentProfile(_ revision: UInt64) throws {
+        try Task.checkCancellation()
+        guard profileRevision == revision else { throw CancellationError() }
+    }
+
+    private func invalidateProfileRequests() {
+        profileRevision &+= 1
+        refreshOperation?.task.cancel()
+        refreshOperation = nil
+        isBusy = false
+        presentedError = nil
     }
 
     private static var debugLoopbackEnabled: Bool {
