@@ -1,0 +1,14 @@
+[
+  {"name":"valid", "hex":"09747874766572733d310670763d312e31", "valid":true, "major":1, "minor":1},
+  {"name":"future-major", "hex":"09747874766572733d310670763d322e30", "valid":true, "major":2, "minor":0},
+  {"name":"unknown-key", "hex":"09747874766572733d310670763d312e3103783d79", "valid":true, "major":1, "minor":1},
+  {"name":"case-insensitive-keys", "hex":"09545854564552533d310650563d312e31", "valid":true, "major":1, "minor":1},
+  {"name":"duplicate-key", "hex":"09747874766572733d310670763d312e310650563d312e31", "valid":false},
+  {"name":"truncated", "hex":"09747874766572733d310770763d312e31", "valid":false},
+  {"name":"missing-version", "hex":"09747874766572733d31", "valid":false},
+  {"name":"unsupported-txt-version", "hex":"09747874766572733d320670763d312e31", "valid":false},
+  {"name":"leading-zero", "hex":"09747874766572733d310770763d30312e31", "valid":false},
+  {"name":"zero-major", "hex":"09747874766572733d310670763d302e31", "valid":false},
+  {"name":"empty-entry", "hex":"09747874766572733d310670763d312e3100", "valid":false},
+  {"name":"empty", "hex":"", "valid":false}
+]
