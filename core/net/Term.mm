@@ -200,8 +200,12 @@ static bool spawn_term(struct term_session *t, uint16_t cols, uint16_t rows) {
         setenv("USER", "root", 1);
         setenv("LOGNAME", "root", 1);
         setenv("SHELL", shell, 1);
+        // POSIX sh may be dash, which does not expand bash-style prompt escapes.
+        // Keep the daemon's jailbreak-aware PATH; do not load login profiles.
+        setenv("PS1", "${PWD} # ", 1);
+        unsetenv("ENV");
         chdir("/var/root");
-        execl(shell, "-sh", NULL);
+        execl(shell, "sh", "-i", NULL);
         _exit(127);
     }
     t->child = pid;

@@ -127,7 +127,23 @@ test-webrtc-permissions:
 	@/tmp/rctl-webrtc-permissions-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish test-package-stage test-rootless-paths
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish test-package-stage test-rootless-paths test-display-geometry test-capture-pcm test-script-validation
+
+.PHONY: test-capture-pcm
+.PHONY: test-script-validation
+test-script-validation:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore tests/ScriptValidationTest.mm -framework Foundation -o /tmp/rctl-script-validation-test
+	@/tmp/rctl-script-validation-test
+
+test-capture-pcm:
+	@clang++ -std=c++17 -Icore tests/CapturePCMTest.cpp -o /tmp/rctl-capture-pcm-test
+	@/tmp/rctl-capture-pcm-test
+
+.PHONY: test-display-geometry
+test-display-geometry:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/DisplayGeometryTest.cpp \
+		-framework Accelerate -o /tmp/rctl-display-geometry-test
+	@/tmp/rctl-display-geometry-test
 
 .PHONY: test-package-stage
 test-package-stage:

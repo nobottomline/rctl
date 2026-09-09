@@ -118,7 +118,7 @@ export default function ControlCenter({
       <div className="flex gap-1.5 pt-0.5">
         <Launch icon={Wand2} label="Console" onClick={onConsole} />
         <Launch icon={Boxes} label="System" onClick={onSystem} />
-        <Launch icon={Images} label="Photos" onClick={onMedia} />
+        <Launch icon={Images} label="Media" onClick={onMedia} />
         <Launch icon={FolderOpen} label="Files" onClick={onFiles} />
         <Launch icon={SquareTerminal} label="Terminal" onClick={onTerminal} />
       </div>
@@ -172,6 +172,7 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
         {r.recording ? (
           <button
             onClick={r.stop}
+            disabled={r.busy}
             className="flex items-center justify-center gap-1.5 rounded-lg bg-red-500 px-2 py-2 text-[12px] font-medium text-white"
           >
             <span className="size-2.5 rounded-full bg-white/90 animate-pulse" />
@@ -180,6 +181,7 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
         ) : (
           <button
             onClick={r.start}
+            disabled={r.busy}
             className="flex items-center justify-center gap-1.5 rounded-lg bg-fg/8 px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-red-500 active:text-white"
           >
             <span className="size-2.5 rounded-full bg-red-500" />
@@ -195,6 +197,7 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
           />
         )}
       </div>
+      {r.error && <p role="alert" className="mt-2 text-xs text-red-500">{r.error}</p>}
       {!r.recording && r.bytes > 0 && (
         <div className="mt-1.5 flex items-center gap-1.5">
           <button
@@ -278,12 +281,12 @@ function Brightness({ value, onChange }: { value: number; onChange: (v: number) 
 
 // The tools sit in a launcher dock: three raised, gradient "app tiles" in one row
 // (icon + label) instead of stacked rows -- compact and distinct from the toggle
-// keys. Pressing scales it down and floods it with the signal colour.
+// keys. Interaction changes colours only, preserving geometry and text rendering.
 function Launch({ icon: Icon, label, onClick }: { icon: ComponentType<LucideProps>; label: string; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="group flex flex-1 flex-col items-center gap-1.5 rounded-2xl bg-gradient-to-b from-fg/[0.09] to-fg/[0.03] py-3 ring-1 ring-line/50 transition active:scale-[0.96] active:from-signal active:to-signal active:ring-signal"
+      className="group flex flex-1 flex-col items-center gap-1.5 rounded-2xl bg-gradient-to-b from-fg/[0.09] to-fg/[0.03] py-3 ring-1 ring-line/50 transition-colors hover:from-fg/[0.13] hover:to-fg/[0.07] active:from-signal active:to-signal active:ring-signal"
     >
       <Icon className="size-[18px] text-fg transition-colors group-active:text-on-signal" />
       <span className="text-[9.5px] font-medium text-muted transition-colors group-active:text-on-signal">{label}</span>
@@ -307,7 +310,7 @@ function Key({
       onClick={onClick}
       className={cn(
         'flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal',
-        active ? 'bg-signal text-on-signal' : 'bg-fg/8',
+        active ? 'bg-signal text-on-signal hover:bg-signal-hi' : 'bg-fg/8 hover:bg-fg/12',
       )}
     >
       <Icon className="size-3.5 shrink-0" />

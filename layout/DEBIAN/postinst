@@ -1,8 +1,8 @@
 #!/bin/sh
 # Re-sign our binaries with the device's own ldid — ad-hoc signatures made
 # off-device (macOS) are rejected by on-device AMFI on arm64e, so the dylib is
-# refused at load and the daemon is SIGKILLed. Then (re)load the daemon and
-# respring so SpringBoard picks up the agent.
+# refused at load and the daemon is SIGKILLed. Rootless keeps build signatures
+# and asks the package manager to restart the GUI after its transaction.
 set -e
 
 # Filled by the package staging step; never inferred from another installation.
@@ -112,7 +112,19 @@ fi
 # can leave dpkg stuck in postinst, which is unacceptable during recovery deploys.
 # Camera permissions are managed explicitly by the camera workflow instead.
 
-# Respring so SpringBoard picks up the (re)installed agent.
-killall -9 SpringBoard 2>/dev/null || true
+request_gui_restart() {
+    # Complete the package transaction before restarting the GUI that owns it.
+    if [ -n "$RCTL_PREFIX" ]; then
+        finish_fd=${CYDIA%% *}
+        case "$finish_fd" in
+            ''|*[!0-9]*) echo 'rctl: installation complete; restart SpringBoard after dpkg exits (sbreload).' ;;
+            *) (printf 'finish:restart\n' >&"$finish_fd") 2>/dev/null ||
+                echo 'rctl: restart SpringBoard after dpkg exits (sbreload).' ;;
+        esac
+    else
+        killall -9 SpringBoard 2>/dev/null || true
+    fi
+}
+request_gui_restart
 
 exit 0

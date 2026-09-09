@@ -27,8 +27,10 @@ depictions, and an append-only ledger of approved release tags. Generated APT
 indexes and `.deb` files are assembled into the Pages artifact and are not
 committed to either repository.
 
-Only `rctl_<version>_iphoneos-arm.deb` from an immutable public GitHub Release is
-accepted. The generator verifies the release and asset attestations, release
+The generator accepts separate `rctl_<version>_iphoneos-arm.deb` (rootful) and
+`rctl_<version>_iphoneos-arm64.deb` (rootless) artifacts from immutable public
+GitHub Releases. Both retain package identifier `com.greatlove.rctl`; they are
+not a universal DEB. The generator verifies release and asset attestations, release
 checksums, package identifier/version/architecture, required web client, and
 absence of the relay plist or data resembling an enrollment credential. It then
 generates `Packages` plus gzip, bzip2, xz, and zstd variants, creates `Release`,
@@ -57,6 +59,34 @@ a schema-3 qualification report with `package_manager_upgrade` and
 `package_manager_recovery` set to true. This prevents a normal APT in-place
 upgrade from bypassing the clean transactional updater without physical-device
 evidence that the package-manager path and recovery behavior are acceptable.
+
+### Rootless admission
+
+The distribution repository additionally owns `rootless-releases.txt`, an
+explicit subset of the approved tags in `releases.txt`. It is initially empty.
+The ordinary synchronization step does not automatically approve rootless
+delivery. Add a tag only after its immutable release includes:
+
+- `rctl_<version>_iphoneos-arm64.deb` and its `SHA256SUMS` entry.
+- An attested `rctl-qualification_<version>_iphoneos-arm64.json`, schema 4,
+  with matching `product`, `tag`, and `version`.
+- `package: {name, architecture, sha256}` bound to that exact rootless artifact.
+- Boolean checks `rootless_runtime`, `package_manager_install`,
+  `package_manager_upgrade`, and `package_manager_recovery`, all true after
+  physical-device validation. Every other reported check must also be true.
+
+Rootless has no bootstrap exemption. Its validator additionally checks the
+`/var/jb` layout, non-empty web client, maintainer-script prefix, ElleKit and
+firmware dependencies, and absence of prefixed or unprefixed relay secrets.
+The release generator in this monorepo still produces rootful release sets;
+rootless immutable release assembly and physical APT qualification are pending.
+The experimental `~rootless` builds are not substitutes for those release assets.
+
+`Release` and depictions derive their architecture list from the actual verified
+`Packages` index, not from the list of architectures the generator can validate.
+Consequently adding generator support alone does not make the current rootful
+feed installable on Dopamine. The distribution tests cover both layouts and
+reject renamed rootful DEBs, mismatched reports and corrupt checksums.
 
 ## Public and relay installations
 

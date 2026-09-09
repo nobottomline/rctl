@@ -3,6 +3,7 @@
 
 import pathlib
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -60,6 +61,37 @@ class StagePackageTests(unittest.TestCase):
         before = {path: (self.stage / path).read_bytes() for path in paths}
         stage_package(self.stage, "")
         self.assertEqual(before, {path: (self.stage / path).read_bytes() for path in paths})
+
+    def test_rootless_restart_is_requested_not_executed(self):
+        self.prepare()
+        stage_package(self.stage, "rootless")
+        for name in ("postinst", "prerm"):
+            contents = (self.stage / "DEBIAN" / name).read_text()
+            helper = re.search(r"^request_gui_restart\(\) \{\n.*?^\}",
+                               contents, re.MULTILINE | re.DOTALL)
+            self.assertIsNotNone(helper)
+            self.assertNotIn("killall -9 SpringBoard", contents.replace(helper.group(), ""))
+            for cydia, descriptor, expected in (
+                ("6 1", "6>&1", "finish:restart\n"),
+                ("", "", "sbreload"),
+                ("invalid 1", "", "sbreload"),
+                ("6 1", "6>&-", "sbreload"),
+            ):
+                with self.subTest(script=name, cydia=cydia, descriptor=descriptor):
+                    shell = ("set -e\nRCTL_PREFIX=/var/jb\n"
+                             "killall() { echo UNEXPECTED_RESTART; }\n" +
+                             helper.group() + "\nrequest_gui_restart " + descriptor)
+                    result = subprocess.run(["/bin/sh", "-c", shell],
+                                            env={"CYDIA": cydia}, text=True,
+                                            capture_output=True, check=True)
+                    self.assertIn(expected, result.stdout)
+                    self.assertNotIn("UNEXPECTED_RESTART", result.stdout)
+            # Preserve the existing rootful/manual deployment behavior.
+            result = subprocess.run(["/bin/sh", "-c",
+                                     "RCTL_PREFIX=''\nkillall() { echo ROOTFUL_RESTART; }\n" +
+                                     helper.group() + "\nrequest_gui_restart"],
+                                    text=True, capture_output=True, check=True)
+            self.assertEqual(result.stdout, "ROOTFUL_RESTART\n")
 
     def test_empty_control_client_is_rejected_in_both_lanes(self):
         for rootless in (True, False):

@@ -67,8 +67,17 @@ does not materialize the original in `rctld` or a browser `Blob`. Share and
 original media playback use the peer-to-peer `files` DataChannel because those
 browser APIs require an in-memory object. Copy
 Image converts the bounded JPEG preview to PNG for broad clipboard compatibility;
-browser image clipboard APIs require a secure context, so local plain HTTP keeps
-Download and Share as the available fallbacks.
+browser image clipboard and Web Share APIs require a secure context. Local plain
+HTTP retains Download; unsupported Copy/Share actions are not offered. HTTPS alone
+does not guarantee Web Share support: the browser must implement it as well.
+
+Video thumbnails use `AVAssetImageGenerator`. On the tested iOS 15.5 rootless
+device, six local videos returned AVFoundation `-11800` / OSStatus `-12437`.
+An isolated `AVAssetReader` probe returned empty samples without image buffers;
+it was not a working fallback and was not retained. Video thumbnails on this
+target remain unresolved. The client shows a video placeholder when decoding
+fails, without fetching entire originals just to fill gallery tiles. Failed
+thumbnail diagnostics contain only error domains/codes, never asset paths.
 
 GIF previews remain static until the user requests the original, then the browser
 renders the original animated file. A Live Photo remains one library item and

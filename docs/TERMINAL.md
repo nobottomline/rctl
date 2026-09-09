@@ -46,7 +46,7 @@ handled by the terminal renderer.
 
 ## Shell environment
 
-The PTY starts `/bin/sh` with:
+The PTY starts the jailbreak-resolved `/bin/sh -i` as a non-login shell with:
 
 ```text
 TERM=xterm-256color
@@ -55,9 +55,15 @@ USER=root
 LOGNAME=root
 SHELL=/bin/sh
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+PS1=${PWD} #
 ```
 
 Default working directory is `/var/root`.
+Rootless prepends its resolved jailbreak binary directories to `PATH` and resolves
+`SHELL` below that root. Login profiles are not loaded and `ENV` is unset: Procursus
+ships a bash-style prompt in its profile even when `sh` resolves to dash. A POSIX
+prompt avoids literal `\h`, `\w`, and `\u` without changing user dotfiles. Utilities
+such as `ping` are supplied by the device's packages, not emulated by the terminal.
 
 ## Safety rules
 

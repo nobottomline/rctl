@@ -5,6 +5,7 @@
 // The build SDK is stripped, so the render-server symbol is dlsym'd at runtime.
 
 #import "capture/ScreenCapture.h"
+#import "capture/DisplayGeometry.h"
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -13,24 +14,33 @@
 #import <dlfcn.h>
 #import <stdio.h>
 #import <unistd.h>
+#include <stdlib.h>
 
 typedef void (*CARenderServerRenderDisplay_f)(uint32_t client, CFStringRef display,
                                               IOSurfaceRef surface, int x, int y);
 
 static CARenderServerRenderDisplay_f gRender = NULL;
 static CFStringRef gDisplayName = NULL;
+static id gDisplay = nil;
 static uint32_t gPowerAssertionID = 0;
 static bool gIdleTimerStateSaved = false;
 static bool gPreviousIdleTimerDisabled = false;
 
-// Enumerate CADisplay displays and return the first usable name (usually "LCD").
-static NSString *pick_main_display_name(void) {
+// Bind geometry and rendering to the same main display, never an external panel.
+static id main_display(void) {
     Class cls = NSClassFromString(@"CADisplay");
     if (!cls) return nil;
+    SEL main = NSSelectorFromString(@"mainDisplay");
+    if ([cls respondsToSelector:main]) {
+        id display = ((id (*)(id, SEL))objc_msgSend)(cls, main);
+        if (display) return display;
+    }
+    if (![cls respondsToSelector:NSSelectorFromString(@"displays")]) return nil;
     NSArray *displays = ((id (*)(id, SEL))objc_msgSend)(cls, NSSelectorFromString(@"displays"));
     for (id d in displays) {
-        NSString *name = ((id (*)(id, SEL))objc_msgSend)(d, NSSelectorFromString(@"name"));
-        if (name.length) return name;
+        SEL external = NSSelectorFromString(@"isExternal");
+        if (![d respondsToSelector:external] || ((BOOL (*)(id, SEL))objc_msgSend)(d, external)) continue;
+        return d;
     }
     return nil;
 }
@@ -40,7 +50,14 @@ static void ensure_init(void) {
     dispatch_once(&once, ^{
         dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", RTLD_NOW);
         gRender = (CARenderServerRenderDisplay_f)dlsym(RTLD_DEFAULT, "CARenderServerRenderDisplay");
-        NSString *dn = pick_main_display_name();
+        NSString *dn = nil;
+        @try {
+            gDisplay = main_display();
+            id name = [gDisplay valueForKey:@"name"];
+            if ([name isKindOfClass:NSString.class] && [name length]) dn = name;
+        } @catch (NSException *exception) {
+            gDisplay = nil;
+        }
         gDisplayName = dn ? (CFStringRef)CFBridgingRetain(dn) : CFSTR("LCD");
         fprintf(stderr, "[capture] init render=%p display=%s\n",
                 (void*)gRender, dn ? dn.UTF8String : "LCD");
@@ -105,22 +122,46 @@ void rctl_capture_set_keep_awake(bool awake) {
     }
 }
 
-static CGSize main_display_pixels(void) {
+static bool display_geometry(rctl_display_geometry *geometry) {
+    ensure_init();
     UIScreen *s = [UIScreen mainScreen];
-    CGRect nb = s.nativeBounds;
-    if (nb.size.width > 0 && nb.size.height > 0) return nb.size;
-    CGFloat scale = s.scale > 0 ? s.scale : 1.0;
-    return CGSizeMake(s.bounds.size.width * scale, s.bounds.size.height * scale);
+    CGSize px = s.nativeBounds.size;
+    if (px.width <= 0 || px.height <= 0) {
+        CGFloat scale = s.scale > 0 ? s.scale : 1.0;
+        CGSize fixed = s.fixedCoordinateSpace.bounds.size;
+        px = CGSizeMake(fixed.width * scale, fixed.height * scale);
+    }
+    NSString *orientation = nil;
+    NSValue *bounds = nil;
+    @try {
+        id o = [gDisplay valueForKey:@"nativeOrientation"];
+        id b = [gDisplay valueForKey:@"bounds"];
+        if ([o isKindOfClass:NSString.class] && [b isKindOfClass:NSValue.class] &&
+            !strcmp([b objCType], @encode(CGRect))) {
+            orientation = o;
+            bounds = b;
+        }
+    } @catch (NSException *exception) {
+        // Older/private API variants retain the established UIKit-only path.
+    }
+    CGSize render = bounds ? bounds.CGRectValue.size : px;
+    const char *rotation = orientation ? orientation.UTF8String : "rot0";
+    bool valid = rctl_display_geometry_resolve(px.width, px.height, render.width,
+                                               render.height, rotation, geometry);
+    fprintf(stderr, "[capture] geometry UIKit=%.0fx%.0f render=%.0fx%.0f native=%s source=%s valid=%d\n",
+            px.width, px.height, render.width, render.height, rotation,
+            bounds ? "CADisplay" : "UIKit-fallback", valid);
+    return valid;
 }
 
-IOSurfaceRef rctl_capture_create_surface(double scale, size_t *outW, size_t *outH) {
-    CGSize px = main_display_pixels();
-    if (scale <= 0) scale = 1.0;
-    size_t w = ((size_t)(px.width  * scale)) & ~1UL; // even dims for H.264 chroma
-    size_t h = ((size_t)(px.height * scale)) & ~1UL;
-    if (outW) *outW = w;
-    if (outH) *outH = h;
-    if (w == 0 || h == 0) return NULL;
+struct rctl_capture {
+    IOSurfaceRef native;
+    IOSurfaceRef canonical;
+    unsigned char rotation;
+    bool failure_logged;
+};
+
+static IOSurfaceRef create_surface(size_t w, size_t h) {
     NSDictionary *props = @{
         (__bridge id)kIOSurfaceWidth:           @(w),
         (__bridge id)kIOSurfaceHeight:          @(h),
@@ -131,9 +172,56 @@ IOSurfaceRef rctl_capture_create_surface(double scale, size_t *outW, size_t *out
     return IOSurfaceCreate((__bridge CFDictionaryRef)props);
 }
 
-void rctl_capture_render(IOSurfaceRef dst) {
-    ensure_init();
-    if (gRender && dst) gRender(0, gDisplayName, dst, 0, 0);
+rctl_capture *rctl_capture_create(size_t *outW, size_t *outH) {
+    if (outW) *outW = 0;
+    if (outH) *outH = 0;
+    rctl_display_geometry geometry;
+    if (!display_geometry(&geometry) || !gRender) return NULL;
+    rctl_capture *capture = (rctl_capture *)calloc(1, sizeof(rctl_capture));
+    if (!capture) return NULL;
+    capture->rotation = geometry.rotation;
+    capture->native = create_surface(geometry.render_width, geometry.render_height);
+    if (capture->rotation) capture->canonical = create_surface(geometry.width, geometry.height);
+    if (!capture->native || (capture->rotation && !capture->canonical)) {
+        rctl_capture_destroy(capture);
+        return NULL;
+    }
+    if (outW) *outW = geometry.width;
+    if (outH) *outH = geometry.height;
+    return capture;
+}
+
+void rctl_capture_destroy(rctl_capture *capture) {
+    if (!capture) return;
+    if (capture->canonical) CFRelease(capture->canonical);
+    if (capture->native) CFRelease(capture->native);
+    free(capture);
+}
+
+IOSurfaceRef rctl_capture_render(rctl_capture *capture) {
+    if (!capture || !gRender) return NULL;
+    gRender(0, gDisplayName, capture->native, 0, 0);
+    if (!capture->rotation) return capture->native;
+
+    bool ok = false;
+    if (IOSurfaceLock(capture->native, kIOSurfaceLockReadOnly, NULL) == 0) {
+        if (IOSurfaceLock(capture->canonical, 0, NULL) == 0) {
+            vImage_Buffer src = {IOSurfaceGetBaseAddress(capture->native),
+                IOSurfaceGetHeight(capture->native), IOSurfaceGetWidth(capture->native),
+                IOSurfaceGetBytesPerRow(capture->native)};
+            vImage_Buffer dst = {IOSurfaceGetBaseAddress(capture->canonical),
+                IOSurfaceGetHeight(capture->canonical), IOSurfaceGetWidth(capture->canonical),
+                IOSurfaceGetBytesPerRow(capture->canonical)};
+            ok = rctl_display_normalize(&src, &dst, capture->rotation);
+            IOSurfaceUnlock(capture->canonical, 0, NULL);
+        }
+        IOSurfaceUnlock(capture->native, kIOSurfaceLockReadOnly, NULL);
+    }
+    if (!ok && !capture->failure_logged) {
+        fprintf(stderr, "[capture] panel normalization failed; dropping frame\n");
+        capture->failure_logged = true;
+    }
+    return ok ? capture->canonical : NULL;
 }
 
 int rctl_surface_to_png(IOSurfaceRef dst, const char *path) {
@@ -171,11 +259,11 @@ int rctl_capture_one_png(const char *path) {
     @autoreleasepool {
         rctl_capture_wake_display();
         size_t w = 0, h = 0;
-        IOSurfaceRef dst = rctl_capture_create_surface(1.0, &w, &h);
-        if (!dst) { fprintf(stderr, "[capture] FAIL: no surface\n"); return 2; }
-        rctl_capture_render(dst);
+        rctl_capture *capture = rctl_capture_create(&w, &h);
+        if (!capture) { fprintf(stderr, "[capture] FAIL: no surface\n"); return 2; }
+        IOSurfaceRef dst = rctl_capture_render(capture);
         int rc = rctl_surface_to_png(dst, path);
-        CFRelease(dst);
+        rctl_capture_destroy(capture);
         return rc;
     }
 }

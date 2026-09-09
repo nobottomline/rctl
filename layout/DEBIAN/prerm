@@ -1,5 +1,5 @@
 #!/bin/sh
-# On removal/upgrade, stop the daemon and respring (frees port 8080).
+# On removal/upgrade, stop the daemon. Rootless GUI restarts are deferred.
 set -e
 
 RCTL_PREFIX=''
@@ -12,6 +12,20 @@ AUDIO_CAPTURE_MARKER=/tmp/rctl-audio-capture
 AUDIO_TONE_MARKER=/tmp/rctl-audio-tone
 RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
 RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
+
+request_gui_restart() {
+    # Complete the package transaction before restarting the GUI that owns it.
+    if [ -n "$RCTL_PREFIX" ]; then
+        finish_fd=${CYDIA%% *}
+        case "$finish_fd" in
+            ''|*[!0-9]*) echo 'rctl: restart SpringBoard after dpkg exits (sbreload).' ;;
+            *) (printf 'finish:restart\n' >&"$finish_fd") 2>/dev/null ||
+                echo 'rctl: restart SpringBoard after dpkg exits (sbreload).' ;;
+        esac
+    else
+        killall -9 SpringBoard 2>/dev/null || true
+    fi
+}
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
     if [ -f "$RELAY_PREF" ] && grep -aq "DeviceSecret" "$RELAY_PREF"; then
@@ -30,7 +44,7 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
     [ -e "$AUDIO_TONE_MARKER" ] && audio_was_active=1
     rm -f "$AUDIO_ACTIVE_DYLIB" "$AUDIO_ACTIVE_PLIST" "$AUDIO_CAPTURE_MARKER" "$AUDIO_TONE_MARKER"
     [ "$audio_was_active" = "1" ] && killall mediaserverd 2>/dev/null || true
-    killall -9 SpringBoard 2>/dev/null || true
+    request_gui_restart
 fi
 
 # Camera access is no longer granted by writing TCC.db rows: the daemon gets it via
