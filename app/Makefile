@@ -1,6 +1,6 @@
 # rctlapp is a small UIKit-process loader. The heavy media payload is a separate
 # dylib that this loader never opens in SpringBoard.
-TARGET := iphone:clang:14.5:14.0
+include ../mk/native-target.mk
 ARCHS := arm64 arm64e
 
 include $(THEOS)/makefiles/common.mk

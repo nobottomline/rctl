@@ -1,9 +1,9 @@
-TARGET := iphone:clang:14.5:14.0
+include ../../mk/native-target.mk
 ARCHS := arm64 arm64e
 
 include $(THEOS)/makefiles/common.mk
 
-LIBCPP := $(shell xcrun --sdk iphoneos --show-sdk-path)/usr/include/c++/v1
+LIBCPP := $(if $(wildcard $(ISYSROOT)/usr/include/c++/v1/__config),$(ISYSROOT),$(shell xcrun --sdk iphoneos --show-sdk-path))/usr/include/c++/v1
 
 LIBRARY_NAME = rctlappmedia
 rctlappmedia_FILES = ../MediaAgent.mm ../CameraAgent.mm ../VirtualMicClient.mm \

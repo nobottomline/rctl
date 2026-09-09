@@ -156,9 +156,30 @@ extern CFUserNotificationRef CFUserNotificationCreate(CFAllocatorRef, CFTimeInte
 extern SInt32 CFUserNotificationReceiveResponse(CFUserNotificationRef, CFTimeInterval, CFOptionFlags *);
 static int current_orientation(void);              // defined below; for upright overlays
 
+static NSString *rctl_orientation_action(uint8_t target) {
+    @try {
+        Class cls = NSClassFromString(@"SBOrientationLockManager");
+        SEL shared = NSSelectorFromString(@"sharedInstance");
+        id manager = [cls respondsToSelector:shared] ? ((id (*)(id, SEL))objc_msgSend)(cls, shared) : nil;
+        SEL lock = NSSelectorFromString(@"lock:");
+        SEL unlock = NSSelectorFromString(@"unlock");
+        SEL locked = NSSelectorFromString(@"isUserLocked");
+        if (![manager respondsToSelector:lock] || ![manager respondsToSelector:unlock] || ![manager respondsToSelector:locked])
+            return @"{\"error\":\"orientation_control_unavailable\"}";
+        if (target == 0) ((void (*)(id, SEL))objc_msgSend)(manager, unlock);
+        else if (target >= 1 && target <= 4) ((void (*)(id, SEL, NSInteger))objc_msgSend)(manager, lock, target);
+        else if (target != 255) return @"{\"error\":\"invalid_orientation\"}";
+        BOOL isLocked = ((BOOL (*)(id, SEL))objc_msgSend)(manager, locked);
+        return [NSString stringWithFormat:@"{\"ok\":true,\"supported\":true,\"locked\":%@,\"orientation\":%d}",
+                isLocked ? @"true" : @"false", current_orientation()];
+    } @catch (NSException *exception) {
+        return @"{\"error\":\"orientation_control_failed\"}";
+    }
+}
+
 static void rctl_show_alert(NSString *title, NSString *message) {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSDictionary *d = @{ @"AlertHeader": title.length ? title : @"rctl",
+        NSDictionary *d = @{ @"AlertHeader": title ?: @"",
                              @"AlertMessage": message ?: @"",
                              @"DefaultButtonTitle": @"OK" };
         SInt32 err = 0;
@@ -619,6 +640,12 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_QUERY && len >= 5) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 uint8_t qtype = buf[4];
+                if (qtype == RCTL_Q_ORIENTATION) {
+                    uint8_t target = len == 6 ? buf[5] : 254;
+                    dispatch_async(dispatch_get_main_queue(), ^{ send_reply(reqid, rctl_orientation_action(target)); });
+                    free(buf);
+                    continue;
+                }
                 if (qtype == RCTL_Q_MEDIA_DELETE) {
                     NSString *uuid = [[NSString alloc] initWithBytes:buf + 5 length:len - 5
                                                             encoding:NSUTF8StringEncoding] ?: @"";

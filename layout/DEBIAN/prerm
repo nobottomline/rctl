@@ -1,21 +1,42 @@
 #!/bin/sh
-# On removal/upgrade, stop the daemon and respring (frees port 8080).
+# On removal/upgrade, stop the daemon. Rootless GUI restarts are deferred.
 set -e
 
-PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
-AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
-AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist
+RCTL_PREFIX=''
+PATH="$RCTL_PREFIX/usr/local/bin:$RCTL_PREFIX/usr/bin:$RCTL_PREFIX/bin:$RCTL_PREFIX/usr/sbin:$RCTL_PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+PLIST=$RCTL_PREFIX/Library/LaunchDaemons/com.greatlove.rctld.plist
+AUDIO_ACTIVE_DYLIB=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
+AUDIO_ACTIVE_PLIST=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist
 AUDIO_CAPTURE_MARKER=/tmp/rctl-audio-capture
 AUDIO_TONE_MARKER=/tmp/rctl-audio-tone
 RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
 RELAY_PREF_BACKUP=/tmp/com.greatlove.rctl.relay.plist.rctl-preserve
+
+request_gui_restart() {
+    # Complete the package transaction before restarting the GUI that owns it.
+    if [ -n "$RCTL_PREFIX" ]; then
+        finish_fd=${CYDIA%% *}
+        case "$finish_fd" in
+            ''|*[!0-9]*) echo 'rctl: restart SpringBoard after dpkg exits (sbreload).' ;;
+            *) (printf 'finish:restart\n' >&"$finish_fd") 2>/dev/null ||
+                echo 'rctl: restart SpringBoard after dpkg exits (sbreload).' ;;
+        esac
+    else
+        killall -9 SpringBoard 2>/dev/null || true
+    fi
+}
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
     if [ -f "$RELAY_PREF" ] && grep -aq "DeviceSecret" "$RELAY_PREF"; then
         cp "$RELAY_PREF" "$RELAY_PREF_BACKUP" 2>/dev/null || true
         chmod 0600 "$RELAY_PREF_BACKUP" 2>/dev/null || true
     fi
-    [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
+    if [ -n "$RCTL_PREFIX" ]; then
+        launchctl bootout system/com.greatlove.rctld 2>/dev/null || true
+    else
+        [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
+    fi
     audio_was_active=0
     [ -e "$AUDIO_ACTIVE_DYLIB" ] && audio_was_active=1
     [ -e "$AUDIO_ACTIVE_PLIST" ] && audio_was_active=1
@@ -23,7 +44,7 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
     [ -e "$AUDIO_TONE_MARKER" ] && audio_was_active=1
     rm -f "$AUDIO_ACTIVE_DYLIB" "$AUDIO_ACTIVE_PLIST" "$AUDIO_CAPTURE_MARKER" "$AUDIO_TONE_MARKER"
     [ "$audio_was_active" = "1" ] && killall mediaserverd 2>/dev/null || true
-    killall -9 SpringBoard 2>/dev/null || true
+    request_gui_restart
 fi
 
 # Camera access is no longer granted by writing TCC.db rows: the daemon gets it via
