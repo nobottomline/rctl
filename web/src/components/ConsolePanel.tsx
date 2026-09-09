@@ -178,7 +178,7 @@ function DeviceCard() {
             <KV k="CPU" v={info.cpu} />
             <KV k="Memory" v={info.memory} />
             <KV k="Storage" v={info.storage} />
-            <KV k="Battery" v={info.battery && `${info.battery}%${info.battery_state ? ` · ${info.battery_state}` : ''}`} />
+            <KV k="Battery" v={info.battery && `${info.battery}${info.battery_state ? ` · ${info.battery_state}` : ''}`} />
             <KV k="Brightness" v={info.brightness != null ? `${Math.round(info.brightness * 100)}%` : undefined} />
             <KV k="Volume" v={volume != null ? `${Math.round(volume * 100)}%` : undefined} />
             <KV k="Uptime" v={info.uptime} />
