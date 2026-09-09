@@ -45,6 +45,12 @@ void rctl_webrtc_set_camera_keyframe_cb(void (*cb)(void));
 void rctl_webrtc_set_input_cb(void (*touch)(int phase, int finger, double x, double y),
                               void (*key)(int page, int usage, int down));
 
+// Pointer requests are bounded and asynchronous; the callback must invoke reply
+// exactly once (also on failure). ctx remains owned by the bridge until reply.
+typedef void (*rctl_pointer_reply)(void *ctx, const char *json);
+typedef void (*rctl_pointer_request)(const char *json, size_t len, rctl_pointer_reply reply, void *ctx);
+void rctl_webrtc_set_pointer_cb(rctl_pointer_request cb);
+
 // File transfer over a dedicated reliable+ordered "files" DataChannel (P2P, so it
 // bypasses the relay body cap and streams any size). The browser sends JSON control
 // (get/put) + raw binary chunks; the bridge hands each message to this callback

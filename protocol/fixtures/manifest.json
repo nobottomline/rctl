@@ -1,5 +1,10 @@
 {
   "fixtures": [
+    { "schema": "pointer.schema.json", "path": "pointer/acquire.json", "valid": true },
+    { "schema": "pointer.schema.json", "path": "pointer/state.json", "valid": true },
+    { "schema": "pointer.schema.json", "path": "pointer/move.json", "valid": true },
+    { "schema": "pointer.schema.json", "path": "pointer/invalid-move.json", "valid": false },
+    { "schema": "pointer.schema.json", "path": "pointer/invalid-state.json", "valid": false },
     { "schema": "capabilities.schema.json", "path": "capabilities/device-v1.json", "valid": true },
     { "schema": "capabilities.schema.json", "path": "capabilities/relay-v1.json", "valid": true },
     { "schema": "capabilities.schema.json", "path": "capabilities/future-minor-v1.json", "valid": true },

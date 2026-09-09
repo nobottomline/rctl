@@ -75,6 +75,7 @@ export type EngineCallbacks = {
   onFrame?: () => void
   onOrient?: (o: number, manual: boolean) => void
   onControlChannel?: (ch: RTCDataChannel) => void
+  onPointerChannel?: (ch: RTCDataChannel) => void
   onAudioChannel?: (ch: RTCDataChannel) => void
   onFilesChannel?: (ch: RTCDataChannel) => void
   onMicChannel?: (ch: RTCDataChannel) => void
@@ -837,6 +838,8 @@ export class ControlEngine {
       if (ch.label === 'control') {
         this.control = ch
         this.cb.onControlChannel?.(ch)
+      } else if (ch.label === 'pointer' || ch.label === 'pointer-motion') {
+        this.cb.onPointerChannel?.(ch)
       } else if (ch.label === 'audio') {
         this.cb.onAudioChannel?.(ch)
       } else if (ch.label === 'files') {

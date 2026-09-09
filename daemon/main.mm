@@ -42,6 +42,7 @@
 #import "config/LocalAccess.h"
 #import "ipc/Ipc.h"
 #import "input/ScriptValidation.h"
+#include "input/PointerLease.h"
 #import "net/WebRTCBridge.h"
 #import "net/CameraIngest.h"
 #import "net/MediaActivityPolicy.h"
@@ -50,6 +51,8 @@
 #import "security/DestructiveActions.h"
 #import "protocol/Capabilities.h"
 #import "update/UpdateLauncher.h"
+#include <atomic>
+#include <chrono>
 
 extern char **environ;
 extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
@@ -187,6 +190,54 @@ static char *sb_query(uint8_t qtype, const char *payload, uint32_t plen, double 
 static char *delete_media_asset(const char *uuid) {
     if (!uuid) return NULL;
     return sb_query(RCTL_Q_MEDIA_DELETE, uuid, (uint32_t)strlen(uuid), 8.0);
+}
+
+// Keep synchronous SB query waits off libdatachannel's callback threads. Bound
+// aggregate work as well as per-peer requests; never replay old queued motion.
+static void on_webrtc_pointer(const char *body, size_t len, rctl_pointer_reply reply, void *ctx) {
+    static std::atomic<unsigned> pending{0};
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ queue = dispatch_queue_create("rctl.pointer.requests", DISPATCH_QUEUE_SERIAL); });
+    @autoreleasepool {
+        NSData *request = len && len <= 1024 ? [NSData dataWithBytes:body length:len] : nil;
+        id object = request ? [NSJSONSerialization JSONObjectWithData:request options:0 error:nil] : nil;
+        if (![object isKindOfClass:[NSDictionary class]] || !rctl_script_number(object[@"id"], 1, UINT32_MAX, true)) {
+            reply(ctx, "{\"id\":0,\"error\":\"invalid_pointer_request\"}"); return;
+        }
+        NSNumber *requestID = object[@"id"];
+        auto received = std::chrono::steady_clock::now();
+        uint64_t deadline = rctl::PointerLease::clockMS() + rctl::PointerLease::requestBudgetMS([object[@"action"] isEqual:@"move"]);
+        void (^respond)(NSString *) = ^(NSString *response) {
+            id value = response ? [NSJSONSerialization JSONObjectWithData:[response dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : nil;
+            NSMutableDictionary *result = [value isKindOfClass:[NSDictionary class]] ? [value mutableCopy] : [@{@"error": @"pointer_device_timeout"} mutableCopy];
+            result[@"id"] = requestID;
+            result[@"processing_ms"] = @(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - received).count());
+            NSData *data = [NSJSONSerialization dataWithJSONObject:result options:0 error:nil];
+            NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            reply(ctx, json.UTF8String);
+        };
+        if (pending.fetch_add(1) >= 4) {
+            pending.fetch_sub(1); respond(@"{\"error\":\"pointer_overloaded\"}"); return;
+        }
+        dispatch_async(queue, ^{
+            @autoreleasepool {
+                if (rctl::PointerLease::clockMS() >= deadline) {
+                    respond(@"{\"error\":\"pointer_request_expired\"}");
+                } else {
+                    // One daemon-issued monotonic deadline covers both queues;
+                    // browser JSON cannot extend the device execution budget.
+                    uint8_t payload[1032];
+                    for (unsigned i = 0; i < 8; ++i) payload[i] = (uint8_t)(deadline >> (56 - i * 8));
+                    memcpy(payload + 8, request.bytes, request.length);
+                    char *response = sb_query(RCTL_Q_GAME_POINTER, (const char *)payload, (uint32_t)request.length + 8, 0.5);
+                    respond(response ? [NSString stringWithUTF8String:response] : nil);
+                    free(response);
+                }
+                pending.fetch_sub(1);
+            }
+        });
+    }
 }
 
 static void on_input(void *ctx, int phase, int finger, double nx, double ny) {
@@ -2231,6 +2282,7 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_keyframe_cb(on_webrtc_keyframe_request); // browser PLI -> force a keyframe
         rctl_webrtc_set_camera_keyframe_cb(on_webrtc_camera_keyframe_request);
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
+        rctl_webrtc_set_pointer_cb(on_webrtc_pointer);
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog(localAccessEnabled ? "http listening on LAN :8080" : "http listening on loopback :8080");
         rctl_camera_set_expired_cb(on_camera_lease_expired);

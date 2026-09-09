@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ControlEngine, codeToUsage, type DiagStats, type MacroEvent } from '../lib/engine'
 import { KeyboardState } from '../lib/keyboardState'
 import { GameKeyboard, validateKeyboardResponse, type GameKeyboardStatus } from '../lib/gameKeyboard'
+import { GamePointer, pointerCaptureUnavailable, type PointerStatus } from '../lib/gamePointer'
 import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
 import { MicTalk, micSupported } from '../lib/mic'
@@ -39,6 +40,8 @@ export function useControl(
   const gameKeyboardRef = useRef<GameKeyboard | null>(null)
   const textKeyboardRef = useRef<KeyboardState | null>(null)
   const [keyboardStatus, setKeyboardStatus] = useState<GameKeyboardStatus>({ mode: 'text' })
+  const gamePointerRef = useRef<GamePointer | null>(null)
+  const [pointerStatus, setPointerStatus] = useState<PointerStatus>({ mode: 'idle', available: false })
   const audioRef = useRef(new AudioPlayer())
   const filesRef = useRef(new FileTransfer())
   const micRef = useRef(new MicTalk())
@@ -78,6 +81,12 @@ export function useControl(
     const canvas = canvasRef.current
     if (!stage || !canvas) return
 
+    const pointer = new GamePointer(status => {
+      setPointerStatus(status)
+      if ((status.mode === 'idle' || status.mode === 'error') && document.pointerLockElement === stage) document.exitPointerLock()
+    })
+    gamePointerRef.current = pointer
+
     const video = document.createElement('video')
     const engine = new ControlEngine(stage, canvas, video, {
       onStatus: setStatus,
@@ -86,6 +95,7 @@ export function useControl(
       onFilesChannel: (ch) => filesRef.current.attach(ch),
       onMicChannel: (ch) => micRef.current.attach(ch),
       onRoomMicChannel: (ch) => roomMicRef.current.attach(ch),
+      onPointerChannel: (ch) => pointer.attach(ch),
     })
     micRef.current.onState = setTalking
     engineRef.current = engine
@@ -101,6 +111,7 @@ export function useControl(
     }
     const onDown = (e: PointerEvent) => {
       stage.focus({ preventScroll: true })
+      if (document.pointerLockElement === stage) return
       const f = allocFinger()
       ptrs.set(e.pointerId, { finger: f, lastMove: 0 })
       try {
@@ -112,6 +123,7 @@ export function useControl(
       e.preventDefault()
     }
     const onMove = (e: PointerEvent) => {
+      if (document.pointerLockElement === stage) return
       const p = ptrs.get(e.pointerId)
       if (!p) return
       const now = performance.now()
@@ -121,6 +133,7 @@ export function useControl(
       e.preventDefault()
     }
     const onUp = (e: PointerEvent) => {
+      if (document.pointerLockElement === stage) return
       const p = ptrs.get(e.pointerId)
       if (!p) return
       ptrs.delete(e.pointerId)
@@ -131,6 +144,47 @@ export function useControl(
     stage.addEventListener('pointermove', onMove)
     stage.addEventListener('pointerup', onUp)
     stage.addEventListener('pointercancel', onUp)
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (document.pointerLockElement === stage) pointer.move(e.movementX, e.movementY)
+    }
+    // Pointer Events only emit down/up for the first/last held mouse button.
+    // Mouse Events preserve each transition in left+right button combinations.
+    const onMouseDown = (e: MouseEvent) => {
+      if (document.pointerLockElement === stage) { pointer.button(e.button, true); e.preventDefault() }
+    }
+    const onMouseUp = (e: MouseEvent) => {
+      if (document.pointerLockElement === stage) { pointer.button(e.button, false); e.preventDefault() }
+    }
+    const onWheel = (e: WheelEvent) => {
+      if (document.pointerLockElement !== stage) return
+      e.preventDefault()
+      const units = e.deltaMode === 0 ? e.deltaY / 100 : e.deltaMode === 1 ? e.deltaY : e.deltaY * 3
+      pointer.move(0, 0, Math.max(-20, Math.min(20, -units)))
+    }
+    const onContextMenu = (e: Event) => { if (document.pointerLockElement === stage) e.preventDefault() }
+    const onPointerLock = () => {
+      if (document.pointerLockElement === stage) {
+        for (const [id, p] of ptrs) {
+          engine.sendTouchAt(2, 0, 0, p.finger)
+          try { stage.releasePointerCapture(id) } catch { /* pointer already ended */ }
+        }
+        ptrs.clear()
+        stage.focus({ preventScroll: true })
+        void pointer.start()
+      } else {
+        if (pointer.status.mode === 'active' || pointer.status.mode === 'connecting') pointer.stop()
+        gameKeyboardRef.current?.releaseKeys()
+      }
+    }
+    const onPointerError = () => pointer.stop('Mouse capture was denied by the browser')
+    document.addEventListener('pointerlockchange', onPointerLock)
+    document.addEventListener('pointerlockerror', onPointerError)
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('mouseup', onMouseUp)
+    stage.addEventListener('wheel', onWheel, { passive: false })
+    stage.addEventListener('contextmenu', onContextMenu)
 
     // ---- keyboard: preserve local form/menu navigation and release on blur ----
     const keyboard = new KeyboardState((usage, down) => engine.key(usage, down))
@@ -155,6 +209,7 @@ export function useControl(
       )
     }
     const onKeyDown = (e: KeyboardEvent) => {
+      if (document.pointerLockElement === stage && e.code === 'Escape') return
       if (e.defaultPrevented || e.isComposing || inField(e.target)) return
       const u = codeToUsage(e.code)
       if (!u) return
@@ -169,8 +224,8 @@ export function useControl(
       const released = gameKeyboard.enabled ? gameKeyboard.up(u) : keyboard.up(u)
       if (released && !inField(e.target)) e.preventDefault()
     }
-    const releaseKeys = () => { keyboard.release(); gameKeyboard.releaseKeys() }
-    const stopKeyboard = () => { keyboard.release(); gameKeyboard.stop() }
+    const releaseKeys = () => { keyboard.release(); gameKeyboard.releaseKeys(); pointer.stop() }
+    const stopKeyboard = () => { keyboard.release(); gameKeyboard.stop(); pointer.stop() }
     const onVisibility = () => { if (document.hidden) stopKeyboard() }
     const onFocus = (e: FocusEvent) => { if (inField(e.target)) releaseKeys() }
     addEventListener('keydown', onKeyDown)
@@ -185,11 +240,20 @@ export function useControl(
 
     return () => {
       stopKeyboard()
+      pointer.detach()
+      gamePointerRef.current = null
       engine.stop()
       stage.removeEventListener('pointerdown', onDown)
       stage.removeEventListener('pointermove', onMove)
       stage.removeEventListener('pointerup', onUp)
       stage.removeEventListener('pointercancel', onUp)
+      document.removeEventListener('pointerlockchange', onPointerLock)
+      document.removeEventListener('pointerlockerror', onPointerError)
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('mouseup', onMouseUp)
+      stage.removeEventListener('wheel', onWheel)
+      stage.removeEventListener('contextmenu', onContextMenu)
       removeEventListener('keydown', onKeyDown)
       removeEventListener('keyup', onKeyUp)
       removeEventListener('blur', releaseKeys)
@@ -264,6 +328,7 @@ export function useControl(
     const eng = engineRef.current
     if (!eng) return
     gameKeyboardRef.current?.stop()
+    gamePointerRef.current?.stop()
     eng.recordStart() // cancels any in-flight playback internally
     setMacroLen(0)
     setRecMode('recording')
@@ -274,6 +339,7 @@ export function useControl(
   }
   const resumeRecord = () => {
     gameKeyboardRef.current?.stop()
+    gamePointerRef.current?.stop()
     engineRef.current?.recordResume()
     setRecMode('recording')
   }
@@ -289,6 +355,7 @@ export function useControl(
     const eng = engineRef.current
     if (!eng || !macroRef.current.length) return
     gameKeyboardRef.current?.stop()
+    gamePointerRef.current?.stop()
     setRecMode('playing')
     await eng.play(macroRef.current, (state) => setRecMode((current) =>
       current === 'playing' || current === 'pausing' || current === 'play-paused' ? state : current))
@@ -407,6 +474,9 @@ export function useControl(
     }
   }
 
+  const pointerUnavailable = pointerCaptureUnavailable(recMode !== 'idle', keyboardStatus.mode,
+    pointerStatus.available, typeof document.body.requestPointerLock === 'function')
+
   return {
     status,
     orient,
@@ -419,7 +489,20 @@ export function useControl(
         if (enabled && recMode !== 'idle') return
         textKeyboardRef.current?.release()
         if (enabled) void gameKeyboardRef.current?.start()
-        else gameKeyboardRef.current?.stop()
+        else { gameKeyboardRef.current?.stop(); gamePointerRef.current?.stop() }
+      },
+    },
+    pointer: {
+      ...pointerStatus,
+      canCapture: !pointerUnavailable,
+      unavailableReason: pointerUnavailable,
+      capture: () => {
+        const stage = stageRef.current
+        if (!stage || pointerUnavailable) return
+        try {
+          // Must run directly in the user's click, before any asynchronous work.
+          Promise.resolve(stage.requestPointerLock()).catch(() => gamePointerRef.current?.stop('Mouse capture was denied by the browser'))
+        } catch { gamePointerRef.current?.stop('Mouse capture is unavailable in this browser') }
       },
     },
     audio: { listening, busy: audioBusy, deviceSpeaker, toggleListen, toggleSpeaker },

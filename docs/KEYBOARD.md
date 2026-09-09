@@ -21,6 +21,9 @@ insufficient if the foreground game's keyboard input path never receives them.
 
 ## Game Mode
 
+Optional relative mouse capture is a separate service and channel; see
+[`POINTER.md`](POINTER.md). It does not change Text mode or duplicate key events.
+
 The control client's **Keyboard > Game** selector uses a separate, opt-in
 virtual HID keyboard. `core/input/GameKeyboard.mm` owns an
 `IOHIDVirtualServiceClient` inside SpringBoard. It is created only when a

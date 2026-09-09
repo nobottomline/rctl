@@ -129,7 +129,16 @@ test-webrtc-permissions:
 .PHONY: test
 test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish test-package-stage test-rootless-paths test-display-geometry test-capture-pcm test-script-validation test-game-keyboard test-http-headers
 
-.PHONY: test-game-keyboard test-http-headers
+.PHONY: test-game-keyboard test-http-headers test-game-pointer
+test: test-game-pointer
+test-game-pointer:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/PointerEventsTest.mm -framework Foundation -o /tmp/rctl-pointer-events-test
+	@/tmp/rctl-pointer-events-test
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/PointerLeaseTest.cpp -o /tmp/rctl-pointer-lease-test
+	@/tmp/rctl-pointer-lease-test
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore tests/GamePointerValidationTest.mm core/input/GamePointer.mm -framework Foundation -framework QuartzCore -o /tmp/rctl-pointer-validation-test
+	@/tmp/rctl-pointer-validation-test
+
 test-game-keyboard:
 	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/KeyboardLeaseTest.cpp -o /tmp/rctl-keyboard-lease-test
 	@/tmp/rctl-keyboard-lease-test

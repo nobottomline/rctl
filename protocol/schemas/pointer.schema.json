@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nobottomline/rctl/protocol/schemas/pointer.schema.json",
+  "title": "rctl optional pointer DataChannel request v1",
+  "type": "object",
+  "required": ["id", "action", "owner"],
+  "properties": {
+    "id": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "action": { "enum": ["acquire", "state", "move", "release"] },
+    "owner": { "type": "string", "pattern": "^[a-f0-9]{32}$" }
+  },
+  "if": { "properties": { "action": { "enum": ["state", "move"] } } },
+  "then": {
+    "required": ["sequence", "dx", "dy", "wheel"],
+    "properties": {
+      "sequence": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+      "buttons": { "type": "integer", "minimum": 0, "maximum": 31 },
+      "dx": { "type": "number", "minimum": -2048, "maximum": 2048 },
+      "dy": { "type": "number", "minimum": -2048, "maximum": 2048 },
+      "wheel": { "type": "number", "minimum": -120, "maximum": 120 }
+    }
+  },
+  "allOf": [{
+    "if": { "properties": { "action": { "const": "state" } } },
+    "then": { "required": ["buttons"], "properties": { "buttons": { "type": "integer", "minimum": 0, "maximum": 31 } } }
+  }],
+  "additionalProperties": true
+}

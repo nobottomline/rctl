@@ -23,6 +23,7 @@
 #include <thread>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -48,6 +49,7 @@ static void (*g_keyframe_cb)(void) = nullptr;
 static void (*g_camera_keyframe_cb)(void) = nullptr;
 static void (*g_touch_cb)(int phase, int finger, double x, double y) = nullptr;
 static void (*g_key_cb)(int page, int usage, int down) = nullptr;
+static rctl_pointer_request g_pointer_cb = nullptr;
 static std::mutex g_mtx;
 
 struct Session {
@@ -56,6 +58,8 @@ struct Session {
     bool camera = false;
     std::shared_ptr<rtc::DataChannel> audioDc;
     std::shared_ptr<rtc::DataChannel> control;
+    std::shared_ptr<rtc::DataChannel> pointer;
+    std::shared_ptr<rtc::DataChannel> pointerMotion;
     std::shared_ptr<rtc::DataChannel> filesDc;
     std::shared_ptr<rtc::DataChannel> micIn;
     std::shared_ptr<rtc::DataChannel> roomMic;
@@ -216,6 +220,8 @@ static void mic_teardown();
 static void destroy_session(std::shared_ptr<Session> dead) {
     if (!dead) return;
     if (dead->control) dead->control->resetCallbacks();
+    if (dead->pointer) dead->pointer->resetCallbacks();
+    if (dead->pointerMotion) dead->pointerMotion->resetCallbacks();
     if (dead->filesDc) dead->filesDc->resetCallbacks();
     if (dead->audioDc) dead->audioDc->resetCallbacks();
     if (dead->micIn)   dead->micIn->resetCallbacks();
@@ -584,6 +590,55 @@ static void start_session(const std::string &id, const json &ice, bool camera,
     // remote control on the same PeerConnection as the video. The device, as the
     // offerer, creates it so the data m-line is in the offer.
     if (permissions.deviceControl) {
+        rtc::DataChannelInit motionInit;
+        motionInit.reliability.unordered = true;
+        motionInit.reliability.maxRetransmits = 0;
+        auto motion = pc->createDataChannel("pointer-motion", motionInit);
+        sess->pointerMotion = motion;
+        auto motionPending = std::make_shared<std::atomic<bool>>(false);
+        motion->onMessage([motionPending](rtc::message_variant msg) {
+            if (!g_pointer_cb || !std::holds_alternative<std::string>(msg)) return;
+            const auto &body = std::get<std::string>(msg);
+            if (body.empty() || body.size() > 1024) return;
+            try {
+                const auto request = json::parse(body);
+                // This lane cannot acquire, change buttons or renew ownership.
+                if (request.value("action", "") != "move") return;
+            } catch (...) { return; }
+            if (motionPending->exchange(true)) return;
+            auto *context = new std::shared_ptr<std::atomic<bool>>(motionPending);
+            g_pointer_cb(body.data(), body.size(), [](void *raw, const char *) {
+                std::unique_ptr<std::shared_ptr<std::atomic<bool>>> pending((std::shared_ptr<std::atomic<bool>> *)raw);
+                (*pending)->store(false);
+            }, context);
+        });
+        auto pointer = pc->createDataChannel("pointer");
+        sess->pointer = pointer;
+        auto pending = std::make_shared<std::atomic<unsigned>>(0);
+        std::weak_ptr<rtc::DataChannel> weakPointer = pointer;
+        pointer->onMessage([weakPointer, pending](rtc::message_variant msg) {
+            auto channel = weakPointer.lock();
+            if (!channel || !std::holds_alternative<std::string>(msg)) return;
+            const auto &body = std::get<std::string>(msg);
+            if (body.empty() || body.size() > 1024 || !g_pointer_cb) return;
+            // Bound both this peer and daemon work. A legitimate controller has
+            // at most two states in flight; a release may overlap them.
+            if (pending->fetch_add(1) >= 3) { pending->fetch_sub(1); return; }
+            struct ReplyContext {
+                std::weak_ptr<rtc::DataChannel> channel;
+                std::shared_ptr<std::atomic<unsigned>> pending;
+            };
+            auto *context = new ReplyContext{weakPointer, pending};
+            g_pointer_cb(body.data(), body.size(), [](void *raw, const char *reply) {
+                std::unique_ptr<ReplyContext> context((ReplyContext *)raw);
+                context->pending->fetch_sub(1);
+                if (auto channel = context->channel.lock()) {
+                    try {
+                        if (channel->isOpen() && channel->bufferedAmount() < 4096) channel->send(std::string(reply));
+                    } catch (...) {}
+                }
+            }, context);
+        });
         auto control = pc->createDataChannel("control");
         sess->control = control;
         control->onMessage([](rtc::message_variant msg) {
@@ -718,6 +773,7 @@ extern "C" void rctl_webrtc_set_input_cb(void (*touch)(int, int, double, double)
     g_touch_cb = touch;
     g_key_cb = key;
 }
+extern "C" void rctl_webrtc_set_pointer_cb(rctl_pointer_request cb) { g_pointer_cb = cb; }
 
 extern "C" void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *, size_t, int)) {
     g_files_cb = cb;

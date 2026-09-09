@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Pause, Play, Settings2, Square } from 'lucide-react'
 import { useControl } from './hooks/useControl'
 import { cn } from './lib/cn'
@@ -19,6 +19,7 @@ export default function App() {
   const ctl = useControl(stageRef, canvasRef)
   const [view, setView] = useState<View>(null)
   const [theme, setTheme] = useState<Theme>(() => getStoredTheme())
+  useEffect(() => { if (ctl.pointer.mode === 'active') setView(null) }, [ctl.pointer.mode])
   const toggleTheme = () => {
     const next: Theme = theme === 'dark' ? 'warm' : 'dark'
     applyTheme(next)
@@ -53,7 +54,7 @@ export default function App() {
 
       <RecordHud record={ctl.record} />
 
-      {(view === null || view === 'cc') && (
+      {(view === null || view === 'cc') && ctl.pointer.mode !== 'active' && (
         <button
           onClick={() => setView(view === 'cc' ? null : 'cc')}
           aria-label="controls"

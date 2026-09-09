@@ -89,6 +89,11 @@ mode instead uses `POST /v1/keyboard`: ordered held-key snapshots go through IPC
 to a SpringBoard-owned virtual HID service with a single-controller lease and
 device-side expiry. No event is dual-dispatched between these keyboard routes.
 See [`KEYBOARD.md`](KEYBOARD.md) for the protocol and device qualification limits.
+Optional captured mouse input uses permission-gated `pointer` (reliable buttons
+and lease) and `pointer-motion` (unordered, no retransmission) DataChannels and
+a SpringBoard virtual mouse with bounded asynchronous IPC and its
+own expiry; see [`POINTER.md`](POINTER.md). Ordinary pointer gestures continue
+to emulate touch while capture is off.
 
 **Audio → browser.** `rctld` activates the inactive `audio/` payload only on
 `/v1/audio_capture?on=1`. After a coordinated mediaserverd restart,

@@ -11,6 +11,7 @@ import {
   Images,
   Keyboard,
   Gamepad2,
+  MousePointer2,
   Lock,
   Mic,
   MicOff,
@@ -110,6 +111,20 @@ export default function ControlCenter({
           <Key icon={Gamepad2} label={ctl.keyboard.mode === 'connecting' ? 'Connecting…' : 'Game'} active={ctl.keyboard.mode === 'game'} disabled={!ctl.keyboard.canStartGame} onClick={() => ctl.keyboard.setGame(true)} />
         </div>
         {ctl.keyboard.mode === 'error' && <p role="alert" className="mt-1 text-[11px] text-danger">{ctl.keyboard.error === 'keyboard_busy' ? 'Keyboard is in use by another controller.' : 'Game keyboard unavailable. Select Game to retry.'}</p>}
+        <div title={ctl.pointer.unavailableReason || 'Capture mouse; press Escape to release'}>
+        <button
+          type="button"
+          onClick={ctl.pointer.capture}
+          disabled={!ctl.pointer.canCapture || ctl.pointer.mode === 'connecting' || ctl.pointer.mode === 'active'}
+          aria-description={ctl.pointer.unavailableReason}
+          className="mt-1.5 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-fg/8 text-xs font-medium transition-colors hover:bg-fg/12 disabled:opacity-50 disabled:cursor-default"
+        >
+          <MousePointer2 className="size-3.5 shrink-0" />
+          {ctl.pointer.mode === 'active' ? 'Mouse captured' : ctl.pointer.mode === 'connecting' ? 'Connecting mouse' : 'Capture mouse'}
+        </button>
+        </div>
+        {ctl.keyboard.mode === 'game' && ctl.pointer.unavailableReason && <p role="status" className="mt-1 text-[11px] text-fg-dim">{ctl.pointer.unavailableReason}</p>}
+        {ctl.pointer.mode === 'error' && <p role="alert" className="mt-1 text-[11px] text-danger">{ctl.pointer.error === 'pointer_busy' ? 'Mouse is in use by another controller.' : ctl.pointer.error}</p>}
       </div>
 
       <div>

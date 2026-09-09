@@ -45,6 +45,7 @@ enum {
     RCTL_Q_MEDIA_DELETE = 6,
     RCTL_Q_ORIENTATION = 7, // 1B: 255=status, 0=automatic, 1..4=locked interface orientation
     RCTL_Q_GAME_KEYBOARD = 8, // bounded JSON lease acquisition/state/release
+    RCTL_Q_GAME_POINTER = 9, // relative mouse movement and leased button state
 };
 
 #pragma pack(push, 1)

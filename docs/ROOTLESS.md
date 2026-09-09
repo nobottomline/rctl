@@ -16,7 +16,7 @@ scripts/build-rootless.sh
 ```
 
 The script builds all components, runs the public-package audit, and prints the
-exact path in `packages/rootless/`. The version has a `~rootless10` prerelease
+exact path in `packages/rootless/`. The version has a `~rootless14` prerelease
 suffix. Objects and staging are isolated from the default rootful lane. The
 package identifier remains `com.greatlove.rctl`, with `iphoneos-arm64`
 architecture and dependencies on `ellekit` and `firmware (>= 15.0)`.
@@ -37,6 +37,12 @@ operator confirmed Minecraft control through the browser's new Game mode.
 validation and separation from macro recording/playback. It is a local test
 candidate, not a published APT release or completed Sileo upgrade qualification.
 See [`KEYBOARD.md`](KEYBOARD.md) for evidence and the remaining input matrix.
+
+`rootless13` adds opt-in virtual mouse capture over separate WebRTC control and
+motion channels, replacing the initial stop-and-wait movement prototype.
+`rootless14` adds explicit HID button transitions and separate control/motion
+execution deadlines. These remain local qualification candidates.
+See [`POINTER.md`](POINTER.md) for the separate mouse qualification record.
 
 ## First Install
 
