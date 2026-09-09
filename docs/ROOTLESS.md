@@ -163,7 +163,7 @@ defect and must remain distinct from viewer rotation.
 
 ## Diagnostics and Recovery
 
-### Sileo Upgrade Qualification (2026-09-08)
+### Sileo Upgrade Qualification (2026-09-08 / 2026-09-09)
 
 A real Sileo 2.5.1 upgrade on iPadOS 15.5 / Dopamine / ElleKit 1.2 exposed a
 package lifecycle defect that a successful build and `apt-get update` did not:
@@ -189,11 +189,26 @@ restart the rootless GUI themselves. Rootful behavior is unchanged. References:
 [RootHelper](https://github.com/Sileo/Sileo/blob/main/SileoRootDaemon/RootHelper.swift).
 
 The correction was installed as `rootless5` through SSH, followed by an explicit
-`sbreload` after dpkg exited. `rootless6` is the matching next-version candidate
+`sbreload` after dpkg exited. `rootless6` was the matching next-version candidate
 for the repeat Sileo upgrade. Host tests exercise the real restart functions
 under both macOS sh and Linux dash: valid, absent, malformed, and closed finish
-descriptors, plus the unchanged rootful restart branch. **The corrected Sileo
-upgrade and clean Sileo installation are still pending physical validation.**
+descriptors, plus the unchanged rootful restart branch.
+
+On 2026-09-09, the operator completed the `rootless5` to `rootless6` update in
+Sileo from the temporary signed LAN source and reported restarting SpringBoard.
+Subsequent independent checks confirmed:
+
+- dpkg reported `0.3.4~rootless6 install ok installed` without a recovery
+  configuration command after this transaction.
+- Both rctld and SpringBoard were running, and the LAN capabilities API responded.
+- A newly opened control client received video at 1432 x 1912 pixels; its
+  decoded-frame counter advanced from 352 to 687 over approximately 12 seconds.
+
+This validates the corrected upgrade transition and post-restart LAN video
+recovery. The Sileo completion interaction was operator-reported, not recorded
+by browser automation. **Clean Sileo installation and a complete input/media
+regression pass remain pending.** It does not qualify upgrades from the older
+unsafe maintainer scripts described below.
 
 The installed *old* `prerm` runs before a new package can replace it. Therefore
 an upgrade from `rootless1` through `rootless4` can still encounter the old
