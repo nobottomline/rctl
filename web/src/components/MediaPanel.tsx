@@ -45,6 +45,9 @@ const MAX_VIDEO_PREVIEW = 250 * 1024 * 1024
 const MAX_ANIMATED_PREVIEW = 50 * 1024 * 1024
 const MAX_SHARE_SIZE = 100 * 1024 * 1024
 
+const canCopyImage = () => window.isSecureContext && !!navigator.clipboard?.write && typeof ClipboardItem !== 'undefined'
+const canShareFiles = () => window.isSecureContext && typeof navigator.share === 'function'
+
 function fmtDuration(seconds = 0) {
   const value = Math.max(0, Math.round(seconds))
   const hours = Math.floor(value / 3600)
@@ -66,7 +69,7 @@ function mediaType(name: string) {
 
 async function clipboardPNG(asset: Asset) {
   if (!window.isSecureContext || !navigator.clipboard?.write || typeof ClipboardItem === 'undefined')
-    throw new Error('Copy image requires HTTPS. Use Download or Share on a local HTTP connection.')
+    throw new Error('Copy image requires HTTPS. Use Download on a local HTTP connection.')
   const response = await fetch(rctlPath(`/v1/media_preview?id=${encodeURIComponent(asset.id)}`))
   if (!response.ok) throw new Error('Could not load the image preview.')
   const source = await response.blob()
@@ -278,11 +281,11 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
                   className="absolute inset-0 size-full text-left"
                   aria-label={`Open ${asset.name}`}
                 >
-                  <img
+                  <MediaThumbnail
+                    key={`${asset.id}:${generation}`}
                     src={rctlPath(`/v1/media_thumb?id=${encodeURIComponent(asset.id)}&v=${generation}`)}
-                    alt=""
-                    loading="lazy"
-                    className="size-full object-cover transition duration-200 group-active:scale-[0.98] group-active:opacity-80"
+                    video={asset.type === 'video'}
+                    className="size-full object-cover transition-opacity duration-150 group-active:opacity-80"
                   />
                 </button>
                 <button
@@ -364,6 +367,15 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
   )
 }
 
+function MediaThumbnail({ src, video, className }: { src: string; video: boolean; className: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) {
+    const Icon = video ? Film : ImageIcon
+    return <span className="grid size-full place-items-center text-muted" title="Preview unavailable"><Icon className="size-8" /></span>
+  }
+  return <img src={src} alt="" loading="lazy" className={className} onError={() => setFailed(true)} />
+}
+
 function MediaMenu({
   menu,
   onClose,
@@ -390,8 +402,8 @@ function MediaMenu({
         style={{ left, top }}
       >
         <MediaMenuItem icon={Download} label="Download original" onClick={() => onDownload(menu.asset)} />
-        {menu.asset.type === 'photo' && <MediaMenuItem icon={Copy} label="Copy image" onClick={() => onCopy(menu.asset)} />}
-        <MediaMenuItem icon={Share2} label="Share…" onClick={() => onShare(menu.asset)} />
+        {menu.asset.type === 'photo' && canCopyImage() && <MediaMenuItem icon={Copy} label="Copy image" onClick={() => onCopy(menu.asset)} />}
+        {canShareFiles() && <MediaMenuItem icon={Share2} label="Share…" onClick={() => onShare(menu.asset)} />}
         {menu.asset.deletable && (
           <MediaMenuItem icon={Trash2} label="Delete…" danger onClick={() => onDelete(menu.asset)} />
         )}
@@ -481,14 +493,14 @@ function MediaViewer({
             {date.toLocaleString()} · {fmtSize(asset.size)}{asset.live ? ' · Live Photo' : asset.animated ? ' · GIF' : ''}
           </div>
         </div>
-        {asset.type === 'photo' && (
+        {asset.type === 'photo' && canCopyImage() && (
           <button onClick={() => onCopy(asset)} title="Copy image" aria-label="Copy image" className="grid size-8 place-items-center rounded-lg bg-white/10 text-white/80 active:bg-white/20">
             <Copy className="size-4" />
           </button>
         )}
-        <button onClick={() => onShare(asset)} title="Share original" aria-label="Share original" className="grid size-8 place-items-center rounded-lg bg-white/10 text-white/80 active:bg-white/20">
+        {canShareFiles() && <button onClick={() => onShare(asset)} title="Share original" aria-label="Share original" className="grid size-8 place-items-center rounded-lg bg-white/10 text-white/80 active:bg-white/20">
           <Share2 className="size-4" />
-        </button>
+        </button>}
         <button onClick={() => onDownload(asset)} title="Download original" aria-label="Download original" className="grid size-8 place-items-center rounded-lg bg-white/10 text-white/80 active:bg-white/20">
           <Download className="size-4" />
         </button>
@@ -517,7 +529,7 @@ function MediaViewer({
           <img src={preview} alt={asset.name} className="max-h-full max-w-full object-contain" />
         )}
         {!loaded && asset.type === 'video' && (
-          <img src={thumb} alt="" className="size-full object-contain opacity-55" />
+          <MediaThumbnail key={asset.id} src={thumb} video className="size-full object-contain opacity-55" />
         )}
         {!loaded && (asset.type === 'video' || asset.animated || asset.live) && (
           <div className="absolute inset-0 grid place-items-center bg-black/25">

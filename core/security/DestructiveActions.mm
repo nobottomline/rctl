@@ -1,4 +1,5 @@
 #import "DestructiveActions.h"
+#import "platform/Paths.h"
 
 #import <Foundation/Foundation.h>
 #import <pthread.h>
@@ -109,7 +110,7 @@ bool normalize_target(const char *action, const char *target, char *out,
 
 NSString *installed_status_database(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
-    for (NSString *path in @[@"/var/lib/dpkg/status", @"/var/jb/var/lib/dpkg/status"]) {
+    for (NSString *path in @[RCTL_ROOT_PATH_NS(@"/var/lib/dpkg/status")]) {
         if ([fm fileExistsAtPath:path]) return path;
     }
     return nil;
@@ -167,6 +168,17 @@ bool rctl_destructive_path_allowed(const char *path, char *reason,
         set_reason(reason, reason_len, "filesystem_root_protected");
         return false;
     }
+#if defined(RCTL_ROOTLESS)
+    // Protect the actual relocated bootstrap as well as its /var/jb alias.
+    NSString *bootstrap = [RCTL_ROOT_PATH_NS(@"/") stringByResolvingSymlinksInPath];
+    if (!bootstrap.length || [bootstrap isEqualToString:@"/"] ||
+        is_at_or_below(value, bootstrap) || is_at_or_below(bootstrap, value) ||
+        is_at_or_below(value, @"/var/jb") ||
+        is_at_or_below(value, @"/private/var/jb")) {
+        set_reason(reason, reason_len, "protected_jailbreak_path");
+        return false;
+    }
+#endif
     for (NSString *root in protectedTrees) {
         if (is_at_or_below(value, root)) {
             set_reason(reason, reason_len, "protected_system_path");

@@ -15,7 +15,8 @@
 #   scripts/deploy.sh
 
 export ARCHS = arm64 arm64e
-export TARGET = iphone:clang:14.5:14.0
+include mk/native-target.mk
+export TARGET
 
 # IMPORTANT: deploy with scripts/deploy.sh (remove + fresh install), NOT
 # `make package install`. Upgrading the dylib in place over a running SpringBoard
@@ -36,24 +37,38 @@ SUBPROJECTS += updater
 
 include $(THEOS)/makefiles/aggregate.mk
 
+ifeq ($(THEOS_PACKAGE_SCHEME),rootless)
+RCTL_WEB_STAGE = usr/local/share/rctl/web
+else
+RCTL_WEB_STAGE = var/mobile/rctl
+endif
+
 # Stage the React/Vite control client (web/) as the device control page.
 # It's one self-contained index.html (xterm etc. inlined), rebuilt only when its
 # sources changed. The old vanilla page is kept under web/legacy/ for reference.
 after-stage::
-	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/var/mobile/rctl"$(ECHO_END)
+	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/$(RCTL_WEB_STAGE)"$(ECHO_END)
 	$(ECHO_NOTHING)if [ ! -f web/dist/index.html ] || find web/src web/index.html web/package.json -newer web/dist/index.html 2>/dev/null | grep -q .; then echo "==> Building web client"; ( cd web && { [ -d node_modules ] || npm ci; } && npm run build ); fi$(ECHO_END)
-	$(ECHO_NOTHING)cp web/dist/index.html "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html"$(ECHO_END)
-	$(ECHO_NOTHING)test -s "$(THEOS_STAGING_DIR)/var/mobile/rctl/index.html" || { echo "error: required control client is missing or empty" >&2; exit 1; }$(ECHO_END)
-	$(ECHO_NOTHING)set -e; dylib=".theos/obj/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib=".theos/obj/debug/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib="app/.theos/obj/rctlappmedia.dylib"; [ -f "$$dylib" ] || dylib="app/.theos/obj/debug/rctlappmedia.dylib"; test -f "$$dylib" || { echo "error: required rctlappmedia library is missing" >&2; exit 1; }; cp "$$dylib" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)
+	$(ECHO_NOTHING)cp web/dist/index.html "$(THEOS_STAGING_DIR)/$(RCTL_WEB_STAGE)/index.html"$(ECHO_END)
+	$(ECHO_NOTHING)test -s "$(THEOS_STAGING_DIR)/$(RCTL_WEB_STAGE)/index.html" || { echo "error: required control client is missing or empty" >&2; exit 1; }$(ECHO_END)
+	$(ECHO_NOTHING)cp "$(THEOS_OBJ_DIR)/rctlappmedia.dylib" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)$(MAKE) -C audio$(ECHO_END)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio"$(ECHO_END)
-	$(ECHO_NOTHING)set -e; dylib=".theos/obj/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib=".theos/obj/debug/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/rctlaudio.dylib"; [ -f "$$dylib" ] || dylib="audio/.theos/obj/debug/rctlaudio.dylib"; test -f "$$dylib" || { echo "error: required rctlaudio library is missing" >&2; exit 1; }; cp "$$dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
+	$(ECHO_NOTHING)cp "$(THEOS_OBJ_DIR)/rctlaudio.dylib" "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.dylib"$(ECHO_END)
 	$(ECHO_NOTHING)cp audio/rctlaudio.plist "$(THEOS_STAGING_DIR)/usr/local/lib/rctl/audio/rctlaudio.plist"$(ECHO_END)
 
+before-package::
+	$(ECHO_NOTHING)python3 scripts/stage_package.py "$(THEOS_STAGING_DIR)" "$(THEOS_PACKAGE_SCHEME)"$(ECHO_END)
+
 .PHONY: package-relay
+ifeq ($(THEOS_PACKAGE_SCHEME),rootless)
+package-relay:
+	@echo "error: rootless personalization and relay updates are not yet qualified" >&2; exit 1
+else
 package-relay: package
 	@echo "==> Personalizing latest .deb with relay.env"
 	@scripts/personalize_deb.sh
+endif
 
 .PHONY: smoke-relay
 smoke-relay:
@@ -112,7 +127,39 @@ test-webrtc-permissions:
 	@/tmp/rctl-webrtc-permissions-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish test-package-stage test-rootless-paths test-display-geometry test-capture-pcm test-script-validation
+
+.PHONY: test-capture-pcm
+.PHONY: test-script-validation
+test-script-validation:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore tests/ScriptValidationTest.mm -framework Foundation -o /tmp/rctl-script-validation-test
+	@/tmp/rctl-script-validation-test
+
+test-capture-pcm:
+	@clang++ -std=c++17 -Icore tests/CapturePCMTest.cpp -o /tmp/rctl-capture-pcm-test
+	@/tmp/rctl-capture-pcm-test
+
+.PHONY: test-display-geometry
+test-display-geometry:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/DisplayGeometryTest.cpp \
+		-framework Accelerate -o /tmp/rctl-display-geometry-test
+	@/tmp/rctl-display-geometry-test
+
+.PHONY: test-package-stage
+test-package-stage:
+	@PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_stage_package.py
+
+.PHONY: test-rootless-paths
+test-rootless-paths:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore -I$(THEOS)/vendor/include \
+		-DRCTL_ROOTLESS=1 -DTHEOS_PACKAGE_INSTALL_PREFIX='"/private/preboot/rctl-test/jb"' \
+		tests/DestructiveActionsTest.mm core/security/DestructiveActions.mm \
+		-framework Foundation -o /tmp/rctl-rootless-paths-test
+	@/tmp/rctl-rootless-paths-test
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore -DRCTL_ROOTLESS=1 \
+		tests/RootlessUpdateTest.mm core/update/UpdateLauncher.mm core/protocol/Capabilities.mm \
+		-framework Foundation -o /tmp/rctl-rootless-update-test
+	@/tmp/rctl-rootless-update-test
 
 .PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-build mobile-test
 protocol-generate:

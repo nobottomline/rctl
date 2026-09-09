@@ -1,19 +1,23 @@
 #!/bin/sh
 # Re-sign our binaries with the device's own ldid — ad-hoc signatures made
 # off-device (macOS) are rejected by on-device AMFI on arm64e, so the dylib is
-# refused at load and the daemon is SIGKILLed. Then (re)load the daemon and
-# respring so SpringBoard picks up the agent.
+# refused at load and the daemon is SIGKILLed. Rootless keeps build signatures
+# and asks the package manager to restart the GUI after its transaction.
 set -e
 
-DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
-CAPLIB=/Library/MobileSubstrate/DynamicLibraries/rctlapp.dylib
-APPMEDIA=/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib
-DAEMON=/usr/local/bin/rctld
-UPDATER=/usr/local/libexec/rctl-updater
-PLIST=/Library/LaunchDaemons/com.greatlove.rctld.plist
-AUDIOSRC=/usr/local/lib/rctl/audio/rctlaudio.dylib
-AUDIO_ACTIVE_DYLIB=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
-AUDIO_ACTIVE_PLIST=/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist
+# Filled by the package staging step; never inferred from another installation.
+RCTL_PREFIX=''
+PATH="$RCTL_PREFIX/usr/local/bin:$RCTL_PREFIX/usr/bin:$RCTL_PREFIX/bin:$RCTL_PREFIX/usr/sbin:$RCTL_PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+DYLIB=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlsbcap.dylib
+CAPLIB=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlapp.dylib
+APPMEDIA=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib
+DAEMON=$RCTL_PREFIX/usr/local/bin/rctld
+UPDATER=$RCTL_PREFIX/usr/local/libexec/rctl-updater
+PLIST=$RCTL_PREFIX/Library/LaunchDaemons/com.greatlove.rctld.plist
+AUDIOSRC=$RCTL_PREFIX/usr/local/lib/rctl/audio/rctlaudio.dylib
+AUDIO_ACTIVE_DYLIB=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib
+AUDIO_ACTIVE_PLIST=$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist
 AUDIO_CAPTURE_MARKER=/tmp/rctl-audio-capture
 AUDIO_TONE_MARKER=/tmp/rctl-audio-tone
 RELAY_PREF=/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist
@@ -30,12 +34,13 @@ fi
 
 # The app-side media agent was renamed rctlcap -> rctlapp; remove any stale copy
 # so the old and new dylibs don't both inject (double hooks) on an in-place upgrade.
-rm -f /Library/MobileSubstrate/DynamicLibraries/rctlcap.dylib \
-      /Library/MobileSubstrate/DynamicLibraries/rctlcap.plist 2>/dev/null || true
+rm -f "$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlcap.dylib" \
+      "$RCTL_PREFIX/Library/MobileSubstrate/DynamicLibraries/rctlcap.plist" 2>/dev/null || true
 
 # rctld is a root daemon with no TCC entry, so mediaserverd feeds it SILENCE when it
 # captures the mic. Grant it microphone + camera via the private TCC entitlement
 # (accepted with AMFI patched) so the daemon-side "listen to the room anytime" works.
+if [ -z "$RCTL_PREFIX" ]; then
 RCTLD_ENT=/tmp/rctld-ent.plist
 cat > "$RCTLD_ENT" <<'ENT'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -58,6 +63,7 @@ if command -v ldid >/dev/null 2>&1; then
     [ -f "$DAEMON" ]  && ldid -S"$RCTLD_ENT" "$DAEMON"  || true
     [ -f "$UPDATER" ] && ldid -S "$UPDATER" || true
     [ -f "$AUDIOSRC" ] && ldid -S "$AUDIOSRC" || true
+fi
 fi
 
 # dpkg packages built on macOS can preserve the builder's uid/gid. launchd is
@@ -93,15 +99,32 @@ rm -f "$AUDIO_ACTIVE_DYLIB" "$AUDIO_ACTIVE_PLIST" "$AUDIO_CAPTURE_MARKER" "$AUDI
 
 # (Re)load the launchd daemon.
 if [ -f "$PLIST" ]; then
-    launchctl unload "$PLIST" 2>/dev/null || true
-    launchctl load "$PLIST"   2>/dev/null || true
+    if [ -n "$RCTL_PREFIX" ]; then
+        launchctl bootout system/com.greatlove.rctld 2>/dev/null || true
+        launchctl bootstrap system "$PLIST"
+    else
+        launchctl unload "$PLIST" 2>/dev/null || true
+        launchctl load "$PLIST"   2>/dev/null || true
+    fi
 fi
 
 # Do not enumerate every installed app here. That TCC grant path is expensive and
 # can leave dpkg stuck in postinst, which is unacceptable during recovery deploys.
 # Camera permissions are managed explicitly by the camera workflow instead.
 
-# Respring so SpringBoard picks up the (re)installed agent.
-killall -9 SpringBoard 2>/dev/null || true
+request_gui_restart() {
+    # Complete the package transaction before restarting the GUI that owns it.
+    if [ -n "$RCTL_PREFIX" ]; then
+        finish_fd=${CYDIA%% *}
+        case "$finish_fd" in
+            ''|*[!0-9]*) echo 'rctl: installation complete; restart SpringBoard after dpkg exits (sbreload).' ;;
+            *) (printf 'finish:restart\n' >&"$finish_fd") 2>/dev/null ||
+                echo 'rctl: restart SpringBoard after dpkg exits (sbreload).' ;;
+        esac
+    else
+        killall -9 SpringBoard 2>/dev/null || true
+    fi
+}
+request_gui_restart
 
 exit 0

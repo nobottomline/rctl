@@ -41,7 +41,7 @@ export function Sheet({
           <button
             onClick={onClose}
             aria-label="Close"
-            className="grid size-8 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors active:bg-fg/15"
+            className="grid size-8 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors hover:bg-fg/12 active:bg-fg/15"
           >
             <X className="size-4" />
           </button>

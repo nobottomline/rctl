@@ -47,6 +47,8 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/rctl-setup-arm64 ./cmd/rctl-setup
       - name: Validate bootstrap shell
         run: sh -n scripts/install.sh
+      - name: Test package staging
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_stage_package.py
 
   web:
     runs-on: ubuntu-24.04

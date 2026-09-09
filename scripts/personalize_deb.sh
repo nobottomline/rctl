@@ -151,6 +151,10 @@ if [[ -z "$BASE_DEB" || ! -f "$BASE_DEB" ]]; then
   echo "error: base .deb not found; run 'make package' first or pass a .deb path" >&2
   exit 1
 fi
+if [[ "$(dpkg-deb -f "$BASE_DEB" Architecture)" != "iphoneos-arm" ]]; then
+  echo "error: rootless personalization and relay updates are not yet qualified" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT_DIR"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rctl-personalize.XXXXXX")"

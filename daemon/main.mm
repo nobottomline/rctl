@@ -10,6 +10,7 @@
 // launchd restarts us on any crash.
 
 #import <Foundation/Foundation.h>
+#import "platform/Paths.h"
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <AudioUnit/AudioUnit.h>
@@ -40,6 +41,7 @@
 #import "net/RelayClient.h"
 #import "config/LocalAccess.h"
 #import "ipc/Ipc.h"
+#import "input/ScriptValidation.h"
 #import "net/WebRTCBridge.h"
 #import "net/CameraIngest.h"
 #import "net/MediaActivityPolicy.h"
@@ -61,17 +63,17 @@ extern "C" int memorystatus_control(uint32_t command, pid_t pid, uint32_t flags,
 static constexpr uint32_t kMemorystatusSetJetsamTaskLimit = 6;
 static constexpr uint32_t kRctldMemoryLimitMB = 128;
 
-#define RCTL_AUDIO_PAYLOAD_DYLIB "/usr/local/lib/rctl/audio/rctlaudio.dylib"
-#define RCTL_AUDIO_PAYLOAD_PLIST "/usr/local/lib/rctl/audio/rctlaudio.plist"
-#define RCTL_AUDIO_ACTIVE_DYLIB "/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib"
-#define RCTL_AUDIO_ACTIVE_PLIST "/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist"
+#define RCTL_AUDIO_PAYLOAD_DYLIB RCTL_ROOT_PATH("/usr/local/lib/rctl/audio/rctlaudio.dylib")
+#define RCTL_AUDIO_PAYLOAD_PLIST RCTL_ROOT_PATH("/usr/local/lib/rctl/audio/rctlaudio.plist")
+#define RCTL_AUDIO_ACTIVE_DYLIB RCTL_ROOT_PATH("/Library/MobileSubstrate/DynamicLibraries/rctlaudio.dylib")
+#define RCTL_AUDIO_ACTIVE_PLIST RCTL_ROOT_PATH("/Library/MobileSubstrate/DynamicLibraries/rctlaudio.plist")
 #define RCTL_AUDIO_CAPTURE_MARKER "/tmp/rctl-audio-capture"
 #define RCTL_AUDIO_TONE_MARKER "/tmp/rctl-audio-tone"
 #define RCTL_AUDIO_LOG "/tmp/rctl-audio.log"
 static void respring_device(void) {
     pid_t pid;
     char *argv[] = { (char *)"killall", (char *)"SpringBoard", NULL };
-    posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, argv, environ);
+    posix_spawn(&pid, RCTL_ROOT_PATH("/usr/bin/killall"), NULL, NULL, argv, environ);
 }
 
 static void dlog(const char *msg) {
@@ -460,19 +462,24 @@ static char *rctl_diagnostics_json(void) {
     {   // Jailbreak / system
         NSMutableArray *f = [NSMutableArray array];
         [f addObject:diag_f(@"Type", file_exists("/var/jb") ? @"rootless" : @"rootful")];
-        NSString *mgr = file_exists("/Applications/Sileo.app") ? @"Sileo"
-                      : file_exists("/Applications/Zebra.app") ? @"Zebra"
-                      : file_exists("/Applications/Cydia.app") ? @"Cydia" : nil;
+        NSString *mgr = file_exists(RCTL_ROOT_PATH("/Applications/Sileo.app")) ? @"Sileo"
+                      : file_exists(RCTL_ROOT_PATH("/Applications/Zebra.app")) ? @"Zebra"
+                      : file_exists(RCTL_ROOT_PATH("/Applications/Cydia.app")) ? @"Cydia" : nil;
         if (mgr) [f addObject:diag_f(@"Manager", mgr)];
-        NSString *inj = file_exists("/usr/lib/libhooker.dylib") ? @"libhooker"
-                      : (file_exists("/usr/lib/libellekit.dylib") || file_exists("/var/jb/usr/lib/libellekit.dylib")) ? @"ElleKit"
-                      : file_exists("/usr/lib/libsubstitute.dylib") ? @"Substitute"
-                      : file_exists("/Library/MobileSubstrate/MobileSubstrate.dylib") ? @"Substrate" : nil;
+        NSString *inj = file_exists(RCTL_ROOT_PATH("/usr/lib/libhooker.dylib")) ? @"libhooker"
+                      : file_exists(RCTL_ROOT_PATH("/usr/lib/libellekit.dylib")) ? @"ElleKit"
+                      : file_exists(RCTL_ROOT_PATH("/usr/lib/libsubstitute.dylib")) ? @"Substitute"
+                      : file_exists(RCTL_ROOT_PATH("/Library/MobileSubstrate/MobileSubstrate.dylib")) ? @"Substrate" : nil;
         if (inj) [f addObject:diag_f(@"Injection", inj)];
         NSString *pk = diag_popen("dpkg-query -f '.\n' -W 2>/dev/null | wc -l | tr -d ' '");
         if (pk) [f addObject:diag_f(@"Packages", pk)];
-        NSString *tw = diag_popen("ls -1 /Library/MobileSubstrate/DynamicLibraries/ 2>/dev/null | grep -c '[.]dylib$' | tr -d ' '");
-        if (tw) [f addObject:diag_f(@"Tweaks", tw)];
+        NSArray *tweaks = [NSFileManager.defaultManager contentsOfDirectoryAtPath:
+                          RCTL_ROOT_PATH_NS(@"/Library/MobileSubstrate/DynamicLibraries") error:nil];
+        if (tweaks) {
+            NSUInteger count = 0;
+            for (NSString *name in tweaks) if ([name.pathExtension isEqualToString:@"dylib"]) count++;
+            [f addObject:diag_f(@"Tweaks", [NSString stringWithFormat:@"%lu", (unsigned long)count])];
+        }
         [f addObject:diag_f(@"SSH", diag_port_open(22) ? @"running" : @"off")];
         [cats addObject:@{@"title": @"Jailbreak", @"fields": f}];
     }
@@ -572,7 +579,7 @@ static int run_wait(const char *path, char *const argv[]) {
 
 static void restart_mediaserverd(void) {
     char *argv[] = { (char *)"killall", (char *)"mediaserverd", NULL };
-    (void)run_wait("/usr/bin/killall", argv);
+    (void)run_wait(RCTL_ROOT_PATH("/usr/bin/killall"), argv);
 }
 
 static bool pause_video_for_media_restart(void) {
@@ -619,8 +626,10 @@ static bool audio_capture_set(bool on, char *err, size_t errsz) {
                 set_err(err, errsz, "copy audio payload failed");
                 ok = false;
             } else {
+#if !defined(RCTL_ROOTLESS)
                 char *ldid_argv[] = { (char *)"ldid", (char *)"-S", (char *)RCTL_AUDIO_ACTIVE_DYLIB, NULL };
                 (void)run_wait("/usr/bin/ldid", ldid_argv);
+#endif
                 if (!touch_file(RCTL_AUDIO_CAPTURE_MARKER)) {
                     set_err(err, errsz, "capture marker failed");
                     ok = false;
@@ -867,16 +876,22 @@ static void schedule_button(const char *name, double t0) {
 // POST /v1/script body: {"actions":[{"type":"launch","bundle":".."},{"type":"wait","ms":1500},
 //   {"type":"tap","x":0.5,"y":0.9},{"type":"type","text":"hi"},{"type":"button","name":"home"}]}
 static char *run_script(const char *body, int *status) {
+    if (!body || !body[0]) { *status = 400; return strdup("{\"error\":\"script_body_required\"}"); }
     NSData *d = [NSData dataWithBytes:body length:strlen(body)];
     id obj = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
     NSArray *actions = [obj isKindOfClass:[NSDictionary class]] ? obj[@"actions"]
                      : [obj isKindOfClass:[NSArray class]] ? obj : nil;
     if (![actions isKindOfClass:[NSArray class]]) { *status = 400; return strdup("{\"error\":\"expected {actions:[...]}\"}"); }
+    if (!rctl_script_valid(actions)) { *status = 400; return strdup("{\"error\":\"invalid_or_unsupported_script_action\"}"); }
     __block double t = 0;
     for (NSDictionary *a in actions) {
         if (![a isKindOfClass:[NSDictionary class]]) continue;
         NSString *type = a[@"type"];
         if      ([type isEqual:@"wait"])  { t += [a[@"ms"] doubleValue] / 1000.0; }
+        else if ([type isEqual:@"input"]) { rctl_ipc_input event = { [a[@"phase"] intValue], [a[@"id"] intValue], [a[@"x"] doubleValue], [a[@"y"] doubleValue] };
+                                            AFTER(t, ^{ send_to_sb(RCTL_MSG_INPUT, &event, sizeof event); }); }
+        else if ([type isEqual:@"input_key"]) { int p = a[@"p"] ? [a[@"p"] intValue] : 7, u = [a[@"u"] intValue], dn = a[@"d"] ? [a[@"d"] intValue] : 2;
+                                                AFTER(t, ^{ ipc_key(p, u, dn); }); }
         else if ([type isEqual:@"tap"])   { schedule_tap([a[@"x"] doubleValue], [a[@"y"] doubleValue], t); t += 0.12; }
         else if ([type isEqual:@"swipe"]) { double ms = [a[@"ms"] doubleValue]; if (ms <= 0) ms = 300;
                                             schedule_swipe([a[@"x1"] doubleValue],[a[@"y1"] doubleValue],
@@ -942,7 +957,7 @@ static void rctl_mic_record_stop(void);
 // Installed packages, parsed straight from dpkg's status DB (no shelling out).
 static char *rctl_packages_json(void) {
     NSString *raw = nil;
-    for (NSString *p in @[ @"/var/lib/dpkg/status", @"/var/jb/var/lib/dpkg/status" ]) {
+    for (NSString *p in @[ RCTL_ROOT_PATH_NS(@"/var/lib/dpkg/status") ]) {
         raw = [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil];
         if (!raw) raw = [NSString stringWithContentsOfFile:p encoding:NSISOLatin1StringEncoding error:nil];
         if (raw) break;
@@ -983,7 +998,7 @@ static char *rctl_packages_json(void) {
             if (!pkg) continue;
             if (st && [st rangeOfString:@"installed"].location == NSNotFound) continue; // not actually installed
             long installed = 0;                                 // install time = mtime of the dpkg file list
-            for (NSString *info in @[ @"/var/lib/dpkg/info", @"/var/jb/var/lib/dpkg/info" ]) {
+            for (NSString *info in @[ RCTL_ROOT_PATH_NS(@"/var/lib/dpkg/info") ]) {
                 struct stat lst;
                 NSString *lp = [NSString stringWithFormat:@"%@/%@.list", info, pkg];
                 if (stat(lp.fileSystemRepresentation, &lst) == 0) { installed = (long)lst.st_mtime; break; }
@@ -1018,9 +1033,13 @@ static char *rctl_packages_json(void) {
 static char *rctl_tweaks_json(void) {
     NSMutableArray *tweaks = [NSMutableArray array];
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *dirs = @[ @"/Library/MobileSubstrate/DynamicLibraries", @"/usr/lib/TweakInject",
-                       @"/var/jb/Library/MobileSubstrate/DynamicLibraries", @"/var/jb/usr/lib/TweakInject" ];
+    NSArray *dirs = @[ RCTL_ROOT_PATH_NS(@"/Library/MobileSubstrate/DynamicLibraries"),
+                       RCTL_ROOT_PATH_NS(@"/usr/lib/TweakInject") ];
+    NSMutableSet *visited = [NSMutableSet set];
     for (NSString *dir in dirs) {
+        NSString *resolved = [dir stringByResolvingSymlinksInPath];
+        if ([visited containsObject:resolved]) continue;
+        [visited addObject:resolved];
         for (NSString *f in ([fm contentsOfDirectoryAtPath:dir error:nil] ?: @[])) {
             BOOL disabled = [f hasSuffix:@".plist.disabled"];   // toggled off by us
             if (!disabled && ![[f pathExtension] isEqualToString:@"plist"]) continue;
@@ -1130,7 +1149,7 @@ static char *rctl_owner_json(const char *cpath) {
     if ([target hasSuffix:@".disabled"]) target = [target substringToIndex:target.length - @".disabled".length];
     NSString *found = @"";
     NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *info in @[ @"/var/lib/dpkg/info", @"/var/jb/var/lib/dpkg/info" ]) {
+    for (NSString *info in @[ RCTL_ROOT_PATH_NS(@"/var/lib/dpkg/info") ]) {
         for (NSString *f in ([fm contentsOfDirectoryAtPath:info error:nil] ?: @[])) {
             if (![f hasSuffix:@".list"]) continue;
             NSString *content = [NSString stringWithContentsOfFile:[info stringByAppendingPathComponent:f] encoding:NSUTF8StringEncoding error:nil];
@@ -1147,7 +1166,7 @@ static char *rctl_owner_json(const char *cpath) {
 // The files a package installed (dpkg .list).
 static char *rctl_pkg_files_json(const char *id) {
     NSMutableArray *files = [NSMutableArray array];
-    for (NSString *info in @[ @"/var/lib/dpkg/info", @"/var/jb/var/lib/dpkg/info" ]) {
+    for (NSString *info in @[ RCTL_ROOT_PATH_NS(@"/var/lib/dpkg/info") ]) {
         NSString *lp = [NSString stringWithFormat:@"%@/%s.list", info, id];
         NSString *content = [NSString stringWithContentsOfFile:lp encoding:NSUTF8StringEncoding error:nil];
         if (!content) continue;
@@ -1172,8 +1191,8 @@ static char *rctl_pkg_remove(const char *id) {
     posix_spawn_file_actions_addclose(&actions, pipes[1]);
     pid_t pid = -1;
     char *argv[] = {(char *)"dpkg", (char *)"-r", (char *)id, NULL};
-    int spawn_rc = posix_spawn(&pid, "/usr/bin/dpkg", &actions, NULL, argv, environ);
-    if (spawn_rc == ENOENT) spawn_rc = posix_spawn(&pid, "/bin/dpkg", &actions, NULL, argv, environ);
+    int spawn_rc = posix_spawn(&pid, RCTL_ROOT_PATH("/usr/bin/dpkg"), &actions, NULL, argv, environ);
+    if (spawn_rc == ENOENT) spawn_rc = posix_spawn(&pid, RCTL_ROOT_PATH("/bin/dpkg"), &actions, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&actions);
     close(pipes[1]);
     if (spawn_rc != 0) {
@@ -1256,7 +1275,7 @@ static char *rctl_pkg_meta_json(const char *cid) {
     NSMutableDictionary *meta = [NSMutableDictionary dictionary];
     NSFileManager *fm = [NSFileManager defaultManager];
     BOOL done = NO;
-    for (NSString *dir in @[ @"/var/lib/apt/lists", @"/var/jb/var/lib/apt/lists" ]) {
+    for (NSString *dir in @[ RCTL_ROOT_PATH_NS(@"/var/lib/apt/lists") ]) {
         if (done) break;
         for (NSString *f in ([fm contentsOfDirectoryAtPath:dir error:nil] ?: @[])) {
             if (done) break;
@@ -1454,6 +1473,24 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
             char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
             return out;
         }
+    } else if (!strcmp(path, "/v1/orientation")) {
+        uint8_t target = 255;
+        if (!strcmp(method, "POST") && !strcmp(content_type, "application/json")) {
+            NSData *data = body && body_len > 0 ? [NSData dataWithBytes:body length:body_len] : nil;
+            id request = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            id value = [request isKindOfClass:[NSDictionary class]] ? request[@"orientation"] : nil;
+            if (![value isKindOfClass:[NSNumber class]] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID() ||
+                !isfinite([value doubleValue]) || [value doubleValue] != [value intValue] || [value intValue] < 0 || [value intValue] > 4) {
+                *status = 400; return strdup("{\"error\":\"orientation_must_be_integer_0_to_4\"}");
+            }
+            target = [value intValue];
+        } else if (strcmp(method, "GET")) {
+            *status = 405; return strdup("{\"error\":\"use_get_or_post_json\"}");
+        }
+        char *result = sb_query(RCTL_Q_ORIENTATION, (const char *)&target, 1, 2.0);
+        if (!result) { *status = 504; return strdup("{\"error\":\"no_reply_from_device\"}"); }
+        if (strstr(result, "\"error\"")) *status = 503;
+        return result;
     } else if (!strcmp(path, "/v1/deviceinfo")) {
         char *info = sb_query(RCTL_Q_DEVINFO, NULL, 0, 1.5);
         if (info) return info;            // SB already returns JSON
@@ -1672,7 +1709,7 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
             if (onp[0] == '1') {
                 g_micRecordWant = true;
                 rctl_mic_refresh();
-                if (!rctl_mic_record_start()) { g_micRecordWant = false; rctl_mic_refresh(); *status = 500; return strdup("{\"error\":\"record start failed\"}"); }
+                if (!g_micCapturing || !rctl_mic_record_start()) { g_micRecordWant = false; rctl_mic_refresh(); *status = 500; return strdup("{\"error\":\"record start failed\"}"); }
             } else {
                 rctl_mic_record_stop();
                 g_micRecordWant = false;
@@ -2073,6 +2110,20 @@ static void rctl_mic_refresh(void) {
 static bool rctl_mic_record_start(void) {
     pthread_mutex_lock(&g_recLock);
     if (g_recording) { pthread_mutex_unlock(&g_recLock); return true; }
+    // Rootless packages do not install the web client in this data directory.
+    NSString *directory = [@RCTL_MIC_REC_PATH stringByDeletingLastPathComponent];
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES
+                                                 attributes:@{NSFilePosixPermissions: @0755} error:nil]) {
+        dlog("micrec: recording directory unavailable");
+        pthread_mutex_unlock(&g_recLock);
+        return false;
+    }
+    struct stat existing;
+    if (lstat(RCTL_MIC_REC_PATH, &existing) == 0 && !S_ISREG(existing.st_mode)) {
+        dlog("micrec: refusing non-regular recording target");
+        pthread_mutex_unlock(&g_recLock);
+        return false;
+    }
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)RCTL_MIC_REC_PATH, strlen(RCTL_MIC_REC_PATH), false);
     AudioStreamBasicDescription aac; memset(&aac, 0, sizeof aac);
     aac.mFormatID = kAudioFormatMPEG4AAC; aac.mSampleRate = 48000; aac.mChannelsPerFrame = 1;
@@ -2085,7 +2136,13 @@ static bool rctl_mic_record_start(void) {
     pcm.mChannelsPerFrame = 1; pcm.mBitsPerChannel = 16; pcm.mBytesPerFrame = 2; pcm.mFramesPerPacket = 1; pcm.mBytesPerPacket = 2;
     st = ExtAudioFileSetProperty(g_recFile, kExtAudioFileProperty_ClientDataFormat, sizeof pcm, &pcm);
     if (st != noErr) { char l[80]; snprintf(l, sizeof l, "micrec: client fmt %d", (int)st); dlog(l); ExtAudioFileDispose(g_recFile); g_recFile = NULL; pthread_mutex_unlock(&g_recLock); return false; }
-    ExtAudioFileWriteAsync(g_recFile, 0, NULL);   // prime the async writer thread
+    chmod(RCTL_MIC_REC_PATH, 0600);
+    st = ExtAudioFileWriteAsync(g_recFile, 0, NULL);   // prime the async writer thread
+    if (st != noErr) {
+        dlog("micrec: writer initialization failed");
+        ExtAudioFileDispose(g_recFile); g_recFile = NULL;
+        pthread_mutex_unlock(&g_recLock); return false;
+    }
     g_recFrames = 0;
     g_recording = true;
     pthread_mutex_unlock(&g_recLock);
@@ -2105,6 +2162,12 @@ static void rctl_mic_record_stop(void) {
 }
 
 int main(int argc, char **argv) {
+    @autoreleasepool {
+        NSArray *bins = @[RCTL_ROOT_PATH_NS(@"/usr/local/bin"), RCTL_ROOT_PATH_NS(@"/usr/bin"),
+                          RCTL_ROOT_PATH_NS(@"/bin"), RCTL_ROOT_PATH_NS(@"/usr/sbin"),
+                          RCTL_ROOT_PATH_NS(@"/sbin"), @"/usr/bin", @"/bin", @"/usr/sbin", @"/sbin"];
+        setenv("PATH", [bins componentsJoinedByString:@":"].UTF8String, 1);
+    }
     // Safe signature validator: dlopen a dylib in THIS process (not SpringBoard).
     // If the code signature is rejected by AMFI, __TEXT stays non-executable and
     // either dlopen fails or this process crashes — never touching SpringBoard.

@@ -7,6 +7,7 @@
 //                     [2 byte BE frames][interleaved s16le data].
 
 #import "net/HttpStreamServer.h"
+#import "platform/Paths.h"
 #import "net/Term.h"
 #import <pthread.h>
 #import <sys/socket.h>
@@ -461,7 +462,7 @@ static void log_control_client_unavailable(rctl_http_server *s) {
     pthread_mutex_unlock(&s->mtx);
     if (should_log) {
         fprintf(stderr, "[http] control client unavailable: required file "
-                        "/var/mobile/rctl/index.html is missing, empty, or unreadable\n");
+                        "%s is missing, empty, or unreadable\n", RCTL_WEB_CLIENT);
     }
 }
 
@@ -655,7 +656,7 @@ static void handle_client(rctl_http_server *s, int fd) {
         close(fd);
     } else if (strncmp(req, "GET / ", 6) == 0 || strncmp(req, "GET /index", 10) == 0) {
         size_t hlen = 0;
-        char *html = read_file("/var/mobile/rctl/index.html", &hlen);
+        char *html = read_file(RCTL_WEB_CLIENT, &hlen);
         // send_data with the real length, not strlen: the inlined web bundle can
         // contain NUL bytes (embedded WASM) that would truncate a strlen() send.
         if (html) {

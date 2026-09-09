@@ -4,6 +4,7 @@
 // AVFoundation still capture is runtime-driven; scoped bundle/TCC hooks prevent a
 // host app without camera declarations or permission from aborting our capture.
 #import <UIKit/UIKit.h>
+#import "platform/Paths.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
@@ -227,7 +228,7 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
             void *rq = dlsym(tcc, "TCCAccessRequest");
             if (rq) MSHookFunction(rq, (void *)rctl_TCCAccessRequest, (void **)&orig_TCCAccessRequest);
         }
-        void *media = dlopen("/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib",
+        void *media = dlopen(RCTL_ROOT_PATH("/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"),
                             RTLD_NOW | RTLD_LOCAL);
         if (media) {
             typedef void (*MediaInitialize)(void (*)(BOOL));
