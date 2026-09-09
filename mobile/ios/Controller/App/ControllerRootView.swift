@@ -6,21 +6,21 @@ struct ControllerRootView: View {
 
     var body: some View {
         DeviceListView(model: model, localDevices: localDevices)
-        .task {
-            await model.restore()
-        }
-        .alert(
-            "Request Failed",
-            isPresented: Binding(
-                get: { model.presentedError != nil },
-                set: { if !$0 { model.presentedError = nil } }
-            ),
-            actions: {
-                Button("OK", role: .cancel) {}
-            },
-            message: {
-                Text(model.presentedError ?? "")
+            .task {
+                await model.restore()
             }
-        )
+            .alert(
+                "Request failed",
+                isPresented: Binding(
+                    get: { model.presentedError != nil },
+                    set: { if !$0 { model.presentedError = nil } }
+                ),
+                actions: {
+                    Button("OK", role: .cancel) {}
+                },
+                message: {
+                    Text(model.presentedError ?? "")
+                }
+            )
     }
 }

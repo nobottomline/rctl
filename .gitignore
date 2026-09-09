@@ -21,6 +21,8 @@ protocol/node_modules/
 
 # Debug captures (may contain the device's screen — never commit)
 *.png
+# App icon artwork is source, not captured media.
+!mobile/ios/Controller/Resources/Assets.xcassets/**/*.png
 *.h264
 *.bin
 .playwright-mcp/

@@ -61,24 +61,47 @@ feature ownership.
 
 ### Devices
 
-Use a compact native list, not a grid of decorative cards. Each row contains
-the device name, model, one connection state, last-seen text when relevant, and
-one restrained disclosure affordance. Online rows open Control with one tap.
+`Devices` is the product's front door and is allowed to be expressive where the
+control surface is not: a warm parchment canvas with two soft color washes and
+a slowly drifting constellation of particles, sharing the web client's `.warm`
+theme (terracotta signal on cream, sage for healthy state). Content sits on
+translucent parchment surfaces so the field stays visible without competing
+with rows.
 
-Connection state is semantic and never color-only:
+Each row contains the device name, its address or build detail, one semantic
+status chip (dot plus text, never color alone), and a chevron. Local rows show
+best-effort reachability from the bounded capabilities probe (`Saved`,
+`Checking`, `Online`, `Offline`); the probe never gates opening a device, which
+always runs its own preflight. Relay rows show `Online`, `Offline`,
+`Needs update`, or `Incompatible`; an unavailable relay row explains itself in
+an alert instead of opening an empty viewport. Edit and Remove live in the row
+context menu.
 
-- `Connected`: active session and current route;
-- `Available`: device can be opened;
-- `Connecting`: cancellable progress with elapsed time;
-- `Degraded`: usable session with a concise warning and diagnostics action;
-- `Offline`: last seen and recovery actions;
-- `Incompatible`: both protocol versions and the required next action;
-- `Revoked`: credential recovery, never an endless reconnect spinner.
+Every secondary screen is a push in one `NavigationStack` (pairing intro,
+scanner, local-device editor, control), never a sheet, so the system back
+gesture and button always work. The stack root owns the presentation style:
+parchment screens are light; the scanner and the media stage are dark. A pushed
+view cannot override an ancestor's `preferredColorScheme`, so the scheme is
+decided once from the current route rather than per screen.
 
-Relay profiles and pairing live in toolbar actions or Settings. Enrollment is a
-short native flow: scan QR, verify relay identity and requested scopes, name the
-controller, then store the resulting key in platform secure storage. Raw JSON,
-tokens, and URLs are never primary UI.
+The first-run state is a hero with the brand mark, the two primary actions, and
+two short explainers of the local and relay paths. The header carries the brand
+mark, the `rctl` wordmark, refresh when a relay profile exists, and an add menu.
+The product name shown to the user is `rctl`; `RCTL Controller` remains only
+the Xcode target and scheme name.
+
+### Pairing
+
+Pairing is a short native flow: an intro with three numbered steps, then a
+full-screen scanner. The scanner dims the camera except for a clear window with
+rounded corner brackets. The window rests centered and breathes slowly, springs
+onto a detected code, turns green with a check for a short lock-on, then claims
+the code in place behind a progress card. Codes that are not pairing payloads
+are called out in amber without a network round trip; a failed claim shows the
+error and ignores the same payload for a few seconds so an expired code cannot
+loop. Bottom controls are a white back circle, `Paste code`, and a torch toggle.
+Denied or missing camera states offer Settings and paste. Raw JSON, tokens, and
+URLs are never primary UI.
 
 ### Control
 
@@ -152,26 +175,37 @@ destructive color exclusively.
 ## Visual System
 
 Use platform system typography, Dynamic Type/font scaling, semantic system
-backgrounds, separators, materials, and navigation components. Do not ship a
-third-party UI kit or custom font for the first product cycle. The application
-supports light and dark appearance; the live media stage remains black.
+separators, materials, and navigation components. Do not ship a third-party UI
+kit or custom font. The application has two deliberate appearances: the warm
+parchment theme for Devices, pairing, and editors, and a black media stage for
+control and the camera scanner. Parchment screens stay light regardless of the
+system appearance because the palette is part of the product identity; the
+stage stays dark.
 
-The brand accent is a restrained warm signal color derived from the existing
-web client. It may mark the active route, primary commit action, recording, or
-focused control, but must not tint entire screens. Green means healthy/online,
-amber means attention/transition, and red means destructive/error. Every status
-also has text or an icon. Platform accessibility contrast, Increase Contrast,
-Differentiate Without Color, and Reduce Motion override decoration.
+The palette mirrors the web client's `.warm` theme: ink text on cream and
+parchment surfaces, terracotta as the signal color for the primary commit
+action, focused control, and attention, sage for healthy/online, and a muted
+red for destructive/error. Every status also has text or an icon. Platform
+accessibility contrast, Increase Contrast, Differentiate Without Color, and
+Reduce Motion override decoration.
 
-Spacing follows each platform's native rhythm. Repeated items may use bounded
-surfaces with at most an 8-point visual corner radius unless a standard system
-component owns a different radius. Do not nest cards, float page sections in
-cards, add decorative gradients/orbs, or use large marketing headings inside
-the operational UI.
+Decoration is confined to the ambient canvas behind the parchment screens: two
+soft radial color washes and a constellation particle field. The field is a
+pure function of time with no accumulated state, is seeded per canvas size so
+rotation does not re-roll it, pauses when its screen is not visible or the
+scene is inactive, and freezes under Reduce Motion. Surfaces are translucent
+parchment with a hairline border and a soft shadow, at most one level deep; do
+not nest surfaces, and do not bring the canvas or decorative gradients into
+the operational control UI.
+
+Spacing follows each platform's native rhythm. Buttons are capsules: ink for
+the default primary action, terracotta for the commit action of a flow, and an
+outlined parchment secondary. Icon buttons have stable 44-point targets.
 
 Motion communicates lifecycle: connection transition, controls appearing,
-sheet presentation, and successful state change. It is short, interruptible,
-and omitted under Reduce Motion. There is no ambient animation.
+pushes, the scanner reticle following a code, and successful state change. It
+is short, interruptible, and omitted under Reduce Motion. The particle field
+and the first-run emblem halo are the only ambient animations.
 
 ## Shared Tokens, Native Components
 

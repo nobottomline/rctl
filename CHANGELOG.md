@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Redesigned the iOS controller's Devices, pairing, and local-device screens:
+  warm parchment theme with an ambient particle canvas, push navigation instead
+  of sheets, LAN reachability chips, a code-tracking QR scanner with torch and
+  paste fallbacks, an app icon, and the `rctl` product name.
 - Added native iOS aspect-fit multitouch control with safe `View` / `Control`
   modes, system controls, and a compact responsive control dock.
 - Added the native RCTL operator visual system, responsive remote-session chrome,

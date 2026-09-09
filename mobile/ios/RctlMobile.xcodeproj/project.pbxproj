@@ -27,6 +27,11 @@
 		A10000000000000000000010 /* RemoteControlChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* RemoteControlChrome.swift */; };
 		A10000000000000000000011 /* RemoteToolsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* RemoteToolsSheet.swift */; };
 		A10000000000000000000012 /* RemoteKeyboardPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* RemoteKeyboardPanel.swift */; };
+		D10000000000000000000001 /* ControllerTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* ControllerTheme.swift */; };
+		D10000000000000000000002 /* AmbientBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002 /* AmbientBackground.swift */; };
+		D10000000000000000000003 /* DeviceRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000003 /* DeviceRow.swift */; };
+		D10000000000000000000004 /* QRScannerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000004 /* QRScannerController.swift */; };
+		D10000000000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000005 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +68,11 @@
 		A20000000000000000000012 /* RemoteControlChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlChrome.swift; sourceTree = "<group>"; };
 		A20000000000000000000013 /* RemoteToolsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteToolsSheet.swift; sourceTree = "<group>"; };
 		A20000000000000000000014 /* RemoteKeyboardPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeyboardPanel.swift; sourceTree = "<group>"; };
+		D20000000000000000000001 /* ControllerTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerTheme.swift; sourceTree = "<group>"; };
+		D20000000000000000000002 /* AmbientBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbientBackground.swift; sourceTree = "<group>"; };
+		D20000000000000000000003 /* DeviceRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRow.swift; sourceTree = "<group>"; };
+		D20000000000000000000004 /* QRScannerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerController.swift; sourceTree = "<group>"; };
+		D20000000000000000000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -102,6 +112,7 @@
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000003 /* App */,
+				D40000000000000000000001 /* Design */,
 				A40000000000000000000004 /* Features */,
 				A40000000000000000000007 /* Resources */,
 			);
@@ -130,10 +141,20 @@
 			path = Features;
 			sourceTree = "<group>";
 		};
+		D40000000000000000000001 /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				D20000000000000000000002 /* AmbientBackground.swift */,
+				D20000000000000000000001 /* ControllerTheme.swift */,
+			);
+			path = Design;
+			sourceTree = "<group>";
+		};
 		A40000000000000000000005 /* Pairing */ = {
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000005 /* PairingView.swift */,
+				D20000000000000000000004 /* QRScannerController.swift */,
 				A20000000000000000000006 /* QRScannerView.swift */,
 			);
 			path = Pairing;
@@ -143,6 +164,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000007 /* DeviceListView.swift */,
+				D20000000000000000000003 /* DeviceRow.swift */,
 				C20000000000000000000002 /* LocalDeviceEditor.swift */,
 			);
 			path = Devices;
@@ -151,6 +173,7 @@
 		A40000000000000000000007 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				D20000000000000000000005 /* Assets.xcassets */,
 				A2000000000000000000000B /* Info.plist */,
 				A2000000000000000000000C /* PrivacyInfo.xcprivacy */,
 			);
@@ -279,6 +302,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000000000000000000005 /* Assets.xcassets in Resources */,
 				A1000000000000000000000B /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -307,6 +331,10 @@
 				A10000000000000000000010 /* RemoteControlChrome.swift in Sources */,
 				A10000000000000000000011 /* RemoteToolsSheet.swift in Sources */,
 				A10000000000000000000012 /* RemoteKeyboardPanel.swift in Sources */,
+				D10000000000000000000001 /* ControllerTheme.swift in Sources */,
+				D10000000000000000000002 /* AmbientBackground.swift in Sources */,
+				D10000000000000000000003 /* DeviceRow.swift in Sources */,
+				D10000000000000000000004 /* QRScannerController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -365,6 +393,8 @@
 		A70000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Controller/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -383,6 +413,8 @@
 		A70000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Controller/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

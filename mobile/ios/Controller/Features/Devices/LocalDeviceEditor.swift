@@ -1,7 +1,10 @@
 import SwiftUI
 
+/// Pushed form for adding or editing a saved LAN address. Connect validates the
+/// device before saving and hands the profile to the caller on success.
 struct LocalDeviceEditor: View {
-    @Environment(\.dismiss) private var dismiss
+    private enum Field { case address, name }
+
     @ObservedObject var model: LocalDevicesModel
     let editing: LocalDeviceProfile?
     let connect: (LocalDeviceProfile) -> Void
@@ -9,6 +12,7 @@ struct LocalDeviceEditor: View {
     @State private var name: String
     @State private var error: String?
     @State private var pending: Task<Void, Never>?
+    @FocusState private var focus: Field?
 
     init(model: LocalDevicesModel, editing: LocalDeviceProfile? = nil,
          connect: @escaping (LocalDeviceProfile) -> Void) {
@@ -20,58 +24,182 @@ struct LocalDeviceEditor: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("IP address : port", text: $address)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
+        ZStack {
+            AmbientBackground(particleOpacity: 0.7)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(editing == nil ? "Local device" : "Edit device")
+                            .font(.system(size: 32, weight: .bold))
+                            .tracking(-0.6)
+                            .foregroundStyle(ControllerPalette.ink)
+                            .accessibilityAddTraits(.isHeader)
+                        Text("Connect directly over the network you are on. The iPad needs the rctl package with LAN control enabled.")
+                            .font(.subheadline)
+                            .foregroundStyle(ControllerPalette.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 8)
+
+                    VStack(spacing: 0) {
+                        FormField(
+                            symbol: "network",
+                            title: "Address",
+                            placeholder: "192.168.1.20:8080",
+                            text: $address,
+                            keyboard: .URL,
+                            submitLabel: .next
+                        )
+                        .focused($focus, equals: .address)
+                        .onSubmit { focus = .name }
                         .accessibilityIdentifier("local-address")
-                    TextField("Name (optional)", text: $name)
+                        Rectangle()
+                            .fill(ControllerPalette.line)
+                            .frame(height: 1)
+                            .padding(.leading, 64)
+                        FormField(
+                            symbol: "tag",
+                            title: "Name",
+                            placeholder: "Optional, for example Living room",
+                            text: $name,
+                            keyboard: .default,
+                            submitLabel: .go
+                        )
+                        .focused($focus, equals: .name)
+                        .onSubmit { submit() }
                         .accessibilityIdentifier("local-name")
-                } footer: {
-                    Text("Local access has no authentication. Use a trusted network.")
-                }
-                .disabled(pending != nil)
-                if let error {
-                    Section {
-                        Text(error).foregroundStyle(.red)
                     }
-                }
-            }
-            .navigationTitle(editing == nil ? "Local Device" : "Edit Local Device")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        pending?.cancel()
-                        dismiss()
+                    .glassSurface(cornerRadius: 22, padding: 4)
+                    .disabled(pending != nil)
+
+                    if let error {
+                        Callout(text: error, symbol: "exclamationmark.triangle.fill", tone: .danger)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        error = nil
-                        pending = Task { @MainActor in
-                            defer { pending = nil }
-                            do {
-                                let device = try await model.save(address: address, name: name, editing: editing?.id)
-                                try Task.checkCancellation()
-                                connect(device)
-                                dismiss()
-                            } catch {
-                                if !Task.isCancelled { self.error = LocalDevicesModel.message(for: error) }
+
+                    Callout(
+                        text: "Local access has no authentication. Use it only on a trusted network. Port 8080 is used when none is given.",
+                        symbol: "lock.open",
+                        tone: .neutral
+                    )
+
+                    Button(action: submit) {
+                        if pending != nil {
+                            HStack(spacing: 10) {
+                                ProgressView().tint(ControllerPalette.onSignal)
+                                Text("Checking device…")
                             }
+                        } else {
+                            Label(editing == nil ? "Connect" : "Save and connect", systemImage: "arrow.right")
                         }
-                    } label: {
-                        if pending != nil { ProgressView() } else { Text("Connect") }
                     }
+                    .buttonStyle(PrimaryButtonStyle(tone: .signal))
                     .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pending != nil)
                     .accessibilityIdentifier("local-connect")
+                    .padding(.top, 4)
+                }
+                .pageColumn(maxWidth: 560)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 40)
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .animation(ControllerMotion.standard, value: error)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(pending != nil)
+        .onAppear {
+            if address.isEmpty { focus = .address }
+        }
+        .onDisappear { pending?.cancel() }
+    }
+
+    private func submit() {
+        guard pending == nil, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        error = nil
+        focus = nil
+        pending = Task { @MainActor in
+            defer { pending = nil }
+            do {
+                let device = try await model.save(address: address, name: name, editing: editing?.id)
+                try Task.checkCancellation()
+                ControllerHaptics.success()
+                connect(device)
+            } catch {
+                if !Task.isCancelled {
+                    ControllerHaptics.warning()
+                    self.error = LocalDevicesModel.message(for: error)
                 }
             }
-            .interactiveDismissDisabled(pending != nil)
-            .onDisappear { pending?.cancel() }
         }
+    }
+}
+
+/// Labeled text field row used inside a glass surface.
+private struct FormField: View {
+    let symbol: String
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    let keyboard: UIKeyboardType
+    let submitLabel: SubmitLabel
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ControllerPalette.signal)
+                .frame(width: 36, height: 36)
+                .background(ControllerPalette.signalSoft, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ControllerPalette.muted)
+                TextField(placeholder, text: $text)
+                    .font(.body)
+                    .foregroundStyle(ControllerPalette.ink)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(keyboard)
+                    .submitLabel(submitLabel)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+/// Inline note or error message with a leading symbol.
+struct Callout: View {
+    enum Tone { case neutral, danger }
+    let text: String
+    let symbol: String
+    let tone: Tone
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(tone == .danger ? ControllerPalette.danger : ControllerPalette.muted)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(tone == .danger ? ControllerPalette.danger : ControllerPalette.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            (tone == .danger ? ControllerPalette.dangerSoft : ControllerPalette.elevated).opacity(0.85),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(tone == .danger ? ControllerPalette.danger.opacity(0.25) : ControllerPalette.line, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
     }
 }

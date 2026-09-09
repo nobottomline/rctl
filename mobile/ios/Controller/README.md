@@ -1,8 +1,9 @@
 # RCTL Controller
 
-`Controller` is the native iOS application for rctl devices. The Devices screen
-supports saved local addresses without relay setup, alongside authenticated
-relay pairing. Both paths share the native WebRTC implementation:
+`Controller` is the native iOS application for rctl devices, shown to users as
+`rctl`. The Devices screen supports saved local addresses without relay setup,
+alongside authenticated relay pairing. Both paths share the native WebRTC
+implementation:
 
 - scan or paste the relay admin's one-time controller pairing JSON;
 - create and retain the P-256 controller identity in Keychain;
@@ -22,12 +23,30 @@ relay pairing. Both paths share the native WebRTC implementation:
 - send Home, lock, volume, Control Center, and Notification Center commands over
   the scoped control channel, with confirmation for device lock.
 
+## Devices And Pairing
+
+Devices is the root of one `NavigationStack`; pairing, the scanner, the
+local-device editor, and control are pushes with working back navigation. The
+screen uses the warm parchment theme and ambient particle canvas described in
+`docs/MOBILE-DESIGN.md`; the stack root selects light or dark presentation from
+the current route. Saved local devices show a best-effort reachability chip
+from the bounded capabilities probe; relay devices show online, update, and
+compatibility state, and an unavailable relay device explains why when tapped.
+
+Pairing opens an intro with the three relay-admin steps, then a full-screen
+scanner whose reticle follows the detected code, confirms a lock-on, and claims
+the code in place. Non-pairing QR codes are rejected locally, a failed claim
+ignores the same payload briefly, and paste plus torch are always available.
+
+Debug builds accept `--rctl-route=pair|scan|local` to open a screen directly
+for screenshots and review; Release builds ignore it.
+
 ## Local Network
 
-Choose **Add Local Device**, enter its private IP (port 8080 by default), and
+Choose **Add local device**, enter its private IP (port 8080 by default), and
 optionally name it. Connect checks device capabilities, saves the address, and
-opens video in View mode. Control requires an explicit mode change. Swipe or
-long-press a saved device to edit or remove it; separate devices may share a port.
+opens video in View mode. Control requires an explicit mode change. Long-press a
+saved device to edit or remove it; separate devices may share a port.
 
 The public LAN-only `.deb` is sufficient. No VPS, domain, certificate setup,
 controller identity, or relay enrollment is needed. The current unauthenticated
