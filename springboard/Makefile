@@ -16,6 +16,7 @@ rctlsbcap_FILES = rctlsbcap.xm \
                   ../core/encode/H264Encoder.mm \
                   ../core/stream/CaptureSession.mm \
                   ../core/input/TouchInjector.mm \
+                  ../core/input/GameKeyboard.mm \
                   ../core/ipc/Ipc.c
 rctlsbcap_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations
 rctlsbcap_CCFLAGS = -isystem $(LIBCPP)

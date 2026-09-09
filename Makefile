@@ -127,7 +127,18 @@ test-webrtc-permissions:
 	@/tmp/rctl-webrtc-permissions-test
 
 .PHONY: test
-test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish test-package-stage test-rootless-paths test-display-geometry test-capture-pcm test-script-validation
+test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish test-package-stage test-rootless-paths test-display-geometry test-capture-pcm test-script-validation test-game-keyboard test-http-headers
+
+.PHONY: test-game-keyboard test-http-headers
+test-game-keyboard:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/KeyboardLeaseTest.cpp -o /tmp/rctl-keyboard-lease-test
+	@/tmp/rctl-keyboard-lease-test
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore tests/GameKeyboardValidationTest.mm core/input/GameKeyboard.mm -framework Foundation -framework QuartzCore -o /tmp/rctl-game-keyboard-validation-test
+	@/tmp/rctl-game-keyboard-validation-test
+
+test-http-headers:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/HttpHeadersTest.cpp -o /tmp/rctl-http-headers-test
+	@/tmp/rctl-http-headers-test
 
 .PHONY: test-capture-pcm
 .PHONY: test-script-validation

@@ -18,6 +18,7 @@
 #import "stream/CaptureSession.h"
 #import "capture/ScreenCapture.h"
 #import "input/TouchInjector.h"
+#import "input/GameKeyboard.h"
 #import "ipc/Ipc.h"
 #import <sys/sysctl.h>
 
@@ -640,6 +641,12 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_QUERY && len >= 5) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 uint8_t qtype = buf[4];
+                if (qtype == RCTL_Q_GAME_KEYBOARD) {
+                    NSData *request = len <= 2053 ? [NSData dataWithBytes:buf + 5 length:len - 5] : nil;
+                    dispatch_async(dispatch_get_main_queue(), ^{ send_reply(reqid, rctl_game_keyboard_request(request)); });
+                    free(buf);
+                    continue;
+                }
                 if (qtype == RCTL_Q_ORIENTATION) {
                     uint8_t target = len == 6 ? buf[5] : 254;
                     dispatch_async(dispatch_get_main_queue(), ^{ send_reply(reqid, rctl_orientation_action(target)); });
@@ -699,6 +706,7 @@ static void *ipc_manager(void *unused) {
         }
 
         NSLog(@"[rctl-sbcap] rctld disconnected");
+        dispatch_async(dispatch_get_main_queue(), ^{ rctl_game_keyboard_stop(); });
         pthread_mutex_lock(&gIpcLock); if (gIpc == peer) gIpc = NULL; pthread_mutex_unlock(&gIpcLock);
         rctl_ipc_close(peer);
         usleep(300000);

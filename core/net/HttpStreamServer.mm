@@ -7,6 +7,7 @@
 //                     [2 byte BE frames][interleaved s16le data].
 
 #import "net/HttpStreamServer.h"
+#import "net/HttpHeaders.h"
 #import "platform/Paths.h"
 #import "net/Term.h"
 #import <pthread.h>
@@ -590,10 +591,8 @@ static void handle_client(rctl_http_server *s, int fd) {
         char *bodybuf = NULL; const char *body = ""; int body_len = 0;
         char *hdr_end = strstr(req, "\r\n\r\n");
         char content_type[96] = {0};
-        char *ct = strstr(req, "\r\nContent-Type:");
-        if (ct && (!hdr_end || ct < hdr_end)) {
-            ct += 15;
-            while (*ct == ' ' || *ct == '\t') ct++;
+        const char *ct = rctl_http_header(req, hdr_end, "Content-Type");
+        if (ct) {
             size_t ci = 0;
             while (ct[ci] && ct[ci] != '\r' && ct[ci] != ';' && ci < sizeof(content_type) - 1) {
                 content_type[ci] = ct[ci];
@@ -602,8 +601,8 @@ static void handle_client(rctl_http_server *s, int fd) {
             content_type[ci] = 0;
         }
         if (isPost && hdr_end) {
-            char *cl = strstr(req, "Content-Length:");
-            int clen = cl ? atoi(cl + 15) : 0;
+            const char *cl = rctl_http_header(req, hdr_end, "Content-Length");
+            int clen = cl ? atoi(cl) : 0;
             if (clen > 0 && clen < (64 << 20)) {
                 char *bstart = hdr_end + 4;
                 int have = (int)(n - (bstart - req)), got = have > clen ? clen : have;

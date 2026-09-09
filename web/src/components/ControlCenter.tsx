@@ -9,6 +9,8 @@ import {
   Headphones,
   House,
   Images,
+  Keyboard,
+  Gamepad2,
   Lock,
   Mic,
   MicOff,
@@ -100,6 +102,15 @@ export default function ControlCenter({
       </Group>
 
       <MicGroup ctl={ctl} />
+
+      <div>
+        <Label>Keyboard</Label>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Key icon={Keyboard} label="Text" active={ctl.keyboard.mode === 'text'} onClick={() => ctl.keyboard.setGame(false)} />
+          <Key icon={Gamepad2} label={ctl.keyboard.mode === 'connecting' ? 'Connecting…' : 'Game'} active={ctl.keyboard.mode === 'game'} disabled={!ctl.keyboard.canStartGame} onClick={() => ctl.keyboard.setGame(true)} />
+        </div>
+        {ctl.keyboard.mode === 'error' && <p role="alert" className="mt-1 text-[11px] text-danger">{ctl.keyboard.error === 'keyboard_busy' ? 'Keyboard is in use by another controller.' : 'Game keyboard unavailable. Select Game to retry.'}</p>}
+      </div>
 
       <div>
         <Label>Display</Label>
@@ -298,18 +309,23 @@ function Key({
   icon: Icon,
   label,
   active,
+  disabled,
   onClick,
 }: {
   icon: ComponentType<LucideProps>
   label: string
   active?: boolean
+  disabled?: boolean
   onClick: () => void
 }) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={active}
+      disabled={disabled}
+      title={disabled ? 'Unavailable during macro recording or playback' : undefined}
       className={cn(
-        'flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal',
+        'flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] font-medium text-fg transition-colors active:bg-signal active:text-on-signal disabled:opacity-50 disabled:pointer-events-none',
         active ? 'bg-signal text-on-signal hover:bg-signal-hi' : 'bg-fg/8 hover:bg-fg/12',
       )}
     >

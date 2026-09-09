@@ -1473,6 +1473,17 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
             char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
             return out;
         }
+    } else if (!strcmp(path, "/v1/keyboard")) {
+        if (strcmp(method, "POST") || strcmp(content_type, "application/json")) {
+            *status = 405; return strdup("{\"error\":\"use_post_json\"}");
+        }
+        if (!body || body_len <= 0 || body_len > 2048) {
+            *status = 400; return strdup("{\"error\":\"invalid_keyboard_request\"}");
+        }
+        char *result = sb_query(RCTL_Q_GAME_KEYBOARD, body, (uint32_t)body_len, 1.0);
+        if (!result) { *status = 504; return strdup("{\"error\":\"keyboard_device_timeout\"}"); }
+        if (strstr(result, "\"error\"")) *status = 409;
+        return result;
     } else if (!strcmp(path, "/v1/orientation")) {
         uint8_t target = 255;
         if (!strcmp(method, "POST") && !strcmp(content_type, "application/json")) {

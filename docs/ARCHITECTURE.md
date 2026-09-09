@@ -82,9 +82,13 @@ to `/stream` subscribers as HTTP chunks with app-framing
 **only while a viewer is connected** (idle-by-default, §4).
 
 **Input → device.** The browser sends `GET /input?phase=&id=&x=&y=` (touch) and
-`/key?p=&u=&d=` (keyboard/buttons). rctld forwards them over IPC to rctlsbcap, which
-injects a **digitizer IOHIDEvent tagged with the real hardware senderID** so the
-foreground app receives it (works in all apps/games, not just SpringBoard).
+`/key?p=&u=&d=` (keyboard/buttons). rctld forwards them over IPC to rctlsbcap.
+Touches use a **digitizer IOHIDEvent tagged with the real hardware senderID**;
+text-mode keys use their existing single UIKit injection route. Optional Game
+mode instead uses `POST /v1/keyboard`: ordered held-key snapshots go through IPC
+to a SpringBoard-owned virtual HID service with a single-controller lease and
+device-side expiry. No event is dual-dispatched between these keyboard routes.
+See [`KEYBOARD.md`](KEYBOARD.md) for the protocol and device qualification limits.
 
 **Audio → browser.** `rctld` activates the inactive `audio/` payload only on
 `/v1/audio_capture?on=1`. After a coordinated mediaserverd restart,

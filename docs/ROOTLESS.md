@@ -16,7 +16,7 @@ scripts/build-rootless.sh
 ```
 
 The script builds all components, runs the public-package audit, and prints the
-exact path in `packages/rootless/`. The version has a `~rootless6` prerelease
+exact path in `packages/rootless/`. The version has a `~rootless10` prerelease
 suffix. Objects and staging are isolated from the default rootful lane. The
 package identifier remains `com.greatlove.rctl`, with `iphoneos-arm64`
 architecture and dependencies on `ellekit` and `firmware (>= 15.0)`.
@@ -30,6 +30,13 @@ protection, and rootless update rejection. The rootless Mach-O payloads have an
 iOS 15.0 deployment target, the expected rootless rpaths, and the daemon's
 existing media entitlements. Initial physical-device observations are recorded
 below; runtime qualification is not complete.
+
+Keyboard follow-up (2026-09-09/10): `rootless9` installed successfully and the
+operator confirmed Minecraft control through the browser's new Game mode.
+`rootless10` retains that native backend and adds stricter browser response
+validation and separation from macro recording/playback. It is a local test
+candidate, not a published APT release or completed Sileo upgrade qualification.
+See [`KEYBOARD.md`](KEYBOARD.md) for evidence and the remaining input matrix.
 
 ## First Install
 

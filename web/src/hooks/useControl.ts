@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ControlEngine, codeToUsage, type DiagStats, type MacroEvent } from '../lib/engine'
 import { KeyboardState } from '../lib/keyboardState'
+import { GameKeyboard, validateKeyboardResponse, type GameKeyboardStatus } from '../lib/gameKeyboard'
 import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
 import { MicTalk, micSupported } from '../lib/mic'
@@ -35,6 +36,9 @@ export function useControl(
   const [stats, setStats] = useState<DiagStats | null>(null)
   const [statsOn, setStatsOn] = useState(false)
   const engineRef = useRef<ControlEngine | null>(null)
+  const gameKeyboardRef = useRef<GameKeyboard | null>(null)
+  const textKeyboardRef = useRef<KeyboardState | null>(null)
+  const [keyboardStatus, setKeyboardStatus] = useState<GameKeyboardStatus>({ mode: 'text' })
   const audioRef = useRef(new AudioPlayer())
   const filesRef = useRef(new FileTransfer())
   const micRef = useRef(new MicTalk())
@@ -130,6 +134,21 @@ export function useControl(
 
     // ---- keyboard: preserve local form/menu navigation and release on blur ----
     const keyboard = new KeyboardState((usage, down) => engine.key(usage, down))
+    textKeyboardRef.current = keyboard
+    const gameKeyboard = new GameKeyboard(async (body) => {
+      const abort = new AbortController()
+      const timeout = setTimeout(() => abort.abort(), 1000)
+      try {
+        const response = await api('/v1/keyboard', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), signal: abort.signal, keepalive: body.action === 'release',
+        })
+        const result: unknown = await response.json()
+        validateKeyboardResponse(result, body.action)
+        if (!response.ok) throw new Error('keyboard_unavailable')
+      } finally { clearTimeout(timeout) }
+    }, setKeyboardStatus)
+    gameKeyboardRef.current = gameKeyboard
     const inField = (t: EventTarget | null) => {
       return t instanceof HTMLElement && (
         t.isContentEditable || !!t.closest('input, textarea, select, button, a, [role="dialog"], [role="menu"]')
@@ -140,22 +159,24 @@ export function useControl(
       const u = codeToUsage(e.code)
       if (!u) return
       e.preventDefault()
-      keyboard.down(u, e.repeat)
+      if (gameKeyboard.enabled) gameKeyboard.down(u, e.repeat)
+      else keyboard.down(u, e.repeat)
     }
     const onKeyUp = (e: KeyboardEvent) => {
       const u = codeToUsage(e.code)
       if (!u) return
       // A forwarded modifier must be released even when focus has moved to UI.
-      const released = keyboard.up(u)
+      const released = gameKeyboard.enabled ? gameKeyboard.up(u) : keyboard.up(u)
       if (released && !inField(e.target)) e.preventDefault()
     }
-    const releaseKeys = () => keyboard.release()
-    const onVisibility = () => { if (document.hidden) releaseKeys() }
+    const releaseKeys = () => { keyboard.release(); gameKeyboard.releaseKeys() }
+    const stopKeyboard = () => { keyboard.release(); gameKeyboard.stop() }
+    const onVisibility = () => { if (document.hidden) stopKeyboard() }
     const onFocus = (e: FocusEvent) => { if (inField(e.target)) releaseKeys() }
     addEventListener('keydown', onKeyDown)
     addEventListener('keyup', onKeyUp)
     addEventListener('blur', releaseKeys)
-    addEventListener('pagehide', releaseKeys)
+    addEventListener('pagehide', stopKeyboard)
     addEventListener('focusin', onFocus)
     document.addEventListener('visibilitychange', onVisibility)
 
@@ -163,7 +184,7 @@ export function useControl(
     addEventListener('resize', onResize)
 
     return () => {
-      releaseKeys()
+      stopKeyboard()
       engine.stop()
       stage.removeEventListener('pointerdown', onDown)
       stage.removeEventListener('pointermove', onMove)
@@ -172,7 +193,7 @@ export function useControl(
       removeEventListener('keydown', onKeyDown)
       removeEventListener('keyup', onKeyUp)
       removeEventListener('blur', releaseKeys)
-      removeEventListener('pagehide', releaseKeys)
+      removeEventListener('pagehide', stopKeyboard)
       removeEventListener('focusin', onFocus)
       document.removeEventListener('visibilitychange', onVisibility)
       removeEventListener('resize', onResize)
@@ -182,6 +203,8 @@ export function useControl(
         /* ignore */
       }
       engineRef.current = null
+      gameKeyboardRef.current = null
+      textKeyboardRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -240,6 +263,7 @@ export function useControl(
   const startRecord = () => {
     const eng = engineRef.current
     if (!eng) return
+    gameKeyboardRef.current?.stop()
     eng.recordStart() // cancels any in-flight playback internally
     setMacroLen(0)
     setRecMode('recording')
@@ -249,6 +273,7 @@ export function useControl(
     setRecMode('paused')
   }
   const resumeRecord = () => {
+    gameKeyboardRef.current?.stop()
     engineRef.current?.recordResume()
     setRecMode('recording')
   }
@@ -263,6 +288,7 @@ export function useControl(
   const playMacro = async () => {
     const eng = engineRef.current
     if (!eng || !macroRef.current.length) return
+    gameKeyboardRef.current?.stop()
     setRecMode('playing')
     await eng.play(macroRef.current, (state) => setRecMode((current) =>
       current === 'playing' || current === 'pausing' || current === 'play-paused' ? state : current))
@@ -386,6 +412,16 @@ export function useControl(
     orient,
     stats,
     statsOn,
+    keyboard: {
+      ...keyboardStatus,
+      canStartGame: recMode === 'idle',
+      setGame: (enabled: boolean) => {
+        if (enabled && recMode !== 'idle') return
+        textKeyboardRef.current?.release()
+        if (enabled) void gameKeyboardRef.current?.start()
+        else gameKeyboardRef.current?.stop()
+      },
+    },
     audio: { listening, busy: audioBusy, deviceSpeaker, toggleListen, toggleSpeaker },
     brightness,
     setBrightness: changeBrightness,
