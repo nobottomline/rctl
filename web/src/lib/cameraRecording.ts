@@ -9,7 +9,7 @@ export async function cameraRecordingToMp4(recording: Blob): Promise<Blob> {
   const source = new Uint8Array(await recording.arrayBuffer())
   if (source.byteLength === 0) throw new Error('Camera recording is empty')
 
-  const parts: Uint8Array[] = []
+  const parts: BlobPart[] = []
   const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: false })
   transmuxer.on('data', (segment: TransmuxedSegment) => {
     parts.push(new Uint8Array(segment.initSegment), new Uint8Array(segment.data))

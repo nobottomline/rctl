@@ -70,6 +70,10 @@ jobs:
         if: matrix.project == 'relay/web-admin'
         working-directory: relay/web-admin
         run: npm run lint
+      - name: Test control client
+        if: matrix.project == 'web'
+        working-directory: web
+        run: node --experimental-strip-types --test tests/*.test.mjs
       - name: Build client
         working-directory: ${{ matrix.project }}
         run: npm run build
