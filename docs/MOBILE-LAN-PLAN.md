@@ -7,6 +7,11 @@ Status: implementation plan, nothing shipped. Baseline inspected on
 [`MOBILE-DESIGN.md`](MOBILE-DESIGN.md). Increment C also depends on
 [`CONTROLLER-AUTH.md`](CONTROLLER-AUTH.md).
 
+This is the active plan. [MOBILE-LAN-REVIEW.md](MOBILE-LAN-REVIEW.md) records
+the source-backed review and preserves both original drafts for comparison.
+Increment C remains a design gate: its transport and bootstrap are not approved
+for implementation until the security and migration questions below are resolved.
+
 ## Outcome And Scope
 
 An operator opens Devices, sees the iPads on the same network, taps one, and
@@ -20,8 +25,8 @@ Three increments ship independently, in this order of risk:
 | Increment | Outcome | Protocol impact |
 |-----------|---------|-----------------|
 | B. Access path | The session header always shows LAN or Relay with the endpoint and media route. | None. Can land first. |
-| A. Discovery | Devices appear without an address; saved devices survive DHCP changes. | Additive: `_rctl._tcp` record, optional `device` object in capabilities (minor 1.2). |
-| C. Authenticated local pairing | Mutual authentication and scopes on the LAN. | New `local.auth` feature, `/v1/local/*` endpoints, sealed signaling channel (minor 1.2). |
+| A. Discovery | Devices appear without an address; saved devices survive DHCP changes with explicit confirmation before pairing. | Additive discovery contract; allocate a protocol minor only when reviewed capabilities changes land. |
+| C. Authenticated local pairing | Reviewed design for mutual authentication and scopes on the LAN. | Proposed `local.auth`; transport, endpoints and version remain behind the design gate. |
 
 Discovery never depends on pairing and never describes a discovered device as
 authenticated. Pairing is a trust-model change and gets its own review gate
@@ -39,24 +44,26 @@ Facts from the code that constrain the design:
   `/config`, `/orient`, `/audio_test`, `/ws/signal`, `/ws/term`,
   `/v1/pull_stream`, 55 `/v1/*` REST paths, and the static web client at `/`
   and `/vendor/*`. The virtual-microphone, camera-ingest, and audio listeners
-  bind loopback only. Any authenticated-only mode must cover exactly this list.
+  bind loopback only. Any authenticated-only mode must refresh and cover this
+  inventory, including endpoints added by concurrent work, not a fixed path count.
 - `DeviceID` is generated only when a relay entry exists
   (`core/net/RelayClient.mm`). A public LAN-only package has no stable
   identity today. The policy plist is written under an atomic lock shared with
   relay approval (`core/config/LocalAccess.mm`).
 - Direct-LAN signaling in `core/net/Term.mm` sends an `open` envelope without
   scopes; the session receives every DataChannel.
-- The daemon links Mbed TLS 3.6.6 (`third_party/webrtc/build-ios.sh`), so
-  P-256 ECDH/ECDSA, HKDF, and AES-GCM exist on the device without a new
-  dependency. SpringBoard already reports `UIDevice.name` through the device
+- The daemon build pins Mbed TLS 3.6.6 (`third_party/webrtc/build-ios.sh`).
+  It is a transport/crypto implementation candidate; verify required modules,
+  entropy and each architecture rather than inferring a qualified new protocol
+  from existing DTLS linkage. SpringBoard reports `UIDevice.name` through the device
   info query and already presents `UIWindow` overlays above alerts.
 - The iOS app validates every local target through `LocalDeviceAddress`
   (private IPv4 or ULA literal), probes capabilities through an isolated
   `URLSession`, allows plaintext WebSocket only for the exact validated
   endpoint, and now probes saved addresses for reachability.
   `RemoteControlView` knows whether a session is local but shows it only in the
-  transient connection label. The controller identity is a Secure Enclave
-  P-256 key per relay.
+  transient connection label. The controller identity is a P-256 key per relay;
+  the current abstraction supports Secure Enclave and a software fallback.
 - No Bonjour or mDNS code exists in the repository.
 
 ## Invariants
@@ -69,17 +76,18 @@ Facts from the code that constrain the design:
    They grant nothing, and before Increment C they cannot silently replace a
    saved device's address.
 4. TXT records carry no UDID, serial number, hostname, relay origin, token,
-   or controller identity. The one stable value they carry, the device
-   identity, is a random value with no relation to hardware or relay secrets.
+   signing-key fingerprint, persistent device ID, or controller identity.
 5. No subnet scan, background discovery service, global ATS exception, TLS
    validation bypass, or implicit Relay-to-LAN or LAN-to-Relay fallback.
-6. Access path (LAN or Relay signaling) and media route (direct, reflexive,
-   relayed ICE pair) are distinct facts and are shown as such. A Relay session
+6. Access path (LAN or Relay signaling) and media route (direct, TURN, unknown)
+   are distinct facts. Server-reflexive is a candidate type, not another access
+   mode. A Relay session
    with a direct media path is still a Relay session.
 7. Existing saved profiles, iOS 14 device runtime support, rootful and
    rootless packaging, and the controller's minimum iOS stay intact.
-8. Every increment lands with its protocol document and fixtures before code
-   that depends on them, and none changes the relay contract.
+8. Contract changes land with documents and fixtures before dependent code.
+   Discovery and the badge do not change relay auth; delegated local pairing
+   would be an explicit additive relay contract requiring its own review.
 
 ## Increment B: Access Path Always Visible
 
@@ -87,15 +95,16 @@ Smallest change, no protocol impact, ships first.
 
 - `RemoteSessionModel` publishes `accessPath` (`lan(LocalDeviceAddress)` or
   `relay(host:)`) derived once from the connection target and never mutated
-  for the life of the session, plus `mediaRoute` (`direct`, `reflexive`,
-  `relayed`, `unknown`) and round-trip time sampled every 3 s from the
-  selected ICE candidate pair in the PeerConnection statistics report.
-  Sampling stops while suspended.
+  for the life of the session. Optional diagnostics add `mediaRoute`
+  (`direct`, `relayed`, `unknown`) and round-trip time from the selected ICE
+  pair and both candidate types. Sampling stops while suspended and clears
+  stale values. Diagnostics must not delay shipping the access-mode indicator;
+  ICE RTT is not measured end-to-end input latency.
 - `RemoteSessionHeader` gets a chip beside the device name: `LAN` in the
   healthy tone or `Relay` in the signal tone, visible in every state including
   connecting, reconnecting, and failed. The subtitle becomes
-  `<state> · <endpoint> · <route>`, for example
-  `Live screen · 192.168.1.20 · direct` or `Live screen · relay.example · TURN`.
+  the session state. Full endpoints and route details belong in Session Controls
+  instead of competing with device names in a compact header.
 - `RemoteToolsSheet` adds a read-only `Connection` block: path, endpoint,
   route, RTT, protocol version, and whether the session is scoped. Once
   Increment C ships it also shows `Authenticated` or `Trusted network`.
@@ -114,56 +123,46 @@ implicitly.
 
 | Question | Decision | Alternatives and why not |
 |----------|----------|--------------------------|
-| Device advertisement | `DNSServiceRegister` from `<dns_sd.h>` inside `rctld` on a serial dispatch queue. | `NSNetService` (deprecated wrapper of the same responder); an embedded UDP 5353 responder (contingency only, if the system responder refuses a root daemon during qualification). |
+| Device advertisement | `DNSServiceRegister` from `<dns_sd.h>` inside `rctld` on a serial dispatch queue. | No embedded UDP 5353 fallback: diagnose system responder failures and retain manual IP; a second responder needs separate justification. |
 | iOS discovery | `NWBrowser` with `.bonjourWithTXTRecord`, in `RctlRealtime` next to the LAN client. | `NetServiceBrowser` (deprecated); `DNSServiceBrowse` (no benefit on iOS 16). |
-| Resolution | A bounded `NWConnection` to the service endpoint, reading the resolved `hostPort`; the literal then goes through the unchanged `LocalDeviceAddress` validation. | Handing service endpoints to `URLSession` (bypasses private-range and exact-target checks). |
-| Instance name | The device's user-visible name from `UIDevice.name`, as AirPlay, printers, and `_ssh._tcp` do. Bonjour resolves collisions. | A generic `rctl` name (privacy-neutral but two iPads become `rctl` and `rctl (2)`, which defeats the feature). The unauthenticated `/v1/deviceinfo` already returns the name to anyone on the LAN, so the record adds no exposure. |
-| Stable identity in TXT | Yes, a random 32-hex `id`, so saved entries survive address changes. | No identity (forces manual confirmation of every DHCP change). Trade-off: the identity is linkable across networks; documented under Privacy below. |
+| Resolution | Bounded `DNSServiceResolve` plus `DNSServiceGetAddrInfo`, validating addresses before any application TCP connection; retain interface provenance and pin the chosen literal. | Connecting first with NWConnection can contact a prohibited destination before validation. Service URLs also bypass the current exact-target boundary. |
+| Instance name | Generic `rctl` by default, with Bonjour collision handling and full endpoint disambiguation. Personal names require explicit opt-in. | Broadcasting a name increases passive exposure even when an API already returns it on request. |
+| Stable identity in TXT | Defer until justified; service identity and explicit selection suffice for first discovery. If introduced, use a separate local hint, never relay DeviceID or an authorization key. | Unsigned IDs do not enable safe silent address replacement and add cross-network tracking. |
 | Saved-address refresh | Before pairing: one-tap confirmation in the row. After pairing: automatic, because the verify handshake would fail against a hijacked address. | Silent refresh from an unsigned record (an mDNS spoofer could redirect input to itself). |
 | IPv6 | Not advertised as connectable and not selected until the listener is dual-stack. IPv6-only results show `Unsupported network`. | Accepting ULA now (the daemon cannot accept it). |
 
 ### Service Contract
 
 Service type `_rctl._tcp`, domain `local.`, SRV port equal to the bound HTTP
-port, instance name equal to the device name (UTF-8, truncated at a character
-boundary to 63 bytes). TXT record, one key per entry:
+port, generic instance name bounded to 63 UTF-8 bytes. TXT record, one key per entry:
 
 ```text
 txtvers=1
-id=<random device identity, 32 hex characters>
 pv=<protocol major>.<protocol minor>
-auth=0|1                   # Increment C available on this device
-fp=<unpadded base64url SHA-256 of the device SPKI>   # only when auth=1
 ```
 
 Model, daemon version, and features are deliberately absent: they come from
 the capabilities preflight, which is also where the client verifies them.
-Client limits: 1 KiB aggregate TXT, 64 visible results, bounded strings,
-malformed required keys reject the result before decoding anything else.
+Client limits: 400 encoded TXT bytes, at most 255 bytes per TXT entry,
+64 visible results, 8 candidates per result, and bounded UTF-8 strings.
+Define duplicate-key and malformed-field handling in fixtures.
 
-`id` is generated on first daemon start for every package, stored under the
-existing plist lock, and reused as the relay `DeviceID` when a relay is
-enrolled later. Installations that already have a relay `DeviceID` keep it.
+No relay identity migration or capabilities identity object is required for
+discovery. A future unsigned identity can detect accidental inconsistencies but
+cannot authenticate or merge saved devices. Allocate protocol versions when
+changes land, accounting for concurrent work rather than reserving minor 1.2.
 
-`GET /v1/capabilities` gains an optional `device` object in protocol minor
-1.2: `{ "device": { "id": "…", "name": "Kitchen iPad", "model": "iPad8,1" } }`.
-Receivers ignore unknown fields within a major. The client compares
-`device.id` with the TXT `id` after resolving; a mismatch marks the result
-stale. This is a consistency check, not authentication.
-
-Artifacts: `protocol/discovery-v1.md` (keys, limits, lifecycle),
-`capabilities.schema.json` update, 1.1 and 1.2 capabilities fixtures,
-synthetic TXT fixtures (valid, unknown key, oversized, malformed, duplicate
-name), and `discovery_txt_bytes` in `protocol/limits.json`.
+Artifacts: `protocol/discovery-v1.md` (keys, limits, lifecycle), synthetic TXT
+fixtures (valid, unknown key, oversized, malformed, duplicate name), and a
+reviewed `discovery_txt_bytes` limit. Capabilities changes require a separate
+consumer and compatibility fixtures before implementation.
 
 ### Privacy
 
-The TXT `id` is a stable identifier broadcast on every network the iPad
-joins. The daemon already exposes far more to any LAN peer, and the product
-documents that port 8080 is for trusted networks only, so this is accepted
-rather than mitigated. It is revisited if the daemon ever gains a
-network-aware policy. The device name is not a new exposure for the same
-reason. Nothing in the record links to relay origins or credentials.
+Do not accept extra passive disclosure merely because active unauthenticated
+queries already exist. TXT excludes tracking identifiers, names, fingerprints,
+model and relay information by default. Bonjour SRV may still expose the system
+hostname; a generic service name is data minimization, not network anonymity.
 
 ### Device Side
 
@@ -174,9 +173,9 @@ New `core/net/LocalDiscovery.{h,mm}`:
   shutdown and on a policy transition. Relay-only mode never registers. A
   daemon crash drops the registration because the responder connection dies;
   restart must not accumulate entries.
-- The name comes from the SpringBoard device-info query, with `rctl iPad` as
-  the fallback while SpringBoard is not answering; the record is updated
-  through `DNSServiceUpdateRecord` when the name arrives or changes.
+- The generic name avoids depending on SpringBoard readiness. TXT may be
+  updated through `DNSServiceUpdateRecord`; changing the service-instance name
+  requires an appropriate registration lifecycle, not a TXT update.
 - `kDNSServiceInterfaceIndexAny`; the responder chooses interfaces. Name
   conflicts, interface changes, and responder failures are logged with the
   `DNSServiceErrorType` and retried with bounded backoff (1 s doubling to
@@ -196,15 +195,18 @@ resolves it with `dns-sd -L`.
 `RctlRealtime` gains transport-level types, no views:
 
 - `LocalDeviceBrowser`: starts `NWBrowser` on demand, publishes bounded
-  `[DiscoveredDevice]` (identity, name, protocol version, `auth`, `fp`,
+  `[DiscoveredDevice]` (service identity, name, protocol version,
   endpoints per interface), groups results from several interfaces by service
   identity, debounces churn, and maps `.waiting` with `kDNSServiceErr_PolicyDenied`
   to a `permissionDenied` state. Cancels on dismissal, backgrounding, and
   network changes; stale callbacks from a superseded browse are ignored.
 - `LocalDeviceResolver`: resolves at most four results concurrently, each
-  bounded to 5 s, prefers an RFC 1918 IPv4 literal, and reports
+  bounded to 5 s, validates before opening any application connection, selects
+  an RFC 1918 IPv4 literal, and reports
   `unsupportedAddressFamily` for IPv6-only results. Output is a
   `LocalDeviceAddress`, so every downstream check stays unchanged.
+  Coordinate this budget with saved-address preflight probes; cap candidates
+  per service at eight and do not spawn an unbounded probe on every TXT update.
 
 The app:
 
@@ -217,27 +219,28 @@ The app:
   automatically whenever Devices is visible and the scene is active, and stops
   otherwise. Denied permission shows a callout with `Open Settings`; manual
   entry stays visible and states that it needs the same permission.
-- `LocalDeviceProfile` v2 adds `deviceID: String?`, `source`, and `lastSeen`;
-  `address` becomes last-known. Storage key `rctl.controller.local-devices.v2`
-  with a one-time migration that keeps every v1 entry and its UUID. Duplicates
-  are detected by identity when present, otherwise by exact endpoint; never by
-  display name.
+- Retain `LocalDeviceProfile` v1 UUID, address and custom name; transient browse
+  results do not require a storage migration. Deduplicate saved entries only
+  by exact endpoint or subsequently proven paired identity. If v2 becomes
+  necessary, qualify migration, rollback and preservation of every v1 entry.
 - `Nearby` rows show name, resolved address when available, and a
   `Discovered` chip; same-name devices are told apart by address. Tapping
   resolves if needed, runs the capabilities preflight, opens View mode, and
-  offers `Save`. Saved devices that are currently advertised show `Online`
-  from the browse result instead of a separate probe; a changed address shows
-  `Address changed · Use` and is applied only on tap until the device is
-  paired. `Add by address` stays in the same group and is emphasized when
+  offers `Save`. Advertisement alone shows `Discovered`; `Reachable` requires
+  bounded preflight, coordinated with existing probes. A changed address shows
+  `Use for saved device` with explicit selection/confirmation; do not infer
+  the association from an unsigned name or ID. Once paired, prove the pinned
+  identity before committing any new address. `Add by address` stays in the same group and is emphasized when
   browsing is denied or finds nothing within 6 s.
 
 ### Manual Fallback
 
-Manual entry is not deprecated. It is the only path for USB tunnels
-(`iproxy`), multicast-filtering or client-isolated networks, and a device
-whose responder failed. A manual entry later seen through discovery is merged
-by identity, not duplicated. Discovery never edits a manual entry's address
-without the confirmation above.
+Manual entry handles blocked multicast or responder failure only if unicast
+is reachable. Client isolation can block both paths. Denied Local Network
+permission affects both paths too. Ordinary Mac iproxy is not implemented by
+this native iPhone flow: localhost is device-relative and the current address
+policy rejects loopback. Discovery never merges manual entries by an unsigned
+ID or edits their address without explicit confirmation.
 
 ### Failure States
 
@@ -247,7 +250,7 @@ without the confirmation above.
 | No results within 6 s | Quiet hint "No devices found. Add by address." Browsing continues. |
 | Result resolves to a public, loopback, multicast, or link-local address | `Unsupported network`; not connectable; nothing saved. |
 | IPv6-only result | `Unsupported network` with the IPv6 reason. |
-| TXT `id` and capabilities `device.id` differ | Result marked stale and dropped; a saved entry keeps its last address. |
+| Conflicting or changing resolution results | Discard stale attempt; a saved entry keeps its last confirmed address. |
 | Advertised major differs | `Incompatible` with both majors; not connectable. |
 | Relay-only device | Not advertised; a saved entry shows `Offline`. |
 | Result flood or oversized TXT | Rejected before decoding; at most 64 rows. |
@@ -257,15 +260,17 @@ without the confirmation above.
 - Package tests: TXT bounds, identity matching, resolver rejection of every
   unsupported family and range, v1 store migration, deduplication rules,
   interface grouping, cancellation and stale-callback handling, and browser
-  state mapping with an in-process `NWListener` advertising `_rctl._tcp` on
-  loopback (the pattern in `RealtimeLifecycleTests`).
+  state mapping with deterministic adapters. Existing loopback WebSocket tests
+  do not prove Bonjour behavior; test real system registration separately.
 - App tests: `Nearby` rendering with synthetic results, denied state,
   address-change confirmation, and no capture or signaling during browsing.
 - Physical matrix: two iPads with the same name on port 8080; DHCP change
-  while the app is open; Relay-only toggle withdraws the service within 5 s;
+  while the app is open; Relay-only toggle tears down registration and closes
+  access immediately, with remote-cache convergence measured separately;
   daemon restart re-registers once; rootful iOS 14 and rootless targets; iOS
   16, 17, and current on the controller; WAN disconnected; guest Wi-Fi and
-  client isolation fall back to manual entry with the right message; VPN on
+  client isolation report unreachable unicast without promising manual entry
+  can bypass it; VPN on
   and off without toggling it silently; browsing CPU, memory, and request
   rate profiled.
 
@@ -287,8 +292,19 @@ migration, browser impact, and recovery, and the decisions are recorded in
 
 The network is hostile: an attacker sees, modifies, and injects LAN traffic,
 runs a look-alike `_rctl._tcp` service with any name and TXT, and reaches port
-8080. The attacker cannot see the iPad screen, read root-owned files on the
-iPad, or use the Secure Enclave key on the phone.
+8080. In today's open mode the attacker can use existing screen, terminal and
+file APIs; we cannot assume the screen or root-owned files are private merely
+because the attacker started without physical or root access. Pre-existing
+device compromise cannot be repaired by a pairing ceremony.
+
+Before displaying a secret QR or creating a device key, enter a protected setup
+state through genuine local owner action or authenticated provisioning. Deny
+new untrusted requests and close existing screen/camera streams, recordings,
+downloads, terminals and remote input, including viewers without pairing rights.
+Do not let remote input press Allow. Protect every capture path rather than
+simply hiding an overlay from one renderer. If quiescence fails, pairing must
+not begin. Persist this protection across crashes until explicit owner recovery;
+never automatically restore the open listener after a failed ceremony.
 
 Required properties:
 
@@ -306,14 +322,15 @@ Required properties:
 
 ### Identities
 
-- Device: a long-term P-256 key generated by `rctld` on first start with
-  Mbed TLS, stored as DER in a root-owned 0600 file beside the policy plist,
-  under the same lock, independent of relay identity, preserved across package
-  upgrades and rollback. The random `id` from Increment A stays the
-  identifier; `fp` is the SHA-256 of the SubjectPublicKeyInfo; the controller
-  pins the pair. A wipe creates a new identity that the controller treats as a
-  different device.
-- Controller: a non-exportable Secure Enclave P-256 key per paired device
+- Device: create the long-term key only after protected setup is established.
+  Select the algorithm through the reviewed transport; P-256 through existing
+  Mbed TLS is a candidate. Use atomic root-owned storage and independent local
+  identity, preserving it across supported upgrades. Mode 0600 does not protect
+  the key from the root daemon's remote file API; enforce that boundary too.
+  Root-terminal grants remain high-trust. The trusted fingerprint comes from
+  pairing, never TXT. A wipe requires explicit re-pairing.
+- Controller: a separate key per paired device, preferring Secure Enclave and
+  documenting/testing the actual software fallback policy,
   through `KeychainControllerStore` with a `local:<device-id>` namespace, so
   revoking or losing one device affects nothing else. Relay refresh
   credentials are never sent to a LAN endpoint.
@@ -322,142 +339,101 @@ Required properties:
 
 Two bootstrap paths produce the same controller record on the device.
 
-Path 1, QR on the device screen (works without a relay):
+Path 1, owner-opened QR ceremony (works without a relay):
 
-```text
-Controller                                             Device
-  POST /v1/local/pairings
-  {v:1, controller:{name,platform}, epk_c, scopes}  ->
-                                                       creates pairing_id, secret (32 bytes), epk_d
-                                                       SpringBoard overlay shows QR {v:1, id, p:pairing_id, s:secret}
-                                                       and lists controller name + requested scopes, with Cancel
-  <- {pairing_id, expires_at (<= 120 s), epk_d}
-  scans QR with the existing scanner
-  K = HKDF-SHA256(ECDH(epk_c, epk_d) || secret,
-                  salt="rctl-local-pair-v1", info=pairing_id||epk_c||epk_d)
-  POST /v1/local/pairings/{id}/claim
-  {ct: AES-256-GCM_K(n=1, {spki_c, sig_c}, aad=pairing_id)} ->
-                                                       wrong secret => AEAD failure; verifies sig_c; stores record
-  <- {ct: AES-256-GCM_K(n=2, {device_id, spki_d, sig_d, controller_id, scopes})}
-  verifies sig_d; requires SHA-256(spki_d) == fp when advertised; pins (id, fp)
-```
+1. The owner enters protected setup; the daemon confirms that untrusted capture,
+   input and file/terminal access are closed before generating pairing material.
+2. Display a short-lived high-entropy QR through a trusted local UI, bound to
+   the device key and one pairing window. Never expose its secret through an
+   unauthenticated endpoint, log, saved screenshot or recording.
+3. Scan on the controller, authenticate the encrypted channel against that trust
+   anchor, and obtain deliberate approval of the exact controller and scopes.
+4. Atomically consume the claim and persist identities/permissions. Define
+   idempotent retry, cancellation, expiry and lost-response behavior.
 
-Signed strings, UTF-8 with newline separators, mirroring `rctl-pair-v1`:
+The reviewed transport must specify the actual wire ceremony. The earlier
+custom ECDH/HKDF/GCM recipe is retained only in the original draft, not approved
+as an implementation spec. High-entropy secrets remove a low-entropy guessing
+problem but do not prove the rest of a protocol correct.
 
-```text
-sig_c: rctl-local-pair-v1\n<pairing_id>\n<epk_c>\n<epk_d>\n<b64url sha256(spki_c)>
-sig_d: rctl-local-pair-v1\n<pairing_id>\n<epk_d>\n<epk_c>\n<b64url sha256(spki_d)>\n<b64url sha256(spki_c)>
-```
-
-Physical presence comes from the screen: only someone who sees the iPad can
-read the secret. Fresh ECDH gives forward secrecy; the 256-bit secret makes
-a man-in-the-middle fail without a PAKE. AES-GCM nonces are the 96-bit
-big-endian message sequence and `K` is used once per direction. One active
-pairing per device; a new request replaces and dismisses the previous one.
-Limits: 3 requests per minute per source, 10 per minute total, five failed
-claims lock pairing for 60 s. The secret lives only in daemon memory and on
-the screen, is never logged or returned, and dies on claim, expiry, or
-Cancel. Open decision 2 below considers an additional `Allow` tap on the iPad.
+One active owner ceremony may not be replaced by an unauthenticated request.
+Return bounded busy/rate-limit responses; apply both per-source and global
+limits, with deterministic tests for distributed cancellation/claim floods.
+Limits and lockout must not turn remote abuse into permanent owner lockout.
 
 Path 2, relay-delegated grant (no device interaction):
 
 A relay administrator, already trusted to approve devices and create
 controllers, grants an existing relay controller local access to a device.
-The relay sends the controller's SPKI, name, and scopes to the device over the
-authenticated relay WebSocket as a `local_grant` message; the device stores
-the same controller record. The controller learns the device identity (`id`,
-`fp`) through the signed `GET /api/controller/devices` response, pins it, and
-proceeds with the session handshake below. This adds no trust: a relay
-compromise already yields full control through the tunnel. Relay-side scope
-selection reuses the existing controller scope UI; the local scope set may be
-narrower than the relay scopes but never wider.
+The proposed additive relay grant must bind the device identity, a distinct
+local controller key, exact scopes, expiry and a single-use identifier over the
+existing authenticated channel. Device-key information reaches the controller
+through authenticated TLS and a reviewed binding, not merely a signed request
+to an endpoint (request signatures do not sign the response). Do not reuse a
+relay refresh/admin credential or automatically import the relay signing key.
+Persistent local access is a new delegated authority even if relay admins
+already control the device; require explicit consent and define whether later
+relay revocation also revokes the local grant. This requires its own contract
+and tests, and cannot silently be considered an unchanged relay protocol.
 
-Rejected: zero-interaction ownership (no trust anchor exists), first-claimant
-wins (invariant 3 in the threat model), and a numeric PIN for v1 (needs a
-reviewed PAKE such as SPAKE2+, and iOS exposes no public group arithmetic;
-the screen makes a high-entropy QR simpler and stronger). A PIN path can be
-added later without changing the identity model.
+Rejected: zero-interaction ownership without prior trust and first-claimant
+wins. A short PIN would need a reviewed PAKE implementation, online limits and
+its own platform qualification. It is not interchangeable with a high-entropy
+out-of-band QR; neither makes the complete protocol automatically secure.
 
 ### Scopes
 
-The scope set is the one in `CONTROLLER-AUTH.md` plus `local.manage` for
-listing and revoking local controllers. The app requests `screen.view`,
-`device.control`, `audio.listen`, `microphone.talk`, `camera`, `files.read`,
-and `files.write` by default; `terminal`, `system.destructive`,
-`device.update`, and `local.manage` are opt-in under `Advanced access` in the
-pairing sheet. The overlay or the relay admin sees the requested set before
-granting; the device grants exactly what was requested, never more.
+Reuse the scope vocabulary in `CONTROLLER-AUTH.md`, with a separately reviewed
+`local.manage` grant for management. Default to `screen.view`; control, audio,
+camera, microphone and files are deliberate choices, while terminal, update and
+destructive actions remain advanced/high-trust. The owner approves the exact
+set bound to both identities through the authenticated ceremony. Device-side
+scopes come from stored grants, never client-supplied labels or TXT capabilities.
 
 ### Session Channel
 
-All authenticated local traffic runs through one WebSocket,
-`GET /v1/local/session` (with the canonical `media=camera` query for camera
-sessions). The upgrade is signed with the relay request-proof format so the
-device rejects unknown controllers before allocating anything:
+Every protected operation needs authenticated encryption, including management,
+files, commands and signaling. Authenticate before WebSocket upgrade or resource
+allocation. Bind the WebRTC DTLS fingerprint to the authenticated signaling
+channel. Passing server-derived scopes into the existing open envelope is
+necessary but not sufficient: REST, stream downloads and terminals need the
+same principal and revocation boundary. This is more than a codec layer.
 
-```text
-X-RCTL-Controller: <controller_id>
-X-RCTL-Timestamp: <unix-seconds>
-X-RCTL-Nonce: <unpadded-base64url random 16..32 bytes>
-X-RCTL-Signature: <unpadded-base64url ECDSA DER signature>
-```
-
-The signed bytes are the `rctl-request-v1` canonical string with the token
-id replaced by `controller_id`. The device accepts 300 s of skew, keeps a
-bounded nonce cache (512 entries or the skew window), and answers a skew
-failure with `401` plus `device_time` so the client retries once with an
-offset. A replayed nonce is a hard `401` without a hint.
-
-After the upgrade, a two-round verify handshake authenticates both sides and
-derives directional keys; every later envelope is sealed:
-
-```text
-controller -> {type:"verify", epk_c2, nonce_c}
-device     -> {type:"verify", epk_d2, nonce_d, sig_d over transcript}
-controller -> {type:"verify", sig_c over transcript}
-K_s   = HKDF-SHA256(ECDH(epk_c2, epk_d2), salt="rctl-local-session-v1",
-                    info=controller_id||device_id||nonce_c||nonce_d)
-K_c2d = HKDF-Expand(K_s, "c2d");  K_d2c = HKDF-Expand(K_s, "d2c")
-then: {type:"sealed", n:<sequence>, ct:<AES-256-GCM_Kdir(inner JSON, nonce=n, aad=n)>}
-```
-
-The transcript is every verify field in order; the controller checks
-`sig_d` against the pinned `fp`. Each direction has its own key and a strictly
-increasing sequence from 1; a gap, repeat, or wrap closes the socket. Inner
-messages are the existing signaling envelopes plus management requests
-(`controllers.list`, `controllers.revoke`), so `Term.mm` and
-`RctlRealtimeSession` keep their state machines and gain a codec layer, and
-no authenticated data ever rides plaintext REST. The device-side `open`
-envelope carries the granted scopes, making `controller.scoped_sessions` the
-single DataChannel gate on both the relay and the authenticated LAN path.
-
-Because the SDP travels sealed, a man-in-the-middle cannot substitute the DTLS
-fingerprint, and DTLS-SRTP then protects media and DataChannels end to end.
+Reuse signing helpers only with explicit local domain separation and binding
+to device, controller, method/path/body and validity. Define authenticated clock
+correction if time-based proofs remain. A bounded nonce cache must never evict
+still-live replay protection to admit more work: reject excess work or use a
+reviewed bounded session/challenge design. Test cache saturation, expiration,
+restart, parallel requests and lost responses. Do not infer anti-replay safety
+from a numeric cache limit alone.
 
 ### Transport Decision
 
-Sealed channel now, TLS later, for these reasons: it covers the whole native
-surface with no certificate lifecycle, no trust-evaluation code in the app,
-and no changes to the hand-written HTTP server's socket loop; and the browser
-client, the only consumer that would benefit from TLS, cannot pin a device
-certificate without a per-client profile install, so TLS alone would not make
-the browser's LAN path authenticated. TLS on port 8080 with Mbed TLS (already
-linked) is the recorded follow-up, triggered by browser local authentication
-or by a need to protect legacy REST on the LAN. The sealed channel is
-transport-agnostic and moves under TLS unchanged. Before implementation, a
-short spike confirms URLSession WebSocket behavior with signed upgrades and
-address changes on iOS 16, and Mbed TLS AES-GCM and ECDH on the iOS 14 daemon
-runtime.
+Prefer a standard TLS-based prototype with pairing-anchored device trust and
+maintained implementations. It protects both native REST and WebSocket traffic;
+TLS alone does not solve authorization or browser certificate UX. Prototype
+device key storage, IP changes, narrow trust evaluation, URLSession WSS, the iOS
+14 daemon, rootless packaging and browser interoperability before final choice.
+Do not accept arbitrary self-signed certificates or global TLS bypasses.
+
+A maintained reviewed Noise/PAKE-based alternative may be considered if a
+concrete platform constraint rules out TLS. It must cover every protected path
+with bounded framing, cancellation, errors and lifecycle semantics. Do not ship
+the bespoke sealed-channel draft just to avoid certificate integration: it
+still introduces trust evaluation, protocol maintenance and a new RPC boundary.
+Record prototype evidence and an explicit decision before allocating wire APIs.
 
 ### Policy Modes And Enforcement
 
-`LocalAccessEnabled` becomes a three-state `LocalAccessMode`; the boolean keeps
-its meaning for existing installations.
+The ADR evolves `LocalAccessEnabled` into explicit policy states while preserving
+the boolean's meaning for existing installations. Protected setup is a required
+phase; its exact persistence representation must be decided and crash-tested.
 
 | Mode | HTTP bind | Unauthenticated surface | Native controllers |
 |------|-----------|-------------------------|--------------------|
-| `lan-open` (today's default) | all interfaces | everything, as today | paired controllers use `/v1/local/session`; unpaired ones may still use `/ws/signal` |
-| `lan-paired` | all interfaces | `/v1/capabilities`, `/v1/local/pairings*`, static files for a future browser login | only paired controllers with their scopes |
+| `lan-open` (today's default) | all interfaces | everything, as today | unpaired trusted-network access; paired app access does not secure the device as a whole |
+| protected setup | network surface restricted before secrets exist | explicitly reviewed bootstrap/health allowlist only | no untrusted streams, input, terminal or file sessions; persists safely on crash |
+| `lan-paired` | protected authenticated listener(s), chosen by transport ADR | explicitly reviewed bootstrap/health allowlist only, no wildcard pairing-management exemption | only paired controllers with their scopes |
 | `relay-only` | loopback | none from the network | none |
 
 `lan-paired` is enforced at the request dispatcher, not per handler, against
@@ -465,50 +441,54 @@ the full inventory in Current Implementation: `/stream`, `/input`, `/key`,
 `/config`, `/orient`, `/audio_test`, `/ws/signal`, `/ws/term`,
 `/v1/pull_stream`, and every `/v1/*` path except the allow list return `403`
 from the network. A host test asserts the inventory against the dispatcher
-so a new endpoint cannot bypass the mode unnoticed. Switching to `lan-paired`
-requires at least one paired controller with `local.manage`, a confirmation
-token bound to `local_access:lan-paired`, and restarts like Relay-only.
-`rctld --local-access lan` remains the SSH recovery to `lan-open`. Until the
+so a new endpoint cannot bypass the mode unnoticed. The principal must be checked
+before upgrade/dispatch and existing sessions must be closed too. Loopback
+reachability is not proof of relay-admin authority. Protected setup precedes
+key creation; finishing setup requires an approved recovery-capable controller
+and an explicit policy transition. Decide whether protected setup is a separate
+persisted mode or an internal phase in the ADR. Reopening LAN through the local
+SSH recovery command requires informed owner action and key-exposure warnings,
+never an unauthenticated web reset. Until the
 browser client has local authentication, `lan-paired` makes the web page
 unusable from the network; the admin page says so before confirming.
 
-On the controller, a device with a pinned identity is always opened through
-`/v1/local/session`. If the device answers without `local.auth` or with a
+On the controller, a device with a pinned identity always uses the authenticated
+transport selected by the ADR. If the device answers without `local.auth` or with a
 different identity, the app shows `Identity changed` with both fingerprints
 and `Forget and pair again`; it never falls back to `/ws/signal` for a
 pinned device.
 
 ### Revocation And Recovery
 
-- `controllers.list` and `controllers.revoke` over the sealed channel require
+- Controller list and revoke operations over the authenticated channel require
   `local.manage`; revocation closes that controller's sessions within one
   second. Relay administrators reach the same operations through the
   authenticated relay tunnel, so a lost phone is revocable without the phone.
 - The app lists paired devices with fingerprint, scopes, and `Forget`, which
-  deletes the pin and the Secure Enclave key.
+  deletes the local pin/key. Forget is not remote revocation; offer those as
+  distinct operations and explain offline revocation limitations.
 - Device key replacement (wipe or explicit reset through the SSH CLI) requires
   re-pairing every controller; the daemon never rotates the key silently.
-- Package upgrade and rollback preserve the key file and controller records;
-  a downgrade to a daemon without `local.auth` leaves `lan-paired` devices
-  reachable only through `rctld --local-access lan` over SSH, which the
-  release notes must state.
+- Supported upgrades preserve key/records and policy atomically. An older daemon
+  does not understand a new policy automatically: test compatibility or block
+  unsupported downgrade before secure mode is enabled. No rollback may silently
+  reopen an unauthenticated listener. Record a tested local recovery path.
 - Audit: pairing creation, claim success or failure, grants, and revocations
   are logged with controller ids and source addresses, never secrets or keys.
 
 ### Contracts And Fixtures
 
-- `protocol/local-auth-v1.md`: pairing, relay grant, signed upgrade, verify
-  handshake, sealed envelope, limits, state diagrams, and error codes.
-- `protocol/schemas/local-auth.schema.json`; `signaling-v1.md` gains the
-  sealed transport section without changing inner messages; the relay
-  device protocol gains `local_grant`.
+- First deliver the ADR: threat/bootstrap, standard transport evidence, complete
+  endpoint/principal inventory, atomic policy transitions, migration and recovery.
+  Then specify `protocol/local-auth-v1.md` and matching schemas/limits for the
+  chosen transport. A proposed relay grant requires an explicitly versioned
+  additive contract, not reuse of credentials or assumptions about old relays.
 - Fixtures under `protocol/fixtures/local-auth/`: golden pairing and verify
   exchanges with test keys, wrong-secret claim, replayed nonce, mismatched
   fingerprint, out-of-order sequence, oversized and malformed messages, and a
-  future-minor sealed envelope.
-- `protocol/limits.json` adds `local_pairing_json_bytes` and
-  `sealed_envelope_bytes`. Protocol minor becomes 1.2 with feature
-  `local.auth` alongside Increment A's `device` object.
+  future-minor extension under the selected transport.
+- Allocate protocol minor and `local.auth` only after the contract is reviewed;
+  do not couple this to discovery or presume minor 1.2 is still available.
 
 ### Tests And Acceptance
 
@@ -518,17 +498,23 @@ pinned device.
 - Swift package tests: the same vectors, key namespacing, pinning,
   identity-change detection, sequence enforcement, and downgrade refusal.
 - Security cases: man-in-the-middle during pairing, replayed claim, replayed
-  upgrade, SDP tampering under the sealed channel, look-alike service with a
+  upgrade, SDP tampering under the authenticated channel, look-alike service with a
   copied TXT record, scope escalation by editing the request, revoked
   controller mid-session, skew beyond the window, and a legacy endpoint
-  probed in `lan-paired` mode.
+  probed in `lan-paired` mode. Include already-open viewers when pairing starts,
+  synthetic key-file reads through root APIs, remote Allow input, distributed
+  pairing replacement, replay-cache saturation, unauthenticated clock injection,
+  process crashes and old-package downgrade. Never expose real keys in tests.
 - Physical: pairing from an overlay scan in under 30 s; relay-delegated grant
   end to end; pairing survives daemon restart and package upgrade;
   `lan-paired` blocks an unpaired phone and the browser with the documented
   message; relay-side revocation; `Forget` then re-pair; identity change after
   a wipe.
 
-Acceptance: an attacker on the same network cannot claim ownership by racing,
+Design acceptance: reviewed ADR, prototype evidence, endpoint/principal matrix,
+accepted owner bootstrap, browser impact and tested recovery plan. Runtime code
+requires a separately accepted implementation plan. Its security target is that
+an attacker on the same network cannot claim ownership by racing,
 spoofing Bonjour, replaying a grant, or using an overlooked legacy endpoint; a
 device in `lan-paired` mode cannot be controlled by an unpaired client; the
 relay path and `lan-open` behavior are unchanged for existing installations.
@@ -537,9 +523,9 @@ relay path and `lan-open` behavior are unchanged for existing installations.
 
 ```text
 B. Access path      model + header + tools sheet                        (no protocol change)
-A. Discovery        contract -> daemon identity + advertiser -> iOS browser/resolver -> Devices UI
-C. Local pairing    review gate -> contract -> daemon identity/pairing -> session channel
-                    -> app pairing + pinning -> relay grant -> lan-paired mode
+A. Discovery        contract -> advertiser -> iOS browser/resolver -> Devices UI
+C. Local pairing    source review -> transport/bootstrap prototype -> ADR + recovery/authorization matrix
+                    -> separately accepted runtime implementation plan
 ```
 
 Suggested commits, each verified on its own:
@@ -550,10 +536,6 @@ Suggested commits, each verified on its own:
 4. `feat(ios): discover and connect to local devices`
 5. `test(lan): qualify discovery and lifecycle recovery`
 6. `docs(protocol): specify authenticated local pairing` (review gate)
-7. `feat(daemon): add device identity and local pairing`
-8. `feat(ios): pair, pin, and open sealed local sessions`
-9. `feat(relay): delegate local grants to paired controllers`
-10. `feat(daemon): add the lan-paired access mode`
 
 Unrelated concurrent input and web changes stay out of these commits. Plan
 edits are not deployed.
@@ -562,8 +544,9 @@ edits are not deployed.
 
 1. Ship `lan-paired` with pairing, or hold it until the browser client has
    local authentication so the mode does not disable the web page.
-2. Require an `Allow` tap on the iPad overlay in addition to visibility,
-   defeating a camera pointed at the screen at the cost of one step.
+2. Choose the owner-approved protected-setup UX and recovery procedure. Merely
+   displaying a QR in open mode is not safe; a tap is not physical proof while
+   remote input can synthesize it.
 3. Enable the relay-delegated grant in the first pairing release, or ship the
    QR path first and delegate later.
 
@@ -576,5 +559,7 @@ edits are not deployed.
 - RFC 6762 (Multicast DNS), RFC 6763 (DNS-Based Service Discovery, TXT rules)
 - RFC 5869 (HKDF), RFC 9700 section 4.14.2 (sender-constrained tokens, as
   used by the relay path)
+- [TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446.html): standard transport
+  candidate; pairing trust, authorization and browser UX remain separate.
 - HomeKit Accessory Protocol pair-verify, prior art for the
   ephemeral-then-sign session handshake
