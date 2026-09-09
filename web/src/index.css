@@ -212,6 +212,10 @@
   .aurora-blob { animation: none; }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  button:not(:disabled):not(.cursor-default) { cursor: pointer; }
+}
+
 /* ── Warm theme: terracotta on cream / sand ────────────────────────────────── */
 .warm {
   --color-bg: #f3ead7;

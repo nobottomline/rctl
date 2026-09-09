@@ -312,8 +312,18 @@ static CGImageRef video_frame(NSString *path, CGFloat maxPixel) {
     AVAssetImageGenerator *generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:asset];
     generator.appliesPreferredTrackTransform = YES;
     generator.maximumSize = CGSizeMake(maxPixel, maxPixel);
-    CMTime at = CMTIME_COMPARE_INLINE(asset.duration, >, kCMTimeZero) ? CMTimeMultiplyByFloat64(asset.duration, 0.1) : CMTimeMake(1, 10);
-    return [generator copyCGImageAtTime:at actualTime:NULL error:nil];
+    NSError *error = nil;
+    CGImageRef image = [generator copyCGImageAtTime:kCMTimeZero actualTime:NULL error:&error];
+    if (!image) {
+        // Error domains/codes only: asset paths and metadata are private.
+        static unsigned failures = 0;
+        if (failures++ < 10) {
+            NSError *underlying = error.userInfo[NSUnderlyingErrorKey];
+            NSLog(@"[rctl-media] video thumbnail failed %@:%ld underlying %@:%ld",
+                  error.domain, (long)error.code, underlying.domain, (long)underlying.code);
+        }
+    }
+    return image;
 }
 
 static CGImageRef photo_frame(NSString *path, NSInteger maxPixel) {

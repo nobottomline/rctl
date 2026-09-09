@@ -43,11 +43,29 @@ esac
 say "checking public package artifact"
 dpkg-deb -R "${DEB}" "${WORK}/pkg"
 
-CONTROL_CLIENT="var/mobile/rctl/index.html"
+ARCHITECTURE="$(dpkg-deb -f "${DEB}" Architecture)"
+PREFIX=""
+case "$ARCHITECTURE" in
+  iphoneos-arm) CONTROL_CLIENT="var/mobile/rctl/index.html" ;;
+  iphoneos-arm64)
+    PREFIX="var/jb/"
+    CONTROL_CLIENT="${PREFIX}usr/local/share/rctl/web/index.html"
+    grep -Fx "RCTL_PREFIX='/var/jb'" "${WORK}/pkg/DEBIAN/postinst" >/dev/null || fail "missing rootless install prefix"
+    grep -Fx 'Depends: ellekit, firmware (>= 15.0)' "${WORK}/pkg/DEBIAN/control" >/dev/null || fail "invalid rootless dependencies"
+    [[ ! -e "${WORK}/pkg/Library" && ! -e "${WORK}/pkg/usr" && ! -e "${WORK}/pkg/var/mobile" ]] || \
+      fail "rootless package contains unprefixed payload"
+    ;;
+  *) fail "unsupported package architecture: $ARCHITECTURE" ;;
+esac
 [[ -s "${WORK}/pkg/${CONTROL_CLIENT}" ]] || \
   fail "public .deb is missing the non-empty control client: ${CONTROL_CLIENT}"
-grep -F 'WEB_CLIENT=/var/mobile/rctl/index.html' "${WORK}/pkg/DEBIAN/postinst" >/dev/null || \
-  fail "postinst does not validate the required control client"
+if [[ -z "$PREFIX" ]]; then
+  grep -Fx 'WEB_CLIENT=/var/mobile/rctl/index.html' "${WORK}/pkg/DEBIAN/postinst" >/dev/null || \
+    fail "postinst does not validate the required control client"
+else
+  grep -Fx 'WEB_CLIENT=$RCTL_PREFIX/usr/local/share/rctl/web/index.html' "${WORK}/pkg/DEBIAN/postinst" >/dev/null || \
+    fail "postinst does not validate the rootless control client"
+fi
 grep -F '[ ! -s "$WEB_CLIENT" ]' "${WORK}/pkg/DEBIAN/postinst" >/dev/null || \
   fail "postinst control-client validation does not reject empty files"
 
@@ -55,12 +73,15 @@ RELAY_PLIST="var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist"
 if [[ -e "${WORK}/pkg/${RELAY_PLIST}" ]]; then
   fail "public .deb contains relay config plist: ${RELAY_PLIST}"
 fi
+if [[ -e "${WORK}/pkg/${PREFIX}${RELAY_PLIST}" ]]; then
+  fail "public .deb contains prefixed relay configuration"
+fi
 
 if find "${WORK}/pkg/var/mobile/Library/Preferences" -name 'com.greatlove.rctl.relay.plist' -print -quit 2>/dev/null | grep -q .; then
   fail "public .deb contains relay preference plist"
 fi
 
-APP_PAYLOAD="Library/MobileSubstrate/DynamicLibraries"
+APP_PAYLOAD="${PREFIX}Library/MobileSubstrate/DynamicLibraries"
 for path in \
   "${APP_PAYLOAD}/rctlapp.dylib" \
   "${APP_PAYLOAD}/rctlapp.plist" \
@@ -69,7 +90,7 @@ for path in \
 done
 [[ ! -e "${WORK}/pkg/${APP_PAYLOAD}/rctlappmedia.plist" ]] || \
   fail "rctlappmedia must be loaded by rctlapp, not injected by MobileSubstrate"
-[[ ! -e "${WORK}/pkg/usr/local/lib/rctl/app/rctlappmedia.dylib" ]] || \
+[[ ! -e "${WORK}/pkg/${PREFIX}usr/local/lib/rctl/app/rctlappmedia.dylib" ]] || \
   fail "obsolete app media payload path is present"
 grep -q '/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib' \
   "${WORK}/pkg/DEBIAN/postinst" || fail "postinst does not sign rctlappmedia"
@@ -82,11 +103,11 @@ nm -gU "${WORK}/pkg/${APP_PAYLOAD}/rctlappmedia.dylib" | \
 if strings "${WORK}/pkg/${APP_PAYLOAD}/rctlappmedia.dylib" | grep -F 'MSHookFunction' >/dev/null; then
   fail "rctlappmedia must not install Substrate hooks from the manually loaded image"
 fi
-strings "${WORK}/pkg/usr/local/bin/rctld" | \
+strings "${WORK}/pkg/${PREFIX}usr/local/bin/rctld" | \
   grep -F 'jetsam hard limit configured:' >/dev/null || \
   fail "rctld binary has no runtime jetsam limit configuration"
-UPDATE_BINARY="usr/local/libexec/rctl-updater"
-UPDATE_PUBLIC_KEY="usr/local/share/rctl/update-public-key.pem"
+UPDATE_BINARY="${PREFIX}usr/local/libexec/rctl-updater"
+UPDATE_PUBLIC_KEY="${PREFIX}usr/local/share/rctl/update-public-key.pem"
 [[ -x "${WORK}/pkg/${UPDATE_BINARY}" ]] || fail "public .deb is missing executable updater"
 [[ -f "${WORK}/pkg/${UPDATE_PUBLIC_KEY}" ]] || fail "public .deb is missing update public key"
 grep -qx -- '-----BEGIN PUBLIC KEY-----' "${WORK}/pkg/${UPDATE_PUBLIC_KEY}" || \
@@ -94,7 +115,7 @@ grep -qx -- '-----BEGIN PUBLIC KEY-----' "${WORK}/pkg/${UPDATE_PUBLIC_KEY}" || \
 if grep -q -- 'PRIVATE KEY' "${WORK}/pkg/${UPDATE_PUBLIC_KEY}"; then
   fail "update key payload contains private key material"
 fi
-strings "${WORK}/pkg/usr/local/bin/rctld" | \
+strings "${WORK}/pkg/${PREFIX}usr/local/bin/rctld" | \
   grep -F '/v1/media_delete_token' >/dev/null || \
   fail "rctld has no confirmed media-delete endpoint"
 strings "${WORK}/pkg/${APP_PAYLOAD}/rctlsbcap.dylib" | \

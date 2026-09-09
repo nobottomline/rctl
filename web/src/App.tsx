@@ -29,7 +29,9 @@ export default function App() {
     <div className="fixed inset-0 select-none overflow-hidden bg-black text-white">
       <div
         ref={stageRef}
-        className="fixed inset-0 grid place-items-center"
+        tabIndex={-1}
+        aria-label="Device screen"
+        className="fixed inset-0 grid place-items-center outline-none"
         style={{ touchAction: 'none' }}
         onPointerDown={() => view === 'cc' && setView(null)}
       >

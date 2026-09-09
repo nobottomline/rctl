@@ -43,6 +43,7 @@ enum {
     RCTL_Q_AUDIOOUT = 4,
     RCTL_Q_SCREENSHOT = 5,
     RCTL_Q_MEDIA_DELETE = 6,
+    RCTL_Q_ORIENTATION = 7, // 1B: 255=status, 0=automatic, 1..4=locked interface orientation
 };
 
 #pragma pack(push, 1)

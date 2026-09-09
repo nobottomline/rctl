@@ -64,6 +64,11 @@ owns independent native controller products; neither directory participates in
 the device `.deb` build.
 `scripts/deploy.sh` is the one-command safe deploy.
 
+That deploy path is qualified for rootful only. The experimental rootless lane
+uses `scripts/build-rootless.sh` and manual installation; see
+[`ROOTLESS.md`](ROOTLESS.md). Its code and static web client live below the
+jailbreak root, while personal data and sockets retain their existing paths.
+
 ---
 
 ## 2. Data flow
@@ -117,6 +122,9 @@ colors, cursor movement, Ctrl-C, and resize. See `docs/TERMINAL.md`.
 brightness/openurl/apps/files/say/sound/flash/banner/camera/script/audio_capture/
 audio_output) — curl- and script-friendly, separate from the realtime plane,
 shares the IPC action path where SpringBoard context is required.
+The JSON macro executor supports a bounded input-action subset, not arbitrary
+REST requests. Device orientation, playback pause/export, and the current
+qualification gaps are documented in [`CONTROL-QUALIFICATION.md`](CONTROL-QUALIFICATION.md).
 
 **Compatibility.** `/v1/capabilities` reports daemon/browser versions, protocol
 major/minor, and stable feature flags. The relay includes the same metadata in
@@ -188,6 +196,15 @@ video capture because restarting mediaserverd can stall the current H.264 sessio
 
 **Orientation.** Screen: the foreground app's `FBSOrientationObserver
 activeInterfaceOrientation` (correct even for force-orientation apps), debounced.
+Panel geometry is a separate, fixed transform: `UIScreen.nativeBounds` and
+`CARenderServerRenderDisplay` do not always share axes. Capture reads the main
+`CADisplay.bounds` and `nativeOrientation`, renders the complete native surface,
+and normalizes nonzero panel offsets with lossless vImage quarter turns before
+encoding or PNG export. The resulting pixels and touch coordinates keep their
+existing UIKit fixed-space contract; clients still apply interface orientation.
+The extra surface is capture-owned and freed at stop; zero-offset panels keep
+the original direct path. See `ROOTLESS.md` for the measured rot270 iPad Pro
+case and remaining physical regression checks.
 Camera: set the capture connection's `videoOrientation` to the app's
 `statusBarOrientation` (UIInterfaceOrientation 1..4 maps 1:1 to
 AVCaptureVideoOrientation). FX overlays: size to `fixedCoordinateSpace.bounds` and

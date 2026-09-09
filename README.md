@@ -36,7 +36,7 @@ supported until their physical-device qualification matrix passes.
 | --- | --- | --- |
 | Local network, rootful iOS 14 | Public | [Cydia/Installer/Sileo/Zebra repository](https://nobottomline.github.io/rctl-repo/) |
 | Self-hosted internet relay | Available | Private package produced by the VPS wizard |
-| Rootless iOS 15+ | Not yet supported | Tracked in [portability](docs/PORTABILITY.md) |
+| Rootless Dopamine, iOS 15+ | Experimental, not device-qualified | [Manual test build](docs/ROOTLESS.md); not in the APT feed |
 
 Release readiness and known limitations are recorded in
 [docs/QUALIFICATION.md](docs/QUALIFICATION.md).

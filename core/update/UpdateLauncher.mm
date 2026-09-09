@@ -74,6 +74,10 @@ static int spawn_updater(NSString *executable, NSString *request) {
 }
 
 char *rctl_update_launch(const char *manifest_url, int *status) {
+#if defined(RCTL_ROOTLESS)
+    if (status) *status = 501;
+    return json_bytes(@{@"error": @"rootless_updates_not_qualified"});
+#endif
     pthread_mutex_lock(&gLaunchLock);
     NSString *manifest = manifest_url ? [NSString stringWithUTF8String:manifest_url] : nil;
     if (!secure_manifest_url(manifest)) {

@@ -8,13 +8,16 @@
 extern "C" {
 #endif
 
-// Create a global BGRA IOSurface sized to the main display times `scale`
-// (1.0 = native). Caller owns it (CFRelease). Writes pixel dims to outW/outH.
-IOSurfaceRef rctl_capture_create_surface(double scale, size_t *outW, size_t *outH);
+typedef struct rctl_capture rctl_capture;
 
-// Render the current display content into `dst` (a surface from create_surface).
-// Only produces pixels when called from inside the render-server process (SpringBoard).
-void rctl_capture_render(IOSurfaceRef dst);
+// Owns native render and, only for rotated panels, canonical BGRA surfaces.
+// Output dimensions and pixels always use UIKit's fixed portrait coordinates.
+rctl_capture *rctl_capture_create(size_t *outW, size_t *outH);
+void rctl_capture_destroy(rctl_capture *capture);
+
+// Caller serializes render/snapshot/destroy. Returns a borrowed surface, or NULL
+// on failure. Only produces pixels inside SpringBoard's render-server context.
+IOSurfaceRef rctl_capture_render(rctl_capture *capture);
 
 // Undim / wake the display so the render server composites a frame.
 void rctl_capture_wake_display(void);

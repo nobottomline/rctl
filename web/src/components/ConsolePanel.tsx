@@ -3,6 +3,8 @@ import { Camera, Check, Circle, Copy, Download, SwitchCamera, X } from 'lucide-r
 import { api, apiDo, apiJSON, destructivePost } from '../lib/rctl'
 import type { FileTransfer } from '../lib/files'
 import { Sheet } from './Sheet'
+import { OptionMenu } from './OptionMenu'
+import { copyText } from '../lib/clipboard'
 import { cn } from '../lib/cn'
 import { CameraTransport } from '../lib/camera'
 import { cameraRecordingToMp4 } from '../lib/cameraRecording'
@@ -18,7 +20,7 @@ type DeviceInfo = {
 }
 type DiagnosticsResponse = { categories: { title: string; fields: { label: string; value: string }[] }[] }
 type RecordApi = {
-  mode: 'idle' | 'recording' | 'paused' | 'playing'
+  mode: 'idle' | 'recording' | 'paused' | 'playing' | 'pausing' | 'play-paused'
   count: number
   start: () => void
   pause: () => void
@@ -26,6 +28,9 @@ type RecordApi = {
   stop: () => void
   play: () => void
   stopPlay: () => void
+  pausePlay: () => void
+  resumePlay: () => void
+  exportScript: () => void
 }
 type CameraStatus = {
   enabled: boolean
@@ -49,7 +54,7 @@ export default function ConsolePanel({
   transfer,
 }: {
   onClose: () => void
-  onScreenshot: () => void | Promise<void>
+  onScreenshot: () => Promise<Blob>
   record: RecordApi
   transfer: FileTransfer
 }) {
@@ -57,6 +62,7 @@ export default function ConsolePanel({
     <Sheet title="Console" onClose={onClose} wide>
       <div className="space-y-2.5 p-3.5">
         <DeviceCard />
+        <OrientationCard />
         <DiagnosticsCard />
         <div className="gap-2.5 sm:columns-2 [&>*]:mb-2.5 [&>*]:break-inside-avoid">
           <FxCard />
@@ -96,7 +102,7 @@ function Btn({ onClick, children, primary }: { onClick: () => void; children: Re
       onClick={onClick}
       className={cn(
         'inline-flex h-9 shrink-0 items-center rounded-lg px-3 text-[12px] font-medium transition-colors',
-        primary ? 'bg-signal font-semibold text-on-signal active:opacity-80' : 'bg-fg/8 text-fg active:bg-fg/15',
+        primary ? 'bg-signal font-semibold text-on-signal hover:bg-signal-hi active:opacity-80' : 'bg-fg/8 text-fg hover:bg-fg/12 active:bg-fg/15',
       )}
     >
       {children}
@@ -117,28 +123,44 @@ function KV({ k, v }: { k: string; v?: string | number }) {
 
 function CopyRow({ k, v }: { k: string; v?: string }) {
   const [copied, setCopied] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const active = useRef(false)
+  useEffect(() => {
+    active.current = true
+    return () => { active.current = false; if (timer.current) clearTimeout(timer.current) }
+  }, [])
   if (!v) return null
-  const copy = () => {
-    navigator.clipboard
-      ?.writeText(v)
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1200)
-      })
-      .catch(() => {})
+  const copy = async () => {
+    const ok = await copyText(v)
+    if (!active.current) return
+    if (timer.current) clearTimeout(timer.current)
+    setCopied(ok)
+    setFailed(!ok)
+    timer.current = setTimeout(() => { setCopied(false); setFailed(false) }, 1600)
   }
   return (
-    <button onClick={copy} className="flex w-full items-center gap-2 text-left">
+    <div className="flex w-full items-center gap-2 text-left">
       <span className="w-11 shrink-0 text-[9.5px] uppercase tracking-wide text-muted">{k}</span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-fg-dim">{v}</span>
-      {copied ? <Check className="size-3.5 shrink-0 text-online" /> : <Copy className="size-3.5 shrink-0 text-faint" />}
-    </button>
+      <span className="min-w-0 flex-1 select-text truncate font-mono text-[12px] text-fg-dim">{v}</span>
+      <button type="button" onClick={copy} aria-label={`Copy ${k}`} title={copied ? 'Copied' : failed ? 'Copy failed. Select the text to copy manually.' : `Copy ${k}`}
+        className="grid size-7 shrink-0 place-items-center rounded-md text-muted transition-colors hover:bg-fg/8 hover:text-fg active:bg-fg/12">
+        {copied ? <Check className="size-3.5 text-online" /> : <Copy className="size-3.5" />}
+      </button>
+      <span role="status" className="sr-only">{copied ? `${k} copied` : failed ? `Could not copy ${k}. Select the text to copy manually.` : ''}</span>
+    </div>
   )
 }
 
 function DeviceCard() {
   const [info, setInfo] = useState<DeviceInfo | null>(null)
-  const load = () => apiJSON<DeviceInfo>('/v1/deviceinfo').then((j) => j && setInfo(j))
+  const [volume, setVolume] = useState<number | null>(null)
+  const load = async () => {
+    const j = await apiJSON<DeviceInfo>('/v1/deviceinfo')
+    if (j) setInfo(j)
+    const audio = await apiJSON<{ volume?: number }>('/v1/audio_output?status=1')
+    setVolume(typeof audio?.volume === 'number' ? audio.volume : null)
+  }
   useEffect(() => {
     load()
   }, [])
@@ -158,6 +180,7 @@ function DeviceCard() {
             <KV k="Storage" v={info.storage} />
             <KV k="Battery" v={info.battery && `${info.battery}%${info.battery_state ? ` · ${info.battery_state}` : ''}`} />
             <KV k="Brightness" v={info.brightness != null ? `${Math.round(info.brightness * 100)}%` : undefined} />
+            <KV k="Volume" v={volume != null ? `${Math.round(volume * 100)}%` : undefined} />
             <KV k="Uptime" v={info.uptime} />
           </div>
           {(info.udid || info.serial || info.imei) && (
@@ -171,6 +194,41 @@ function DeviceCard() {
       )}
     </Card>
   )
+}
+
+function OrientationCard() {
+  const [value, setValue] = useState(0)
+  const [supported, setSupported] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let active = true
+    apiJSON<{ supported?: boolean; locked?: boolean; orientation?: number }>('/v1/orientation').then((status) => {
+      if (!active) return
+      setSupported(!!status?.supported)
+      setValue(status?.locked ? status.orientation || 1 : 0)
+    })
+    return () => { active = false }
+  }, [])
+  return <Card title="Device orientation">
+    <OptionMenu label="Device orientation" value={String(value)} disabled={!supported || busy}
+      options={[
+        ['0', 'Automatic'], ['1', 'Portrait'], ['2', 'Portrait upside down'],
+        ['3', 'Landscape left'], ['4', 'Landscape right'],
+      ]}
+      onChange={async (next) => {
+        const orientation = Number(next)
+        setBusy(true); setError('')
+        try {
+          const response = await api('/v1/orientation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orientation }) })
+          if (!response.ok) throw new Error('Device orientation request failed.')
+          setValue(orientation)
+        } catch (e) { setError(e instanceof Error ? e.message : 'Request failed.') }
+        finally { setBusy(false) }
+      }} />
+    {!supported && <p className="mt-2 text-xs text-muted">Unavailable on this device.</p>}
+    {error && <p role="alert" className="mt-2 text-xs text-red-500">{error}</p>}
+  </Card>
 }
 
 function DiagnosticsCard() {
@@ -347,6 +405,7 @@ function ClipboardCard() {
 
 function ScriptCard() {
   const [v, setV] = useState('')
+  const [error, setError] = useState('')
   return (
     <Card title="Script (JSON macro)">
       <textarea
@@ -358,10 +417,20 @@ function ScriptCard() {
         className={cn(FIELD, 'h-auto resize-none py-2 font-mono text-[12px]')}
       />
       <div className="mt-1.5">
-        <Btn primary onClick={() => api('/v1/script', { method: 'POST', body: v }).catch(() => {})}>
+        <Btn primary onClick={async () => {
+          setError('')
+          try {
+            const response = await api('/v1/script', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: v })
+            if (!response.ok) {
+              const result = await response.json().catch(() => null)
+              throw new Error(result?.error || 'Script rejected.')
+            }
+          } catch (e) { setError(e instanceof Error ? e.message : 'Script request failed.') }
+        }}>
           Run
         </Btn>
       </div>
+      {error && <p role="alert" className="mt-2 text-xs text-red-500">{error}</p>}
     </Card>
   )
 }
@@ -638,6 +707,8 @@ function RecordCard({ record }: { record: RecordApi }) {
       ? 'recording…'
       : mode === 'paused'
         ? 'paused'
+        : mode === 'pausing' ? 'pausing after current gesture…'
+        : mode === 'play-paused' ? 'playback paused'
         : mode === 'playing'
           ? 'playing…'
           : count
@@ -658,6 +729,7 @@ function RecordCard({ record }: { record: RecordApi }) {
         {status}
       </div>
       <div className="flex flex-wrap gap-1.5">
+        {count > 0 && mode === 'idle' && <button onClick={record.exportScript} title="Export JSON script" aria-label="Export JSON script" className="grid size-9 place-items-center rounded-lg bg-fg/8"><Download className="size-4" /></button>}
         {mode === 'recording' && (
           <>
             <Btn onClick={record.pause}>Pause</Btn>
@@ -674,8 +746,9 @@ function RecordCard({ record }: { record: RecordApi }) {
             </Btn>
           </>
         )}
-        {mode === 'playing' && (
+        {(mode === 'playing' || mode === 'pausing' || mode === 'play-paused') && (
           <>
+            {mode === 'playing' ? <Btn onClick={record.pausePlay}>Pause</Btn> : <Btn onClick={record.resumePlay}>Resume</Btn>}
             <Btn onClick={record.start}>Record</Btn>
             <Btn primary onClick={record.stopPlay}>
               Stop
@@ -697,26 +770,38 @@ function RecordCard({ record }: { record: RecordApi }) {
   )
 }
 
-function ScreenshotCard({ onScreenshot }: { onScreenshot: () => void | Promise<void> }) {
+function ScreenshotCard({ onScreenshot }: { onScreenshot: () => Promise<Blob> }) {
   const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const active = useRef(true)
+  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview) }, [preview])
   return (
     <Card title="Screenshot">
-      <div className="mb-2 text-[12px] text-muted">
-        Full-resolution lossless PNG from the device — invisible on the iPad.
-      </div>
+      {preview && <img src={preview} alt="Captured screen" className="mb-2 max-h-80 w-full rounded-md object-contain" />}
+      {error && <div role="alert" className="mb-2 text-xs text-red-500">{error}</div>}
+      <div className="flex items-center gap-2">
       <Btn
         primary
         onClick={async () => {
+          if (busy) return
           setBusy(true)
+          setError('')
           try {
-            await onScreenshot()
+            const blob = await onScreenshot()
+            if (active.current) setPreview(URL.createObjectURL(blob))
+          } catch (e) {
+            if (active.current) setError(e instanceof Error ? e.message : 'Screenshot failed.')
           } finally {
-            setBusy(false)
+            if (active.current) setBusy(false)
           }
         }}
       >
-        {busy ? 'Saving…' : 'Save frame'}
+        {busy ? 'Capturing…' : 'Capture'}
       </Btn>
+      {preview && <a href={preview} download={`rctl-${Date.now()}.png`} title="Save screenshot" aria-label="Save screenshot" className="grid size-9 place-items-center rounded-lg bg-fg/8 hover:bg-fg/15"><Download className="size-4" /></a>}
+      </div>
     </Card>
   )
 }

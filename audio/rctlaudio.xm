@@ -22,6 +22,7 @@
 #import <math.h>
 #import <dlfcn.h>
 #import "ipc/Ipc.h"
+#import "audio/CapturePCM.h"
 
 #define RCTL_AUDIO_SOURCE_LOG "/tmp/rctl-audio.log"
 #define RCTL_AUDIO_SOURCE_MARKER "/tmp/rctl-audio-tone"
@@ -302,14 +303,7 @@ static void *capture_watchdog(void *arg) {
 }
 
 static bool capture_format_supported(const AudioStreamBasicDescription *asbd) {
-    if (asbd->mFormatID != kAudioFormatLinearPCM) return false;
-    if (asbd->mChannelsPerFrame < 1 || asbd->mChannelsPerFrame > 2) return false;
-    if (asbd->mSampleRate < 8000 || asbd->mSampleRate > 192000) return false;
-    if (asbd->mBytesPerFrame == 0) return false;
-    if (asbd->mFormatFlags & kAudioFormatFlagIsBigEndian) return false;
-    if (asbd->mBitsPerChannel == 16 && (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger)) return true;
-    if (asbd->mBitsPerChannel == 32 && (asbd->mFormatFlags & kAudioFormatFlagIsFloat)) return true;
-    return false;
+    return asbd && rctl_capture_pcm_supported(*asbd);
 }
 
 static void log_skipped_format(const char *source, const AudioStreamBasicDescription *asbd) {
@@ -336,6 +330,7 @@ static void enqueue_interleaved_samples(const AudioStreamBasicDescription *asbd,
         log_skipped_format("pcm", asbd);
         return;
     }
+    if ((asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) && asbd->mChannelsPerFrame > 1) return;
 
     uint32_t channels = asbd->mChannelsPerFrame;
     uint32_t bytes_per_frame = asbd->mBytesPerFrame;
@@ -352,10 +347,7 @@ static void enqueue_interleaved_samples(const AudioStreamBasicDescription *asbd,
     } else {
         const float *f = (const float *)src;
         for (size_t i = 0; i < sample_count; i++) {
-            float v = f[i];
-            if (v > 1.0f) v = 1.0f;
-            else if (v < -1.0f) v = -1.0f;
-            samples[i] = (int16_t)(v * 32767.0f);
+            samples[i] = rctl_capture_float_s16(f[i]);
         }
     }
 
@@ -403,11 +395,14 @@ static void maybe_capture_audiounit(AudioUnit unit, UInt32 bus, UInt32 frames, A
 
     if (ioData->mNumberBuffers == 1) {
         AudioBuffer *b = &ioData->mBuffers[0];
-        enqueue_interleaved_samples(&asbd, b->mData, b->mDataByteSize);
+        if (!capture_format_supported(&asbd) || b->mNumberChannels != asbd.mChannelsPerFrame) return;
+        uint32_t count = MIN(frames, b->mDataByteSize / asbd.mBytesPerFrame);
+        enqueue_interleaved_samples(&asbd, b->mData, count * asbd.mBytesPerFrame);
         return;
     }
 
-    if (!capture_format_supported(&asbd) || asbd.mChannelsPerFrame != ioData->mNumberBuffers) {
+    if (!capture_format_supported(&asbd) || !(asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) ||
+        asbd.mChannelsPerFrame != ioData->mNumberBuffers) {
         log_skipped_format("au", &asbd);
         return;
     }
@@ -419,17 +414,14 @@ static void maybe_capture_audiounit(AudioUnit unit, UInt32 bus, UInt32 frames, A
 
     for (uint32_t c = 0; c < channels; c++) {
         AudioBuffer *b = &ioData->mBuffers[c];
-        if (!b->mData || b->mDataByteSize == 0) { free(samples); return; }
+        if (!rctl_capture_plane_fits(*b, frames_avail, asbd.mBitsPerChannel / 8)) { free(samples); return; }
         if (asbd.mBitsPerChannel == 16) {
             const int16_t *src = (const int16_t *)b->mData;
             for (uint32_t i = 0; i < frames_avail; i++) samples[i * channels + c] = src[i];
         } else {
             const float *src = (const float *)b->mData;
             for (uint32_t i = 0; i < frames_avail; i++) {
-                float v = src[i];
-                if (v > 1.0f) v = 1.0f;
-                else if (v < -1.0f) v = -1.0f;
-                samples[i * channels + c] = (int16_t)(v * 32767.0f);
+                samples[i * channels + c] = rctl_capture_float_s16(src[i]);
             }
         }
     }
@@ -503,7 +495,10 @@ static OSStatus hook_AudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlag
                                        inNumberFrames, ioData);
     if (st == noErr) {
         if (gProbe) probe_log_au(inUnit, inOutputBusNumber, inNumberFrames, ioData);
-        maybe_capture_audiounit(inUnit, inOutputBusNumber, inNumberFrames, ioData);
+        // A silent render need not initialize its sample storage. Never transmit
+        // stale contents as sound; downstream playback drains naturally.
+        if (!ioActionFlags || !(*ioActionFlags & kAudioUnitRenderAction_OutputIsSilence))
+            maybe_capture_audiounit(inUnit, inOutputBusNumber, inNumberFrames, ioData);
     }
     return st;
 }

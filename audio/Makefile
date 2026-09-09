@@ -3,7 +3,7 @@
 # Built from the top-level package stage as an inactive payload. rctld copies it
 # into the active MobileSubstrate path only while browser audio capture is enabled.
 
-TARGET := iphone:clang:14.5:14.0
+include ../mk/native-target.mk
 ARCHS := arm64 arm64e
 
 include $(THEOS)/makefiles/common.mk

@@ -20,6 +20,11 @@ THEOS="${THEOS:-/Users/grigorij/theos}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${RCTL_SSH:-rctl-device}"        # ~/.ssh/config alias
 
+if [[ "${THEOS_PACKAGE_SCHEME:-}" == "rootless" ]]; then
+  echo "[deploy] use scripts/build-rootless.sh and the documented manual test install" >&2
+  exit 1
+fi
+
 if [[ -n "${RCTL_DEB:-}" ]]; then
   DEB="$RCTL_DEB"
   case "$DEB" in
@@ -32,6 +37,14 @@ else
   # sed -n 1p (not head -1) drains ls fully -- head closes the pipe early and,
   # once packages/ holds many .debs, that SIGPIPEs ls and pipefail aborts the deploy.
   DEB="$(ls -t "$ROOT"/packages/*.deb | sed -n '1p')"
+fi
+if [[ "$(dpkg-deb -f "$DEB" Architecture)" != "iphoneos-arm" ]]; then
+  echo "[deploy] rootless recovery deployment is not qualified; use the documented manual test install" >&2
+  exit 1
+fi
+if [[ "$(ssh "$HOST" 'dpkg --print-architecture')" != "iphoneos-arm" ]]; then
+  echo "[deploy] target is not rootful; refusing to remove or replace its packages" >&2
+  exit 1
 fi
 echo "[deploy] $DEB -> $HOST"
 scp -q "$DEB" "$HOST:/tmp/rctl.deb"
