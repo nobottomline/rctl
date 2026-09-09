@@ -344,6 +344,11 @@ controllers per origin.
 
 ## Relay And Direct-LAN Modes
 
+The current iOS app implements relay profiles only. The direct-LAN flow, current
+device entry points, security boundary, and acceptance tests are specified in
+[`MOBILE-LAN.md`](MOBILE-LAN.md); this section describes the intended two-mode
+architecture, not existing native LAN UI.
+
 Relay mode is the primary mobile path even when the phone and iPad share Wi-Fi.
 ICE can still choose a direct peer-to-peer route while the relay supplies auth,
 signaling and TURN fallback. This avoids exposing the unauthenticated local API
