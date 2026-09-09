@@ -16,6 +16,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
 
     private let factory: RctlPeerConnectionFactory
     private let urlSession: URLSession
+    private let localURLSession = LocalNetworkSession.make()
     private let eventDelivery: RealtimeEventDelivery
     private let queue = DispatchQueue(label: "com.greatlove.rctl.realtime.session")
 
@@ -23,6 +24,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private var eventRevision: UInt64 = 0
     private var keyboardGeneration: UInt64 = 0
     private var running = false
+    private var localConnection = false
     private var webSocket: URLSessionWebSocketTask?
     private var peerConnection: LKRTCPeerConnection?
     private var readyReceived = false
@@ -55,15 +57,16 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
 
     deinit {
         stopResources()
+        localURLSession.invalidateAndCancel()
     }
 
-    public func start(with request: URLRequest) throws {
-        try Self.validateWebSocketRequest(request)
+    public func start(with request: URLRequest, localAddress: LocalDeviceAddress? = nil) throws {
+        try Self.validateWebSocketRequest(request, localAddress: localAddress)
         eventDelivery.advance { revision in
             queue.async { [weak self] in
                 guard let self, self.eventDelivery.isCurrent(revision) else { return }
                 self.eventRevision = revision
-                self.startLocked(with: request)
+                self.startLocked(with: request, local: localAddress != nil)
             }
         }
     }
@@ -196,7 +199,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         }
     }
 
-    private func startLocked(with request: URLRequest) {
+    private func startLocked(with request: URLRequest, local: Bool) {
         guard !running else {
             emit(.failure(.alreadyRunning))
             return
@@ -204,6 +207,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         generation &+= 1
         let currentGeneration = generation
         running = true
+        localConnection = local
         readyReceived = false
         remoteDescriptionReady = false
         pendingCandidates.removeAll(keepingCapacity: true)
@@ -216,7 +220,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         orientation = nil
         emit(.connection(.signaling))
 
-        let task = urlSession.webSocketTask(with: request)
+        let task = (local ? localURLSession : urlSession).webSocketTask(with: request)
         webSocket = task
         task.resume()
         receiveNext(on: task, generation: currentGeneration)
@@ -271,7 +275,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         case let .ready(servers):
             guard !readyReceived else { throw RctlRealtimeError.invalidSignalingResponse }
             readyReceived = true
-            let iceServers = try Self.makeIceServers(servers)
+            let iceServers = try Self.makeIceServers(servers, local: localConnection)
             if let peerConnection {
                 let configuration = peerConnection.configuration
                 configuration.iceServers = iceServers
@@ -477,7 +481,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         return String(message.prefix(256))
     }
 
-    static func validateWebSocketRequest(_ request: URLRequest) throws {
+    static func validateWebSocketRequest(_ request: URLRequest, localAddress: LocalDeviceAddress? = nil) throws {
         guard let url = request.url,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let host = components.host,
@@ -485,8 +489,16 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
               components.password == nil,
               components.fragment == nil,
               request.httpMethod == nil || request.httpMethod == "GET",
-              request.httpBody == nil else {
+              request.httpBody == nil, request.httpBodyStream == nil else {
             throw RctlRealtimeError.invalidSignalingResponse
+        }
+        if let localAddress {
+            guard request.allHTTPHeaderFields?.isEmpty != false,
+                  !request.httpShouldHandleCookies,
+                  url == localAddress.signalingRequest().url || url == localAddress.signalingRequest(camera: true).url else {
+                throw RctlRealtimeError.invalidSignalingResponse
+            }
+            return
         }
         if components.scheme == "wss" {
             return
@@ -497,8 +509,9 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         }
     }
 
-    private static func makeIceServers(_ servers: [WireICEServer]) throws -> [LKRTCIceServer] {
-        try servers.map { server in
+    static func makeIceServers(_ servers: [WireICEServer], local: Bool = false) throws -> [LKRTCIceServer] {
+        guard !local || servers.isEmpty else { throw RctlRealtimeError.invalidSignalingResponse }
+        return try servers.map { server in
             for value in server.urls {
                 guard let scheme = URLComponents(string: value)?.scheme?.lowercased(),
                       ["stun", "stuns", "turn", "turns"].contains(scheme) else {

@@ -4,6 +4,11 @@ import RctlClient
 import RctlProtocol
 import RctlRealtime
 
+enum RemoteConnectionTarget {
+    case relay(String)
+    case local(LocalDeviceAddress)
+}
+
 enum RemoteInteractionMode: String, CaseIterable, Identifiable {
     case view
     case control
@@ -77,18 +82,25 @@ final class RemoteSessionModel: ObservableObject {
 
     let session: RctlRealtimeSession
     private let appModel: ControllerAppModel
-    private let deviceID: String
+    private let target: RemoteConnectionTarget
+    private let localClient: LocalDeviceClient
     private var suspended = false
     private var connectionAttempt: UInt64 = 0
+    private var preparationTask: Task<URLRequest, Error>?
     private var keyboardAvailableAt: TimeInterval = 0
 
     var canControl: Bool {
         state == .connected && media == .screen && channelStates["control"] == .open
     }
 
-    init(appModel: ControllerAppModel, deviceID: String) {
+    convenience init(appModel: ControllerAppModel, deviceID: String) {
+        self.init(appModel: appModel, target: .relay(deviceID))
+    }
+
+    init(appModel: ControllerAppModel, target: RemoteConnectionTarget, localClient: LocalDeviceClient = LocalDeviceClient()) {
         self.appModel = appModel
-        self.deviceID = deviceID
+        self.target = target
+        self.localClient = localClient
         let router = EventRouter()
         session = RctlRealtimeSession { [router] event in
             router.send(event)
@@ -97,6 +109,7 @@ final class RemoteSessionModel: ObservableObject {
     }
 
     func connect() async {
+        preparationTask?.cancel()
         suspended = false
         connectionAttempt &+= 1
         let currentAttempt = connectionAttempt
@@ -107,21 +120,48 @@ final class RemoteSessionModel: ObservableObject {
         channelStates = [:]
         interactionMode = .view
         errorMessage = nil
+        let selectedMedia = media
+        let preparation = Task { [appModel, target, localClient] in
+            switch target {
+            case let .relay(deviceID):
+                return try await appModel.signalingRequest(deviceID: deviceID, media: selectedMedia)
+            case let .local(address):
+                _ = try await localClient.capabilities(at: address, camera: selectedMedia == .camera)
+                return address.signalingRequest(camera: selectedMedia == .camera)
+            }
+        }
+        preparationTask = preparation
+        defer {
+            if connectionAttempt == currentAttempt { preparationTask = nil }
+        }
         do {
-            let request = try await appModel.signalingRequest(deviceID: deviceID, media: media)
+            let request = try await withTaskCancellationHandler {
+                try await preparation.value
+            } onCancel: { preparation.cancel() }
+            let localAddress: LocalDeviceAddress?
+            switch target {
+            case .relay:
+                localAddress = nil
+            case let .local(address):
+                localAddress = address
+            }
             guard !suspended, connectionAttempt == currentAttempt else { return }
-            try session.start(with: request)
+            try Task.checkCancellation()
+            try session.start(with: request, localAddress: localAddress)
         } catch is CancellationError {
             guard !suspended, connectionAttempt == currentAttempt else { return }
             handle(.connection(.closed))
         } catch {
             guard !suspended, connectionAttempt == currentAttempt else { return }
             state = .failed
-            errorMessage = ControllerAppModel.message(for: error)
+            if case .local = target { errorMessage = LocalDevicesModel.message(for: error) }
+            else { errorMessage = ControllerAppModel.message(for: error) }
         }
     }
 
     func disconnect() {
+        preparationTask?.cancel()
+        preparationTask = nil
         connectionAttempt &+= 1
         suspended = false
         interactionMode = .view
@@ -132,6 +172,8 @@ final class RemoteSessionModel: ObservableObject {
 
     func suspend() {
         guard !suspended else { return }
+        preparationTask?.cancel()
+        preparationTask = nil
         connectionAttempt &+= 1
         suspended = true
         videoAvailable = false
@@ -254,8 +296,10 @@ final class RemoteSessionModel: ObservableObject {
     }
 
     private func cancelKeyboardInput() {
+        let hadKeyboardInput = keyboardAvailableAt > 0
         keyboardAvailableAt = 0
         session.cancelQueuedKeyboardControl()
+        guard hadKeyboardInput else { return }
         session.enqueueControl(
             .key(page: HIDKeyboard.page, usage: HIDKeyboard.leftShift, down: false)
         )

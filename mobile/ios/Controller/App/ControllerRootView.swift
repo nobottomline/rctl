@@ -2,15 +2,10 @@ import SwiftUI
 
 struct ControllerRootView: View {
     @ObservedObject var model: ControllerAppModel
+    @StateObject private var localDevices = LocalDevicesModel()
 
     var body: some View {
-        Group {
-            if model.profile == nil {
-                PairingView(model: model)
-            } else {
-                DeviceListView(model: model)
-            }
-        }
+        DeviceListView(model: model, localDevices: localDevices)
         .task {
             await model.restore()
         }

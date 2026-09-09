@@ -11,14 +11,23 @@ struct RemoteControlView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    let device: ControllerDevice
+    let deviceName: String
+    private let isLocal: Bool
     @StateObject private var model: RemoteSessionModel
     @State private var presentedSheet: SheetDestination?
     @State private var keyboardPresented = false
 
     init(appModel: ControllerAppModel, device: ControllerDevice) {
-        self.device = device
+        deviceName = device.name
+        isLocal = false
         _model = StateObject(wrappedValue: RemoteSessionModel(appModel: appModel, deviceID: device.id))
+    }
+
+    init(appModel: ControllerAppModel, localDevice: LocalDeviceProfile, localClient: LocalDeviceClient) {
+        deviceName = localDevice.name
+        isLocal = true
+        _model = StateObject(wrappedValue: RemoteSessionModel(appModel: appModel,
+            target: .local(localDevice.address), localClient: localClient))
     }
 
     var body: some View {
@@ -36,7 +45,7 @@ struct RemoteControlView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             RemoteSessionHeader(
-                deviceName: device.name,
+                deviceName: deviceName,
                 connectionLabel: connectionLabel,
                 connectionColor: connectionColor,
                 modeLabel: modeLabel,
@@ -81,7 +90,7 @@ struct RemoteControlView: View {
             switch destination {
             case .tools:
                 RemoteToolsSheet(
-                    deviceName: device.name,
+                    deviceName: deviceName,
                     controlsEnabled: controlsEnabled,
                     send: model.sendHardware,
                     reconnect: { Task { await model.connect() } }
@@ -175,7 +184,7 @@ struct RemoteControlView: View {
     private var connectionLabel: String {
         switch model.state {
         case .idle: "Ready"
-        case .signaling: "Authorizing"
+        case .signaling: isLocal ? "Connecting locally" : "Authorizing"
         case .connecting: "Connecting"
         case .connected: model.media == .camera ? "Live camera" : "Live screen"
         case .disconnected: "Disconnected"

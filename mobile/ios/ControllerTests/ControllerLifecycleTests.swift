@@ -182,7 +182,7 @@ private final class ProfileFixture {
     }
 }
 
-private final class RequestStub: URLProtocol, @unchecked Sendable {
+final class RequestStub: URLProtocol, @unchecked Sendable {
     static let requests = StubRequests()
     private let lock = NSLock()
     private var stopped = false
@@ -211,7 +211,7 @@ private final class RequestStub: URLProtocol, @unchecked Sendable {
     }
 }
 
-private final class StubRequests: @unchecked Sendable {
+final class StubRequests: @unchecked Sendable {
     private let lock = NSLock()
     private var pending: [RequestStub] = []
     private var counts: [String: Int] = [:]

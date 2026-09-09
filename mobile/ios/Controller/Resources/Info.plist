@@ -24,6 +24,13 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan a one-time controller pairing code from your relay.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to the rctl device whose local address you enter.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
