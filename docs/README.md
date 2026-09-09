@@ -19,6 +19,9 @@ flow, then read the feature document for the code being changed.
 - [CONTROLLER-AUTH.md](CONTROLLER-AUTH.md): native pairing, P-256 proof of
   possession, scoped tokens, recoverable refresh, replay protection, and
   revocation.
+- [MOBILE-LAN.md](MOBILE-LAN.md): implemented direct-LAN connection boundaries
+  and qualification; [MOBILE-LAN-PLAN.md](MOBILE-LAN-PLAN.md): planned Bonjour
+  discovery, access-path indicator, and authenticated local pairing.
 - [MEDIA.md](MEDIA.md), [CAM.md](CAM.md), [AUDIO.md](AUDIO.md), and
   [VIRTUAL_MIC.md](VIRTUAL_MIC.md): media ownership and lifecycle.
 - [TERMINAL.md](TERMINAL.md): terminal protocol and relay tunneling.

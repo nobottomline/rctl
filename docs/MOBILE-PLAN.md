@@ -347,3 +347,7 @@ Refresh recovery now keeps the P-256-bound refresh secret stable, renews its
 thirty-day inactivity expiry, and replaces only short-lived access credentials.
 A client can therefore recover a lost response with a fresh signed request while
 an exact nonce replay still fails.
+
+The next LAN increments, Bonjour discovery, a persistent access-path indicator,
+and authenticated local pairing, are planned in
+[`MOBILE-LAN-PLAN.md`](MOBILE-LAN-PLAN.md).
