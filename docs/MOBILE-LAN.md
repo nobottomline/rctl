@@ -4,6 +4,10 @@ Status: implemented in the iOS controller source. LAN and Relay have separate
 entries on the Devices screen; LAN does not require a relay profile. Physical
 controller qualification remains a release gate, as detailed below.
 
+Next increments: [LAN discovery, persistent access-mode UI, and authenticated
+pairing design](MOBILE-LAN-PLAN.md). These are planned separately from the
+implemented direct-IP flow.
+
 ## User Flow
 
 Devices -> Add Local Device -> enter an address and optional name -> Connect.
