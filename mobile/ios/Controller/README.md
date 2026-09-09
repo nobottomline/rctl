@@ -1,8 +1,8 @@
 # RCTL Controller
 
-`Controller` is the native iOS application for managing approved rctl devices.
-The current product slice uses the same authenticated relay and WebRTC paths as
-the browser client:
+`Controller` is the native iOS application for rctl devices. The Devices screen
+supports saved local addresses without relay setup, alongside authenticated
+relay pairing. Both paths share the native WebRTC implementation:
 
 - scan or paste the relay admin's one-time controller pairing JSON;
 - create and retain the P-256 controller identity in Keychain;
@@ -22,6 +22,21 @@ the browser client:
 - send Home, lock, volume, Control Center, and Notification Center commands over
   the scoped control channel, with confirmation for device lock.
 
+## Local Network
+
+Choose **Add Local Device**, enter its private IP (port 8080 by default), and
+optionally name it. Connect checks device capabilities, saves the address, and
+opens video in View mode. Control requires an explicit mode change. Swipe or
+long-press a saved device to edit or remove it; separate devices may share a port.
+
+The public LAN-only `.deb` is sufficient. No VPS, domain, certificate setup,
+controller identity, or relay enrollment is needed. The current unauthenticated
+HTTP/WS device API is for trusted networks only. Relay credentials are never
+sent to LAN; relay failures never automatically fall back to local control.
+Only private IPv4 and bracketed IPv6 ULA literals are accepted in this slice;
+hostname discovery and link-local IPv6 are not implemented. See
+[`MOBILE-LAN.md`](../../../docs/MOBILE-LAN.md) for qualification limits.
+
 Build from the repository root with `make mobile-ios-build`, or open
 `RctlMobile.xcodeproj` and run the shared `RCTL Controller` scheme. Simulator
 supports paste pairing and validates application lifecycle, but physical devices
@@ -30,7 +45,8 @@ are required to qualify QR capture, hardware decode, and network behavior.
 Local app-level tests may launch a Debug build with
 `RCTL_CONTROLLER_ALLOW_INSECURE_LOOPBACK=1` or the
 `--rctl-allow-insecure-loopback` launch argument and pair only to an explicit
-loopback HTTP origin. Release builds ignore both opt-ins and require HTTPS.
+loopback HTTP relay origin. Release builds ignore both relay opt-ins and require
+HTTPS for relay profiles. Explicit validated LAN connections are a separate path.
 
 Before distributing the application, verify on a physical controller iPhone and
 controlled iPad:
@@ -57,8 +73,17 @@ ad-hoc simulator signing for Keychain; no Apple account or team is needed.
 The tests hold HTTP responses with `URLProtocol` and use isolated Keychain and
 UserDefaults namespaces. They cover profile removal during refresh/device-list
 requests, stale operation cleanup, shared concurrent refresh, terminal control
-cleanup, and explicit control re-arming after transient disconnection. No real
-relay or physical device is contacted.
+cleanup, and explicit control re-arming after transient disconnection. LAN tests
+cover bounded capability reads, cancellation, address persistence/deduplication,
+invalid saved data, and credential isolation; native screen attachments are kept
+in the test results. By default no real relay or physical device is contacted.
+
+Set `RCTL_LAN_TEST_ADDRESS` to an owned device's private address to opt into
+real LAN video and suspend/resume testing (no touch or keyboard input).
+`RCTL_IOS_TEST_RUNTIME=18.6 make mobile-ios-app-test` selects a specific installed
+runtime; by default the newest iOS 16+ runtime is used. LAN video/reconnect have
+passed on Simulator 18.6 and 26.1; physical iPhone permission behavior and the
+full input/orientation matrix still need qualification.
 
 Realtime package tests also exercise foreign PeerConnection callbacks through a
 loopback WebSocket endpoint and invalidate already queued main-thread events.

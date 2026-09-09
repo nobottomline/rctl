@@ -4,6 +4,11 @@ The iOS controller uses Swift 6 and SwiftUI for product UI, with UIKit-owned
 WebRTC rendering, Picture in Picture, and lifecycle-sensitive media integration.
 It does not wrap the browser UI in a WebView.
 
+The Devices screen supports direct LAN connections by private IP and optional
+port, independently of relay pairing. A public LAN-only device package works
+without a VPS. See [controller usage](Controller/README.md#local-network) and
+the [LAN security and qualification notes](../../docs/MOBILE-LAN.md).
+
 The checked-in modules are:
 
 - `Modules/RctlProtocol`: bounded native models for the shared wire contracts;

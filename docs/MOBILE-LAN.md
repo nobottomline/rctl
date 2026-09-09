@@ -1,11 +1,12 @@
 # Native Direct-LAN Connection
 
-Status: design and implementation gates; not implemented in the shipping iOS
-controller source. The current app still requires a paired relay profile.
+Status: implemented in the iOS controller source. LAN and Relay have separate
+entries on the Devices screen; LAN does not require a relay profile. Physical
+controller qualification remains a release gate, as detailed below.
 
 ## User Flow
 
-Add device -> Local network -> enter an address and optional name -> Connect.
+Devices -> Add Local Device -> enter an address and optional name -> Connect.
 The default port is 8080. A public LAN-only package is sufficient: no VPS,
 domain, certificate provisioning, enrollment, or relay controller account is
 required. Save the address locally for the next connection. Start in View mode;
@@ -14,7 +15,10 @@ control remains an explicit operator action.
 Two devices can both use port 8080 because their addresses differ. A router's
 DHCP change can invalidate a saved address; provide an Edit address action, not
 automatic reconnection to an unrelated host or a subnet scan. A display name or
-HTTP capabilities response is not cryptographic device authentication.
+HTTP capabilities response is not cryptographic device authentication. Swipe or
+long-press a saved entry to edit or remove it. Removal only forgets the address;
+it does not uninstall or reconfigure the controlled device. Up to 64 addresses
+are stored, with duplicate endpoints retaining their original entry identity.
 
 Internet service is unnecessary, but the devices need a reachable network path.
 Guest Wi-Fi/client isolation, firewall rules, VPN routing, denied local-network
@@ -46,13 +50,27 @@ No relay token, signature, refresh request, cookie, or enrollment material may
 reach the local endpoint. Use an isolated, non-caching URLSession without shared
 cookie/credential storage and reject redirects during preflight/signaling.
 
-The initial address form should accept validated private IP literals and a
-valid port, rejecting credentials, arbitrary paths, query strings, fragments,
-public destinations, multicast and broadcast. Support bracketed IPv6 where
-qualified; explicitly report unsupported link-local zone identifiers rather
-than guessing the interface. Hostname/Bonjour discovery can follow later with
-resolved-address validation and permission tests; it is not required for the
-first complete LAN path.
+`LocalDeviceAddress` accepts RFC1918 IPv4 and bracketed IPv6 ULA literals, with
+an optional port (1-65535) and optional `http://` prefix. It rejects credentials,
+paths other than `/`, query strings, fragments, ambiguous IPv4 notation, public
+destinations, multicast, limited broadcast, loopback, hostnames, and link-local
+addresses. ULA parsing is unit-tested; end-to-end IPv6 remains unqualified.
+Hostname/Bonjour discovery requires resolved-address validation and permission
+tests and is intentionally not part of this slice.
+
+`LocalDeviceClient` fetches capabilities with a 64 KiB streaming receive limit,
+15-second request and 20-second resource timeouts, and cancellable URLSession
+tasks. It checks daemon identity, protocol compatibility, and the selected media
+feature before opening signaling. The realtime session permits plaintext only
+for the exact validated local signaling endpoint, uses isolated storage, and
+rejects nonempty ICE server lists in LAN mode. No STUN/TURN service is required.
+
+`LocalDevicesModel` stores only names, UUIDs and validated addresses under
+`rctl.controller.local-devices.v1`, separately from the relay profile and
+Keychain. Saved data is size-limited and revalidated on load. Pending additions
+cannot persist after cancellation or a competing list mutation. Leaving the
+remote view, backgrounding or changing media cancels pending connection
+preparation. Reconnect always returns to View mode.
 
 Plaintext HTTP/WS permission must be tied to the explicit local connection mode
 and validated target. Do not make the existing WSS validator accept every `ws`
@@ -67,25 +85,44 @@ Authenticated local pairing is a separate future protocol change.
 
 ## iOS Integration And Qualification
 
-Declare `NSLocalNetworkUsageDescription` and initiate access only after Connect.
-Local-network permission and App Transport Security are separate mechanisms;
-verify the narrow ATS configuration for HTTP and WebSocket IP connections on
-iOS 16, iOS 17+, and the current supported release. Apple's version-specific
-rules do not justify a global `NSAllowsArbitraryLoads` exception.
+The app declares `NSLocalNetworkUsageDescription` and
+`NSAppTransportSecurity.NSAllowsLocalNetworking`, without arbitrary-load or TLS
+bypass exceptions. Access starts only on explicit add/connect or returning to
+an already opened remote view. Local-network permission and App Transport
+Security are separate mechanisms.
 
-Required checks before declaring LAN complete:
+Verified on 2026-09-10:
+
+- Private-address normalization, exact-target WS policy, isolated credential
+  storage, redirect refusal, and host-only ICE policy pass package tests.
+- App tests cover multiple same-port devices, persistence/deduplication,
+  malformed saved data, cancellation, oversized/malformed/incompatible
+  capabilities, and HTTP errors. Relay lifecycle regression tests still pass.
+- iOS 18.6 and 26.1 Simulator received real H.264 video from a rootless iPad via
+  local HTTP/WS and restored video after suspend/resume. No relay profile or
+  relay request was needed. This is not physical-controller permission testing.
+
+Ordinary `make mobile-test` does not contact a physical device. To opt into the
+view-only live test, set `RCTL_LAN_TEST_ADDRESS` to an owned device's private
+address before running `make mobile-ios-app-test`. `RCTL_IOS_TEST_RUNTIME` may
+select an installed runtime version, such as `18.6`; otherwise the newest
+installed iOS 16+ runtime is selected. The test runner creates and deletes only
+its own temporary simulator and passes no address into source or build settings.
+
+Remaining checks before declaring the LAN slice release-qualified:
 
 - Public rootful and rootless packages connect without a relay configuration.
 - Screen, four orientations, input, and reconnect work through the native app.
-- Two devices with the same port remain separate saved targets.
-- Relay credentials never appear in local HTTP or WebSocket requests.
-- Redirects and non-local targets fail closed; HTTP timeouts/body sizes are bounded.
+- Validate physical Local Network permission allow/deny and IP-based HTTP/WS
+  on the minimum supported iOS 16, iOS 17, and current iOS.
+- Qualify an IPv6 ULA network on physical devices before advertising IPv6.
 - Denied permission, offline address, incompatible protocol, and Relay-only mode
   produce actionable errors without guessing the cause of a generic timeout.
 - An isolated LAN works without WAN, STUN, TURN, or an available VPS.
 - Wi-Fi loss, cancellation, profile changes and backgrounding stop the session;
   recovery does not restore Control mode without an explicit action.
-- Existing HTTPS/WSS relay behavior and profile persistence remain unchanged.
+- Exercise a real relay profile alongside saved LAN devices, including resetting
+  that profile, without invalidating or reconnecting the unrelated LAN session.
 
 References: [Apple local-network privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy)
 and [ATS local networking](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking).

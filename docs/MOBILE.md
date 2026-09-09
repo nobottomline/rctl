@@ -338,16 +338,16 @@ HttpOnly, SameSite cookies for browser sessions; controller auth is additive and
 must not weaken the web path.
 
 The relay is self-hosted, so the mobile application has no mandatory rctl cloud
-account and does not require Sign in with Apple or Google. One app installation
-may hold profiles for multiple independent relay origins and multiple
-controllers per origin.
+account and does not require Sign in with Apple or Google. The current iOS app
+stores one relay controller profile and multiple independent LAN addresses.
+Multiple relay profiles remain a future product increment.
 
 ## Relay And Direct-LAN Modes
 
-The current iOS app implements relay profiles only. The direct-LAN flow, current
-device entry points, security boundary, and acceptance tests are specified in
-[`MOBILE-LAN.md`](MOBILE-LAN.md); this section describes the intended two-mode
-architecture, not existing native LAN UI.
+The current iOS app implements both relay pairing and explicit direct-LAN
+connections. A public LAN-only device package is sufficient for the latter.
+The implemented flow, security boundary, supported address forms, and remaining
+physical-device qualification are documented in [`MOBILE-LAN.md`](MOBILE-LAN.md).
 
 Relay mode is the primary mobile path even when the phone and iPad share Wi-Fi.
 ICE can still choose a direct peer-to-peer route while the relay supplies auth,
@@ -358,7 +358,8 @@ Direct LAN remains an explicit recovery/offline profile:
 
 - the user supplies or selects a local address;
 - iOS declares and explains Local Network access;
-- Android cleartext policy is restricted to the deliberate local profile;
+- Android must restrict cleartext policy to the deliberate local profile when
+  its LAN flow is implemented;
 - the UI identifies the profile as trusted-LAN control;
 - no automatic broad subnet scan runs before user intent;
 - relay and direct-LAN sessions never share credentials.
