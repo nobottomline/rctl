@@ -96,9 +96,29 @@ arm64/arm64e compilation passed. The web build and desktop/narrow-viewport menu
 inspection passed for the unchanged rootless13 client. The 1024-transition event
 construction test also passed on the actual iPadOS 15.5 device; its temporary
 executable was removed afterward. This test does not dispatch input and is not
-proof that Minecraft consumes the events. Rootless14 sustained Safari movement
-and the button/scroll matrix remain pending operator confirmation; do not promote this
-candidate as a qualified public release on build results alone.
+proof that Minecraft consumes the events.
+
+Integrated rootless14 LAN test on 2026-09-10 used the production `GamePointer`
+class in a dedicated Chromium page with both real DataChannels and the live
+Minecraft stream. It bypassed browser Pointer Lock, not the native input path:
+
+- 120 seconds and 7497 calls to relative movement completed without a control
+  error. The session remained active until explicit release, which was
+  acknowledged. Maximum reported daemon processing time in that run was 49 ms;
+  this is not end-to-end latency or a count of delivered motion packets.
+- The stream showed left-button attack, wheel selection of the next hotbar
+  slot, middle-button selection of a nearby leaf block, right-button placement,
+  and left-button removal of that same test block.
+- Reacquisition after explicit release succeeded. With the client's heartbeat
+  timer deliberately stopped for 2300 ms, the next button request was rejected
+  as `pointer_not_owned`; it did not revive the expired lease.
+- The test controller released ownership and the page and SSH session closed.
+
+Sustained capture and mouse-event routing in Safari still need a real-browser
+check. The operator did not have a mouse available for the rootless14 retest.
+The automated result is transport/game evidence, not Safari Pointer Lock proof.
+Do not promote this candidate as a qualified public release on these results
+alone; rootful, relay, browser lifecycle and simultaneous-input checks remain.
 
 Regression checklist:
 
