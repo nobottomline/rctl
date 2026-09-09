@@ -32,6 +32,7 @@ rctld_FILES = main.mm \
               ../core/update/UpdateLauncher.mm \
               ../core/net/RelayClient.mm \
               ../core/net/HttpStreamServer.mm \
+              ../core/net/LocalDiscovery.mm \
               ../core/net/Term.mm \
               ../core/net/WebRTCBridge.cpp \
               ../core/net/WebRTCPermissions.cpp \

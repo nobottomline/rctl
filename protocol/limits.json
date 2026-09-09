@@ -1,4 +1,5 @@
 {
+  "discovery_txt_bytes": 400,
   "capabilities_json_bytes": 65536,
   "signaling_json_bytes": 262144,
   "control_json_bytes": 256,

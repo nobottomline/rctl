@@ -40,6 +40,7 @@
 #import "net/HttpStreamServer.h"
 #import "net/RelayClient.h"
 #import "config/LocalAccess.h"
+#import "net/LocalDiscovery.h"
 #import "ipc/Ipc.h"
 #import "input/ScriptValidation.h"
 #include "input/PointerLease.h"
@@ -1291,6 +1292,7 @@ static char *rctl_local_access_json(bool restarting) {
         @"mode": enabled ? @"lan" : @"relay-only",
         @"listen": enabled ? @"0.0.0.0:8080" : @"127.0.0.1:8080",
         @"restarting": @(restarting),
+        @"discovery": @(rctl_discovery_status()),
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
     char *result = (char *)malloc(data.length + 1);
@@ -1413,6 +1415,7 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
             return rctl_json_error(reason);
         }
         *status = 202;
+        rctl_discovery_stop();
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 750 * NSEC_PER_MSEC),
                        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             // launchd KeepAlive restarts rctld with the newly persisted binding.
@@ -2302,6 +2305,7 @@ int main(int argc, char **argv) {
         pthread_t alt;
         pthread_create(&alt, NULL, audio_lease_thread, NULL);
 
+        if (localAccessEnabled) rctl_discovery_start(8080);
         dispatch_main();
     }
     return 0;

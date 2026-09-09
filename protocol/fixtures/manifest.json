@@ -1,5 +1,6 @@
 {
   "fixtures": [
+    { "schema": "discovery-fixtures.schema.json", "path": "discovery-v1.json", "valid": true },
     { "schema": "pointer.schema.json", "path": "pointer/acquire.json", "valid": true },
     { "schema": "pointer.schema.json", "path": "pointer/state.json", "valid": true },
     { "schema": "pointer.schema.json", "path": "pointer/move.json", "valid": true },

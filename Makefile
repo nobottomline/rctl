@@ -220,6 +220,12 @@ test-destructive-actions:
 	@/tmp/rctl-destructive-actions-test
 
 .PHONY: test-local-access
+.PHONY: test-local-discovery
+test: test-local-discovery
+test-local-discovery:
+	@clang++ -std=c++17 -fobjc-arc -Icore tests/local_discovery_test.mm core/net/LocalDiscovery.mm -framework Foundation -o /tmp/rctl-local-discovery-test
+	@/tmp/rctl-local-discovery-test
+
 test-local-access:
 	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore \
 		-DRCTL_RELAY_CONFIG_PLIST='@"/tmp/rctl-local-access-test.plist"' \
