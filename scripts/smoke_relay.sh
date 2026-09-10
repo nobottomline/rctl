@@ -64,6 +64,14 @@ if [[ ! -f "${ROOT}/web/dist/index.html" ]] ||
   )
 fi
 
+require npm
+say "building relay admin client"
+(
+  cd "${ROOT}/relay/web-admin"
+  [[ -d node_modules ]] || npm ci
+  npm run build
+)
+
 say "building relay binary"
 (
   cd "${ROOT}/relay"

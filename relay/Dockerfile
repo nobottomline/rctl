@@ -1,3 +1,11 @@
+FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS admin
+
+WORKDIR /src/relay/web-admin
+COPY relay/web-admin/package*.json ./
+RUN npm ci
+COPY relay/web-admin/ ./
+RUN npm run build
+
 FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS build
 
 ARG VERSION=dev
@@ -7,6 +15,7 @@ WORKDIR /src
 COPY relay/go.mod relay/go.sum* ./
 RUN go mod download
 COPY relay/ .
+COPY --from=admin /src/relay/internal/relay/webdist ./internal/relay/webdist
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X github.com/nobottomline/rctl/relay/internal/relay.Version=${VERSION}" \
     -o /out/rctl-relay ./cmd/rctl-relay

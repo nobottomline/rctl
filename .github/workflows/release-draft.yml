@@ -120,6 +120,16 @@ jobs:
         with:
           go-version: 1.26.6
           cache-dependency-path: relay/go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: relay/web-admin/package-lock.json
+      - name: Build relay admin client
+        working-directory: relay/web-admin
+        run: |
+          npm ci
+          npm run build
       - name: Build static Linux binaries
         working-directory: relay
         env:

@@ -165,6 +165,7 @@ Build the binary from the repository:
 
 ```sh
 cd relay
+( cd web-admin && npm ci && npm run build )
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
   go build -trimpath -ldflags='-s -w' -o rctl-relay ./cmd/rctl-relay
 ```
