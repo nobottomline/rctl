@@ -4,6 +4,29 @@ These additive endpoints use the existing controller request proof: opaque
 access bearer token plus fresh P-256 timestamp/nonce/signature headers. They
 never accept an admin credential, controller ID, or secret in a query string.
 
+## Transport and Identity Rationale
+
+`me` denotes the controller authenticated by the request proof, not a user
+account or the iPad being controlled. The handler derives its target from that
+principal; the path spelling itself provides no authorization. Administrative
+revocation of a chosen controller remains a separate admin-only endpoint.
+
+Use HTTPS request/response for revocation and foreground heartbeats. Revocation
+is a bounded state-changing command with an acknowledgement and does not require
+an open streaming session. A heartbeat renews a server-timed lease; it must work
+on the device list as well as during control. Existing signaling WebSockets and
+WebRTC channels retain their realtime responsibilities.
+
+A dedicated presence WebSocket would still need liveness timeouts, reconnects
+and foreground lifecycle handling. An open socket or protocol-level pong does
+not establish that a human is using the app. It is not justified just to replace
+two small requests per minute per selected controller. HTTP connection reuse is
+left to the networking stack; a heartbeat does not require a new TLS connection.
+Reconsider a persistent event channel if bidirectional server events become a
+product requirement, with measured latency/load goals and the same lease and
+authorization boundaries. The current limits are safeguards, not load-test
+evidence or a promise of unlimited capacity.
+
 ## Self-revocation
 
 `POST /api/controller/me/revoke`, empty body, no additional scope required.

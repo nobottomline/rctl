@@ -211,6 +211,15 @@ rctl-setup reset-admin   rotate admin/session credentials with rollback
 rctl-setup version       build and release metadata
 ```
 
+The admin page's **Update device** action updates the iPad package, not the
+relay server. There is currently no relay self-update HTTP endpoint or admin
+button. Server upgrades belong to the external `rctl-setup upgrade` process:
+the web service does not need root privileges, a Docker socket, or permission to
+replace its own executable. This command requires a wizard-managed installation;
+an existing unmanaged systemd relay follows the binary deployment procedure in
+[`RELAY.md`](RELAY.md#binarysystemd-deployment) with an operator-managed backup
+and rollback. Do not run the fresh-host wizard over an existing shared VPS.
+
 Non-interactive automation uses a mode-0600 JSON configuration file. Setup
 does not accept deployment secrets in that file, environment variables, or
 command-line flags; it generates them from the kernel CSPRNG after validation
