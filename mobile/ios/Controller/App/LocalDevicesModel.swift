@@ -22,7 +22,16 @@ final class LocalDevicesModel: ObservableObject {
     @Published private(set) var devices: [LocalDeviceProfile] = []
     @Published private(set) var reachability: [UUID: LocalDeviceReachability] = [:]
     @Published var errorMessage: String?
+    @Published private(set) var nearby: [DiscoveredLocalDevice] = []
+    @Published private(set) var discoveryState: LocalBrowserState = .stopped
+    @Published private(set) var discoveryEnabled: Bool
+    @Published private(set) var selectingNearby = false
+    @Published private(set) var discoverySearchSettled = false
     let client: LocalDeviceClient
+    private let browser = LocalDeviceBrowser()
+    private let resolver = LocalDeviceResolver()
+    private var foreground = false
+    private var selection: Task<LocalDeviceProfile, Error>?
     private let defaults: UserDefaults
     private let storageKey = "rctl.controller.local-devices.v1"
     private var revision: UInt64 = 0
@@ -31,6 +40,13 @@ final class LocalDevicesModel: ObservableObject {
     init(defaults: UserDefaults = .standard, client: LocalDeviceClient = LocalDeviceClient()) {
         self.defaults = defaults
         self.client = client
+        discoveryEnabled = defaults.bool(forKey: "rctl.controller.discovery.enabled")
+        browser.onChange = { [weak self] in
+            guard let self else { return }
+            nearby = browser.devices
+            discoveryState = browser.state
+            discoverySearchSettled = browser.searchSettled
+        }
         if let data = defaults.data(forKey: storageKey) {
             do {
                 guard data.count <= 64 * 1024 else { throw LocalDeviceStoreError.invalidSavedDevices }
@@ -45,6 +61,53 @@ final class LocalDevicesModel: ObservableObject {
                 errorMessage = "Saved local devices could not be read. Add their addresses again."
             }
         }
+    }
+
+    func setDiscoveryEnabled(_ enabled: Bool) {
+        discoveryEnabled = enabled
+        defaults.set(enabled, forKey: "rctl.controller.discovery.enabled")
+        if enabled && foreground { cancelReachabilityProbe(); browser.start() }
+        else {
+            browser.stop()
+            selection?.cancel(); resolver.cancelAll()
+        }
+    }
+
+    func setForeground(_ active: Bool) {
+        foreground = active
+        if active && discoveryEnabled { cancelReachabilityProbe(); browser.start() }
+        if !active {
+            browser.stop()
+            cancelReachabilityProbe()
+            selection?.cancel(); resolver.cancelAll()
+        }
+    }
+
+    func restartDiscovery() {
+        guard foreground, discoveryEnabled, !selectingNearby else { return }
+        browser.stop(); browser.start()
+    }
+
+    /// An explicit selection re-resolves the service. The displayed address is
+    /// not trusted, and a new address never silently replaces a saved profile.
+    func prepareNearby(_ device: DiscoveredLocalDevice) async throws -> LocalDeviceProfile {
+        guard foreground, !selectingNearby, nearby.contains(where: { $0.id == device.id }) else { throw CancellationError() }
+        selectingNearby = true
+        cancelReachabilityProbe()
+        browser.stop()
+        let task = Task { [resolver, client] in
+            let endpoint = try await resolver.resolve(device.id, interfaceIndices: device.interfaces)
+            _ = try await client.capabilities(at: endpoint.address)
+            try Task.checkCancellation()
+            return LocalDeviceProfile(id: UUID(), name: device.id.name, address: endpoint.address)
+        }
+        selection = task
+        defer {
+            selectingNearby = false; selection = nil
+            if foreground && discoveryEnabled { browser.start() }
+        }
+        return try await withTaskCancellationHandler { try await task.value }
+        onCancel: { task.cancel() }
     }
 
     func save(address input: String, name: String, editing id: UUID? = nil) async throws -> LocalDeviceProfile {
@@ -80,17 +143,18 @@ final class LocalDevicesModel: ObservableObject {
         reachability[profile.id] ?? .unknown
     }
 
-    /// Probes every saved address concurrently with the bounded capabilities
-    /// request. A newer probe supersedes an in-flight one.
+    /// At most four probes, never in parallel with discovery resolution.
     func probeReachability() async {
         probe?.cancel()
+        guard foreground, !discoveryEnabled, !selectingNearby else { return }
         let snapshot = devices
         guard !snapshot.isEmpty else { return }
         for device in snapshot { reachability[device.id] = .checking }
         let client = client
         let task = Task { @MainActor [weak self] in
             await withTaskGroup(of: (UUID, LocalDeviceReachability).self) { group in
-                for device in snapshot {
+                var iterator = snapshot.makeIterator()
+                func add(_ device: LocalDeviceProfile) {
                     group.addTask {
                         do {
                             let capabilities = try await client.capabilities(at: device.address)
@@ -102,14 +166,17 @@ final class LocalDevicesModel: ObservableObject {
                         }
                     }
                 }
+                for _ in 0..<4 { if let device = iterator.next() { add(device) } }
                 for await (id, state) in group {
-                    guard !Task.isCancelled, let self, self.devices.contains(where: { $0.id == id }) else { continue }
+                    guard !Task.isCancelled else { group.cancelAll(); break }
+                    if let device = iterator.next() { add(device) }
+                    guard let self, self.devices.contains(where: { $0.id == id }) else { continue }
                     self.reachability[id] = state
                 }
             }
         }
         probe = task
-        await task.value
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
     func cancelReachabilityProbe() {
@@ -126,6 +193,15 @@ final class LocalDevicesModel: ObservableObject {
     }
 
     static func message(for error: Error) -> String {
+        if let error = error as? LocalDiscoveryError {
+            switch error {
+            case .unsupportedVersion: return "This device uses an incompatible rctl protocol."
+            case .unsupportedNetwork: return "No supported private IPv4 address was found. Add the device by address."
+            case .malformedRecord: return "The device advertised an invalid discovery record."
+            case .timedOut: return "Device discovery timed out. Check the network or add the device by address."
+            case .busy, .unavailable: return "Discovery is unavailable. Retry or add the device by address."
+            }
+        }
         if let error = error as? LocalConnectionError { return error.localizedDescription }
         if let error = error as? LocalDeviceStoreError { return error.localizedDescription }
         if let error = error as? URLError {

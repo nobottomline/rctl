@@ -1,4 +1,5 @@
 import RctlClient
+import RctlRealtime
 import SwiftUI
 
 /// Navigation routes owned by the Devices screen. Every secondary screen is a
@@ -8,10 +9,13 @@ enum DevicesRoute: Hashable {
     case scanPairingCode
     case localDevice(LocalDeviceProfile?)
     case localControl(LocalDeviceProfile)
+    case discoveredDevice(LocalDeviceProfile, replacing: LocalDeviceProfile?)
     case relayControl(deviceID: String)
 }
 
 struct DeviceListView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @ObservedObject var model: ControllerAppModel
     @ObservedObject var localDevices: LocalDevicesModel
     @State private var path: [DevicesRoute] = []
@@ -19,6 +23,8 @@ struct DeviceListView: View {
     @State private var removing: LocalDeviceProfile?
     @State private var unavailableReason: String?
     @State private var homeVisible = true
+    @State private var nearbySelection: LocalDeviceProfile?
+    @State private var nearbyTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -59,6 +65,7 @@ struct DeviceListView: View {
                         localSection
                         relaySection
                     }
+                    nearbySection
                     footer
                 }
                 .pageColumn()
@@ -71,11 +78,31 @@ struct DeviceListView: View {
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             homeVisible = true
+            localDevices.setForeground(scenePhase == .active)
             if let route = Self.debugLaunchRoute, path.isEmpty { path = route }
         }
-        .onDisappear { homeVisible = false }
+        .onDisappear {
+            homeVisible = false
+            nearbyTask?.cancel()
+            localDevices.setForeground(false)
+        }
+        .onChange(of: scenePhase) { phase in
+            localDevices.setForeground(homeVisible && phase == .active)
+        }
         .task(id: localDevices.devices) {
             await localDevices.probeReachability()
+        }
+        .confirmationDialog(
+            nearbySelection.map { "\($0.name) at \($0.address.displayAddress)" } ?? "Local device",
+            isPresented: Binding(get: { nearbySelection != nil }, set: { if !$0 { nearbySelection = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let selected = nearbySelection {
+                Button("Open in View mode") { path.append(.localControl(selected)); nearbySelection = nil }
+                Button("Save device") { path.append(.discoveredDevice(selected, replacing: nil)); nearbySelection = nil }
+            }
+        } message: {
+            Text("Discovery does not verify ownership. Use LAN control only on a trusted network.")
         }
         .confirmationDialog(
             "Remove this controller from this device?",
@@ -123,7 +150,7 @@ struct DeviceListView: View {
     private var topRouteIsDark: Bool {
         switch path.last {
         case .scanPairingCode, .localControl, .relayControl: true
-        case .pairRelay, .localDevice, nil: false
+        case .pairRelay, .localDevice, .discoveredDevice, nil: false
         }
     }
 
@@ -242,6 +269,65 @@ struct DeviceListView: View {
                     path.append(.localDevice(nil))
                 }
                 .accessibilityIdentifier("add-local-device")
+            }
+        }
+    }
+
+    private var nearbySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Nearby")
+            DeviceGroup {
+                if !localDevices.discoveryEnabled {
+                    AddRow(title: "Find devices on this network", subtitle: "Local network", systemImage: "network") {
+                        localDevices.setDiscoveryEnabled(true)
+                    }
+                } else {
+                    ForEach(localDevices.nearby) { device in
+                        DeviceRow(name: device.id.name,
+                                  detail: device.endpoint?.address.displayAddress ?? device.error.map { LocalDevicesModel.message(for: $0) } ?? "Resolving",
+                                  status: .init(text: device.error == nil ? "Discovered" : "Unavailable", tone: .neutral),
+                                  enabled: device.endpoint != nil && !localDevices.selectingNearby) {
+                            selectNearby(device)
+                        }
+                        .contextMenu {
+                            if device.endpoint != nil {
+                                Menu("Use for saved device") {
+                                    ForEach(localDevices.devices) { saved in
+                                        Button("\(saved.name) (\(saved.address.displayAddress))") {
+                                            selectNearby(device, replacing: saved)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        RowSeparator()
+                    }
+                    if localDevices.discoveryState == .permissionDenied {
+                        AddRow(title: "Local Network permission required", subtitle: "Manual connections need this permission too", systemImage: "gear") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                        }
+                    } else if localDevices.nearby.isEmpty {
+                        AddRow(title: localDevices.selectingNearby ? "Checking device" : localDevices.discoveryState == .unavailable ? "Discovery unavailable" : localDevices.discoverySearchSettled ? "No devices found" : "Searching",
+                               subtitle: "Add by address", systemImage: "plus") { path.append(.localDevice(nil)) }
+                    }
+                    AddRow(title: "Refresh discovery", subtitle: "Nearby devices", systemImage: "arrow.clockwise") { localDevices.restartDiscovery() }
+                    AddRow(title: "Stop discovery", subtitle: "Manual connections remain available", systemImage: "stop") { localDevices.setDiscoveryEnabled(false) }
+                }
+            }
+        }
+    }
+
+    private func selectNearby(_ device: DiscoveredLocalDevice, replacing saved: LocalDeviceProfile? = nil) {
+        guard nearbyTask == nil else { return }
+        nearbyTask = Task { @MainActor in
+            defer { nearbyTask = nil }
+            do {
+                let profile = try await localDevices.prepareNearby(device)
+                try Task.checkCancellation()
+                if let saved { path.append(.discoveredDevice(profile, replacing: saved)) }
+                else { nearbySelection = profile }
+            } catch {
+                if !Task.isCancelled { unavailableReason = LocalDevicesModel.message(for: error) }
             }
         }
     }
@@ -411,6 +497,7 @@ struct DeviceListView: View {
     }
 
     private func refresh() async {
+        localDevices.restartDiscovery()
         async let relay: Void = model.refreshDevices()
         async let local: Void = localDevices.probeReachability()
         _ = await (relay, local)
@@ -425,6 +512,10 @@ struct DeviceListView: View {
             PairingScannerView(model: model)
         case let .localDevice(editing):
             LocalDeviceEditor(model: localDevices, editing: editing) { device in
+                path = [.localControl(device)]
+            }
+        case let .discoveredDevice(suggested, replacing):
+            LocalDeviceEditor(model: localDevices, editing: replacing, suggested: suggested) { device in
                 path = [.localControl(device)]
             }
         case let .localControl(device):

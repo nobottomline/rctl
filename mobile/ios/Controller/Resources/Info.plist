@@ -25,7 +25,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scan a one-time controller pairing code from your relay.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to the rctl device whose local address you enter.</string>
+	<string>Find rctl devices on your local network and connect to devices you select or add by address.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_rctl._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

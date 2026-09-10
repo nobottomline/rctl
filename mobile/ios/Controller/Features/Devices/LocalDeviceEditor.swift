@@ -14,13 +14,13 @@ struct LocalDeviceEditor: View {
     @State private var pending: Task<Void, Never>?
     @FocusState private var focus: Field?
 
-    init(model: LocalDevicesModel, editing: LocalDeviceProfile? = nil,
+    init(model: LocalDevicesModel, editing: LocalDeviceProfile? = nil, suggested: LocalDeviceProfile? = nil,
          connect: @escaping (LocalDeviceProfile) -> Void) {
         self.model = model
         self.editing = editing
         self.connect = connect
-        _address = State(initialValue: editing?.address.displayAddress ?? "")
-        _name = State(initialValue: editing?.name ?? "")
+        _address = State(initialValue: suggested?.address.displayAddress ?? editing?.address.displayAddress ?? "")
+        _name = State(initialValue: editing?.name ?? suggested?.name ?? "")
     }
 
     var body: some View {

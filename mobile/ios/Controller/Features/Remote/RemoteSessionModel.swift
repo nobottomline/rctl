@@ -9,6 +9,19 @@ enum RemoteConnectionTarget {
     case local(LocalDeviceAddress)
 }
 
+enum RemoteAccessPath: Equatable {
+    case lan(LocalDeviceAddress)
+    case relay(origin: String?)
+
+    var label: String { if case .lan = self { "LAN" } else { "Relay" } }
+    var endpoint: String {
+        switch self {
+        case .lan(let address): address.displayAddress
+        case .relay(let origin): origin ?? "Unavailable"
+        }
+    }
+}
+
 enum RemoteInteractionMode: String, CaseIterable, Identifiable {
     case view
     case control
@@ -81,6 +94,7 @@ final class RemoteSessionModel: ObservableObject {
     @Published private(set) var interactionMode: RemoteInteractionMode = .view
 
     let session: RctlRealtimeSession
+    let accessPath: RemoteAccessPath
     private let appModel: ControllerAppModel
     private let target: RemoteConnectionTarget
     private let localClient: LocalDeviceClient
@@ -100,6 +114,10 @@ final class RemoteSessionModel: ObservableObject {
     init(appModel: ControllerAppModel, target: RemoteConnectionTarget, localClient: LocalDeviceClient = LocalDeviceClient()) {
         self.appModel = appModel
         self.target = target
+        switch target {
+        case .local(let address): accessPath = .lan(address)
+        case .relay: accessPath = .relay(origin: appModel.profile?.origin)
+        }
         self.localClient = localClient
         let router = EventRouter()
         session = RctlRealtimeSession { [router] event in

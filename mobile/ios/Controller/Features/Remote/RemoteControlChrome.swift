@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RemoteSessionHeader: View {
     let deviceName: String
+    let accessPath: String
     let connectionLabel: String
     let connectionColor: Color
     let modeLabel: String
@@ -26,6 +27,10 @@ struct RemoteSessionHeader: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                 HStack(spacing: 6) {
+                    Text(accessPath)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(RemotePalette.secondaryText)
+                        .accessibilityLabel(accessPath == "LAN" ? "Connection path: local network" : "Connection path: relay")
                     Circle()
                         .fill(connectionColor)
                         .frame(width: 6, height: 6)

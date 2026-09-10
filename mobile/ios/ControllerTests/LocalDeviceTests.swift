@@ -9,6 +9,74 @@ import XCTest
 final class LocalDeviceTests: XCTestCase {
     private let capabilities = #"{"component":"daemon","product":"rctl","daemon":{"version":"test"},"browser":{"version":"test"},"protocol":{"major":1,"minor":1},"features":["screen.webrtc"]}"#
 
+    func testAccessPathSurvivesAllConnectionStates() throws {
+        let address = try LocalDeviceAddress("192.168.1.2")
+        let local = RemoteSessionModel(appModel: ControllerAppModel(), target: .local(address))
+        let relay = RemoteSessionModel(appModel: ControllerAppModel(), deviceID: "synthetic")
+        for state in [RctlRealtimeConnectionState.idle, .signaling, .connected, .disconnected, .failed, .closed] {
+            local.handle(.connection(state)); relay.handle(.connection(state))
+            XCTAssertEqual(local.accessPath, .lan(address))
+            XCTAssertEqual(local.accessPath.label, "LAN")
+            XCTAssertEqual(relay.accessPath.label, "Relay")
+        }
+        local.suspend(); local.disconnect()
+        XCTAssertEqual(local.accessPath.endpoint, "192.168.1.2:8080")
+    }
+
+    func testDiscoveryOptInDoesNotBrowseInBackgroundOrChangeSavedStore() {
+        let suite = "rctl.local.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = LocalDevicesModel(defaults: defaults)
+        XCTAssertFalse(model.discoveryEnabled)
+        model.setDiscoveryEnabled(true)
+        XCTAssertEqual(model.discoveryState, .stopped)
+        XCTAssertTrue(model.nearby.isEmpty)
+        XCTAssertTrue(LocalDevicesModel(defaults: defaults).discoveryEnabled)
+        model.setForeground(false)
+        model.setDiscoveryEnabled(false)
+        XCTAssertNil(defaults.data(forKey: "rctl.controller.local-devices.v1"))
+    }
+
+    func testConfirmedAddressReplacementPreservesIdentityAndName() async throws {
+        let suite = "rctl.local.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let original = LocalDeviceProfile(id: UUID(), name: "Saved name", address: try LocalDeviceAddress("192.168.1.2"))
+        defaults.set(try JSONEncoder().encode([original]), forKey: "rctl.controller.local-devices.v1")
+        let model = LocalDevicesModel(defaults: defaults, client: client())
+        let change = Task { try await model.save(address: "192.168.1.3", name: original.name, editing: original.id) }
+        let request = try await pendingRequest()
+        XCTAssertEqual(model.devices, [original])
+        request.respond(capabilities)
+        let replaced = try await change.value
+        XCTAssertEqual(replaced.id, original.id)
+        XCTAssertEqual(replaced.name, original.name)
+        XCTAssertEqual(model.devices.count, 1)
+        XCTAssertEqual(replaced.address.displayAddress, "192.168.1.3:8080")
+    }
+
+    func testReachabilityHasFourRequestBudgetAndStopsOnBackground() async throws {
+        let suite = "rctl.local.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let saved = try (1...12).map { index in
+            LocalDeviceProfile(id: UUID(), name: "Synthetic \(index)", address: try LocalDeviceAddress("192.168.1.\(index)"))
+        }
+        defaults.set(try JSONEncoder().encode(saved), forKey: "rctl.controller.local-devices.v1")
+        let model = LocalDevicesModel(defaults: defaults, client: client())
+        model.setForeground(true)
+        let probe = Task { await model.probeReachability() }
+        var requests: [RequestStub] = []
+        for _ in 0..<4 { requests.append(try await pendingRequest()) }
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertNil(RequestStub.requests.take("/v1/capabilities"))
+        model.setForeground(false)
+        for request in requests { request.respond(capabilities) }
+        await probe.value
+        XCTAssertNil(RequestStub.requests.take("/v1/capabilities"))
+    }
+
     func testLocalScreensRenderWithoutRelay() async throws {
         let suite = "rctl.local.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

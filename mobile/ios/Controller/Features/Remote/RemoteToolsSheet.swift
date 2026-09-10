@@ -5,6 +5,7 @@ struct RemoteToolsSheet: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let deviceName: String
+    let accessPath: RemoteAccessPath
     let controlsEnabled: Bool
     let send: (RemoteHardwareAction) -> Void
     let reconnect: () -> Void
@@ -14,6 +15,14 @@ struct RemoteToolsSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(accessPath.label).font(.headline)
+                    Text(accessPath.endpoint).font(.footnote).textSelection(.enabled)
+                    if case .lan = accessPath { Text("Trusted network, not paired").font(.caption) }
+                }
+                .foregroundStyle(RemotePalette.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 12)
                 LazyVGrid(columns: columns, spacing: 10) {
                     tool("Control Center", symbol: "switch.2", action: .controlCenter)
                     tool("Notifications", symbol: "bell", action: .notificationCenter)

@@ -46,6 +46,7 @@ struct RemoteControlView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             RemoteSessionHeader(
                 deviceName: deviceName,
+                accessPath: model.accessPath.label,
                 connectionLabel: connectionLabel,
                 connectionColor: connectionColor,
                 modeLabel: modeLabel,
@@ -91,6 +92,7 @@ struct RemoteControlView: View {
             case .tools:
                 RemoteToolsSheet(
                     deviceName: deviceName,
+                    accessPath: model.accessPath,
                     controlsEnabled: controlsEnabled,
                     send: model.sendHardware,
                     reconnect: { Task { await model.connect() } }
