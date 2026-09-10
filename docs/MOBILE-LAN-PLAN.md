@@ -1,6 +1,7 @@
 # LAN Discovery, Access-Path Visibility, And Authenticated Local Pairing
 
-Status: implementation plan, nothing shipped. Baseline inspected on
+Status: discovery/access-path code implemented; physical qualification and
+authenticated pairing remain gated. Baseline inspected on
 2026-09-10. It extends the implemented direct-IP flow in
 [`MOBILE-LAN.md`](MOBILE-LAN.md), follows the work rules and gates of
 [`MOBILE-PLAN.md`](MOBILE-PLAN.md), and uses the Devices screen rules in
@@ -11,6 +12,27 @@ This is the active plan. [MOBILE-LAN-REVIEW.md](MOBILE-LAN-REVIEW.md) records
 the source-backed review and preserves both original drafts for comparison.
 Increment C remains a design gate: its transport and bootstrap are not approved
 for implementation until the security and migration questions below are resolved.
+
+## Implementation Checkpoint (2026-09-10)
+
+- B: immutable `RemoteSessionModel.accessPath`, persistent LAN/Relay label and
+  endpoint in Session Controls. Existing visual components were reused; design
+  polish and optional ICE-route/RTT diagnostics remain separate work.
+- A: [discovery-v1](../protocol/discovery-v1.md), raw TXT fixtures/parser,
+  daemon registration, bounded NWBrowser/DNS-SD resolution, foreground opt-in,
+  explicit open/save/replace-address flows and manual fallback are implemented.
+  Saved profiles remain v1. Capability probes are limited to four and do not
+  run alongside discovery resolution.
+- Rootful package installed with `scripts/deploy.sh`; real Mac NWBrowser ->
+  resolver -> capabilities succeeded. Bonjour add/remove churn was observed
+  despite a live daemon; sleep/network stability is not release-qualified.
+- Rootless build/public package audit pass; device deployment and Bonjour on
+  the rootless target remain unverified.
+- C: [transport ADR and isolated TLS spike](../protocol/local-auth-v1.md).
+  Host TLS 1.3 HTTPS with pinned Apple trust and wrong/missing-pin rejection
+  passes. No runtime local-auth changes or new pairing endpoints were added.
+- Remaining matrix: two devices, DHCP changes, physical controller permission
+  denial/allow, guest networks, WAN-off and explicit Relay-only transitions.
 
 ## Outcome And Scope
 
@@ -61,10 +83,11 @@ Facts from the code that constrain the design:
   (private IPv4 or ULA literal), probes capabilities through an isolated
   `URLSession`, allows plaintext WebSocket only for the exact validated
   endpoint, and now probes saved addresses for reachability.
-  `RemoteControlView` knows whether a session is local but shows it only in the
-  transient connection label. The controller identity is a P-256 key per relay;
+  `RemoteSessionModel.accessPath` preserves LAN/Relay independently of transient
+  connection state. The controller identity is a P-256 key per relay;
   the current abstraction supports Secure Enclave and a software fallback.
-- No Bonjour or mDNS code exists in the repository.
+- Bonjour registration lives in `core/net/LocalDiscovery.mm`; browsing,
+  raw-record validation and DNS-only resolution live in `RctlRealtime`.
 
 ## Invariants
 
@@ -180,8 +203,10 @@ New `core/net/LocalDiscovery.{h,mm}`:
   conflicts, interface changes, and responder failures are logged with the
   `DNSServiceErrorType` and retried with bounded backoff (1 s doubling to
   60 s). None of them is fatal.
-- `/v1/local_access` reports `"discovery": "advertising" | "off" | "error"`
+- `/v1/local_access` reports `"discovery": "starting" | "advertising" | "off" | "error"`
   for the relay admin device page and diagnostics.
+  `advertising` means the responder accepted registration, not that every
+  client currently sees it or can reach the device.
 - Rootful and rootless linking of `libsystem_dnssd` is verified on device
   before the feature is enabled; a missing responder is a recoverable feature
   failure.

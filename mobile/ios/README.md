@@ -4,8 +4,10 @@ The iOS controller uses Swift 6 and SwiftUI for product UI, with UIKit-owned
 WebRTC rendering, Picture in Picture, and lifecycle-sensitive media integration.
 It does not wrap the browser UI in a WebView.
 
-The Devices screen supports direct LAN connections by private IP and optional
-port, independently of relay pairing. A public LAN-only device package works
+The Devices screen supports opt-in Bonjour discovery and manual private IP/port
+connections, independently of relay pairing. Discovery validates DNS-SD results
+before connecting; it does not authenticate ownership. LAN/Relay stays visible
+throughout a session. A public LAN-only device package works
 without a VPS. See [controller usage](Controller/README.md#local-network) and
 the [LAN security and qualification notes](../../docs/MOBILE-LAN.md).
 

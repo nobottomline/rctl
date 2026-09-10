@@ -21,6 +21,11 @@ Fixtures contain no production hostnames, identifiers, credentials, or media.
 defined under `schemas/`; binary DataChannel framing and state machines are
 defined in `datachannel/` and `signaling-v1.md`.
 
+`discovery-v1.md` defines untrusted Bonjour hints, raw TXT limits and resolution
+policy. `fixtures/discovery-v1.json` is a byte-exact fixture corpus exercised by
+the native controller tests. `local-auth-v1.md` is a gated transport proposal,
+not a shipped authentication protocol.
+
 Within one protocol major, receivers ignore unknown object fields so a newer
 minor can add metadata. Unknown message kinds and operations remain invalid and
 must fail locally without invoking device behavior.

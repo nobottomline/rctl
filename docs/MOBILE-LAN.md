@@ -4,11 +4,22 @@ Status: implemented in the iOS controller source. LAN and Relay have separate
 entries on the Devices screen; LAN does not require a relay profile. Physical
 controller qualification remains a release gate, as detailed below.
 
-Next increments: [LAN discovery, persistent access-mode UI, and authenticated
-pairing design](MOBILE-LAN-PLAN.md). These are planned separately from the
-implemented direct-IP flow.
+Bonjour discovery and a persistent LAN/Relay indicator are implemented alongside
+the direct-IP flow. [Delivery and qualification](MOBILE-LAN-PLAN.md) track the
+remaining physical matrix and the separate [authenticated pairing gate](../protocol/local-auth-v1.md).
 
 ## User Flow
+
+Devices -> Nearby -> Find devices on this network opts into system Bonjour.
+After opt-in, discovery runs only while Devices is visible and active. Select a
+device, then explicitly open in View mode or save it. Selection re-resolves the
+service and checks capabilities. Long-press -> Use for saved device opens the
+existing editor with the new address; only Save and connect replaces the old
+address. The saved UUID and custom name survive. Stop discovery and Add by
+address remain available. Names and discovery records do not verify ownership.
+
+LAN/Relay remains visible in all session states. Session Controls shows the
+endpoint; LAN is described as trusted-network access, not authenticated pairing.
 
 Devices -> Add Local Device -> enter an address and optional name -> Connect.
 The default port is 8080. A public LAN-only package is sufficient: no VPS,
@@ -59,8 +70,10 @@ an optional port (1-65535) and optional `http://` prefix. It rejects credentials
 paths other than `/`, query strings, fragments, ambiguous IPv4 notation, public
 destinations, multicast, limited broadcast, loopback, hostnames, and link-local
 addresses. ULA parsing is unit-tested; end-to-end IPv6 remains unqualified.
-Hostname/Bonjour discovery requires resolved-address validation and permission
-tests and is intentionally not part of this slice.
+Bonjour selects private IPv4 only because the daemon listener is AF_INET. TXT
+is capped at 400 bytes, results at 64, interfaces/addresses at eight and concurrent
+resolutions at four with a five-second per-service deadline. DNS-only resolution
+validates and pins the literal before any application TCP connection.
 
 `LocalDeviceClient` fetches capabilities with a 64 KiB streaming receive limit,
 15-second request and 20-second resource timeouts, and cancellable URLSession
@@ -89,9 +102,9 @@ Authenticated local pairing is a separate future protocol change.
 
 ## iOS Integration And Qualification
 
-The app declares `NSLocalNetworkUsageDescription` and
+The app declares `NSLocalNetworkUsageDescription`, `NSBonjourServices` and
 `NSAppTransportSecurity.NSAllowsLocalNetworking`, without arbitrary-load or TLS
-bypass exceptions. Access starts only on explicit add/connect or returning to
+bypass exceptions. Discovery is explicit opt-in. Access starts on add/connect or returning to
 an already opened remote view. Local-network permission and App Transport
 Security are separate mechanisms.
 
@@ -102,6 +115,15 @@ Verified on 2026-09-10:
 - App tests cover multiple same-port devices, persistence/deduplication,
   malformed saved data, cancellation, oversized/malformed/incompatible
   capabilities, and HTTP errors. Relay lifecycle regression tests still pass.
+- Discovery byte fixtures, malformed/oversized records, duplicate keys,
+  protocol versions, service identity and cancellation pass package tests.
+  Native tests cover registration, stop, responder failure, retry and stale-retry
+  cancellation. App tests cover immutable access path, opt-in without background
+  browsing, confirmed address replacement and the four-request probe budget.
+- The rootful package was installed through `scripts/deploy.sh`, with SpringBoard
+  IPC verified. Live Mac NWBrowser/resolution/capabilities passed. Repeated
+  add/remove events on this LAN remain a sleep/network qualification gap.
+  Rootless build and public-artifact audit passed, not rootless runtime discovery.
 - iOS 18.6 and 26.1 Simulator received real H.264 video from a rootless iPad via
   local HTTP/WS and restored video after suspend/resume. No relay profile or
   relay request was needed. This is not physical-controller permission testing.
@@ -112,6 +134,12 @@ address before running `make mobile-ios-app-test`. `RCTL_IOS_TEST_RUNTIME` may
 select an installed runtime version, such as `18.6`; otherwise the newest
 installed iOS 16+ runtime is selected. The test runner creates and deletes only
 its own temporary simulator and passes no address into source or build settings.
+
+For DNS-SD qualification on the Mac, explicitly set `RCTL_DISCOVERY_TEST_NAME`
+to an owned device's advertised service name and run
+`swift test --package-path mobile/ios/Modules/RctlRealtime --filter liveBonjourWhenExplicitlyConfigured`.
+That opt-in test browses, resolves and reads capabilities only; it does not
+start media or send input. Without the variable it is skipped.
 
 Remaining checks before declaring the LAN slice release-qualified:
 
