@@ -36,6 +36,8 @@ const META: Record<string, { label: string; tone: Tone; icon: ComponentType<Luci
   admin_logout: { label: 'Admin signed out', tone: 'muted', icon: LogOut },
   admin_device_approved: { label: 'Device approved', tone: 'online', icon: ShieldCheck },
   admin_device_revoked: { label: 'Device access revoked', tone: 'danger', icon: Ban },
+  controller_revoked: { label: 'Controller access revoked', tone: 'danger', icon: Ban },
+  controller_self_revoked: { label: 'Controller revoked its access', tone: 'danger', icon: Ban },
   admin_device_deleted: { label: 'Device deleted', tone: 'danger', icon: Trash2 },
   admin_enrollment_created: { label: 'Enrollment token created', tone: 'signal', icon: Plus },
   admin_enrollment_revoked: { label: 'Enrollment token revoked', tone: 'danger', icon: Ban },

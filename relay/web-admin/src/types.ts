@@ -33,6 +33,9 @@ export interface Controller {
   created_at: number
   last_seen_at?: number
   revoked_at?: number
+  presence?: 'online' | 'offline' | 'unknown'
+  heartbeat_at?: number
+  open_sessions?: number
 }
 
 export interface Device {

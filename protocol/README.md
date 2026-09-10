@@ -26,6 +26,9 @@ policy. `fixtures/discovery-v1.json` is a byte-exact fixture corpus exercised by
 the native controller tests. `local-auth-v1.md` is a gated transport proposal,
 not a shipped authentication protocol.
 
+`controller-lifecycle-v1.md` defines signed controller self-revocation and
+foreground presence, independently of device enrollment and authorization status.
+
 Within one protocol major, receivers ignore unknown object fields so a newer
 minor can add metadata. Unknown message kinds and operations remain invalid and
 must fail locally without invoking device behavior.

@@ -126,6 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_controller_nonces_expiry ON controller_nonces(exp
 		`ALTER TABLE devices ADD COLUMN protocol_minor INTEGER`,
 		`ALTER TABLE devices ADD COLUMN capabilities_json TEXT`,
 		`ALTER TABLE devices ADD COLUMN compatibility_error TEXT`,
+		`ALTER TABLE controllers ADD COLUMN heartbeat_at INTEGER`,
 	} {
 		if _, e := s.db.ExecContext(ctx, stmt); e != nil &&
 			!strings.Contains(e.Error(), "duplicate column") {

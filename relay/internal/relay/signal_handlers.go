@@ -125,6 +125,13 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			s.unregisterControllerSignal(controllerID, sessionID)
 			cancelControllerSignal()
 		}()
+		// A revocation can commit between request authentication and registration.
+		// Once registered, later revocations cancel this context as usual.
+		var status string
+		if err := s.db.QueryRowContext(sessionContext, `SELECT status FROM controllers WHERE id=?`, controllerID).Scan(&status); err != nil || status != "active" {
+			_ = ws.Close(websocket.StatusPolicyViolation, "controller access revoked")
+			return
+		}
 	}
 	eventCh := make(chan signalTunnelEvent, 32)
 	dc.registerSignal(sessionID, eventCh)

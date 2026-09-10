@@ -357,28 +357,32 @@ VALUES(?,?,?,?,?,?,?)`, accessID, controllerID, "access",
 }
 
 func (s *server) handleListControllers(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,name,platform,scopes_json,status,created_at,last_seen_at,revoked_at FROM controllers ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id,name,platform,scopes_json,status,created_at,last_seen_at,revoked_at,heartbeat_at FROM controllers ORDER BY created_at DESC`)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "controller_list_failed")
 		return
 	}
 	defer rows.Close()
 	type item struct {
-		ID         string   `json:"id"`
-		Name       string   `json:"name"`
-		Platform   string   `json:"platform"`
-		Status     string   `json:"status"`
-		Scopes     []string `json:"scopes"`
-		CreatedAt  int64    `json:"created_at"`
-		LastSeenAt *int64   `json:"last_seen_at,omitempty"`
-		RevokedAt  *int64   `json:"revoked_at,omitempty"`
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		Platform     string   `json:"platform"`
+		Status       string   `json:"status"`
+		Scopes       []string `json:"scopes"`
+		CreatedAt    int64    `json:"created_at"`
+		LastSeenAt   *int64   `json:"last_seen_at,omitempty"`
+		RevokedAt    *int64   `json:"revoked_at,omitempty"`
+		Presence     string   `json:"presence"`
+		HeartbeatAt  *int64   `json:"heartbeat_at,omitempty"`
+		OpenSessions int      `json:"open_sessions"`
 	}
+	now := time.Now()
 	out := []item{}
 	for rows.Next() {
 		var v item
 		var scopes string
-		var last, revoked sql.NullInt64
-		if err := rows.Scan(&v.ID, &v.Name, &v.Platform, &scopes, &v.Status, &v.CreatedAt, &last, &revoked); err != nil {
+		var last, revoked, heartbeat sql.NullInt64
+		if err := rows.Scan(&v.ID, &v.Name, &v.Platform, &scopes, &v.Status, &v.CreatedAt, &last, &revoked, &heartbeat); err != nil {
 			writeErr(w, http.StatusInternalServerError, "controller_scan_failed")
 			return
 		}
@@ -389,7 +393,20 @@ func (s *server) handleListControllers(w http.ResponseWriter, r *http.Request) {
 		if revoked.Valid {
 			v.RevokedAt = &revoked.Int64
 		}
+		v.Presence = controllerPresence(v.Status, heartbeat, now)
+		if heartbeat.Valid {
+			v.HeartbeatAt = &heartbeat.Int64
+		}
+		if v.Status == "active" {
+			s.controllerSignalsMu.Lock()
+			v.OpenSessions = len(s.controllerSignals[v.ID])
+			s.controllerSignalsMu.Unlock()
+		}
 		out = append(out, v)
+	}
+	if rows.Err() != nil {
+		writeErr(w, http.StatusInternalServerError, "controller_list_failed")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"controllers": out})
 }
@@ -417,6 +434,20 @@ func (s *server) handleRenameController(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) handleRevokeController(w http.ResponseWriter, r *http.Request) {
+	s.revokeController(w, r, r.PathValue("id"), "controller_revoked")
+}
+
+func (s *server) handleRevokeCurrentController(w http.ResponseWriter, r *http.Request) {
+	principal, ok := controllerFromContext(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "controller_unauthorized")
+		return
+	}
+	// The target comes only from the verified identity, never a client-supplied ID.
+	s.revokeController(w, r, principal.ControllerID, "controller_self_revoked")
+}
+
+func (s *server) revokeController(w http.ResponseWriter, r *http.Request, id, event string) {
 	now := time.Now().Unix()
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -424,7 +455,7 @@ func (s *server) handleRevokeController(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(r.Context(), `UPDATE controllers SET status='revoked',revoked_at=? WHERE id=? AND status='active'`, now, r.PathValue("id"))
+	res, err := tx.ExecContext(r.Context(), `UPDATE controllers SET status='revoked',revoked_at=? WHERE id=? AND status='active'`, now, id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "controller_revoke_failed")
 		return
@@ -433,7 +464,7 @@ func (s *server) handleRevokeController(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusNotFound, "controller_not_found")
 		return
 	}
-	if _, err = tx.ExecContext(r.Context(), `UPDATE controller_tokens SET revoked_at=? WHERE controller_id=? AND revoked_at IS NULL`, now, r.PathValue("id")); err != nil {
+	if _, err = tx.ExecContext(r.Context(), `UPDATE controller_tokens SET revoked_at=? WHERE controller_id=? AND revoked_at IS NULL`, now, id); err != nil {
 		writeErr(w, http.StatusInternalServerError, "controller_revoke_failed")
 		return
 	}
@@ -441,7 +472,7 @@ func (s *server) handleRevokeController(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "controller_revoke_failed")
 		return
 	}
-	s.closeControllerSignals(r.PathValue("id"))
-	s.audit(r, "controller_revoked", "controller_id", r.PathValue("id"))
+	s.closeControllerSignals(id)
+	s.audit(r, event, "controller_id", id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

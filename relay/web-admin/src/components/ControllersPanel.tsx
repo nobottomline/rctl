@@ -184,7 +184,7 @@ export function ControllersPanel({ controllers, onChanged }: { controllers: Cont
     <>
       <Panel
         title="Controllers"
-        subtitle={`${activeCount} active controller${activeCount === 1 ? '' : 's'}`}
+        subtitle={`${activeCount} authorized · ${controllers.filter((controller) => controller.status === 'active' && controller.presence === 'online').length} online`}
         action={
           <Button variant="primary" size="sm" onClick={openPairing}>
             <Plus className="size-4" />
@@ -214,23 +214,36 @@ export function ControllersPanel({ controllers, onChanged }: { controllers: Cont
                     <Smartphone className="size-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate text-[13px] font-medium text-fg">{controller.name}</span>
                       <span
                         className={cn(
                           'shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium uppercase ring-1',
                           controller.status === 'active'
-                            ? 'bg-online/8 text-online ring-online/25'
+                            ? 'bg-surface-2 text-muted ring-line'
                             : 'bg-danger/8 text-danger ring-danger/25',
                         )}
                       >
-                        {controller.status}
+                        {controller.status === 'active' ? 'Authorized' : 'Revoked'}
                       </span>
+                      {controller.status === 'active' && (
+                        <span
+                          className={cn('text-[11px]', controller.presence === 'online' ? 'text-online' : 'text-muted')}
+                          title="Online means a foreground heartbeat within 90 seconds. Closing the app or switching relays expires this status; it does not revoke access."
+                        >
+                          {controller.presence === 'online' ? 'Online' : controller.presence === 'offline' ? 'Offline' : 'Presence unknown'}
+                        </span>
+                      )}
                     </div>
                     <div className="mt-0.5 truncate font-mono text-[10.5px] text-faint">
                       {controller.platform.toUpperCase()} · {controller.scopes.length} permissions ·{' '}
                       {controller.status === 'active' ? `seen ${fmtRel(controller.last_seen_at)}` : `revoked ${fmtRel(controller.revoked_at)}`}
                     </div>
+                    {controller.status === 'active' && controller.open_sessions !== undefined && (
+                      <div className="mt-0.5 text-[11px] text-muted" title="Open signaling sessions; this does not prove that video is flowing or the user is interacting.">
+                        {controller.open_sessions} open session{controller.open_sessions === 1 ? '' : 's'}
+                      </div>
+                    )}
                   </div>
                   {controller.status === 'active' && (
                     <Menu
