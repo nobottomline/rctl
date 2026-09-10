@@ -168,22 +168,33 @@ struct SectionLabel: View {
     }
 }
 
-/// Semantic status chip: a dot plus text, never color alone.
+/// Semantic status chip: a dot plus text, never color alone. `busy` swaps the
+/// dot for a small activity indicator while the state is being determined.
 struct StatusPill: View {
     enum Tone { case healthy, attention, danger, neutral }
     let text: String
     let tone: Tone
+    var busy = false
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(dot)
-                .frame(width: 7, height: 7)
-                .overlay {
-                    if tone == .healthy {
-                        Circle().strokeBorder(dot.opacity(0.35), lineWidth: 3).padding(-3)
+            if busy {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(dot)
+                    .scaleEffect(0.7)
+                    .frame(width: 10, height: 10)
+                    .accessibilityHidden(true)
+            } else {
+                Circle()
+                    .fill(dot)
+                    .frame(width: 7, height: 7)
+                    .overlay {
+                        if tone == .healthy {
+                            Circle().strokeBorder(dot.opacity(0.35), lineWidth: 3).padding(-3)
+                        }
                     }
-                }
+            }
             Text(text)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(foreground)
@@ -219,6 +230,31 @@ struct StatusPill: View {
         case .danger: ControllerPalette.dangerSoft
         case .neutral: ControllerPalette.canvasDeep
         }
+    }
+}
+
+/// Small capsule glyph used as a section-header accessory (menus, refresh,
+/// stop). The visual is compact; the hit area is kept at 44 points.
+struct SectionAccessoryLabel: View {
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.footnote.weight(.bold))
+            .foregroundStyle(ControllerPalette.inkDim)
+            .frame(width: 34, height: 26)
+            .background(ControllerPalette.elevated.opacity(0.9), in: Capsule())
+            .overlay { Capsule().strokeBorder(ControllerPalette.line, lineWidth: 1) }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+    }
+}
+
+struct SectionAccessoryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(ControllerMotion.immediate, value: configuration.isPressed)
     }
 }
 

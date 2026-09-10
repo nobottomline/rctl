@@ -85,9 +85,15 @@ final class LocalDeviceTests: XCTestCase {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
+        let saved = LocalDeviceProfile(id: UUID(), name: "Saved iPad", address: try LocalDeviceAddress("192.168.1.2"))
+        let found = LocalDeviceProfile(id: UUID(), name: "Kitchen iPad", address: try LocalDeviceAddress("192.168.1.30"))
         for (name, view) in [
             ("local-device-list", AnyView(DeviceListView(model: ControllerAppModel(), localDevices: local))),
             ("local-device-editor", AnyView(LocalDeviceEditor(model: local) { _ in })),
+            ("local-device-save-discovered", AnyView(LocalDeviceEditor(model: local, suggested: found) { _ in })),
+            ("local-device-replace-address", AnyView(LocalDeviceEditor(model: local, editing: saved, suggested: found) { _ in })),
+            ("nearby-device-sheet", AnyView(NearbyDeviceSheet(profile: found, savedDevices: [saved], open: {}, save: {}, replace: { _ in }))),
+            ("nearby-section-opt-in", AnyView(NearbySection(localDevices: local, select: { _ in }, replace: { _, _ in }, addByAddress: {}))),
         ] {
             let host = UIHostingController(rootView: view)
             window.rootViewController = host

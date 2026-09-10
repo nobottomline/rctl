@@ -6,6 +6,7 @@ struct DeviceRow: View {
     struct Status {
         let text: String
         let tone: StatusPill.Tone
+        var busy = false
     }
 
     let name: String
@@ -14,9 +15,11 @@ struct DeviceRow: View {
     let enabled: Bool
     let action: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(alignment: stacked ? .top : .center, spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .fill(enabled ? ControllerPalette.signalSoft : ControllerPalette.canvasDeep)
@@ -27,22 +30,21 @@ struct DeviceRow: View {
                 .frame(width: 44, height: 44)
                 .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(name)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(ControllerPalette.ink)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(detail)
-                        .font(.footnote)
-                        .foregroundStyle(ControllerPalette.muted)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                if stacked {
+                    // Large text: stack the chip under the text so an address
+                    // is never truncated to make room for it.
+                    VStack(alignment: .leading, spacing: 6) {
+                        texts
+                        StatusPill(text: status.text, tone: status.tone, busy: status.busy)
+                    }
+                    Spacer(minLength: 6)
+                } else {
+                    texts
+                    Spacer(minLength: 6)
+                    StatusPill(text: status.text, tone: status.tone, busy: status.busy)
+                        .fixedSize()
+                        .layoutPriority(1)
                 }
-                Spacer(minLength: 6)
-                StatusPill(text: status.text, tone: status.tone)
-                    .fixedSize()
-                    .layoutPriority(1)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(ControllerPalette.faint)
@@ -56,6 +58,28 @@ struct DeviceRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(name), \(status.text)")
         .accessibilityHint(enabled ? "Opens remote control" : "Shows why this device is unavailable")
+    }
+
+    /// XXXL and the accessibility sizes stack the chip under the text.
+    private var stacked: Bool {
+        dynamicTypeSize >= .xxxLarge
+    }
+
+    private var texts: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(name)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(ControllerPalette.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Text(detail)
+                .font(.footnote)
+                .foregroundStyle(ControllerPalette.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(stacked ? 0.7 : 0.85)
+                .truncationMode(.tail)
+                .multilineTextAlignment(.leading)
+        }
     }
 }
 
@@ -166,10 +190,14 @@ extension SectionHeader where Accessory == EmptyView {
     }
 }
 
-/// First-run hero shown while nothing is saved or paired.
+/// First-run hero shown while nothing is saved or paired. Discovery is the
+/// primary action; it is opt-in and the system permission prompt appears in
+/// context when the user taps it.
 struct DevicesHero: View {
+    let findNearby: () -> Void
     let pairRelay: () -> Void
     let addLocal: () -> Void
+    var discoveryEnabled = false
 
     var body: some View {
         VStack(spacing: 22) {
@@ -180,22 +208,31 @@ struct DevicesHero: View {
                     .font(.title2.weight(.bold))
                     .foregroundStyle(ControllerPalette.ink)
                     .multilineTextAlignment(.center)
-                Text("Add a device on your local network, or pair with your relay to control it from anywhere.")
+                Text("Find a device on the network you are on, or pair with your relay to control it from anywhere.")
                     .font(.subheadline)
                     .foregroundStyle(ControllerPalette.inkDim)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(spacing: 10) {
+                Button(action: findNearby) {
+                    Label(discoveryEnabled ? "Searching this network" : "Find devices on this network", systemImage: "bonjour")
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(discoveryEnabled)
+                .accessibilityIdentifier("find-nearby-devices")
                 Button(action: pairRelay) {
                     Label("Pair with relay", systemImage: "qrcode.viewfinder")
                 }
-                .buttonStyle(PrimaryButtonStyle())
+                .buttonStyle(SecondaryButtonStyle())
                 .accessibilityIdentifier("pair-relay")
                 Button(action: addLocal) {
-                    Label("Add local device", systemImage: "wifi")
+                    Text("Add by address")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(ControllerPalette.signal)
+                        .frame(minHeight: 44)
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("add-local-device")
             }
         }

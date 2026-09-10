@@ -5,9 +5,14 @@ import SwiftUI
 struct LocalDeviceEditor: View {
     private enum Field { case address, name }
 
+    /// Which flow opened the editor. Discovery hands in a `suggested` profile
+    /// whose address answered a preflight moments ago; it is still a hint.
+    private enum Mode { case add, saveDiscovered, edit, replaceAddress }
+
     @ObservedObject var model: LocalDevicesModel
     let editing: LocalDeviceProfile?
     let connect: (LocalDeviceProfile) -> Void
+    private let suggested: LocalDeviceProfile?
     @State private var address: String
     @State private var name: String
     @State private var error: String?
@@ -18,9 +23,47 @@ struct LocalDeviceEditor: View {
          connect: @escaping (LocalDeviceProfile) -> Void) {
         self.model = model
         self.editing = editing
+        self.suggested = suggested
         self.connect = connect
         _address = State(initialValue: suggested?.address.displayAddress ?? editing?.address.displayAddress ?? "")
         _name = State(initialValue: editing?.name ?? suggested?.name ?? "")
+    }
+
+    private var mode: Mode {
+        switch (editing, suggested) {
+        case (nil, nil): .add
+        case (nil, .some): .saveDiscovered
+        case (.some, nil): .edit
+        case (.some, .some): .replaceAddress
+        }
+    }
+
+    private var title: String {
+        switch mode {
+        case .add: "Local device"
+        case .saveDiscovered: "Save device"
+        case .edit: "Edit device"
+        case .replaceAddress: "Update address"
+        }
+    }
+
+    private var intro: String {
+        switch mode {
+        case .add, .edit:
+            "Connect directly over the network you are on. The iPad needs the rctl package with LAN control enabled."
+        case .saveDiscovered:
+            "Keep this device for next time. You can rename it; the address stays the one that answered."
+        case .replaceAddress:
+            "Point a saved device at the address found on the network. Nothing changes until you save."
+        }
+    }
+
+    private var action: String {
+        switch mode {
+        case .add: "Connect"
+        case .saveDiscovered, .edit: "Save and connect"
+        case .replaceAddress: "Replace address and connect"
+        }
     }
 
     var body: some View {
@@ -29,17 +72,32 @@ struct LocalDeviceEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(editing == nil ? "Local device" : "Edit device")
+                        Text(title)
                             .font(.system(size: 32, weight: .bold))
                             .tracking(-0.6)
                             .foregroundStyle(ControllerPalette.ink)
                             .accessibilityAddTraits(.isHeader)
-                        Text("Connect directly over the network you are on. The iPad needs the rctl package with LAN control enabled.")
+                        Text(intro)
                             .font(.subheadline)
                             .foregroundStyle(ControllerPalette.inkDim)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.top, 8)
+
+                    if let suggested, let editing, mode == .replaceAddress {
+                        AddressChangeCard(
+                            deviceName: editing.name,
+                            discoveredName: suggested.name,
+                            oldAddress: editing.address.displayAddress,
+                            newAddress: suggested.address.displayAddress
+                        )
+                    } else if let suggested, mode == .saveDiscovered {
+                        Callout(
+                            text: "Found on this network as “\(suggested.name)”. Discovery does not verify which iPad answered; use LAN control only on a network you trust.",
+                            symbol: "bonjour",
+                            tone: .neutral
+                        )
+                    }
 
                     VStack(spacing: 0) {
                         FormField(
@@ -90,7 +148,7 @@ struct LocalDeviceEditor: View {
                                 Text("Checking device…")
                             }
                         } else {
-                            Label(editing == nil ? "Connect" : "Save and connect", systemImage: "arrow.right")
+                            Label(action, systemImage: "arrow.right")
                         }
                     }
                     .buttonStyle(PrimaryButtonStyle(tone: .signal))
@@ -132,6 +190,58 @@ struct LocalDeviceEditor: View {
                 }
             }
         }
+    }
+}
+
+/// Shows exactly what a confirmed address replacement will change.
+private struct AddressChangeCard: View {
+    let deviceName: String
+    let discoveredName: String
+    let oldAddress: String
+    let newAddress: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(ControllerPalette.signal)
+                    .accessibilityHidden(true)
+                Text("Saved device “\(deviceName)”")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(ControllerPalette.ink)
+                    .lineLimit(2)
+            }
+            VStack(spacing: 0) {
+                addressRow(label: "Current", value: oldAddress, emphasized: false)
+                Rectangle().fill(ControllerPalette.line).frame(height: 1)
+                addressRow(label: "Found as “\(discoveredName)”", value: newAddress, emphasized: true)
+            }
+            .background(ControllerPalette.canvasDeep.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Text("Only Replace address and connect changes the saved entry. The name and history stay.")
+                .font(.footnote)
+                .foregroundStyle(ControllerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .glassSurface(cornerRadius: 20, padding: 16)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func addressRow(label: String, value: String, emphasized: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ControllerPalette.muted)
+                .lineLimit(2)
+            Text(value)
+                .font(.body.monospaced().weight(emphasized ? .semibold : .regular))
+                .foregroundStyle(emphasized ? ControllerPalette.signal : ControllerPalette.inkDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 }
 
