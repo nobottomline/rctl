@@ -6,6 +6,7 @@ import UIKit
 @MainActor
 final class ControllerAppModel: ObservableObject {
     @Published private(set) var profile: ControllerProfile?
+    @Published private(set) var savedProfiles: [ControllerProfile] = []
     @Published private(set) var devices: [ControllerDevice] = []
     @Published private(set) var isBusy = false
     @Published var presentedError: String?
@@ -35,15 +36,19 @@ final class ControllerAppModel: ObservableObject {
     func restore() async {
         guard !restored else { return }
         restored = true
+        do { savedProfiles = try profiles.loadAll() }
+        catch { presentedError = "Saved relay profiles could not be read. They have not been overwritten."; return }
         guard let stored = profiles.load() else { return }
         profile = stored
         await refreshDevices()
     }
 
-    func pair(using rawPayload: String) async {
-        guard !isBusy else { return }
+    @discardableResult
+    func pair(using rawPayload: String) async -> Bool {
+        guard !isBusy else { return false }
         invalidateProfileRequests()
         let revision = profileRevision
+        var paired = false
         isBusy = true
         defer { if profileRevision == revision { isBusy = false } }
         do {
@@ -54,6 +59,16 @@ final class ControllerAppModel: ObservableObject {
                 from: data,
                 allowInsecureLoopback: allowInsecureLoopback
             )
+            // A relay-provided ID must not overwrite another saved identity or
+            // reuse its refresh credential at a different origin.
+            if try profiles.loadAll().contains(where: { $0.relayID == pairing.relayID }) {
+                presentedError = "This relay is already saved. Select it from the Relay menu."
+                return false
+            }
+            if let existing = try keychain.loadCredential(relayID: pairing.relayID),
+               existing.origin != pairing.origin {
+                throw ControllerProfileStoreError.duplicateIdentity
+            }
             let key = try keychain.loadOrCreateSigningKey(relayID: pairing.relayID)
             let claim = try await api.claim(
                 pairing: pairing,
@@ -70,18 +85,35 @@ final class ControllerAppModel: ObservableObject {
                 controller: claim.controller
             )
             try profiles.save(newProfile)
+            savedProfiles = try profiles.loadAll()
             profile = newProfile
+            paired = true
             accessToken = claim.tokens.accessToken
             accessExpiresAt = claim.tokens.accessExpiresAt
+            devices = []
             try await loadDevices(
                 session: AccessSession(profile: newProfile, token: claim.tokens.accessToken, key: key),
                 revision: revision
             )
+            return true
         } catch {
             if profileRevision == revision, !(error is CancellationError), !Task.isCancelled {
                 presentedError = Self.message(for: error)
             }
         }
+        return profileRevision == revision && paired
+    }
+
+    func selectProfile(_ relayID: String) async {
+        guard profile?.relayID != relayID,
+              let selected = savedProfiles.first(where: { $0.relayID == relayID }) else { return }
+        invalidateProfileRequests()
+        accessToken = nil
+        accessExpiresAt = nil
+        devices = []
+        profiles.select(relayID)
+        profile = selected
+        await refreshDevices()
     }
 
     func refreshDevices() async {
@@ -105,7 +137,8 @@ final class ControllerAppModel: ObservableObject {
         }
     }
 
-    func signalingRequest(deviceID: String, media: ControllerMediaRole) async throws -> URLRequest {
+    func signalingRequest(deviceID: String, media: ControllerMediaRole, expectedProfile: ControllerProfile? = nil) async throws -> URLRequest {
+        if let expectedProfile, profile != expectedProfile { throw CancellationError() }
         let revision = profileRevision
         guard let device = devices.first(where: { $0.id == deviceID }) else {
             throw SessionPreflightError.deviceUnavailable
@@ -156,12 +189,15 @@ final class ControllerAppModel: ObservableObject {
         guard let relayID = profile?.relayID else { return }
         invalidateProfileRequests()
         do {
+            _ = try profiles.loadAll() // Validate metadata before deleting any credential.
             try keychain.deleteProfile(relayID: relayID)
-            profiles.remove()
+            try profiles.remove(relayID: relayID)
+            savedProfiles = try profiles.loadAll()
             accessToken = nil
             accessExpiresAt = nil
             devices = []
-            profile = nil
+            profile = profiles.load()
+            if profile != nil { Task { await refreshDevices() } }
         } catch {
             presentedError = Self.message(for: error)
         }
@@ -178,6 +214,10 @@ final class ControllerAppModel: ObservableObject {
         }
         if refreshOperation == nil {
             guard let credential = try keychain.loadCredential(relayID: profile.relayID) else {
+                throw ControllerClientError.corruptCredential
+            }
+            guard credential.origin == profile.origin,
+                  credential.controller.id == profile.controller.id else {
                 throw ControllerClientError.corruptCredential
             }
             let task = Task { @MainActor in
@@ -247,6 +287,8 @@ final class ControllerAppModel: ObservableObject {
 
     static func message(for error: Error) -> String {
         switch error {
+        case ControllerProfileStoreError.duplicateIdentity:
+            "This relay identity conflicts with a saved profile. Existing credentials were not replaced."
         case let error as SessionPreflightError:
             error.localizedDescription
         case ControllerClientError.expiredPairing:

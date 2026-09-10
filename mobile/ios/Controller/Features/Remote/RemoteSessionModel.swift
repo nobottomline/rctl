@@ -97,6 +97,7 @@ final class RemoteSessionModel: ObservableObject {
     let accessPath: RemoteAccessPath
     private let appModel: ControllerAppModel
     private let target: RemoteConnectionTarget
+    private let relayProfile: ControllerProfile?
     private let localClient: LocalDeviceClient
     private var suspended = false
     private var connectionAttempt: UInt64 = 0
@@ -114,6 +115,7 @@ final class RemoteSessionModel: ObservableObject {
     init(appModel: ControllerAppModel, target: RemoteConnectionTarget, localClient: LocalDeviceClient = LocalDeviceClient()) {
         self.appModel = appModel
         self.target = target
+        self.relayProfile = appModel.profile
         switch target {
         case .local(let address): accessPath = .lan(address)
         case .relay: accessPath = .relay(origin: appModel.profile?.origin)
@@ -139,10 +141,11 @@ final class RemoteSessionModel: ObservableObject {
         interactionMode = .view
         errorMessage = nil
         let selectedMedia = media
-        let preparation = Task { [appModel, target, localClient] in
+        let preparation = Task { [appModel, target, localClient, relayProfile] in
             switch target {
             case let .relay(deviceID):
-                return try await appModel.signalingRequest(deviceID: deviceID, media: selectedMedia)
+                guard let relayProfile else { throw ControllerClientError.corruptCredential }
+                return try await appModel.signalingRequest(deviceID: deviceID, media: selectedMedia, expectedProfile: relayProfile)
             case let .local(address):
                 _ = try await localClient.capabilities(at: address, camera: selectedMedia == .camera)
                 return address.signalingRequest(camera: selectedMedia == .camera)

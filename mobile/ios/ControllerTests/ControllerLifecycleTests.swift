@@ -91,7 +91,7 @@ final class ControllerLifecycleTests: XCTestCase {
         XCTAssertTrue(fixture.model.isBusy)
         XCTAssertNil(fixture.model.presentedError)
         claim.respond(#"{"error":"test-ended"}"#, status: 400)
-        await pair.value
+        _ = await pair.value
     }
 
     func testConcurrentSignalingUsesOneRefresh() async throws {
@@ -115,6 +115,81 @@ final class ControllerLifecycleTests: XCTestCase {
         _ = try await first.value
         _ = try await second.value
         XCTAssertEqual(RequestStub.requests.count("/api/controller/token/refresh"), 2)
+    }
+
+    func testProfileMigrationAndMultipleRelays() throws {
+        let suite = "rctl.tests.profiles.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ControllerProfileStore(defaults: defaults)
+        let controller = PairedController(id: "ctl_test", name: "Test", platform: "ios", scopes: [.screenView])
+        let original = ControllerProfile(origin: "https://first.example", relayID: "first", controller: controller)
+        defaults.set(try JSONEncoder().encode(original), forKey: "rctl.controller.profile.v1")
+        XCTAssertEqual(try store.loadAll(), [original])
+        XCTAssertEqual(store.load(), original)
+        XCTAssertNil(defaults.data(forKey: "rctl.controller.profile.v1"))
+        // Saved profiles are user-controlled, unlike untrusted Bonjour results.
+        for index in 0..<100 {
+            try store.save(ControllerProfile(origin: "https://relay\(index).example", relayID: "relay\(index)", controller: controller))
+        }
+        XCTAssertEqual(try store.loadAll().count, 101)
+        store.select(original.relayID)
+        XCTAssertEqual(store.load(), original)
+        XCTAssertThrowsError(try store.save(ControllerProfile(origin: "https://other.example", relayID: "first", controller: controller)))
+        XCTAssertEqual(store.load(), original)
+        try store.remove(relayID: "first")
+        XCTAssertEqual(try store.loadAll().count, 100)
+        XCTAssertNotNil(store.load())
+    }
+
+    func testSwitchDiscardsOldRequestsAndPreservesOtherCredentials() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let second = try fixture.addSecondRelay()
+        let restore = Task { await fixture.model.restore() }
+        let oldRefresh = try await request("/api/controller/token/refresh")
+        let switching = Task { await fixture.model.selectProfile(second.relayID) }
+        let newRefresh = try await request("/api/controller/token/refresh")
+        XCTAssertEqual(newRefresh.request.url?.host, "second.example")
+        oldRefresh.respond(fixture.tokens)
+        await restore.value
+        XCTAssertEqual(fixture.model.profile, second)
+        XCTAssertTrue(fixture.model.isBusy)
+        XCTAssertTrue(fixture.model.devices.isEmpty)
+        newRefresh.respond(fixture.tokens)
+        let listing = try await request("/api/controller/devices")
+        XCTAssertEqual(listing.request.url?.host, "second.example")
+        listing.respond(Self.devices)
+        await switching.value
+        XCTAssertEqual(fixture.model.devices.count, 1)
+        let original = try XCTUnwrap(fixture.profiles.loadAll().first { $0.relayID == fixture.relayID })
+        do {
+            _ = try await fixture.model.signalingRequest(deviceID: "test-device", media: .screen, expectedProfile: original)
+            XCTFail("A session must not switch relays even when device IDs match")
+        } catch is CancellationError { }
+        XCTAssertNotNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+        fixture.model.resetProfile()
+        XCTAssertEqual(fixture.model.profile?.relayID, fixture.relayID)
+        XCTAssertNotNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+        XCTAssertNil(try fixture.keychain.loadCredential(relayID: second.relayID))
+        // Finish the selected relay refresh started after removal.
+        let remainingRefresh = try await request("/api/controller/token/refresh")
+        remainingRefresh.respond(fixture.tokens)
+        let remainingList = try await request("/api/controller/devices")
+        remainingList.respond(Self.devices)
+        await Task.yield()
+    }
+
+    func testCorruptCollectionDoesNotFallBackOrOverwrite() throws {
+        let suite = "rctl.tests.corrupt.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ControllerProfileStore(defaults: defaults)
+        let corrupt = Data("invalid".utf8)
+        defaults.set(corrupt, forKey: "rctl.controller.profiles.v2")
+        XCTAssertThrowsError(try store.loadAll())
+        XCTAssertThrowsError(try store.remove(relayID: "any"))
+        XCTAssertEqual(defaults.data(forKey: "rctl.controller.profiles.v2"), corrupt)
     }
 
     private func request(_ path: String) async throws -> RequestStub {
@@ -162,6 +237,17 @@ private final class ProfileFixture {
 
     var tokens: String { tokenResponse(accessLifetime: 300) }
 
+    func addSecondRelay() throws -> ControllerProfile {
+        let controller = PairedController(id: "ctl_second", name: "Second", platform: "ios", scopes: [.screenView])
+        let profile = ControllerProfile(origin: "https://second.example", relayID: "second", controller: controller)
+        try profiles.save(profile)
+        profiles.select(relayID)
+        _ = try keychain.loadOrCreateSigningKey(relayID: profile.relayID)
+        try keychain.save(ControllerRefreshCredential(origin: profile.origin, relayID: profile.relayID,
+            controller: controller, refreshToken: "crt_second.fixture", refreshExpiresAt: Int64(Date().timeIntervalSince1970) + 3600))
+        return profile
+    }
+
     func tokenResponse(accessLifetime: Int64) -> String {
         let now = Int64(Date().timeIntervalSince1970)
         return """
@@ -178,6 +264,7 @@ private final class ProfileFixture {
     func close() {
         session.invalidateAndCancel()
         try? keychain.deleteProfile(relayID: relayID)
+        try? keychain.deleteProfile(relayID: "second")
         defaults.removePersistentDomain(forName: suite)
     }
 }

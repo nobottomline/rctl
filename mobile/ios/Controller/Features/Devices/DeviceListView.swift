@@ -202,7 +202,7 @@ struct DeviceListView: View {
                 } label: {
                     Label("Scan pairing code", systemImage: "qrcode.viewfinder")
                 }
-                .disabled(model.profile != nil)
+                .disabled(model.isBusy)
                 Button {
                     path.append(.localDevice(nil))
                 } label: {
@@ -373,6 +373,20 @@ struct DeviceListView: View {
             VStack(alignment: .leading, spacing: 12) {
                 SectionHeader(title: "Relay", subtitle: host(of: profile.origin)) {
                     Menu {
+                        ForEach(model.savedProfiles) { saved in
+                            Button {
+                                Task { await model.selectProfile(saved.relayID) }
+                            } label: {
+                                Label(host(of: saved.origin) ?? saved.origin, systemImage: saved.relayID == profile.relayID ? "checkmark" : "server.rack")
+                            }
+                        }
+                        Divider()
+                        Button {
+                            path.append(.pairRelay)
+                        } label: {
+                            Label("Add relay", systemImage: "plus")
+                        }
+                        .disabled(model.isBusy)
                         Button {
                             Task { await model.refreshDevices() }
                         } label: {
