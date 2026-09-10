@@ -9,6 +9,7 @@ final class ControllerAppModel: ObservableObject {
     @Published private(set) var savedProfiles: [ControllerProfile] = []
     @Published private(set) var devices: [ControllerDevice] = []
     @Published private(set) var isBusy = false
+    @Published private(set) var isRevoking = false
     @Published var presentedError: String?
 
     private let api: ControllerAPIClient
@@ -105,7 +106,7 @@ final class ControllerAppModel: ObservableObject {
     }
 
     func selectProfile(_ relayID: String) async {
-        guard profile?.relayID != relayID,
+        guard !isRevoking, profile?.relayID != relayID,
               let selected = savedProfiles.first(where: { $0.relayID == relayID }) else { return }
         invalidateProfileRequests()
         accessToken = nil
@@ -201,6 +202,69 @@ final class ControllerAppModel: ObservableObject {
         } catch {
             presentedError = Self.message(for: error)
         }
+    }
+
+    func revokeProfile() async {
+        guard let selected = profile, !isBusy, !isRevoking else { return }
+        let revision = profileRevision
+        isRevoking = true
+        isBusy = true
+        defer {
+            isRevoking = false
+            if profileRevision == revision { isBusy = false }
+        }
+        do {
+            let session = try await ensureAccessSession(forceRefresh: false)
+            try requireCurrentProfile(revision)
+            try await api.revokeCurrentController(origin: selected.origin, accessToken: session.token,
+                signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+            try requireCurrentProfile(revision)
+            // Only a confirmed server acknowledgement permits local deletion.
+            resetProfile()
+        } catch {
+            guard profileRevision == revision, !(error is CancellationError), !Task.isCancelled else { return }
+            presentedError = "Revocation was not confirmed. The local profile has been kept. Check relay admin or retry. Forget locally does not revoke server access."
+        }
+    }
+
+    /// Owned by the root view's foreground task, including while a session is open.
+    /// No background keepalive or presence for unselected saved relays.
+    func maintainPresence(for expectedProfile: ControllerProfile) async {
+        while !Task.isCancelled, profile == expectedProfile {
+            if isBusy {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                continue
+            }
+            do {
+                try await sendPresence(for: expectedProfile)
+            } catch is CancellationError { return }
+            catch ControllerClientError.http(status: 404, code: _) { return }
+            catch ControllerClientError.http(status: 405, code: _) { return }
+            catch ControllerClientError.http(status: 401, code: _) { return }
+            catch { /* Transient failures let the server lease expire. */ }
+            do { try await Task.sleep(for: .seconds(30)) } catch { return }
+        }
+    }
+
+    func sendPresence(for expectedProfile: ControllerProfile) async throws {
+        guard profile == expectedProfile, !isRevoking else { throw CancellationError() }
+        let revision = profileRevision
+        var session = try await ensureAccessSession(forceRefresh: false)
+        try requireCurrentProfile(revision)
+        guard !isRevoking else { throw CancellationError() }
+        do {
+            try await api.heartbeat(origin: session.profile.origin, accessToken: session.token,
+                signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+        } catch ControllerClientError.http(status: 401, code: _) {
+            try requireCurrentProfile(revision)
+            guard !isRevoking else { throw CancellationError() }
+            session = try await ensureAccessSession(forceRefresh: true)
+            try requireCurrentProfile(revision)
+            guard !isRevoking else { throw CancellationError() }
+            try await api.heartbeat(origin: session.profile.origin, accessToken: session.token,
+                signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+        }
+        try requireCurrentProfile(revision)
     }
 
     private func ensureAccessSession(forceRefresh: Bool) async throws -> AccessSession {

@@ -30,6 +30,7 @@ struct DeviceListView: View {
     @ObservedObject var localDevices: LocalDevicesModel
     @State private var path: [DevicesRoute] = []
     @State private var resetConfirmation = false
+    @State private var revokeConfirmation = false
     @State private var removing: LocalDeviceProfile?
     @State private var unavailableReason: String?
     @State private var homeVisible = true
@@ -122,13 +123,22 @@ struct DeviceListView: View {
             )
         }
         .confirmationDialog(
-            "Remove this controller from this device?",
+            "Forget this relay locally?",
             isPresented: $resetConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Remove relay profile", role: .destructive) { model.resetProfile() }
+            Button("Forget locally", role: .destructive) { model.resetProfile() }
         } message: {
             Text("This does not revoke the controller in relay admin and does not remove saved local devices.")
+        }
+        .confirmationDialog(
+            "Revoke this controller's access?",
+            isPresented: $revokeConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Revoke access", role: .destructive) { Task { await model.revokeProfile() } }
+        } message: {
+            Text("The relay will revoke this controller and close its sessions. Its local profile is removed only after confirmation. Other controllers and local devices are not affected.")
         }
         .confirmationDialog(
             "Remove saved local device?",
@@ -394,10 +404,17 @@ struct DeviceListView: View {
                         }
                         .disabled(model.isBusy)
                         Button(role: .destructive) {
+                            revokeConfirmation = true
+                        } label: {
+                            Label("Revoke access", systemImage: "hand.raised")
+                        }
+                        .disabled(model.isBusy)
+                        Button(role: .destructive) {
                             resetConfirmation = true
                         } label: {
-                            Label("Remove relay profile", systemImage: "person.crop.circle.badge.xmark")
+                            Label("Forget locally", systemImage: "person.crop.circle.badge.xmark")
                         }
+                        .disabled(model.isBusy)
                     } label: {
                         Image(systemName: "ellipsis")
                             .font(.footnote.weight(.bold))

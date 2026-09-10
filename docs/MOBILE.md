@@ -337,6 +337,11 @@ put access or refresh credentials in query strings. Continue to use Secure,
 HttpOnly, SameSite cookies for browser sessions; controller auth is additive and
 must not weaken the web path.
 
+Controller self-revocation and foreground presence are implemented separately
+from local profile removal and device online status. See
+[`controller-lifecycle-v1.md`](../protocol/controller-lifecycle-v1.md) for the
+signed endpoints, 90-second presence lease, compatibility and verification.
+
 The relay is self-hosted, so the mobile application has no mandatory rctl cloud
 account and does not require Sign in with Apple or Google. The iOS app stores
 multiple relay profiles and independent LAN addresses. The Relay menu selects

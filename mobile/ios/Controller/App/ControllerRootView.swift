@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ControllerRootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: ControllerAppModel
     @StateObject private var localDevices = LocalDevicesModel()
 
@@ -8,6 +9,10 @@ struct ControllerRootView: View {
         DeviceListView(model: model, localDevices: localDevices)
             .task {
                 await model.restore()
+            }
+            .task(id: presenceIdentity) {
+                guard scenePhase == .active, let profile = model.profile else { return }
+                await model.maintainPresence(for: profile)
             }
             .alert(
                 "Request failed",
@@ -22,5 +27,16 @@ struct ControllerRootView: View {
                     Text(model.presentedError ?? "")
                 }
             )
+    }
+
+    private var presenceIdentity: PresenceIdentity? {
+        guard scenePhase == .active, let profile = model.profile else { return nil }
+        return PresenceIdentity(relayID: profile.relayID, origin: profile.origin, controllerID: profile.controller.id)
+    }
+
+    private struct PresenceIdentity: Hashable {
+        let relayID: String
+        let origin: String
+        let controllerID: String
     }
 }

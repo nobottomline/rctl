@@ -202,6 +202,88 @@ final class ControllerLifecycleTests: XCTestCase {
         throw URLError(.timedOut)
     }
 
+    func testRevokeRequiresAcknowledgementAndPreservesOtherRelays() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let other = try fixture.addSecondRelay()
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+        let original = fixture.model.profile
+
+        let failed = Task { await fixture.model.revokeProfile() }
+        let failedRequest = try await request("/api/controller/me/revoke")
+        XCTAssertTrue(fixture.model.isRevoking)
+        XCTAssertEqual(fixture.model.profile, original)
+        XCTAssertNotNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+        XCTAssertEqual(failedRequest.request.httpMethod, "POST")
+        XCTAssertNotNil(failedRequest.request.value(forHTTPHeaderField: "X-RCTL-Signature"))
+        await fixture.model.selectProfile(other.relayID)
+        XCTAssertEqual(fixture.model.profile, original, "Switching must not race revocation")
+        failedRequest.respond(#"{"error":"unavailable"}"#, status: 503)
+        await failed.value
+        XCTAssertEqual(fixture.model.profile, original)
+        XCTAssertNotNil(fixture.model.presentedError)
+        XCTAssertFalse(fixture.model.isRevoking)
+
+        let success = Task { await fixture.model.revokeProfile() }
+        try await request("/api/controller/me/revoke").respond(#"{"ok":true}"#)
+        await success.value
+        XCTAssertNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+        XCTAssertNotNil(try fixture.keychain.loadCredential(relayID: other.relayID))
+        XCTAssertEqual(fixture.model.profile, other)
+        XCTAssertFalse(fixture.model.isRevoking)
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await Task.yield()
+    }
+
+    func testUnconfirmedRevokeDoesNotForgetProfile() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+        // Old servers, lost acknowledgement/retry, and malformed acknowledgements
+        // must not be presented as successful revocation.
+        for status in [404, 401, 200] {
+            let revoke = Task { await fixture.model.revokeProfile() }
+            try await request("/api/controller/me/revoke").respond(#"{"ok":false}"#, status: status)
+            await revoke.value
+            XCTAssertNotNil(fixture.model.profile)
+            XCTAssertNotNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+            XCTAssertNotNil(fixture.model.presentedError)
+        }
+    }
+
+    func testPresenceCancellationAndOldServerCompatibility() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+        let profile = try XCTUnwrap(fixture.model.profile)
+
+        let presence = Task { await fixture.model.maintainPresence(for: profile) }
+        let pulse = try await request("/api/controller/presence")
+        XCTAssertEqual(pulse.request.httpMethod, "POST")
+        XCTAssertEqual(pulse.request.url?.host, "relay.example")
+        XCTAssertNotNil(pulse.request.value(forHTTPHeaderField: "X-RCTL-Signature"))
+        presence.cancel()
+        await presence.value
+        XCTAssertEqual(RequestStub.requests.count("/api/controller/presence"), 1)
+        XCTAssertNil(fixture.model.presentedError)
+
+        let oldServer = Task { await fixture.model.maintainPresence(for: profile) }
+        try await request("/api/controller/presence").respond(#"{"error":"not_found"}"#, status: 404)
+        await oldServer.value
+        XCTAssertNil(fixture.model.presentedError)
+        XCTAssertEqual(fixture.model.profile, profile)
+    }
+
     private static let devices = #"{"devices":[{"id":"test-device","name":"Test iPad","status":"approved","online":true,"features":["screen.webrtc","controller.scoped_sessions"],"compatible":true}]}"#
 }
 

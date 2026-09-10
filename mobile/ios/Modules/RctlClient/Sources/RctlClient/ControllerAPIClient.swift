@@ -123,6 +123,35 @@ public struct ControllerAPIClient: Sendable {
         return request
     }
 
+    public func revokeCurrentController(
+        origin: String, accessToken: String, signingKey: ControllerSigningKey,
+        allowInsecureLoopback: Bool = false
+    ) async throws {
+        try await sendControllerAction(path: "/api/controller/me/revoke", origin: origin,
+            accessToken: accessToken, signingKey: signingKey, allowInsecureLoopback: allowInsecureLoopback)
+    }
+
+    public func heartbeat(
+        origin: String, accessToken: String, signingKey: ControllerSigningKey,
+        allowInsecureLoopback: Bool = false
+    ) async throws {
+        try await sendControllerAction(path: "/api/controller/presence", origin: origin,
+            accessToken: accessToken, signingKey: signingKey, allowInsecureLoopback: allowInsecureLoopback)
+    }
+
+    private func sendControllerAction(
+        path: String, origin: String, accessToken: String, signingKey: ControllerSigningKey,
+        allowInsecureLoopback: Bool
+    ) async throws {
+        let request = try makeSignedRequest(origin: origin, path: path, method: "POST",
+            token: accessToken, body: Data(), signingKey: signingKey,
+            expectedTokenPrefix: "cat_", allowInsecureLoopback: allowInsecureLoopback)
+        struct Acknowledgement: Decodable { let ok: Bool }
+        guard try await send(request, as: Acknowledgement.self).ok else {
+            throw ControllerClientError.invalidResponse
+        }
+    }
+
     public func refresh(
         origin: String,
         refreshToken: String,

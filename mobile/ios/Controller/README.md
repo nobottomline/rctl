@@ -51,7 +51,19 @@ The Relay menu supports **Add relay** and switching between saved servers,
 with a checkmark on the selected server. There is no fixed saved-relay count
 limit. Each server keeps its own Keychain identity; device lists and volatile
 tokens belong to the selected profile only. Removing one profile preserves the
-others. The original single-profile store migrates automatically. Re-pairing
+others. **Revoke access** first revokes the selected controller on its relay and
+removes local credentials only after confirmation. **Forget locally** removes
+only the saved profile and keys, including offline; it does not revoke access
+on the server. Failed or ambiguous revocation preserves the profile and shows
+an error. Already-forgotten controllers must be revoked from relay admin.
+
+The selected relay receives a signed heartbeat every 30 seconds while the app
+is active, including during a remote session. Backgrounding or switching relays
+lets the old 90-second lease expire. Admin shows authorization separately from
+Online/Offline and open signaling sessions. Legacy clients without heartbeats
+have unknown presence. See [controller lifecycle](../../../protocol/controller-lifecycle-v1.md).
+
+The original single-profile store migrates automatically. Re-pairing
 an already saved relay is rejected before making a claim; select its profile
 instead. A session cannot reconnect through a different selected relay.
 
