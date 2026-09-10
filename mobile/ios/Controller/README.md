@@ -30,16 +30,27 @@ local-device editor, and control are pushes with working back navigation. The
 screen uses the warm parchment theme and ambient particle canvas described in
 `docs/MOBILE-DESIGN.md`; the stack root selects light or dark presentation from
 the current route. Saved local devices show a best-effort reachability chip
-from the bounded capabilities probe; relay devices show online, update, and
-compatibility state, and an unavailable relay device explains why when tapped.
+from the bounded capabilities probe, or `Discovered` while their exact address
+is advertised; relay devices show online, update, and compatibility state, and
+an unavailable relay device explains why when tapped.
+
+`Nearby` renders the opt-in discovery flow with explicit searching, empty,
+permission-denied, unavailable, resolving, and checking states, and keeps
+`Add by address` and `Stop` reachable in every state. Selecting a device
+re-resolves it, then a decision sheet offers `Open in View mode`, `Save
+device`, or a confirmed address replacement for a saved entry; the editor's
+`Update address` mode shows the current and found addresses before anything
+changes. LAN/Relay stays visible in the session header and Session Controls.
 
 Pairing opens an intro with the three relay-admin steps, then a full-screen
 scanner whose reticle follows the detected code, confirms a lock-on, and claims
 the code in place. Non-pairing QR codes are rejected locally, a failed claim
 ignores the same payload briefly, and paste plus torch are always available.
 
-Debug builds accept `--rctl-route=pair|scan|local` to open a screen directly
-for screenshots and review; Release builds ignore it.
+Debug builds accept `--rctl-route=pair|scan|local|save|replace|first-local|
+gallery|gallery2` to open a screen directly for screenshots and review;
+`gallery` and `gallery2` render the discovery and session building blocks with
+synthetic data. Release builds ignore the argument.
 
 ## Local Network
 

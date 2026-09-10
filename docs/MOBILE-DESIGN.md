@@ -77,9 +77,32 @@ always runs its own preflight. Relay rows show `Online`, `Offline`,
 an alert instead of opening an empty viewport. Edit and Remove live in the row
 context menu.
 
-Every secondary screen is a push in one `NavigationStack` (pairing intro,
-scanner, local-device editor, control), never a sheet, so the system back
-gesture and button always work. The stack root owns the presentation style:
+`Nearby` is its own group with a stable shape across states so rows never
+jump: a header with a searching indicator, `Search again`, and `Stop`; rows
+for advertised services with `Resolving`, `Discovered`, `Saved` (exact
+endpoint match with a saved entry), `Checking`, `Incompatible`, or
+`Unsupported`; and one trailing state row, either the searching placeholder,
+`No devices found`, `Local Network access is off` with Settings, or
+`Discovery is unavailable` with retry. Every state keeps `Add by address` one
+tap away. Discovery is opt-in: before the first opt-in the group shows a single
+`Find devices on this network` row, so the system permission prompt appears in
+context. A caption under the group states that found devices are not verified.
+Saved rows whose address is currently advertised show `Discovered`, never
+`Online`; only a capabilities probe earns `Online`, and none of this claims
+ownership. Saved devices are never removed because they left `Nearby`.
+
+Choosing a nearby device re-resolves it and runs the preflight, then either
+opens a saved entry with the same address directly or presents a short
+decision sheet: name, address, `Answered just now`, a trust note, and the
+actions `Open in View mode`, `Save device`, and `Use this address for a saved
+device…`. Saving or replacing pushes the local-device editor in `Save device`
+or `Update address` mode; the latter shows the current and found addresses side
+by side and states that only `Replace address and connect` changes the entry.
+
+Every destination is a push in one `NavigationStack` (pairing intro, scanner,
+local-device editor, control), so the system back gesture and button always
+work; the nearby decision sheet is the one transient surface and never carries
+a destination itself. The stack root owns the presentation style:
 parchment screens are light; the scanner and the media stage are dark. A pushed
 view cannot override an ancestor's `preferredColorScheme`, so the scheme is
 decided once from the current route rather than per screen.
@@ -106,7 +129,12 @@ URLs are never primary UI.
 ### Control
 
 The live screen is full-bleed inside safe areas and uses a black media stage so
-letterboxing is intentional. Portrait and landscape content preserve aspect
+letterboxing is intentional. The header carries a persistent access-path badge,
+`LAN` with a Wi-Fi glyph or `Relay` with a globe, beside the connection state
+in every session state. The badge is neutral in color on purpose: LAN means a
+trusted network, not an authenticated pairing. Session Controls repeats the
+path with the endpoint and a factual trust line, `Trusted network · not
+paired` or `Authenticated controller`. Portrait and landscape content preserve aspect
 ratio and input mapping; controls cannot resize the media when labels or status
 change.
 
