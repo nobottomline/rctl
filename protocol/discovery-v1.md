@@ -37,8 +37,20 @@ Service identity is the exact instance name plus normalized type and domain,
 not a persistent device ID. Group interfaces under that identity; never merge
 distinct service instances by display name. Accept only this service type in
 `local.`. Keep at most 64 services, 8 interfaces/addresses per service, and four
-active resolutions. A resolution has one five-second deadline including SRV
-and address lookup. Ignore callbacks from replaced or cancelled attempts.
+active resolutions. Automatic resolution has one five-second deadline including
+SRV and address lookup; multiple interfaces share it. An explicit selection
+pauses automatic resolves (not the browse subscription) and may retry DNS-only
+resolution up to four rounds within twenty seconds. Only this explicit path
+requests the system's WakeOnResolve behavior; it is best-effort, not a promise
+to wake every device. Ignore callbacks from replaced or cancelled attempts.
+
+Transient resolve errors retry with exponential backoff from one to thirty
+seconds while browsing. Malformed records and unsupported versions do not retry
+without a new service result. Removed services may remain visible for thirty
+seconds as unavailable, with their resolved endpoint cleared. A user may retry
+fresh DNS resolution, never a cached TCP connection. Bound live plus retained
+entries together to 64; live results take precedence over retained entries.
+Stopping discovery or leaving the foreground clears entries and cancels retries.
 
 Use DNSServiceResolve then DNSServiceGetAddrInfo with interface provenance.
 Validate the returned TXT again (not a cached NWBrowser dictionary). Reject

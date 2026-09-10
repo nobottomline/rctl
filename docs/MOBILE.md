@@ -338,9 +338,14 @@ HttpOnly, SameSite cookies for browser sessions; controller auth is additive and
 must not weaken the web path.
 
 The relay is self-hosted, so the mobile application has no mandatory rctl cloud
-account and does not require Sign in with Apple or Google. The current iOS app
-stores one relay controller profile and multiple independent LAN addresses.
-Multiple relay profiles remain a future product increment.
+account and does not require Sign in with Apple or Google. The iOS app stores
+multiple relay profiles and independent LAN addresses. The Relay menu selects
+one server or adds another; there is no fixed saved-relay count limit. Only the
+selected relay is fetched, avoiding unbounded background requests. Profiles
+migrate from the original single-profile store without re-pairing. Selection
+clears volatile tokens/devices and cancels old refresh work; removal deletes
+only that relay's Keychain identity. Sessions pin the full originating profile,
+so identical device IDs on different relays cannot redirect a reconnect.
 
 ## Relay And Direct-LAN Modes
 

@@ -47,6 +47,14 @@ scanner whose reticle follows the detected code, confirms a lock-on, and claims
 the code in place. Non-pairing QR codes are rejected locally, a failed claim
 ignores the same payload briefly, and paste plus torch are always available.
 
+The Relay menu supports **Add relay** and switching between saved servers,
+with a checkmark on the selected server. There is no fixed saved-relay count
+limit. Each server keeps its own Keychain identity; device lists and volatile
+tokens belong to the selected profile only. Removing one profile preserves the
+others. The original single-profile store migrates automatically. Re-pairing
+an already saved relay is rejected before making a claim; select its profile
+instead. A session cannot reconnect through a different selected relay.
+
 Debug builds accept `--rctl-route=pair|scan|local|save|replace|first-local|
 gallery|gallery2` to open a screen directly for screenshots and review;
 `gallery` and `gallery2` render the discovery and session building blocks with
@@ -63,8 +71,9 @@ The public LAN-only `.deb` is sufficient. No VPS, domain, certificate setup,
 controller identity, or relay enrollment is needed. The current unauthenticated
 HTTP/WS device API is for trusted networks only. Relay credentials are never
 sent to LAN; relay failures never automatically fall back to local control.
-Only private IPv4 and bracketed IPv6 ULA literals are accepted in this slice;
-hostname discovery and link-local IPv6 are not implemented. See
+Manual entry accepts only private IPv4 and bracketed IPv6 ULA literals; Bonjour
+resolves and validates private IPv4 before connecting. Link-local IPv6 is not
+implemented. See
 [`MOBILE-LAN.md`](../../../docs/MOBILE-LAN.md) for qualification limits.
 
 Build from the repository root with `make mobile-ios-build`, or open

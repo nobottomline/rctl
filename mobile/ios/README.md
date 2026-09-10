@@ -11,6 +11,11 @@ throughout a session. A public LAN-only device package works
 without a VPS. See [controller usage](Controller/README.md#local-network) and
 the [LAN security and qualification notes](../../docs/MOBILE-LAN.md).
 
+Multiple relay profiles are supported through the Relay menu, with isolated
+credentials and explicit server selection. Existing single-profile installs
+migrate without losing pairing. Saved relay count has no fixed product limit;
+network work is limited to the selected relay and bounded local discovery.
+
 The checked-in modules are:
 
 - `Modules/RctlProtocol`: bounded native models for the shared wire contracts;
