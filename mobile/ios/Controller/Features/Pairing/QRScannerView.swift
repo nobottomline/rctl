@@ -4,6 +4,11 @@ import UIKit
 /// Full-screen pairing-code scanner. The reticle rests in the center, springs
 /// onto a detected code, confirms the lock, then hands the payload to the app
 /// model. Pairing runs in place; the Devices screen pops on success.
+///
+/// Layering: the camera, the dimming scrim, the edge gradients, and the
+/// reticle live in one full-bleed stage so they share the preview layer's
+/// coordinate space and cover the whole screen. Instruction text and the
+/// controls sit above it inside the safe area.
 struct PairingScannerView: View {
     private enum Phase: Equatable {
         case scanning
@@ -20,24 +25,43 @@ struct PairingScannerView: View {
     @State private var phase: Phase = .scanning
     @State private var lockTask: Task<Void, Never>?
     @State private var rejected: (payload: String, until: Date)?
-    @State private var foreignCode = false
     @State private var breathe = false
     @State private var clipboardEmpty = false
 
+    // Foreign-code feedback: amber reticle, a short label, one soft haptic per
+    // new code, and a brief linger after the code leaves the frame so the
+    // message is readable even when the phone moves away.
+    @State private var foreignCode = false
+    @State private var foreignPayload: String?
+    @State private var foreignLinger: Task<Void, Never>?
+    @State private var foreignHapticNotBefore = Date.distantPast
+
+#if DEBUG
+    @StateObject private var demo = ScannerDemo()
+#endif
+
+    private var availability: QRScannerController.Availability {
+#if DEBUG
+        if demo.enabled { return .running }
+#endif
+        return scanner.availability
+    }
+
+    private var detection: QRScannerController.Detection? {
+#if DEBUG
+        if demo.enabled { return demo.detection }
+#endif
+        return scanner.detection
+    }
+
     var body: some View {
-        GeometryReader { proxy in
+        GeometryReader { outer in
             ZStack {
                 Color.black.ignoresSafeArea()
-                switch scanner.availability {
+                switch availability {
                 case .initializing, .running:
-                    CameraPreview(controller: scanner)
+                    stage(insets: outer.safeAreaInsets, safeSize: outer.size)
                         .ignoresSafeArea()
-                    ScannerReticle(
-                        target: reticle(in: proxy),
-                        tone: reticleTone,
-                        breathing: breathe && scanner.detection == nil && phase == .scanning && !reduceMotion
-                    )
-                    .ignoresSafeArea()
                     instruction
                     controls
                     if phase == .pairing {
@@ -66,16 +90,28 @@ struct PairingScannerView: View {
         }
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
-        .task { await scanner.start() }
+        .task {
+#if DEBUG
+            if demo.enabled { return }
+#endif
+            await scanner.start()
+        }
         .onAppear { breathe = true }
         .onDisappear {
             lockTask?.cancel()
+            foreignLinger?.cancel()
             scanner.stop()
+#if DEBUG
+            demo.stop()
+#endif
         }
-        .onChange(of: scanner.detection) { detection in
+        .onChange(of: detection) { detection in
             handle(detection)
         }
         .onChange(of: scenePhase) { scene in
+#if DEBUG
+            if demo.enabled { return }
+#endif
             switch scene {
             case .active: Task { await scanner.start() }
             case .inactive, .background: scanner.stop()
@@ -84,7 +120,7 @@ struct PairingScannerView: View {
         }
         .onChange(of: model.isBusy) { busy in
             // A paste from the intro screen or a finished claim both end here.
-            if !busy, phase == .pairing, model.profile == nil {
+            if !busy, phase == .pairing {
                 phase = .scanning
             }
         }
@@ -100,6 +136,83 @@ struct PairingScannerView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Copy the pairing code from relay admin first, then paste it here.")
+        }
+    }
+
+    // MARK: - Full-bleed stage
+
+    /// Camera, edge scrims, and the reticle in one coordinate space that
+    /// matches the preview layer, so detection bounds map one to one.
+    private func stage(insets: EdgeInsets, safeSize: CGSize) -> some View {
+        let target = reticle(insets: insets, safeSize: safeSize)
+        return ZStack {
+#if DEBUG
+            if demo.enabled {
+                ScannerDemoPreview(detection: demo.detection)
+            } else {
+                CameraPreview(controller: scanner)
+            }
+#else
+            CameraPreview(controller: scanner)
+#endif
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: insets.top + 130)
+                Spacer(minLength: 0)
+                LinearGradient(colors: [.clear, .black.opacity(0.62)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: insets.bottom + 170)
+            }
+            .allowsHitTesting(false)
+            ScannerReticle(
+                target: target,
+                tone: reticleTone,
+                breathing: breathe && detection == nil && phase == .scanning && !foreignCode && !reduceMotion,
+                caption: foreignCode ? "Not a pairing code" : nil,
+                stageHeight: safeSize.height + insets.top + insets.bottom,
+                bottomInset: insets.bottom
+            )
+        }
+#if DEBUG
+        .onAppear {
+            if demo.enabled {
+                demo.start(in: CGSize(
+                    width: safeSize.width + insets.leading + insets.trailing,
+                    height: safeSize.height + insets.top + insets.bottom
+                ))
+            }
+        }
+#endif
+    }
+
+    /// Resting window centered in the safe area, expressed in stage
+    /// coordinates; a detection replaces it with the code's padded bounds.
+    /// While pairing, the window stays on the code as long as it is in view.
+    private func reticle(insets: EdgeInsets, safeSize: CGSize) -> CGRect {
+        let side = min(max(min(safeSize.width, safeSize.height) * 0.62, 220), 300)
+        let resting = CGRect(
+            x: insets.leading + (safeSize.width - side) / 2,
+            y: insets.top + safeSize.height * 0.44 - side / 2,
+            width: side,
+            height: side
+        )
+        guard let detection, !detection.bounds.isNull,
+              detection.bounds.width > 24, detection.bounds.height > 24 else {
+            return resting
+        }
+        let bounds = detection.bounds.insetBy(dx: -16, dy: -16)
+        let clampedSide = max(bounds.width, bounds.height, 120)
+        return CGRect(
+            x: bounds.midX - clampedSide / 2,
+            y: bounds.midY - clampedSide / 2,
+            width: clampedSide,
+            height: clampedSide
+        )
+    }
+
+    private var reticleTone: ScannerReticle.Tone {
+        switch phase {
+        case .scanning: foreignCode ? .rejected : .searching
+        case .locked, .pairing: .locked
         }
     }
 
@@ -120,14 +233,9 @@ struct PairingScannerView: View {
         .padding(.horizontal, 32)
         .padding(.top, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(alignment: .top) {
-            LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: 180)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-        }
         .animation(ControllerMotion.standard, value: instructionTitle)
         .accessibilityElement(children: .combine)
+        .allowsHitTesting(false)
     }
 
     private var instructionTitle: String {
@@ -189,12 +297,6 @@ struct PairingScannerView: View {
         .padding(.horizontal, 22)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .background(alignment: .bottom) {
-            LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
-                .frame(height: 200)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-        }
     }
 
     private var pairingCard: some View {
@@ -216,39 +318,6 @@ struct PairingScannerView: View {
         .accessibilityElement(children: .combine)
     }
 
-    // MARK: - Reticle geometry
-
-    private func reticle(in proxy: GeometryProxy) -> CGRect {
-        let size = proxy.size
-        let side = min(max(min(size.width, size.height) * 0.62, 220), 300)
-        let resting = CGRect(
-            x: (size.width - side) / 2,
-            y: size.height * 0.44 - side / 2,
-            width: side,
-            height: side
-        )
-        guard phase != .pairing, let detection = scanner.detection, !detection.bounds.isNull,
-              detection.bounds.width > 24, detection.bounds.height > 24 else {
-            return resting
-        }
-        // The preview ignores the safe area; the overlay is measured in the same space.
-        let bounds = detection.bounds.insetBy(dx: -16, dy: -16)
-        let clampedSide = max(bounds.width, bounds.height, 120)
-        return CGRect(
-            x: bounds.midX - clampedSide / 2,
-            y: bounds.midY - clampedSide / 2,
-            width: clampedSide,
-            height: clampedSide
-        )
-    }
-
-    private var reticleTone: ScannerReticle.Tone {
-        switch phase {
-        case .scanning: foreignCode ? .rejected : .searching
-        case .locked, .pairing: .locked
-        }
-    }
-
     // MARK: - Detection flow
 
     private func handle(_ detection: QRScannerController.Detection?) {
@@ -256,18 +325,18 @@ struct PairingScannerView: View {
         guard let detection else {
             lockTask?.cancel()
             lockTask = nil
-            foreignCode = false
             if case .locked = phase { phase = .scanning }
+            if foreignCode { scheduleForeignLinger() }
             return
         }
         if let rejected, rejected.payload == detection.payload, Date() < rejected.until {
             return
         }
         guard Self.looksLikePairingPayload(detection.payload) else {
-            foreignCode = true
+            noteForeign(detection.payload)
             return
         }
-        foreignCode = false
+        clearForeign()
         if case let .locked(payload) = phase, payload == detection.payload { return }
         lockTask?.cancel()
         phase = .locked(detection.payload)
@@ -280,12 +349,54 @@ struct PairingScannerView: View {
         }
     }
 
+    /// One soft cue per new foreign code, never more often than every few
+    /// seconds, so a stray code on a desk does not keep buzzing.
+    private func noteForeign(_ payload: String) {
+        foreignLinger?.cancel()
+        foreignLinger = nil
+        if !foreignCode || foreignPayload != payload {
+            foreignPayload = payload
+            let now = Date()
+            if now >= foreignHapticNotBefore {
+                ControllerHaptics.nudge()
+                foreignHapticNotBefore = now.addingTimeInterval(2.5)
+            }
+        }
+        foreignCode = true
+    }
+
+    private func scheduleForeignLinger() {
+        foreignLinger?.cancel()
+        foreignLinger = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled else { return }
+            clearForeign()
+        }
+    }
+
+    private func clearForeign() {
+        foreignLinger?.cancel()
+        foreignLinger = nil
+        foreignCode = false
+        foreignPayload = nil
+    }
+
     private func deliver(_ payload: String) {
         phase = .pairing
         ControllerHaptics.success()
+#if DEBUG
+        if demo.enabled {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(1500))
+                rejected = (payload, Date().addingTimeInterval(6))
+                phase = .scanning
+            }
+            return
+        }
+#endif
         Task { @MainActor in
-            await model.pair(using: payload)
-            guard model.profile == nil else { return }
+            let paired = await model.pair(using: payload)
+            guard !paired else { return }
             // Failure is explained by the root alert; keep scanning but skip
             // this payload for a while so the same expired code does not loop.
             rejected = (payload, Date().addingTimeInterval(6))
@@ -321,13 +432,17 @@ struct PairingScannerView: View {
 // MARK: - Reticle
 
 /// Dimmed scrim with a clear window and four corner brackets that animate to
-/// the target rectangle.
+/// the target rectangle. The breathing scale is isolated in its own modifier
+/// so its repeating animation can never attach to the window's position.
 struct ScannerReticle: View {
     enum Tone { case searching, locked, rejected }
 
     let target: CGRect
     let tone: Tone
     let breathing: Bool
+    var caption: String? = nil
+    var stageHeight: CGFloat = .infinity
+    var bottomInset: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -339,14 +454,10 @@ struct ScannerReticle: View {
                 .position(x: target.midX, y: target.midY)
             ReticleBrackets(cornerRadius: 24, length: min(34, target.width * 0.2))
                 .stroke(color, style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+                .modifier(BreathingScale(active: breathing))
                 .frame(width: target.width, height: target.height)
                 .position(x: target.midX, y: target.midY)
                 .shadow(color: .black.opacity(0.35), radius: 4, x: 0, y: 1)
-                .scaleEffect(breathing ? 1.035 : 1)
-                .animation(
-                    breathing ? .easeInOut(duration: 1.7).repeatForever(autoreverses: true) : .default,
-                    value: breathing
-                )
             if tone == .locked {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 30, weight: .semibold))
@@ -354,11 +465,30 @@ struct ScannerReticle: View {
                     .position(x: target.midX, y: target.minY - 30)
                     .transition(.scale.combined(with: .opacity))
             }
+            if let caption {
+                Label(caption, systemImage: "xmark.circle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .overlay { Capsule().strokeBorder(color.opacity(0.35), lineWidth: 1) }
+                    .position(x: target.midX, y: captionY)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+            }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: target)
         .animation(ControllerMotion.standard, value: tone)
+        .animation(ControllerMotion.standard, value: caption)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// Below the window, but never under the bottom controls.
+    private var captionY: CGFloat {
+        let preferred = target.maxY + 34
+        let limit = stageHeight - bottomInset - 118
+        return preferred <= limit ? preferred : max(target.minY - 34, 60)
     }
 
     private var color: Color {
@@ -367,6 +497,21 @@ struct ScannerReticle: View {
         case .locked: Color(red: 0.42, green: 0.84, blue: 0.58)
         case .rejected: Color(red: 1.0, green: 0.74, blue: 0.38)
         }
+    }
+}
+
+/// Idle "breathing" of the brackets. Kept in a modifier so the repeating
+/// animation only ever drives the scale; frame and position stay outside it.
+private struct BreathingScale: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(active ? 1.035 : 1)
+            .animation(
+                active ? .easeInOut(duration: 1.7).repeatForever(autoreverses: true) : .easeOut(duration: 0.25),
+                value: active
+            )
     }
 }
 
@@ -521,3 +666,85 @@ private struct ScannerWideButtonStyle: ButtonStyle {
             .animation(ControllerMotion.immediate, value: configuration.isPressed)
     }
 }
+
+#if DEBUG
+// MARK: - Simulator demo
+
+/// Replays a scripted detection sequence so the scanner overlay can be
+/// reviewed in the Simulator, which has no camera. Enabled by the
+/// `--rctl-scanner-demo` launch argument together with `--rctl-route=scan`.
+/// Never compiled into Release.
+@MainActor
+final class ScannerDemo: ObservableObject {
+    @Published private(set) var detection: QRScannerController.Detection?
+    let enabled = ProcessInfo.processInfo.arguments.contains("--rctl-scanner-demo")
+    private var task: Task<Void, Never>?
+
+    func start(in size: CGSize) {
+        guard enabled, task == nil, size.width > 0, size.height > 0 else { return }
+        task = Task { @MainActor [weak self] in
+            let foreign = QRScannerController.Detection(
+                payload: "https://example.com/menu",
+                bounds: CGRect(x: size.width * 0.62 - 75, y: size.height * 0.36 - 75, width: 150, height: 150)
+            )
+            let pairing = QRScannerController.Detection(
+                payload: #"{"v":1,"origin":"https://relay.example","pairing_id":"pair_demo","secret":"demo","expires_at":0,"protocol_major":1,"relay_id":"demo"}"#,
+                bounds: CGRect(x: size.width * 0.4 - 85, y: size.height * 0.56 - 85, width: 170, height: 170)
+            )
+            let script: [(QRScannerController.Detection?, Duration)] = [
+                (nil, .seconds(1.5)), (foreign, .seconds(2)), (nil, .seconds(3.5)),
+                (pairing, .seconds(1.2)), (nil, .seconds(3.5)),
+            ]
+            while !Task.isCancelled {
+                for (value, hold) in script {
+                    guard let self, !Task.isCancelled else { return }
+                    detection = value
+                    do { try await Task.sleep(for: hold) } catch { return }
+                }
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        detection = nil
+    }
+}
+
+/// Stand-in for the camera: a dim desk-like gradient with a mock code drawn
+/// at the scripted detection bounds so tracking can be judged visually.
+struct ScannerDemoPreview: View {
+    let detection: QRScannerController.Detection?
+
+    var body: some View {
+        Canvas { context, size in
+            context.fill(
+                Path(CGRect(origin: .zero, size: size)),
+                with: .linearGradient(
+                    Gradient(colors: [Color(white: 0.34), Color(white: 0.16)]),
+                    startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)
+                )
+            )
+            var grid = Path()
+            stride(from: 0, through: size.width, by: 44).forEach { x in
+                grid.move(to: CGPoint(x: x, y: 0)); grid.addLine(to: CGPoint(x: x, y: size.height))
+            }
+            stride(from: 0, through: size.height, by: 44).forEach { y in
+                grid.move(to: CGPoint(x: 0, y: y)); grid.addLine(to: CGPoint(x: size.width, y: y))
+            }
+            context.stroke(grid, with: .color(.white.opacity(0.06)), lineWidth: 1)
+            guard let bounds = detection?.bounds else { return }
+            context.fill(Path(roundedRect: bounds.insetBy(dx: -10, dy: -10), cornerRadius: 6), with: .color(.white))
+            let cell = bounds.width / 9
+            for row in 0..<9 {
+                for column in 0..<9 where (row * 7 + column * 3 + row * column) % 5 < 2 || row < 3 && column < 3 {
+                    let rect = CGRect(x: bounds.minX + CGFloat(column) * cell, y: bounds.minY + CGFloat(row) * cell, width: cell, height: cell)
+                    context.fill(Path(rect), with: .color(.black))
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+#endif

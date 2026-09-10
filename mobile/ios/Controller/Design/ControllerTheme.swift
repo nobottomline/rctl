@@ -312,6 +312,8 @@ struct BrandMark: View {
 @MainActor
 enum ControllerHaptics {
     static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    /// Softest available cue, for information that is not an error.
+    static func nudge() { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.7) }
     static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
     static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
 }
