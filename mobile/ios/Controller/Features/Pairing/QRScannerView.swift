@@ -500,18 +500,29 @@ struct ScannerReticle: View {
     }
 }
 
-/// Idle "breathing" of the brackets. Kept in a modifier so the repeating
-/// animation only ever drives the scale; frame and position stay outside it.
+/// Idle "breathing" of the brackets. The repeating animation is started with
+/// `withAnimation` on private state, so it is scoped to that state change
+/// alone. A value-based `.animation` modifier would also capture the shape's
+/// size proposal from the enclosing frame in the same transaction and make
+/// the brackets oscillate between the old and new window whenever breathing
+/// started together with a target change.
 private struct BreathingScale: ViewModifier {
     let active: Bool
+    @State private var pulse = false
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(active ? 1.035 : 1)
-            .animation(
-                active ? .easeInOut(duration: 1.7).repeatForever(autoreverses: true) : .easeOut(duration: 0.25),
-                value: active
-            )
+            .scaleEffect(pulse ? 1.035 : 1)
+            .onAppear { sync(active) }
+            .onChange(of: active) { sync($0) }
+    }
+
+    private func sync(_ active: Bool) {
+        if active {
+            withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) { pulse = true }
+        } else {
+            withAnimation(.easeOut(duration: 0.25)) { pulse = false }
+        }
     }
 }
 
@@ -691,9 +702,11 @@ final class ScannerDemo: ObservableObject {
                 payload: #"{"v":1,"origin":"https://relay.example","pairing_id":"pair_demo","secret":"demo","expires_at":0,"protocol_major":1,"relay_id":"demo"}"#,
                 bounds: CGRect(x: size.width * 0.4 - 85, y: size.height * 0.56 - 85, width: 170, height: 170)
             )
+            // The pairing code stays in view past the simulated claim result,
+            // then leaves: the window must return to rest and stay there.
             let script: [(QRScannerController.Detection?, Duration)] = [
                 (nil, .seconds(1.5)), (foreign, .seconds(2)), (nil, .seconds(3.5)),
-                (pairing, .seconds(1.2)), (nil, .seconds(3.5)),
+                (pairing, .seconds(3.0)), (nil, .seconds(3.5)),
             ]
             while !Task.isCancelled {
                 for (value, hold) in script {
