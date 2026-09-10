@@ -5,7 +5,8 @@
 extern "C" {
 #endif
 
-// Call only after the LAN listener and all handlers are ready. Never for loopback.
+// Call after the LAN listener is ready, before publishing policy-changing REST.
+// Never call for a loopback-only listener.
 void rctl_discovery_start(uint16_t port);
 void rctl_discovery_stop(void);
 const char *rctl_discovery_status(void);

@@ -316,8 +316,9 @@ select Relay-only mode, which binds the same service to loopback so the on-devic
 relay tunnel still works. It must never be exposed directly to the public
 internet; internet clients terminate TLS and authenticate at the relay.
 
-**Local discovery.** After the LAN listener and handlers are ready, the daemon
-registers `_rctl._tcp` through the system DNS-SD responder. Relay-only mode does
+**Local discovery.** After the LAN listener is ready, and before exposing the
+policy-changing REST handler, the daemon registers `_rctl._tcp` through the
+system DNS-SD responder. Relay-only mode does
 not register; a policy change deregisters before the scheduled daemon restart.
 Registration/retry failure never affects HTTP or Relay. The iOS controller opts
 into foreground-only Bonjour browsing, validates raw TXT and private IPv4 before

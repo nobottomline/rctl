@@ -2278,7 +2278,6 @@ int main(int argc, char **argv) {
         rctl_http_set_reconfigure(gHttp, on_reconfigure, NULL);
         gAuto = dispatch_queue_create("com.greatlove.rctl.auto", DISPATCH_QUEUE_SERIAL);
         rctl_media_set_delete_callback(delete_media_asset);
-        rctl_http_set_rest(gHttp, rest_handler, NULL);
         rctl_http_set_session(gHttp, on_session, NULL);   // wake/idle SB on viewer presence
         rctl_webrtc_set_viewer_cb(on_webrtc_viewers);     // WebRTC viewers keep capture awake too
         rctl_webrtc_set_camera_viewer_cb(on_webrtc_camera_viewers);
@@ -2306,6 +2305,9 @@ int main(int argc, char **argv) {
         pthread_create(&alt, NULL, audio_lease_thread, NULL);
 
         if (localAccessEnabled) rctl_discovery_start(8080);
+        // Publish policy-changing REST only after discovery startup, so an early
+        // Relay-only request cannot be followed by a stale LAN advertisement.
+        rctl_http_set_rest(gHttp, rest_handler, NULL);
         dispatch_main();
     }
     return 0;

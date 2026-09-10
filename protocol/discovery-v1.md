@@ -5,8 +5,10 @@ version, authenticate a device, or enable any device action.
 
 ## Advertisement
 
-Register `_rctl._tcp` in `local.` only after the LAN HTTP listener and handlers
-are ready. SRV carries the actual listener port. Default instance name is
+Register `_rctl._tcp` in `local.` only after the LAN HTTP listener is ready,
+before publishing the policy-changing REST handler. This prevents an early
+Relay-only request from racing with startup registration. SRV carries the
+actual listener port. Default instance name is
 `rctl`; the system responder resolves collisions. Names are at most 63 UTF-8
 bytes. Deregister when LAN is disabled; responder failure is recoverable and
 must not affect HTTP, Relay, or manual address entry. Retry registration with

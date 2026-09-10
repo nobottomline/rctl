@@ -48,6 +48,14 @@ int main() {
     rctl_discovery_stop();
     rctl_discovery_stop();
     assert(releases == 1 && !strcmp(rctl_discovery_status(), "off"));
+    // A policy change can arrive while the responder is still registering.
+    rctl_discovery_start(8080);
+    rctl_discovery_stop();
+    dispatch_sync(callbackQueue, ^{ reply(fakeRef, 0, 0, "rctl", "_rctl._tcp", "local.", nullptr); });
+    assert(releases == 2 && !strcmp(rctl_discovery_status(), "off"));
+    const unsigned stoppedAttempts = registrations;
+    rctl_discovery_start(0);
+    assert(registrations == stoppedAttempts && !strcmp(rctl_discovery_status(), "off"));
     registrationError = kDNSServiceErr_ServiceNotRunning;
     rctl_discovery_start(8080);
     assert(!strcmp(rctl_discovery_status(), "error"));

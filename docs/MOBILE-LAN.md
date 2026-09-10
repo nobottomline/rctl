@@ -40,6 +40,31 @@ Guest Wi-Fi/client isolation, firewall rules, VPN routing, denied local-network
 permission, and the daemon's explicit Relay-only policy can prevent access even
 when the devices appear to share Wi-Fi. Do not infer reachability from the SSID.
 
+## Relay-only Policy And Discovery
+
+The relay admin LAN switch calls the device's confirmed `POST /v1/local_access`.
+A successful change persists the policy, immediately deregisters Bonjour and
+cancels pending registration retries, then restarts the daemon. Relay-only
+startup binds HTTP to loopback and does not register `_rctl._tcp`; the outbound
+relay connection remains independent. Re-enabling LAN registers again after
+restart. Rejected changes leave the current advertisement intact.
+
+Startup registration finishes before the policy-changing REST handler becomes
+reachable, preventing an early disable request from being overwritten by a
+late startup registration. CLI `--local-access` only saves the policy and
+requires the documented daemon restart before either binding or discovery
+changes. Browsers may briefly retain a cached service; it must not be treated
+as proof of reachability. Saved manual entries are not deleted when LAN is off.
+
+Qualification (2026-09-10): rootful `0.3.4-18+debug` passed a confirmed API
+cycle through LAN -> Relay-only -> LAN after safe deployment. The transition
+reported discovery off immediately; after restart the loopback API remained
+reachable while a direct LAN HTTP connection failed. Restoring the original
+LAN policy restored direct HTTP and discovery advertising. This exercised the
+same device API as the admin switch, not the production relay/browser path.
+Native policy/discovery tests and both package builds passed. Rootless physical
+discovery and the native controller's cache-removal behavior remain unqualified.
+
 ## Existing Device Path
 
 - `GET /v1/capabilities` describes the daemon and protocol compatibility.
