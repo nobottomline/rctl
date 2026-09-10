@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ControlEngine, codeToUsage, type DiagStats, type MacroEvent } from '../lib/engine'
 import { KeyboardState } from '../lib/keyboardState'
 import { GameKeyboard, validateKeyboardResponse, type GameKeyboardStatus } from '../lib/gameKeyboard'
-import { GamePointer, pointerCaptureUnavailable, type PointerStatus } from '../lib/gamePointer'
+import { GamePointer, pointerCaptureUnavailable, pointerWheelDelta, type PointerStatus } from '../lib/gamePointer'
 import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
 import { MicTalk, micSupported } from '../lib/mic'
@@ -159,8 +159,7 @@ export function useControl(
     const onWheel = (e: WheelEvent) => {
       if (document.pointerLockElement !== stage) return
       e.preventDefault()
-      const units = e.deltaMode === 0 ? e.deltaY / 100 : e.deltaMode === 1 ? e.deltaY : e.deltaY * 3
-      pointer.move(0, 0, Math.max(-20, Math.min(20, -units)))
+      pointer.move(0, 0, pointerWheelDelta(e.deltaY, e.deltaMode))
     }
     const onContextMenu = (e: Event) => { if (document.pointerLockElement === stage) e.preventDefault() }
     const onPointerLock = () => {

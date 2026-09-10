@@ -1,6 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { GamePointer, pointerCaptureUnavailable } from '../src/lib/gamePointer.ts'
+import { GamePointer, pointerCaptureUnavailable, pointerWheelDelta } from '../src/lib/gamePointer.ts'
+
+test('wheel normalization preserves direction in pixel, line and page modes', () => {
+  for (const [mode, delta, expected] of [[0, 100, 1], [0, 0.5, 0.005], [1, 2, 2], [2, 1, 3]]) {
+    assert.equal(pointerWheelDelta(delta, mode), expected)
+    assert.equal(pointerWheelDelta(-delta, mode), -expected)
+    assert.equal(pointerWheelDelta(0, mode), 0)
+  }
+})
+test('wheel normalization bounds both directions and rejects invalid input', () => {
+  for (const mode of [0, 1, 2]) {
+    assert.equal(pointerWheelDelta(10000, mode), 20)
+    assert.equal(pointerWheelDelta(-10000, mode), -20)
+  }
+  for (const value of [NaN, Infinity, -Infinity]) assert.equal(pointerWheelDelta(value, 0), 0)
+  assert.equal(pointerWheelDelta(100, 3), 0)
+})
 
 const tick = (ms = 0) => new Promise(resolve => setTimeout(resolve, ms))
 class Channel extends EventTarget {

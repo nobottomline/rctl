@@ -23,6 +23,13 @@ this feature. A browser without Pointer Lock or a device without the new
 DataChannel shows capture unavailable. The HTTP/WebCodecs-only path does not
 enable remote mouse capture.
 
+Wheel events (including two-finger trackpad scrolling) are normalized by
+`pointerWheelDelta`: pixel/line/page scaling and a symmetric 20-unit cap retain
+the browser delta's sign. The previous extra negation caused operator-reported
+inverted page scrolling on rootful. Cursor X/Y and keyboard events are unchanged.
+Unit tests cover both signs, fractional pixels, modes, bounds and invalid input;
+physical gesture direction still needs confirmation after deploying this client.
+
 ## Runtime
 
 - `core/input/GamePointer.mm`: optional virtual Generic Desktop mouse service

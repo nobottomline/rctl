@@ -1,4 +1,10 @@
 export type PointerStatus = { mode: 'idle' | 'connecting' | 'active' | 'error'; available: boolean; error?: string }
+export function pointerWheelDelta(deltaY: number, deltaMode: number): number {
+  if (!Number.isFinite(deltaY)) return 0
+  const units = deltaMode === 0 ? deltaY / 100 : deltaMode === 1 ? deltaY : deltaMode === 2 ? deltaY * 3 : 0
+  // Preserve the browser's scroll direction, including the operator's settings.
+  return Math.max(-20, Math.min(20, units))
+}
 export function pointerCaptureUnavailable(recording: boolean, keyboard: string, available: boolean, supported: boolean): string | undefined {
   if (!supported) return 'Mouse capture is not supported by this browser.'
   if (recording) return 'Mouse capture is unavailable during touch recording or playback.'
