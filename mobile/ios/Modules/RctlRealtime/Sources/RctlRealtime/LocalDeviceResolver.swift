@@ -8,25 +8,34 @@ public final class LocalDeviceResolver {
     private var queries: [UUID: LocalDNSQuery] = [:]
     public init() {}
 
-    public func resolve(_ identity: LocalServiceIdentity, interfaceIndices: [UInt32]) async throws -> ResolvedLocalDevice {
-        let end = ContinuousClock.now.advanced(by: .seconds(5))
+    public func resolve(_ identity: LocalServiceIdentity, interfaceIndices: [UInt32], userInitiated: Bool = false) async throws -> ResolvedLocalDevice {
+        let end = ContinuousClock.now.advanced(by: .seconds(userInitiated ? 20 : 5))
         var lastError: Error = LocalDiscoveryError.unsupportedNetwork
-        for index in interfaceIndices.prefix(8) {
-            try Task.checkCancellation()
-            let remaining = ContinuousClock.now.duration(to: end)
-            guard remaining > .zero else { throw LocalDiscoveryError.timedOut }
-            do { return try await resolve(identity, interfaceIndex: index, timeout: remaining) }
-            catch is CancellationError { throw CancellationError() }
-            catch { lastError = error }
+        var seen = Set<UInt32>()
+        let interfaces = interfaceIndices.prefix(8).filter { seen.insert($0).inserted }
+        guard !interfaces.isEmpty else { throw lastError }
+        for attempt in 0..<(userInitiated ? 4 : 1) {
+            if attempt > 0 { try await Task.sleep(for: .milliseconds(250)) }
+            for index in interfaces {
+                try Task.checkCancellation()
+                let remaining = ContinuousClock.now.duration(to: end)
+                guard remaining > .zero else { throw LocalDiscoveryError.timedOut }
+                let budget = min(remaining, .seconds(interfaces.count > 1 ? 2 : 5))
+                do { return try await resolve(identity, interfaceIndex: index, timeout: budget, wakeOnResolve: userInitiated) }
+                catch is CancellationError { throw CancellationError() }
+                catch LocalDiscoveryError.malformedRecord { throw LocalDiscoveryError.malformedRecord }
+                catch LocalDiscoveryError.unsupportedVersion { throw LocalDiscoveryError.unsupportedVersion }
+                catch { lastError = error }
+            }
         }
         throw lastError
     }
 
-    public func resolve(_ identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: Duration = .seconds(5)) async throws -> ResolvedLocalDevice {
+    public func resolve(_ identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: Duration = .seconds(5), wakeOnResolve: Bool = false) async throws -> ResolvedLocalDevice {
         try Task.checkCancellation()
         guard queries.count < 4 else { throw LocalDiscoveryError.busy }
         let id = UUID()
-        let query = LocalDNSQuery(identity: identity, interfaceIndex: interfaceIndex, timeout: min(timeout, .seconds(5)))
+        let query = LocalDNSQuery(identity: identity, interfaceIndex: interfaceIndex, timeout: min(timeout, .seconds(5)), wakeOnResolve: wakeOnResolve)
         queries[id] = query
         defer { queries[id] = nil }
         return try await withTaskCancellationHandler {
@@ -47,6 +56,7 @@ private final class LocalDNSQuery {
     let identity: LocalServiceIdentity
     let interfaceIndex: UInt32
     let timeout: Duration
+    let wakeOnResolve: Bool
     var resolveRef: DNSServiceRef?
     var addressRef: DNSServiceRef?
     var continuation: CheckedContinuation<ResolvedLocalDevice, Error>?
@@ -57,14 +67,16 @@ private final class LocalDNSQuery {
     var seenAddresses = 0
     var candidates: [ResolvedLocalDevice] = []
 
-    init(identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: Duration) {
+    init(identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: Duration, wakeOnResolve: Bool) {
         self.identity = identity; self.interfaceIndex = interfaceIndex; self.timeout = timeout
+        self.wakeOnResolve = wakeOnResolve
     }
 
     func start(_ continuation: CheckedContinuation<ResolvedLocalDevice, Error>) {
         guard !finished else { continuation.resume(throwing: CancellationError()); return }
         self.continuation = continuation
-        let error = DNSServiceResolve(&resolveRef, 0, interfaceIndex, identity.name, identity.type, identity.domain,
+        let flags = wakeOnResolve ? DNSServiceFlags(kDNSServiceFlagsWakeOnResolve) : 0
+        let error = DNSServiceResolve(&resolveRef, flags, interfaceIndex, identity.name, identity.type, identity.domain,
             { _, _, interface, error, _, hostname, port, length, txt, context in
                 guard let context else { return }
                 MainActor.assumeIsolated {
@@ -117,25 +129,28 @@ private final class LocalDNSQuery {
 
     func addressed(flags: DNSServiceFlags, interface: UInt32, error: DNSServiceErrorType, address: UnsafePointer<sockaddr>?) {
         guard !finished else { return }
+        if error == kDNSServiceErr_NoSuchRecord { return } // A may arrive after a negative cache entry.
         guard error == kDNSServiceErr_NoError, let address, let record else {
-            finish(.failure(LocalDiscoveryError.unsupportedNetwork)); return
+            finish(.failure(LocalDiscoveryError.unavailable)); return
         }
         seenAddresses += 1
         guard seenAddresses <= 8 else { finish(.failure(LocalDiscoveryError.unsupportedNetwork)); return }
-        if flags & DNSServiceFlags(kDNSServiceFlagsAdd) != 0,
-           interfaceIndex == 0 || interface == interfaceIndex,
+        if interfaceIndex == 0 || interface == interfaceIndex,
            address.pointee.sa_family == sa_family_t(AF_INET) {
             var value = UnsafeRawPointer(address).assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr
             var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
             if inet_ntop(AF_INET, &value, &text, socklen_t(text.count)) != nil,
                let target = try? LocalDeviceAddress("\(String(decoding: text.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)):\(port)") {
-                candidates.append(.init(address: target, record: record, interfaceIndex: interface))
+                candidates.removeAll { $0.address == target && $0.interfaceIndex == interface }
+                if flags & DNSServiceFlags(kDNSServiceFlagsAdd) != 0 {
+                    candidates.append(.init(address: target, record: record, interfaceIndex: interface))
+                }
             }
         }
         if flags & DNSServiceFlags(kDNSServiceFlagsMoreComing) == 0 {
             if let candidate = candidates.sorted(by: { $0.address.displayAddress < $1.address.displayAddress }).first {
                 finish(.success(candidate))
-            } else { finish(.failure(LocalDiscoveryError.unsupportedNetwork)) }
+            }
         }
     }
 

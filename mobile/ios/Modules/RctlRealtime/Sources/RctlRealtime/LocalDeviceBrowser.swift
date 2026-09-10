@@ -11,6 +11,13 @@ public struct DiscoveredLocalDevice: Identifiable, Equatable, Sendable {
     public let interfaces: [UInt32]
     public var endpoint: ResolvedLocalDevice?
     public var error: LocalDiscoveryError?
+    public var isPresent = true
+    public var canResolve: Bool {
+        switch error {
+        case .malformedRecord, .unsupportedVersion, .unsupportedNetwork: false
+        case nil, .unavailable, .timedOut, .busy: true
+        }
+    }
 }
 
 /// Foreground-only discovery. The owner controls permission opt-in and lifecycle.
@@ -27,6 +34,9 @@ public final class LocalDeviceBrowser {
     private var tasks: [LocalServiceIdentity: Task<Void, Never>] = [:]
     private var debounce: Task<Void, Never>?
     private var emptyDeadline: Task<Void, Never>?
+    private var maintenance: Task<Void, Never>?
+    private var catalog = LocalDiscoveryCatalog()
+    private var resolutionPaused = false
 
     public init() {}
 
@@ -46,12 +56,31 @@ public final class LocalDeviceBrowser {
         parameters.includePeerToPeer = false
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_rctl._tcp", domain: "local."), using: parameters)
         self.browser = browser
+        maintenance = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.generation == attempt else { return }
+                self.catalog.expire(now: ProcessInfo.processInfo.systemUptime)
+                self.publish()
+                if self.state == .searching { self.schedule() }
+            }
+        }
         browser.stateUpdateHandler = { [weak self] state in
             MainActor.assumeIsolated {
                 guard let self, self.generation == attempt else { return }
                 switch state {
                 case .ready: self.state = .searching
-                case .waiting(let error), .failed(let error):
+                case .waiting(let error):
+                    if case .dns(let code) = error, code == kDNSServiceErr_PolicyDenied {
+                        self.stop(); self.state = .permissionDenied
+                    } else {
+                        // NWBrowser can recover from a transient path outage.
+                        self.debounce?.cancel()
+                        self.debounce = nil
+                        self.state = .unavailable
+                        self.update([])
+                    }
+                case .failed(let error):
                     if case .dns(let code) = error, code == kDNSServiceErr_PolicyDenied {
                         self.stop(); self.state = .permissionDenied
                     } else {
@@ -84,12 +113,33 @@ public final class LocalDeviceBrowser {
         browser?.cancel(); browser = nil
         debounce?.cancel(); debounce = nil
         emptyDeadline?.cancel(); emptyDeadline = nil
+        maintenance?.cancel(); maintenance = nil
         for task in tasks.values { task.cancel() }
         tasks.removeAll()
         resolver.cancelAll()
         sources.removeAll(); devices.removeAll()
+        catalog = LocalDiscoveryCatalog()
+        resolutionPaused = false
         state = .stopped
         searchSettled = false
+        onChange?()
+    }
+
+    /// Keep the browse subscription alive during a user-initiated resolve.
+    /// Cancelling NWBrowser here would discard its list and create a selection race.
+    public func setResolutionPaused(_ paused: Bool) {
+        resolutionPaused = paused
+        if paused {
+            for task in tasks.values { task.cancel() }
+            tasks.removeAll()
+            resolver.cancelAll()
+        } else if browser != nil, state == .searching { schedule() }
+    }
+
+    private func publish() {
+        let updated = catalog.devices
+        guard updated != devices else { return }
+        devices = updated
         onChange?()
     }
 
@@ -103,22 +153,25 @@ public final class LocalDeviceBrowser {
         for (id, task) in tasks where latest[id] != sources[id] {
             task.cancel(); tasks[id] = nil
         }
-        let previous = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
-        devices = latest.map { id, result in
-            if sources[id] == result, let old = previous[id] { return old }
+        let changed = Set(latest.keys.filter { sources[$0] != latest[$0] })
+        let interfaces = latest.mapValues { result in
             let interfaces = Array(result.interfaces.prefix(8)).sorted {
                 if ($0.type == .wifi) != ($1.type == .wifi) { return $0.type == .wifi }
                 return $0.index < $1.index
             }.map { UInt32($0.index) }
-            return DiscoveredLocalDevice(id: id, interfaces: interfaces, endpoint: nil, error: nil)
-        }.sorted { $0.id.name < $1.id.name }
+            return interfaces
+        }
+        catalog.update(interfaces, changed: changed, now: ProcessInfo.processInfo.systemUptime)
         sources = latest
+        publish()
         schedule()
         onChange?()
     }
 
     private func schedule() {
-        for device in devices where device.endpoint == nil && device.error == nil && tasks[device.id] == nil {
+        guard !resolutionPaused, state == .searching else { return }
+        for entry in catalog.ready(now: ProcessInfo.processInfo.systemUptime) where tasks[entry.device.id] == nil {
+            let device = entry.device
             guard tasks.count < 4 else { break }
             let attempt = generation
             let source = sources[device.id]
@@ -132,10 +185,14 @@ public final class LocalDeviceBrowser {
                 catch let value as LocalDiscoveryError { endpoint = nil; failure = value }
                 catch { endpoint = nil; failure = .unavailable }
                 guard let self, !Task.isCancelled, generation == attempt, sources[device.id] == source,
-                      let index = devices.firstIndex(where: { $0.id == device.id }) else { return }
+                      catalog.entries[device.id]?.revision == entry.revision else { return }
                 tasks[device.id] = nil
-                devices[index].endpoint = endpoint
-                devices[index].error = failure
+                if let endpoint {
+                    catalog.complete(device.id, revision: entry.revision, result: .success(endpoint), now: ProcessInfo.processInfo.systemUptime)
+                } else {
+                    catalog.complete(device.id, revision: entry.revision, result: .failure(failure ?? .unavailable), now: ProcessInfo.processInfo.systemUptime)
+                }
+                publish()
                 schedule()
                 onChange?()
             }

@@ -91,12 +91,15 @@ final class LocalDevicesModel: ObservableObject {
     /// An explicit selection re-resolves the service. The displayed address is
     /// not trusted, and a new address never silently replaces a saved profile.
     func prepareNearby(_ device: DiscoveredLocalDevice) async throws -> LocalDeviceProfile {
-        guard foreground, !selectingNearby, nearby.contains(where: { $0.id == device.id }) else { throw CancellationError() }
+        guard foreground, discoveryEnabled, !selectingNearby,
+              let current = nearby.first(where: { $0.id == device.id }), current.canResolve else {
+            throw LocalDiscoveryError.unavailable
+        }
         selectingNearby = true
         cancelReachabilityProbe()
-        browser.stop()
+        browser.setResolutionPaused(true)
         let task = Task { [resolver, client] in
-            let endpoint = try await resolver.resolve(device.id, interfaceIndices: device.interfaces)
+            let endpoint = try await resolver.resolve(current.id, interfaceIndices: current.interfaces, userInitiated: true)
             _ = try await client.capabilities(at: endpoint.address)
             try Task.checkCancellation()
             return LocalDeviceProfile(id: UUID(), name: device.id.name, address: endpoint.address)
@@ -104,7 +107,7 @@ final class LocalDevicesModel: ObservableObject {
         selection = task
         defer {
             selectingNearby = false; selection = nil
-            if foreground && discoveryEnabled { browser.start() }
+            if foreground && discoveryEnabled { browser.setResolutionPaused(false) }
         }
         return try await withTaskCancellationHandler { try await task.value }
         onCancel: { task.cancel() }
@@ -198,7 +201,7 @@ final class LocalDevicesModel: ObservableObject {
             case .unsupportedVersion: return "This device uses an incompatible rctl protocol."
             case .unsupportedNetwork: return "No supported private IPv4 address was found. Add the device by address."
             case .malformedRecord: return "The device advertised an invalid discovery record."
-            case .timedOut: return "Device discovery timed out. Check the network or add the device by address."
+            case .timedOut: return "The device did not answer discovery in time. Wake the iPad and retry, or use a saved local address."
             case .busy, .unavailable: return "Discovery is unavailable. Retry or add the device by address."
             }
         }

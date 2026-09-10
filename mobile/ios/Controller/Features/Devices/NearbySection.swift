@@ -12,7 +12,6 @@ struct NearbySection: View {
     let addByAddress: () -> Void
 
     @Environment(\.openURL) private var openURL
-    @State private var snapshot: [DiscoveredLocalDevice] = []
     @State private var checking: LocalServiceIdentity?
 
     var body: some View {
@@ -81,28 +80,18 @@ struct NearbySection: View {
         .animation(ControllerMotion.standard, value: displayed.map(\.id))
         .animation(ControllerMotion.standard, value: localDevices.discoveryEnabled)
         .animation(ControllerMotion.standard, value: localDevices.discoveryState)
-        .onChange(of: localDevices.nearby) { nearby in
-            if !nearby.isEmpty { snapshot = nearby }
-        }
         .onChange(of: localDevices.selectingNearby) { selecting in
             if !selecting { checking = nil }
         }
         .onChange(of: localDevices.discoveryEnabled) { enabled in
-            if !enabled { snapshot = []; checking = nil }
+            if !enabled { checking = nil }
         }
     }
 
     // MARK: - Rows
 
-    /// While a selection re-resolves, or right after discovery restarts, the
-    /// browser reports an empty list for a moment. Keep the last non-empty
-    /// list on screen so rows do not vanish and reappear.
     private var displayed: [DiscoveredLocalDevice] {
-        let live = localDevices.nearby
-        guard live.isEmpty, !snapshot.isEmpty, localDevices.discoveryEnabled else { return live }
-        let bridging = localDevices.selectingNearby
-            || (localDevices.discoveryState == .searching && !localDevices.discoverySearchSettled)
-        return bridging ? snapshot : live
+        localDevices.nearby
     }
 
     private var rows: some View {
@@ -112,14 +101,14 @@ struct NearbySection: View {
                 name: device.id.name,
                 detail: detail(for: device, saved: saved),
                 status: status(for: device, saved: saved),
-                enabled: device.endpoint != nil && !localDevices.selectingNearby
+                enabled: device.canResolve && !localDevices.selectingNearby
             ) {
                 ControllerHaptics.tap()
                 checking = device.id
                 select(device)
             }
             .contextMenu {
-                if device.endpoint != nil, !localDevices.devices.isEmpty {
+                if device.isPresent, device.endpoint != nil, !localDevices.devices.isEmpty {
                     Menu {
                         ForEach(localDevices.devices) { profile in
                             Button {
@@ -193,6 +182,7 @@ struct NearbySection: View {
         if checking == device.id, localDevices.selectingNearby {
             return .init(text: "Checking", tone: .neutral, busy: true)
         }
+        if !device.isPresent { return .init(text: "Unavailable", tone: .attention) }
         if let error = device.error {
             switch error {
             case .unsupportedVersion: return .init(text: "Incompatible", tone: .danger)
@@ -206,6 +196,7 @@ struct NearbySection: View {
     }
 
     private func detail(for device: DiscoveredLocalDevice, saved: LocalDeviceProfile?) -> String {
+        if !device.isPresent { return "No longer advertised on this network" }
         if let error = device.error {
             switch error {
             case .unsupportedVersion: return "Protocol mismatch"
@@ -227,7 +218,8 @@ struct NearbySection: View {
         case .permissionDenied: return "Permission needed"
         case .unavailable: return "Unavailable"
         case .searching, .stopped:
-            let count = displayed.count
+            let count = displayed.filter(\.isPresent).count
+            if count == 0, !displayed.isEmpty { return "Recently seen" }
             if count == 0 { return localDevices.discoverySearchSettled ? "None found" : "Searching" }
             return count == 1 ? "1 found" : "\(count) found"
         }
