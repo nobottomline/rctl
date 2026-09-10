@@ -15,14 +15,8 @@ struct RemoteToolsSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(accessPath.label).font(.headline)
-                    Text(accessPath.endpoint).font(.footnote).textSelection(.enabled)
-                    if case .lan = accessPath { Text("Trusted network, not paired").font(.caption) }
-                }
-                .foregroundStyle(RemotePalette.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 12)
+                SessionConnectionBlock(accessPath: accessPath)
+                    .padding(.bottom, 14)
                 LazyVGrid(columns: columns, spacing: 10) {
                     tool("Control Center", symbol: "switch.2", action: .controlCenter)
                     tool("Notifications", symbol: "bell", action: .notificationCenter)
@@ -117,5 +111,75 @@ struct RemoteToolsSheet: View {
         .buttonStyle(RemoteActionButtonStyle())
         .disabled(!controlsEnabled)
         .opacity(controlsEnabled ? 1 : 0.42)
+    }
+}
+
+/// Read-only facts about the open session. The trust line is factual: LAN is
+/// a trusted network, not an authenticated pairing.
+struct SessionConnectionBlock: View {
+    let accessPath: RemoteAccessPath
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("CONNECTION")
+                .font(.caption2.weight(.semibold))
+                .tracking(1)
+                .foregroundStyle(RemotePalette.mutedText)
+                .accessibilityAddTraits(.isHeader)
+            VStack(spacing: 0) {
+                row("Path") {
+                    HStack(spacing: 8) {
+                        AccessPathBadge(path: accessPath)
+                        Text(isLAN ? "Local network" : "Relay")
+                            .foregroundStyle(RemotePalette.primaryText)
+                    }
+                }
+                Divider().overlay(RemotePalette.line)
+                row("Endpoint") {
+                    Text(endpointText)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(RemotePalette.primaryText)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Divider().overlay(RemotePalette.line)
+                row("Trust") {
+                    Text(isLAN ? "Trusted network · not paired" : "Authenticated controller")
+                        .foregroundStyle(isLAN ? RemotePalette.signal : RemotePalette.online)
+                }
+            }
+            .background(RemotePalette.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8).strokeBorder(RemotePalette.line, lineWidth: 1)
+            }
+        }
+    }
+
+    private func row<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(.footnote)
+                .foregroundStyle(RemotePalette.secondaryText)
+                .frame(width: 72, alignment: .leading)
+            content()
+                .font(.footnote.weight(.medium))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 40)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var isLAN: Bool {
+        if case .lan = accessPath { true } else { false }
+    }
+
+    private var endpointText: String {
+        switch accessPath {
+        case .lan(let address): address.displayAddress
+        case .relay(let origin):
+            if let origin, let host = URLComponents(string: origin)?.host { host } else { origin ?? "Unavailable" }
+        }
     }
 }

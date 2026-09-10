@@ -1,9 +1,40 @@
 import RctlClient
 import SwiftUI
 
+/// Persistent LAN/Relay badge. Deliberately neutral in color: LAN means a
+/// trusted network, not an authenticated pairing, and Relay is a route.
+struct AccessPathBadge: View {
+    let path: RemoteAccessPath
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+            Text(path.label)
+                .font(.caption2.weight(.bold))
+                .tracking(0.4)
+        }
+        .foregroundStyle(RemotePalette.primaryText)
+        .padding(.horizontal, 7)
+        .frame(height: 20)
+        .background(RemotePalette.raised, in: Capsule())
+        .overlay { Capsule().strokeBorder(RemotePalette.line, lineWidth: 1) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var symbol: String {
+        if case .lan = path { "wifi" } else { "globe" }
+    }
+
+    private var accessibilityLabel: String {
+        if case .lan = path { "Connection path: local network" } else { "Connection path: relay" }
+    }
+}
+
 struct RemoteSessionHeader: View {
     let deviceName: String
-    let accessPath: String
+    let accessPath: RemoteAccessPath
     let connectionLabel: String
     let connectionColor: Color
     let modeLabel: String
@@ -27,10 +58,7 @@ struct RemoteSessionHeader: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                 HStack(spacing: 6) {
-                    Text(accessPath)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(RemotePalette.secondaryText)
-                        .accessibilityLabel(accessPath == "LAN" ? "Connection path: local network" : "Connection path: relay")
+                    AccessPathBadge(path: accessPath)
                     Circle()
                         .fill(connectionColor)
                         .frame(width: 6, height: 6)

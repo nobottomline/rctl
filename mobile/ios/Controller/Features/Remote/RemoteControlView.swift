@@ -46,7 +46,7 @@ struct RemoteControlView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             RemoteSessionHeader(
                 deviceName: deviceName,
-                accessPath: model.accessPath.label,
+                accessPath: model.accessPath,
                 connectionLabel: connectionLabel,
                 connectionColor: connectionColor,
                 modeLabel: modeLabel,
