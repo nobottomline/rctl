@@ -54,7 +54,7 @@ struct NearbySection: View {
                 } else {
                     AddRow(
                         title: "Find devices on this network",
-                        subtitle: "Lists iPads with LAN control on. Nothing connects until you choose one.",
+                        subtitle: "Lists devices with LAN control on. Nothing connects until you choose one.",
                         systemImage: "bonjour"
                     ) {
                         ControllerHaptics.tap()
@@ -160,7 +160,7 @@ struct NearbySection: View {
                     DiscoveryNotice(
                         symbol: "magnifyingglass",
                         title: "No devices found",
-                        text: "Make sure the iPad is on this network with LAN control on. Devices set to Relay only do not advertise.",
+                        text: "Make sure the device is on this network with LAN control on. Devices set to Relay only do not advertise.",
                         primary: ("Add by address", addByAddress),
                         secondary: nil
                     )
@@ -362,7 +362,7 @@ struct NearbyDeviceSheet: View {
                         ZStack {
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .fill(ControllerPalette.signalSoft)
-                            Image(systemName: "ipad.landscape")
+                            Image(systemName: "ipad.and.iphone")
                                 .font(.system(size: 20, weight: .medium))
                                 .foregroundStyle(ControllerPalette.signal)
                         }
@@ -396,7 +396,7 @@ struct NearbyDeviceSheet: View {
                     .accessibilityElement(children: .contain)
 
                     Callout(
-                        text: "Found on this network by name. Discovery does not verify which iPad this is; connect only on a network you trust. Sessions start in View mode.",
+                        text: "Found on this network by name. Discovery does not verify which device this is; connect only on a network you trust. Sessions start in View mode.",
                         symbol: "info.circle",
                         tone: .neutral
                     )
@@ -508,7 +508,7 @@ struct DiscoveryDesignGallery: View {
                         DiscoveryNotice(
                             symbol: "magnifyingglass",
                             title: "No devices found",
-                            text: "Make sure the iPad is on this network with LAN control on. Devices set to Relay only do not advertise.",
+                            text: "Make sure the device is on this network with LAN control on. Devices set to Relay only do not advertise.",
                             primary: ("Add by address", {}),
                             secondary: nil
                         )

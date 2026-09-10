@@ -201,7 +201,7 @@ final class LocalDevicesModel: ObservableObject {
             case .unsupportedVersion: return "This device uses an incompatible rctl protocol."
             case .unsupportedNetwork: return "No supported private IPv4 address was found. Add the device by address."
             case .malformedRecord: return "The device advertised an invalid discovery record."
-            case .timedOut: return "The device did not answer discovery in time. Wake the iPad and retry, or use a saved local address."
+            case .timedOut: return "The device did not answer discovery in time. Wake the device and retry, or use a saved local address."
             case .busy, .unavailable: return "Discovery is unavailable. Retry or add the device by address."
             }
         }

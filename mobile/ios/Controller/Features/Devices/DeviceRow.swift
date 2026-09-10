@@ -23,7 +23,7 @@ struct DeviceRow: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .fill(enabled ? ControllerPalette.signalSoft : ControllerPalette.canvasDeep)
-                    Image(systemName: "ipad.landscape")
+                    Image(systemName: "ipad.and.iphone")
                         .font(.system(size: 19, weight: .medium))
                         .foregroundStyle(enabled ? ControllerPalette.signal : ControllerPalette.faint)
                 }
@@ -204,7 +204,7 @@ struct DevicesHero: View {
             HeroEmblem()
                 .padding(.top, 6)
             VStack(spacing: 8) {
-                Text("Your iPad, one tap away")
+                Text("Your device, one tap away")
                     .font(.title2.weight(.bold))
                     .foregroundStyle(ControllerPalette.ink)
                     .multilineTextAlignment(.center)

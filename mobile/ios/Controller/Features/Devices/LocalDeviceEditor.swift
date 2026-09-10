@@ -50,7 +50,7 @@ struct LocalDeviceEditor: View {
     private var intro: String {
         switch mode {
         case .add, .edit:
-            "Connect directly over the network you are on. The iPad needs the rctl package with LAN control enabled."
+            "Connect directly over the network you are on. The device needs the rctl package with LAN control enabled."
         case .saveDiscovered:
             "Keep this device for next time. You can rename it; the address stays the one that answered."
         case .replaceAddress:
@@ -93,7 +93,7 @@ struct LocalDeviceEditor: View {
                         )
                     } else if let suggested, mode == .saveDiscovered {
                         Callout(
-                            text: "Found on this network as “\(suggested.name)”. Discovery does not verify which iPad answered; use LAN control only on a network you trust.",
+                            text: "Found on this network as “\(suggested.name)”. Discovery does not verify which device answered; use LAN control only on a network you trust.",
                             symbol: "bonjour",
                             tone: .neutral
                         )

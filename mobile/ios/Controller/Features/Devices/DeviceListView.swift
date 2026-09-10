@@ -140,7 +140,7 @@ struct DeviceListView: View {
                 removing = nil
             }
         } message: {
-            Text("Only the saved address is removed. The iPad is not changed.")
+            Text("Only the saved address is removed. The device is not changed.")
         }
         .alert(
             "Device unavailable",
@@ -249,7 +249,7 @@ struct DeviceListView: View {
 
     /// Exact-endpoint match between a saved address and a resolved discovery
     /// result. A hint for the status chip only; it proves nothing about which
-    /// iPad answered and never edits the saved entry.
+    /// device answered and never edits the saved entry.
     private func advertisedNearby(_ device: LocalDeviceProfile) -> Bool {
         localDevices.discoveryEnabled
             && localDevices.nearby.contains { $0.endpoint?.address == device.address }
@@ -477,7 +477,7 @@ struct DeviceListView: View {
 
     private func unavailableMessage(for device: ControllerDevice) -> String {
         if !device.compatible {
-            return device.compatibilityError ?? "The iPad uses an incompatible protocol version."
+            return device.compatibilityError ?? "The device uses an incompatible protocol version."
         }
         if !device.online {
             return "\(device.name) is offline. Wait for it to reconnect to the relay, then refresh."

@@ -321,9 +321,9 @@ final class ControllerAppModel: ObservableObject {
             case .deviceUnavailable:
                 "This device is no longer available. Refresh the device list."
             case .deviceOffline:
-                "The iPad is offline. Wait for it to reconnect and try again."
+                "The device is offline. Wait for it to reconnect and try again."
             case let .incompatibleDevice(reason):
-                reason ?? "The iPad uses an incompatible protocol version."
+                reason ?? "The device uses an incompatible protocol version."
             case let .deviceUpdateRequired(version):
                 if let version {
                     "Update rctld \(version) before using the native controller. Browser control remains available."

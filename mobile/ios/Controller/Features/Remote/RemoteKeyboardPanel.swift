@@ -13,7 +13,7 @@ struct RemoteKeyboardPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                TextField("Type on iPad", text: $draft, axis: .vertical)
+                TextField("Type on the device", text: $draft, axis: .vertical)
                     .lineLimit(1...3)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -45,7 +45,7 @@ struct RemoteKeyboardPanel: View {
                 }
                 .buttonStyle(RemoteIconButtonStyle(selected: !draft.isEmpty))
                 .disabled(draft.isEmpty)
-                .accessibilityLabel("Type text on iPad")
+                .accessibilityLabel("Type text on the device")
 
                 Button(action: close) {
                     Image(systemName: "xmark")
