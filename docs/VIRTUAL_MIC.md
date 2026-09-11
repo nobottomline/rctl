@@ -148,9 +148,8 @@ counts, never PCM. Returned buffers are not proof of playback: reset also return
 them. `bash scripts/test-webrtc-ownership.sh` exercises production speaker code
 with real Opus and fake AudioQueue failures, including interrupted/repeated Talk,
 allocation ownership, bounded backlog and retry behavior. Both package lanes
-build and pass the public-package audit. Acoustic verification of the new native
-path and real Safari microphone capture are still required. No production relay
-HTML was replaced during these tests.
+build and pass the public-package audit. No production relay HTML was replaced
+during these tests; real Safari microphone capture remains unverified.
 
 On-device follow-up found that the first attempt reached the half-second queue
 capacity before buffers were returned; the second attempt drained normally.
@@ -159,9 +158,20 @@ handled separately from failure: excess incoming PCM is dropped without growing
 the queue or cancelling Talk, allowing asynchronous startup to finish. Only two
 seconds without buffer-return progress while capacity is exhausted fails the
 speaker attempt. Mock tests cover bounded warmup, automatic continuation after
-the first callback and a genuine stall. First-attempt acoustic verification is
-still pending; neither queue callbacks nor the user's qualified observation
-establish complete rootless/Safari support.
+the first callback and a genuine stall.
+
+After installing `0.3.4~test.20260911173408.bbe7101f0109` and restarting
+SpringBoard, dpkg reported `install ok installed` and a new daemon process was
+confirmed. The operator explicitly heard both successive synthetic signals
+(440 Hz, then 660 Hz) through the Pro's speaker. Both used the production relay
+control UI in Chrome and its real Opus/DataChannel path, not a direct native
+playback shortcut. The first attempt dropped 17 packets during queue warmup but
+continued; the second dropped none. Both queues drained before idle cleanup,
+the speaker volume was restored and Talk stopped. This qualifies cold-start and
+repeated speaker playback for that test, not lossless startup, real browser
+microphone capture, Safari, app-mic injection or recovery after media-services
+restart. The next check is Safari with the updated control client and actual
+microphone permission/input, separately from this speaker result.
 
 Still required before calling the feature generally qualified:
 
