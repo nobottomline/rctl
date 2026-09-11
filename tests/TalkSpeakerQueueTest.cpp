@@ -4,6 +4,7 @@
 static decltype(AudioQueueNewOutput) fakeNewOutput;
 static decltype(AudioQueueSetParameter) fakeSetParameter;
 static decltype(AudioQueueStart) fakeStart;
+static decltype(AudioQueuePause) fakePause;
 static decltype(AudioQueueReset) fakeReset;
 static decltype(AudioQueueAllocateBuffer) fakeAllocate;
 static decltype(AudioQueueFreeBuffer) fakeFree;
@@ -12,6 +13,7 @@ static decltype(AudioQueueGetProperty) fakeGetProperty;
 #define AudioQueueNewOutput fakeNewOutput
 #define AudioQueueSetParameter fakeSetParameter
 #define AudioQueueStart fakeStart
+#define AudioQueuePause fakePause
 #define AudioQueueReset fakeReset
 #define AudioQueueAllocateBuffer fakeAllocate
 #define AudioQueueFreeBuffer fakeFree
@@ -21,9 +23,10 @@ static decltype(AudioQueueGetProperty) fakeGetProperty;
 #include <cassert>
 #include <cstdlib>
 
-enum Failure { None, Create, Volume, Start, Reset, Allocate, Enqueue, Query };
+enum Failure { None, Create, Volume, Start, Pause, Reset, Allocate, Enqueue, Query };
 static Failure failure = None;
 static bool sessionOK = true, running = false;
+static bool interrupted = false;
 static int starts = 0, allocations = 0, boosts = 0, virtualFrames = 0;
 static int route = RCTL_TALK_SPEAKER;
 static std::vector<AudioQueueBufferRef> queued;
@@ -46,9 +49,16 @@ static OSStatus fakeSetParameter(AudioQueueRef, AudioQueueParameterID, AudioQueu
 }
 static OSStatus fakeStart(AudioQueueRef, const AudioTimeStamp *) {
     assert(!queued.empty()); // Never start an empty queue.
+    assert(!running); // Normalize stale running state before a new burst.
     ++starts;
     if (failure == Start) return -50;
     running = true;
+    interrupted = false;
+    return noErr;
+}
+static OSStatus fakePause(AudioQueueRef) {
+    if (failure == Pause) return -50;
+    running = false;
     return noErr;
 }
 static OSStatus fakeReset(AudioQueueRef aq) {
@@ -109,17 +119,18 @@ int main() {
     send();
     assert(starts == 1 && boosts == 1 && allocations == 1);
     nextBurst();
-    send(); // A running persistent queue must not be started twice.
-    assert(starts == 1);
+    interrupted = true; // IsRunning can stay true while hardware no longer consumes.
+    send();
+    assert(starts == 2 && !interrupted);
     nextBurst();
     running = false; // Interruption between Talk attempts.
     send();
-    assert(starts == 2 && !g_micSpeakerFailed);
+    assert(starts == 3 && !g_micSpeakerFailed);
     nextBurst();
 
-    for (Failure f : {Create, Volume, Start, Reset, Allocate, Enqueue, Query}) {
+    for (Failure f : {Create, Volume, Start, Pause, Reset, Allocate, Enqueue, Query}) {
         if (f == Create) g_micAQ = nullptr;
-        running = false;
+        running = f == Pause;
         failure = f;
         send();
         assert(g_micSpeakerFailed && boosts == 0 && allocations == 0);

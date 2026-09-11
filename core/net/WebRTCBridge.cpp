@@ -316,7 +316,8 @@ static void mic_speaker_failed(const char *operation, OSStatus status) {
 
 // Preserve the queue between bursts: the original iOS 14 qualification found
 // silence after dispose/recreate. A persistent queue can still stop after an
-// interruption; inspect and restart it after enqueueing the first new buffer.
+// interruption, even while IsRunning remains true. Explicitly pause/restart it
+// at a new user-driven burst, after enqueueing the first new buffer.
 static void mic_watchdog() {
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -393,7 +394,14 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         if (!g_micWatchStarted) { std::thread(mic_watchdog).detach(); g_micWatchStarted = true; }
     }
     if (starting) {
-        OSStatus status = AudioQueueSetParameter(g_micAQ, kAudioQueueParam_Volume, 1.0f);
+        UInt32 running = 0, size = sizeof(running);
+        OSStatus status = AudioQueueGetProperty(g_micAQ, kAudioQueueProperty_IsRunning, &running, &size);
+        if (status != noErr) { mic_speaker_failed("running query", status); return; }
+        if (running) {
+            status = AudioQueuePause(g_micAQ);
+            if (status != noErr) { mic_speaker_failed("pause", status); return; }
+        }
+        status = AudioQueueSetParameter(g_micAQ, kAudioQueueParam_Volume, 1.0f);
         if (status != noErr) { mic_speaker_failed("volume", status); return; }
         status = AudioQueueReset(g_micAQ);
         if (status != noErr) { mic_speaker_failed("burst reset", status); return; }
@@ -435,15 +443,10 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
     }
     ++g_micEnqueuedBuffers;
     if (starting) {
-        UInt32 running = 0, size = sizeof(running);
-        status = AudioQueueGetProperty(g_micAQ, kAudioQueueProperty_IsRunning, &running, &size);
-        if (status != noErr) { mic_speaker_failed("running query", status); return; }
-        if (!running) {
-            status = AudioQueueStart(g_micAQ, nullptr);
-            if (status != noErr) { mic_speaker_failed("start", status); return; }
-        }
+        status = AudioQueueStart(g_micAQ, nullptr);
+        if (status != noErr) { mic_speaker_failed("start", status); return; }
         g_micProgressAt = std::chrono::steady_clock::now();
-        wlog("mic intercom: talk burst queued; was_running=" + std::to_string(running));
+        wlog("mic intercom: talk burst queued and explicitly started");
     }
 }
 

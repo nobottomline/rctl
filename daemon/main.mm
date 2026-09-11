@@ -2007,6 +2007,31 @@ extern "C" bool rctl_audio_session_activate(void) {
         if (!C) { dlog("AVAudioSession class missing"); return false; }
         id sess = ((id (*)(id, SEL))objc_msgSend)((id)C, NSSelectorFromString(@"sharedInstance"));
         if (!sess) return false;
+        static dispatch_once_t observerOnce;
+        dispatch_once(&observerOnce, ^{
+            NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+            [center addObserverForName:@"AVAudioSessionInterruptionNotification" object:sess queue:nil
+                            usingBlock:^(NSNotification *notification) {
+                NSNumber *type = notification.userInfo[@"AVAudioSessionInterruptionTypeKey"];
+                if (![type isKindOfClass:NSNumber.class]) return;
+                char message[96];
+                snprintf(message, sizeof(message), "Talk audio session interruption type=%ld", (long)type.integerValue);
+                dlog(message);
+            }];
+            [center addObserverForName:@"AVAudioSessionRouteChangeNotification" object:sess queue:nil
+                            usingBlock:^(NSNotification *notification) {
+                NSNumber *reason = notification.userInfo[@"AVAudioSessionRouteChangeReasonKey"];
+                if (![reason isKindOfClass:NSNumber.class]) return;
+                char message[96];
+                snprintf(message, sizeof(message), "Talk audio session route change reason=%ld", (long)reason.integerValue);
+                dlog(message);
+            }];
+            [center addObserverForName:@"AVAudioSessionMediaServicesWereResetNotification" object:sess queue:nil
+                            usingBlock:^(NSNotification *notification) {
+                (void)notification;
+                dlog("Talk audio session media services reset; audio objects need recovery");
+            }];
+        });
         NSError *err = nil;
         // Playback category: audible through the media volume, ignores the mute
         // switch. (PlayAndRecord/DefaultToSpeaker comes with the virtual mic.)

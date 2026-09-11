@@ -206,6 +206,27 @@ both devices without opening a real microphone or sending test audio. Actual
 Safari microphone permission, capture and speaker playback remain the next
 operator acceptance check.
 
+### Playback After Other Audio
+
+The later real-microphone test kept `Talking` active in Safari/Chrome without a
+browser error, but device logs recorded repeated `playback stalled` failures.
+The daemon accepted/decoded incoming audio; its persistent queue reported
+`IsRunning=1` yet did not return buffers. mediaserverd's process start preceded
+the daemon and successful tones, excluding a media-services process restart for
+this observed failure. The earlier two-tone pass did not cover this lifecycle.
+
+Each new speaker burst now pauses a queue reporting running, resets stale PCM,
+enqueues its first buffer and explicitly starts playback. It no longer treats
+`IsRunning` as evidence of working output or skips Start solely on that flag.
+The queue remains persistent to preserve the original iOS 14 behavior. Mock
+tests cover this stale-running state and pause failure. Numeric interruption and
+route-change notifications are logged without device names or audio content;
+notifications never activate playback automatically. Media-services reset is
+logged but orphaned-object recreation remains unqualified. Real acceptance must
+include first/repeated Talk, playback in another app between attempts, and then
+actual Safari microphone input. This latest recovery change is not yet
+physically verified.
+
 Still required before calling the feature generally qualified:
 
 1. Discord voice call with `App mic`: the remote participant hears browser
