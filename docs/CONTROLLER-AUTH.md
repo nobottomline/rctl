@@ -178,7 +178,7 @@ the exact original request remains a rejected nonce replay.
 
 ## Lifecycle
 
-Administrators can list, rename, revoke, and delete controllers independently.
+Administrators can list, rename, change permissions, revoke, and delete controllers independently.
 Revoke invalidates all of that controller's tokens and cancels its active native
 signaling WebSockets immediately. Future long-lived native tunnel routes must
 join the same controller-owned cancellation registry before release. Revoke
@@ -253,16 +253,37 @@ callbacks from a replaced transport are ignored by connection generation.
 If relay delivery of a signaling `close` fails, the server closes that exact
 device WebSocket so the daemon fails closed instead of leaving P2P running.
 
-This is not a zero-latency revocation guarantee across a partition. A half-open
-transport is detected by the existing device supervisor (40-second inactivity
-threshold plus scheduling delay). There is no per-session renewable authorization
-lease yet. Before adding a permissions editor, qualify lost-link teardown on
-rootful and rootless and add a versioned grant/revision protocol if bounded
-revocation independent of transport health is required. Never implement scope
-editing as only a database or UI change. The native app refreshes `/me` and closes
-an established session on changed grants; pairing identity and credentials remain.
+The admin controller detail has a Permissions editor backed by
+`POST /api/admin/controllers/{id}/permissions` with
+`{"scopes":["screen.view"],"expected_revision":1}`. Lists, pairing responses and
+`GET /api/controller/me` expose `authorization_revision`. Existing controllers
+migrate to revision 1. A changed grant increments the revision atomically and
+cancels existing controller sessions; a normalized no-op neither increments nor
+disconnects. Stale revisions return 409 `controller_permissions_changed`, revoked
+controllers return 409 `controller_revoked`, and missing controllers return 404.
+Unknown/empty scopes are rejected; use Revoke access to remove all access. The UI
+requires explicit reload after a concurrent edit, never overwrites a stale form,
+and treats an interrupted save as unconfirmed. Tokens, keys, identity and pairing
+remain unchanged. Changes are audited with old/new scopes and revision, no secrets.
 
-Verification for this increment (2026-09-11): relay `go test ./...` and targeted
+New native sessions require `controller.authorization_lease_v1` on the device.
+The device challenges the relay before opening media and periodically thereafter;
+each response requires the same current active grant revision. The 20-second
+lease starts at device-local challenge issuance, not response arrival, so delayed
+responses and A -> B -> A scope changes cannot resurrect an old session. Expiry
+disables input and closes the session on the next one-second watchdog tick,
+subject to OS scheduling. This bounds lost-link access without claiming instant
+revocation across a partition. See [`../protocol/signaling-v1.md`](../protocol/signaling-v1.md)
+for replay, sleep, capacity and rolling-upgrade rules.
+
+The iOS client reconciles `/me` before connection, on refresh and foreground
+heartbeat. It also refreshes after a signaling policy close, stops automatic
+retry for that case, rejects regressing revisions, and closes negotiated sessions
+even if a newer revision returns to the same scope set. Reconnection starts in
+View, never automatically restores Control. Old saved profiles without a revision
+remain readable; no re-pairing is required.
+
+Verification for the original teardown increment (2026-09-11): relay `go test ./...` and targeted
 `-race` tests passed; native `make test` passed; the separate real-libdatachannel
 ownership test passed, including retained PeerConnection references. Swift
 RctlClient tests and iOS app lifecycle tests passed. Both rootful and rootless
@@ -271,6 +292,28 @@ path and passed real LAN video, diagnostics and suspend/resume qualification.
 Rootless installation of this increment, active P2P revocation under a network
 partition, and physical controller-app validation remain unqualified. Do not
 infer those results from package compilation or the host teardown test.
+
+Permissions editor qualification (2026-09-12): full relay tests and targeted race
+tests passed, including real WebSocket grant renewal/policy close, stale CAS,
+no-op updates, isolation, unchanged credentials, migration and old-device refusal.
+The real-libdatachannel host test verifies pre-offer authorization, expiry,
+duplicate/late responses, retained PeerConnections and owner isolation. The
+20-second clock/replay rules also run in `make test-webrtc-permissions`.
+RctlClient's 28 tests and the iOS app's 23 lifecycle tests passed, including
+revision regression and A -> B -> A handling. Admin lint/build and real browser
+save/conflict/reload checks passed at desktop and mobile sizes using an isolated
+local relay. Rootful was installed with the watchdog deploy and passed real LAN
+video/recovery qualification. Rootless built and passed the public package audit;
+rootless installation and physical P2P authorization expiry during a relay network
+partition remain release gates. No production relay deployment is implied by
+these results; upgrade the devices before rolling out the new relay.
+
+Include held touches and modifier keys in physical revocation qualification.
+The legacy touch/key injector is process-global, not session-owned; closing a
+PeerConnection is not proof that previously injected held input was released.
+Do not add a global release on controller revocation: it could interrupt another
+controller or LAN input. Owner-aware input cleanup is a separate remaining
+hardening task. Already dispatched actions are not rolled back by grant changes.
 
 Deliberately not collected: IMEI, serial number, UDID, advertising or vendor
 identifiers, Wi-Fi SSID/BSSID, contacts or accounts. Apple does not expose the

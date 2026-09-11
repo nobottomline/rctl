@@ -35,6 +35,7 @@ type server struct {
 	limiter *rateLimiter
 
 	controllerSignalsMu sync.Mutex
+	controllerGrantsMu  sync.Mutex
 	controllerSignals   map[string]map[string]context.CancelFunc
 
 	packageMu           sync.Mutex
@@ -149,6 +150,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/controller-pairings/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeControllerPairing)))
 	mux.HandleFunc("GET /api/admin/controllers", s.withAdmin(s.handleListControllers))
 	mux.HandleFunc("POST /api/admin/controllers/{id}/rename", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRenameController)))
+	mux.HandleFunc("POST /api/admin/controllers/{id}/permissions", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleUpdateControllerPermissions)))
 	mux.HandleFunc("POST /api/admin/controllers/{id}/revoke", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeController)))
 	mux.HandleFunc("POST /api/admin/controllers/{id}/delete", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleDeleteController)))
 	mux.HandleFunc("POST /api/admin/controllers/clear-history", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleClearControllerHistory)))

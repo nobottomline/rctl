@@ -312,7 +312,7 @@ UPDATE controller_pairings SET used_at=? WHERE id=? AND used_at IS NULL AND revo
 	s.audit(r, "controller_paired", "pairing_id", id, "controller_id", controllerID, "controller_name", name, "platform", req.Platform)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"relay_id":   relayID,
-		"controller": map[string]any{"id": controllerID, "name": name, "platform": req.Platform, "scopes": scopes},
+		"controller": map[string]any{"id": controllerID, "name": name, "platform": req.Platform, "scopes": scopes, "authorization_revision": 1},
 		"tokens":     tokens,
 	})
 }
@@ -375,7 +375,7 @@ func (s *server) handleListControllers(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `
 SELECT id,name,platform,scopes_json,status,created_at,last_seen_at,revoked_at,heartbeat_at,
        public_key_sha256,paired_ip,last_ip,user_agent,
-       client_json,client_updated_at,telemetry_json,telemetry_updated_at
+       client_json,client_updated_at,telemetry_json,telemetry_updated_at,authorization_revision
 FROM controllers ORDER BY created_at DESC`)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "controller_list_failed")
@@ -383,17 +383,18 @@ FROM controllers ORDER BY created_at DESC`)
 	}
 	defer rows.Close()
 	type item struct {
-		ID           string   `json:"id"`
-		Name         string   `json:"name"`
-		Platform     string   `json:"platform"`
-		Status       string   `json:"status"`
-		Scopes       []string `json:"scopes"`
-		CreatedAt    int64    `json:"created_at"`
-		LastSeenAt   *int64   `json:"last_seen_at,omitempty"`
-		RevokedAt    *int64   `json:"revoked_at,omitempty"`
-		Presence     string   `json:"presence"`
-		HeartbeatAt  *int64   `json:"heartbeat_at,omitempty"`
-		OpenSessions int      `json:"open_sessions"`
+		AuthorizationRevision int64    `json:"authorization_revision"`
+		ID                    string   `json:"id"`
+		Name                  string   `json:"name"`
+		Platform              string   `json:"platform"`
+		Status                string   `json:"status"`
+		Scopes                []string `json:"scopes"`
+		CreatedAt             int64    `json:"created_at"`
+		LastSeenAt            *int64   `json:"last_seen_at,omitempty"`
+		RevokedAt             *int64   `json:"revoked_at,omitempty"`
+		Presence              string   `json:"presence"`
+		HeartbeatAt           *int64   `json:"heartbeat_at,omitempty"`
+		OpenSessions          int      `json:"open_sessions"`
 		// Identity and network facts observed by the relay.
 		KeyFingerprint string `json:"key_fingerprint"`
 		PairedIP       string `json:"paired_ip,omitempty"`
@@ -413,7 +414,7 @@ FROM controllers ORDER BY created_at DESC`)
 		var last, revoked, heartbeat, clientAt, telemetryAt sql.NullInt64
 		var pairedIP, lastIP, userAgent, clientJSON, telemetryJSON sql.NullString
 		if err := rows.Scan(&v.ID, &v.Name, &v.Platform, &scopes, &v.Status, &v.CreatedAt, &last, &revoked, &heartbeat,
-			&v.KeyFingerprint, &pairedIP, &lastIP, &userAgent, &clientJSON, &clientAt, &telemetryJSON, &telemetryAt); err != nil {
+			&v.KeyFingerprint, &pairedIP, &lastIP, &userAgent, &clientJSON, &clientAt, &telemetryJSON, &telemetryAt, &v.AuthorizationRevision); err != nil {
 			writeErr(w, http.StatusInternalServerError, "controller_scan_failed")
 			return
 		}
@@ -538,6 +539,8 @@ func (s *server) handleRevokeCurrentController(w http.ResponseWriter, r *http.Re
 }
 
 func (s *server) revokeController(w http.ResponseWriter, r *http.Request, id, event string) {
+	s.controllerGrantsMu.Lock()
+	defer s.controllerGrantsMu.Unlock()
 	now := time.Now().Unix()
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -545,7 +548,7 @@ func (s *server) revokeController(w http.ResponseWriter, r *http.Request, id, ev
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(r.Context(), `UPDATE controllers SET status='revoked',revoked_at=? WHERE id=? AND status='active'`, now, id)
+	res, err := tx.ExecContext(r.Context(), `UPDATE controllers SET status='revoked',revoked_at=?,authorization_revision=authorization_revision+1 WHERE id=? AND status='active'`, now, id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "controller_revoke_failed")
 		return

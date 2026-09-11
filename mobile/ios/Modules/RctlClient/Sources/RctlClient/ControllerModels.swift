@@ -89,15 +89,25 @@ public struct PairedController: Codable, Equatable, Sendable {
     public let name: String
     public let platform: String
     public let scopes: [ControllerScope]
+    public let authorizationRevision: Int64?
 
-    public init(id: String, name: String, platform: String, scopes: [ControllerScope]) {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, platform, scopes
+        case authorizationRevision = "authorization_revision"
+    }
+
+    public init(id: String, name: String, platform: String, scopes: [ControllerScope], authorizationRevision: Int64? = nil) {
         self.id = id
         self.name = name
         self.platform = platform
         self.scopes = scopes
+        self.authorizationRevision = authorizationRevision
     }
 
     func validated() throws -> Self {
+        if let authorizationRevision, !(1...9_007_199_254_740_991).contains(authorizationRevision) {
+            throw ControllerClientError.invalidResponse
+        }
         guard id.hasPrefix("ctl_"), id.utf8.count <= 64,
               id.utf8.allSatisfy({ $0.isBase64URLByte }),
               !name.isEmpty, name.unicodeScalars.count <= 80,

@@ -28,6 +28,7 @@ import { AnimatedHeight, ListEmpty, ListFootnote, SegmentedFilter, ViewSwitch, W
 import { Menu, MenuItem, MenuSeparator } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { ControllerDetailModal, PresenceTag } from './ControllerDetailModal'
+import { ControllerPermissionsModal } from './ControllerPermissionsModal'
 
 const EVERYDAY_SCOPES = SCOPE_OPTIONS.filter((scope) => !scope.elevated).map((scope) => scope.id)
 const OWNER_SCOPES = SCOPE_OPTIONS.map((scope) => scope.id)
@@ -62,6 +63,7 @@ export function ControllersPanel({
   const [copied, setCopied] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const [detail, setDetail] = useState<Controller | null>(null)
+  const [permissions, setPermissions] = useState<Controller | null>(null)
   const [rename, setRename] = useState<Controller | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renaming, setRenaming] = useState(false)
@@ -304,6 +306,10 @@ export function ControllersPanel({
         audit={audit}
         onOpenChange={(open) => !open && setDetail(null)}
         onRename={openRename}
+        onPermissions={(controller) => {
+          setDetail(null)
+          setPermissions(controller)
+        }}
         onRevoke={(controller) => {
           setDetail(null)
           setRevoke(controller)
@@ -313,6 +319,17 @@ export function ControllersPanel({
           setRemove(controller)
         }}
       />
+
+      {permissions && (
+        <ControllerPermissionsModal
+          key={`${permissions.id}:${permissions.authorization_revision}`}
+          controller={permissions}
+          current={controllers.find((controller) => controller.id === permissions.id)}
+          onClose={() => setPermissions(null)}
+          onReload={(controller) => setPermissions(controller)}
+          onChanged={onChanged}
+        />
+      )}
 
       <Modal
         open={pairOpen}
@@ -541,7 +558,7 @@ function ControllerRow({
   const system = [client?.system_name, client?.system_version].filter(Boolean).join(' ')
   const meta = [
     model ? `${model}${system ? ` · ${system}` : ''}` : controller.platform.toUpperCase(),
-    `${controller.scopes.length} permissions`,
+    `${controller.scopes.length} permission${controller.scopes.length === 1 ? '' : 's'}`,
     active ? `seen ${fmtRel(controller.last_seen_at)}` : `revoked ${fmtRel(controller.revoked_at)}`,
   ].join(' · ')
   return (

@@ -480,6 +480,19 @@ func TestControllerDeviceRoutesEnforceProofAndMediaScope(t *testing.T) {
 		t.Fatalf("unscoped daemon status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	ts.relay.devices["dev1"].features = []string{"controller.scoped_sessions"}
+	req = signedControllerRequest(t, ts, key, claim.Tokens.AccessToken, http.MethodGet,
+		"/api/controller/devices/dev1/signal", nil, time.Now(), randomControllerNonce(t))
+	resp, err = ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var failure map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&failure)
+	if resp.StatusCode != http.StatusConflict || failure["error"] != "device_authorization_lease_not_supported" {
+		t.Fatalf("old device accepted without authorization lease: status=%d error=%s", resp.StatusCode, failure["error"])
+	}
 }
 
 func createPairingFixture(t *testing.T, ts adminSessionTestServer, admin testSession, scopes []string) pairingFixture {

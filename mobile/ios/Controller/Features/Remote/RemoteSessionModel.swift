@@ -128,6 +128,7 @@ final class RemoteSessionModel: ObservableObject {
         self.target = target
         self.relayProfile = appModel.profile
         self.sessionScopes = appModel.profile?.controller.scopes
+        self.sessionAuthorizationRevision = appModel.profile?.controller.authorizationRevision
         switch target {
         case .local(let address): accessPath = .lan(address)
         case .relay: accessPath = .relay(origin: appModel.profile?.origin)
@@ -147,16 +148,19 @@ final class RemoteSessionModel: ObservableObject {
                 // grant must never silently turn an existing viewer into Control.
                 let negotiated = [.connecting, .connected, .disconnected].contains(self.state) ||
                     (self.state == .signaling && self.preparationTask == nil)
-                if !sameIdentity || (negotiated && scopes != self.sessionScopes) {
+                let revision = updated?.controller.authorizationRevision
+                if !sameIdentity || (negotiated && (scopes != self.sessionScopes || revision != self.sessionAuthorizationRevision)) {
                     self.disconnect()
                     self.errorMessage = "Controller access changed. Reconnect to use current permissions."
                 }
                 self.sessionScopes = scopes
+                self.sessionAuthorizationRevision = revision
             }
         }
     }
 
     private var sessionScopes: [ControllerScope]?
+    private var sessionAuthorizationRevision: Int64?
 
     func connect() async {
         cancelReconnect()
@@ -449,6 +453,17 @@ final class RemoteSessionModel: ObservableObject {
             }
         case let .failure(error):
             errorMessage = error.localizedDescription
+            if error == .authorizationChanged {
+                wantsConnection = false
+                cancelReconnect()
+                if case .relay = target {
+                    Task { [weak self] in
+                        guard let self, let original = self.relayProfile,
+                              self.appModel.profile?.hasSameIdentity(as: original) == true else { return }
+                        await self.appModel.refreshDevices()
+                    }
+                }
+            }
             switch error {
             case .negotiationFailed, .signalingFailed, .signalingClosed, .videoStalled:
                 retryableFailure = true

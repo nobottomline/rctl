@@ -26,13 +26,14 @@ const (
 )
 
 type controllerPrincipal struct {
-	ControllerID string
-	TokenID      string
-	TokenExpires int64
-	Generation   string
-	Name         string
-	Platform     string
-	Scopes       map[string]struct{}
+	AuthorizationRevision int64
+	ControllerID          string
+	TokenID               string
+	TokenExpires          int64
+	Generation            string
+	Name                  string
+	Platform              string
+	Scopes                map[string]struct{}
 }
 
 type controllerContextKey struct{}
@@ -87,11 +88,11 @@ func (s *server) authenticateControllerRequest(r *http.Request, kind string, now
 	var publicKeyDER []byte
 	var expiresAt int64
 	err := s.db.QueryRowContext(r.Context(), `
-SELECT t.secret_hash,t.kind,t.expires_at,t.generation,c.id,c.name,c.platform,c.public_key_der,c.scopes_json,c.status
+SELECT t.secret_hash,t.kind,t.expires_at,t.generation,c.id,c.name,c.platform,c.public_key_der,c.scopes_json,c.status,c.authorization_revision
 FROM controller_tokens t JOIN controllers c ON c.id=t.controller_id
 WHERE t.id=? AND t.revoked_at IS NULL AND c.status='active'`, tokenID).Scan(
 		&secretHash, &storedKind, &expiresAt, &principal.Generation, &principal.ControllerID,
-		&principal.Name, &principal.Platform, &publicKeyDER, &scopesJSON, &status)
+		&principal.Name, &principal.Platform, &publicKeyDER, &scopesJSON, &status, &principal.AuthorizationRevision)
 	if err != nil || storedKind != kind || status != "active" || expiresAt < now.Unix() ||
 		subtle.ConstantTimeCompare([]byte(secretHash), []byte(hmacToken(s.cfg.SessionSecret, token))) != 1 {
 		return controllerPrincipal{}, errors.New("invalid token")
@@ -237,6 +238,7 @@ func (s *server) handleControllerMe(w http.ResponseWriter, r *http.Request) {
 		"controller": map[string]any{
 			"id": principal.ControllerID, "name": principal.Name,
 			"platform": principal.Platform, "scopes": scopes,
+			"authorization_revision": principal.AuthorizationRevision,
 		},
 	})
 }

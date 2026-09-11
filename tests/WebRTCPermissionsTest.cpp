@@ -1,4 +1,5 @@
 #include "net/WebRTCPermissions.h"
+#include "net/ControllerAuthorizationLease.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -11,6 +12,18 @@ static void require(bool condition, const char *message) {
 }
 
 int main() {
+    rctl::ControllerAuthorizationLease lease(1, 100);
+    require(!lease.authorized(100), "unconfirmed lease grants no access");
+    lease.challenge("nonce", 100);
+    require(!lease.renew(2, "nonce", 101), "another revision cannot renew");
+    require(lease.renew(1, "nonce", 115), "matching challenge renews");
+    require(lease.expiresAt == 120, "delayed response cannot extend from arrival");
+    require(!lease.renew(1, "nonce", 116), "challenge replay rejected");
+    lease.challenge("next", 116);
+    require(!lease.renew(1, "next", 120), "expired lease cannot be resurrected");
+    require(!lease.authorized(120), "deadline comparison is exclusive");
+    lease.retired = true;
+    require(!lease.authorized(117), "retired owner grants no access");
     const auto legacy = rctl::legacyWebRTCPermissions();
     require(!legacy.scoped, "legacy session must remain unscoped");
     require(legacy.screenView && legacy.camera && legacy.audioListen &&

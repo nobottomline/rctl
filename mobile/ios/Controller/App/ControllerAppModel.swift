@@ -389,6 +389,10 @@ final class ControllerAppModel: ObservableObject {
         guard controllerSyncRevision == syncRevision else { return }
         guard let current = profile, current.hasSameIdentity(as: session.profile),
               controller.id == current.controller.id else { throw ControllerClientError.invalidResponse }
+        if let previous = current.controller.authorizationRevision,
+           (controller.authorizationRevision ?? 0) < previous {
+            throw ControllerClientError.invalidResponse
+        }
         guard controller != current.controller else { return }
         let updated = ControllerProfile(origin: current.origin, relayID: current.relayID, controller: controller)
         guard let credential = try keychain.loadCredential(relayID: current.relayID) else {

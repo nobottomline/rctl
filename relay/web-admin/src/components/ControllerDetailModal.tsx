@@ -39,6 +39,7 @@ export function ControllerDetailModal({
   audit = [],
   onOpenChange,
   onRename,
+  onPermissions,
   onRevoke,
   onDelete,
 }: {
@@ -46,6 +47,7 @@ export function ControllerDetailModal({
   audit?: AuditEntry[]
   onOpenChange: (open: boolean) => void
   onRename: (controller: Controller) => void
+  onPermissions: (controller: Controller) => void
   onRevoke: (controller: Controller) => void
   onDelete: (controller: Controller) => void
 }) {
@@ -220,6 +222,10 @@ export function ControllerDetailModal({
             </Button>
             {c.status === 'active' ? (
               <>
+                <Button variant="secondary" disabled={!c.authorization_revision} onClick={() => onPermissions(c)}>
+                  <ShieldCheck className="size-4" />
+                  Permissions
+                </Button>
                 <Button variant="secondary" onClick={() => onRename(c)}>
                   <Pencil className="size-4" />
                   Rename

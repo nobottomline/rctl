@@ -7,6 +7,7 @@ public enum RctlRealtimeError: Error, Equatable, Sendable {
     case negotiationFailed(String)
     case signalingFailed(String)
     case signalingClosed
+    case authorizationChanged
     case controlChannelUnavailable
     case controlBackpressure
     case videoStalled
@@ -27,6 +28,8 @@ extension RctlRealtimeError: LocalizedError {
             "Relay signaling failed: \(message)"
         case .signalingClosed:
             "Relay signaling closed before the session completed."
+        case .authorizationChanged:
+            "Controller access changed. Reconnect to use current permissions."
         case .controlChannelUnavailable:
             "The control DataChannel is not open."
         case .controlBackpressure:

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -27,9 +28,10 @@ type signalClientMessage struct {
 }
 
 type signalOpenPayload struct {
-	Role   string          `json:"role"`
-	ICE    json.RawMessage `json:"ice"`
-	Scopes []string        `json:"scopes,omitempty"`
+	AuthorizationRevision int64           `json:"authorization_revision,omitempty"`
+	Role                  string          `json:"role"`
+	ICE                   json.RawMessage `json:"ice"`
+	Scopes                []string        `json:"scopes,omitempty"`
 }
 
 const (
@@ -61,6 +63,10 @@ func validControllerSignalMessage(message signalClientMessage) bool {
 }
 
 func validDeviceSignalMessage(message signalTunnelEvent) bool {
+	if message.Kind == "authorization_challenge" {
+		_, ok := parseAuthorizationChallenge(message.Payload)
+		return ok
+	}
 	if message.Kind == "close" {
 		return len(message.Payload) == 0 || string(message.Payload) == "null"
 	}
@@ -107,6 +113,11 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "device_scoped_sessions_not_supported")
 		return
 	}
+	if controllerID != "" && !hasFeature(dc.features, "controller.authorization_lease_v1") {
+		writeErr(w, http.StatusConflict, "device_authorization_lease_not_supported")
+		return
+	}
+	principal, _ := controllerFromContext(r.Context())
 
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: s.cfg.AllowInsecure})
 	if err != nil {
@@ -120,15 +131,20 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	if controllerID != "" {
 		var cancelControllerSignal context.CancelFunc
 		sessionContext, cancelControllerSignal = context.WithCancel(r.Context())
+		s.controllerGrantsMu.Lock()
 		s.registerControllerSignal(controllerID, sessionID, cancelControllerSignal)
+		current := s.controllerGrantCurrent(sessionContext, controllerID, principal.AuthorizationRevision)
+		s.controllerGrantsMu.Unlock()
 		defer func() {
 			s.unregisterControllerSignal(controllerID, sessionID)
+			if sessionContext.Err() != nil {
+				_ = ws.Close(websocket.StatusPolicyViolation, "controller authorization changed")
+			}
 			cancelControllerSignal()
 		}()
 		// A revocation can commit between request authentication and registration.
 		// Once registered, later revocations cancel this context as usual.
-		var status string
-		if err := s.db.QueryRowContext(sessionContext, `SELECT status FROM controllers WHERE id=?`, controllerID).Scan(&status); err != nil || status != "active" {
+		if !current {
 			_ = ws.Close(websocket.StatusPolicyViolation, "controller access revoked")
 			return
 		}
@@ -153,7 +169,7 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	ice := s.iceServersJSON(sessionID)
 
 	openCtx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
-	openPayload, _ := json.Marshal(signalOpenPayload{Role: role, ICE: ice, Scopes: scopes})
+	openPayload, _ := json.Marshal(signalOpenPayload{Role: role, ICE: ice, Scopes: scopes, AuthorizationRevision: principal.AuthorizationRevision})
 	err = dc.writeJSON(openCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "open", Payload: openPayload})
 	cancel()
 	if err != nil {
@@ -168,10 +184,12 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "webrtc_signal_open", auditFields...)
 
 	readDone := make(chan struct{})
+	readContext, stopRead := context.WithCancel(r.Context())
+	defer stopRead()
 	go func() {
 		defer close(readDone)
 		for {
-			messageType, payload, err := ws.Read(sessionContext)
+			messageType, payload, err := ws.Read(readContext)
 			if err != nil {
 				return
 			}
@@ -200,6 +218,22 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			if event.Kind == "close" {
 				return
 			}
+			if event.Kind == "authorization_challenge" {
+				challenge, valid := parseAuthorizationChallenge(event.Payload)
+				if !valid || controllerID == "" || challenge.Revision != principal.AuthorizationRevision ||
+					!s.controllerGrantCurrent(sessionContext, controllerID, principal.AuthorizationRevision) {
+					return
+				}
+				// Never forward challenges to a controller. Only this authenticated
+				// device transport can renew its session's current grant.
+				ctx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
+				err := dc.writeJSON(ctx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "authorization_renew", Payload: event.Payload})
+				cancel()
+				if err != nil {
+					return
+				}
+				continue
+			}
 			writeCtx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
 			err := wsjsonWrite(writeCtx, ws, signalClientMessage{Kind: event.Kind, Payload: event.Payload})
 			cancel()
@@ -209,9 +243,24 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 		case <-readDone:
 			return
 		case <-sessionContext.Done():
+			_ = ws.Close(websocket.StatusPolicyViolation, "controller authorization changed")
 			return
 		}
 	}
+}
+
+type authorizationChallenge struct {
+	Revision int64  `json:"authorization_revision"`
+	Nonce    string `json:"nonce"`
+}
+
+func parseAuthorizationChallenge(payload json.RawMessage) (authorizationChallenge, bool) {
+	var value authorizationChallenge
+	if len(payload) > 256 || json.Unmarshal(payload, &value) != nil || value.Revision < 1 || value.Revision > 9007199254740991 {
+		return value, false
+	}
+	decoded, err := hex.DecodeString(value.Nonce)
+	return value, err == nil && len(decoded) == 32
 }
 
 func (s *server) registerControllerSignal(controllerID, sessionID string, cancel context.CancelFunc) {

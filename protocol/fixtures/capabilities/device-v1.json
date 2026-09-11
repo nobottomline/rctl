@@ -9,6 +9,7 @@
     "audio.playback",
     "audio.virtual_mic",
     "controller.scoped_sessions",
+    "controller.authorization_lease_v1",
     "media.library"
   ]
 }

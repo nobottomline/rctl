@@ -330,7 +330,9 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
                         self.failLocked(.invalidSignalingResponse, generation: currentGeneration)
                     }
                 case let .failure(error):
-                    self.failLocked(.signalingFailed(Self.safeMessage(error)), generation: currentGeneration)
+                    let failure: RctlRealtimeError = task.closeCode == .policyViolation
+                        ? .authorizationChanged : .signalingFailed(Self.safeMessage(error))
+                    self.failLocked(failure, generation: currentGeneration)
                 }
             }
         }
@@ -540,6 +542,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         case .negotiationFailed: "negotiation"
         case .signalingFailed: "signaling"
         case .signalingClosed: "signaling-closed"
+        case .authorizationChanged: "authorization-changed"
         case .controlChannelUnavailable: "control-unavailable"
         case .controlBackpressure: "control-backpressure"
         case .videoStalled: "video-stalled"

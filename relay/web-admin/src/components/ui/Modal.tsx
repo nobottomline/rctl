@@ -11,6 +11,7 @@ export type ModalProps = {
   description?: string
   children?: ReactNode
   className?: string
+  autoFocusContent?: boolean
 }
 
 // A nested Radix popper (a dropdown menu, select, etc.) portals its content
@@ -31,6 +32,7 @@ export function Modal({
   description,
   children,
   className,
+  autoFocusContent = false,
 }: ModalProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -50,7 +52,7 @@ export function Modal({
               <Dialog.Content
                 asChild
                 forceMount
-                onOpenAutoFocus={(e) => e.preventDefault()}
+                onOpenAutoFocus={(e) => { if (!autoFocusContent) e.preventDefault() }}
                 onInteractOutside={(e) => {
                   if (isInsidePopper(e.detail.originalEvent.target)) e.preventDefault()
                 }}

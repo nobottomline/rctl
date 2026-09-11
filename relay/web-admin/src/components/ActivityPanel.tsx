@@ -63,6 +63,7 @@ const META: Record<string, { label: string; tone: Tone; icon: ComponentType<Luci
   controller_access_refreshed: { label: 'Controller renewed access', tone: 'muted', icon: RefreshCw },
   controller_client_updated: { label: 'Controller profile updated', tone: 'muted', icon: Smartphone },
   controller_renamed: { label: 'Controller renamed', tone: 'muted', icon: Pencil },
+  controller_permissions_changed: { label: 'Controller permissions changed', tone: 'signal', icon: ShieldCheck },
   controller_revoked: { label: 'Controller access revoked', tone: 'danger', icon: Ban },
   controller_self_revoked: { label: 'Controller revoked its access', tone: 'danger', icon: Ban },
   controller_deleted: { label: 'Controller deleted from history', tone: 'danger', icon: Trash2 },

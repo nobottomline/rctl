@@ -73,6 +73,7 @@ export interface Controller {
   platform: 'ios' | 'android'
   status: 'active' | 'revoked'
   scopes: ControllerScope[]
+  authorization_revision?: number
   created_at: number
   last_seen_at?: number
   revoked_at?: number

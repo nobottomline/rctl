@@ -204,6 +204,11 @@ export const api = {
     request<Ok>(`/api/admin/controllers/${encodeURIComponent(id)}/revoke`, {
       method: 'POST',
     }),
+  updateControllerPermissions: (id: string, scopes: ControllerScope[], expectedRevision: number) =>
+    request<Ok & { scopes: ControllerScope[]; authorization_revision: number; changed: boolean }>(`/api/admin/controllers/${encodeURIComponent(id)}/permissions`, {
+      method: 'POST',
+      body: JSON.stringify({ scopes, expected_revision: expectedRevision }),
+    }),
   deleteController: (id: string) =>
     request<Ok>(`/api/admin/controllers/${encodeURIComponent(id)}/delete`, {
       method: 'POST',

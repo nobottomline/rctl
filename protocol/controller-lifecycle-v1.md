@@ -87,6 +87,43 @@ or refresh token. A changed grant closes an already connected native session;
 the user reconnects in View. This client-side behavior does not replace server
 authorization or authorize editing scopes directly in the database.
 
+## Mutable Permissions
+
+The admin-only `POST /api/admin/controllers/{id}/permissions` accepts exactly
+`{"scopes":["screen.view"],"expected_revision":1}`. Scopes use the pairing
+allowlist and must be nonempty; no implied permissions are added. A scope alone
+does not imply a usable media session: screen/camera entry points still require
+their corresponding media permission, and reserved features remain unavailable.
+Use the revoke endpoint to remove all access.
+
+Success returns `{"ok":true,"scopes":["screen.view"],"authorization_revision":2,"changed":true}`.
+Normalized no-ops return `changed:false` and the unchanged revision. Stale forms
+return 409 `controller_permissions_changed`, revoked controllers return 409
+`controller_revoked`, missing controllers return 404, malformed/unknown input
+returns 400. The command uses existing admin session/CSRF/rate-limit policy; a
+controller token cannot edit grants, including its own.
+
+`authorization_revision` is a positive, monotonically increasing JSON-safe
+integer, starting at 1 for migrated and new controllers. It appears in admin
+lists, claim responses and `/me`. Every actual permission change and revocation
+increments it. The app accepts missing revisions in old profiles, persists new
+ones, and rejects subsequent regression. Identity and refresh credentials are
+unchanged. A concurrent/uncertain save requires rereading rather than blindly
+replaying a stale edit.
+
+Grant mutations and session registration are serialized; authentication
+snapshots are rechecked after registration. Existing controller signaling is
+cancelled with WebSocket 1008, and device sessions close. An unresponsive link
+is bounded by the device-issued authorization lease, not by the phone's UI or
+presence heartbeat. See `signaling-v1.md` for the separate 20-second lease and
+rolling-upgrade contract. Permission edits do not change presence status.
+
+An active updated iOS session refreshes `/me` after policy closure and does not
+auto-reconnect; ordinary network recovery obtains a fresh grant and starts in
+View. An idle/foreground device list observes changes on its next refresh or
+30-second heartbeat; an offline app observes them on reconnection. There is no
+claim that an offline display changes immediately.
+
 The controller sends a heartbeat every 30 seconds while the application is
 active, for its selected relay only, including while viewing a remote session.
 Leaving the foreground, forgetting a profile, switching relays or cancelling

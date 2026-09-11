@@ -22,7 +22,7 @@ final class ControllerLifecycleTests: XCTestCase {
         remote.setInteractionMode(.control)
 
         let refresh = Task { await fixture.model.refreshDevices() }
-        try await request("/api/controller/me").respond(#"{"controller":{"id":"ctl_test","name":"Renamed","platform":"ios","scopes":["screen.view","camera"]}}"#)
+        try await request("/api/controller/me").respond(#"{"controller":{"id":"ctl_test","name":"Renamed","platform":"ios","scopes":["screen.view","camera"],"authorization_revision":2}}"#)
         try await request("/api/controller/devices").respond(Self.devices)
         await refresh.value
         XCTAssertEqual(fixture.model.profile?.controller.scopes, [.screenView, .camera])
@@ -32,6 +32,22 @@ final class ControllerLifecycleTests: XCTestCase {
         XCTAssertEqual(remote.state, .closed)
         XCTAssertEqual(remote.interactionMode, .view)
         XCTAssertFalse(remote.canControl)
+        XCTAssertEqual(fixture.model.profile?.controller.authorizationRevision, 2)
+
+        let stale = Task { await fixture.model.refreshDevices() }
+        try await request("/api/controller/me").respond(#"{"controller":{"id":"ctl_test","name":"Stale","platform":"ios","scopes":["screen.view","device.control"],"authorization_revision":1}}"#)
+        await stale.value
+        XCTAssertEqual(fixture.model.profile?.controller.authorizationRevision, 2)
+        XCTAssertEqual(fixture.model.profile?.controller.scopes, [.screenView, .camera])
+
+        // A -> B -> A between polls still invalidates the negotiated session.
+        remote.handle(.connection(.connected))
+        let next = Task { await fixture.model.refreshDevices() }
+        try await request("/api/controller/me").respond(#"{"controller":{"id":"ctl_test","name":"Renamed","platform":"ios","scopes":["screen.view","camera"],"authorization_revision":4}}"#)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await next.value
+        XCTAssertEqual(remote.state, .closed)
+        XCTAssertEqual(fixture.model.profile?.controller.authorizationRevision, 4)
     }
 
     func testOldRelayAcknowledgementDoesNotCacheUnacceptedSchema() async throws {

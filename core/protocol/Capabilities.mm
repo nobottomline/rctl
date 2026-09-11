@@ -19,6 +19,7 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
 #endif
             @"network.local_access_policy",
             @"controller.scoped_sessions",
+            @"controller.authorization_lease_v1",
             @"state.orientation",
         ];
     });
