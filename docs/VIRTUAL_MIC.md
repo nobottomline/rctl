@@ -26,6 +26,25 @@ previous intercom behavior. The web control center exposes the same three modes.
 The same endpoint reports non-content `clients`, `frames_pushed`, and
 `frames_broadcast` counters for runtime diagnosis.
 
+## Browser Availability
+
+Talk is not relay-only. `micSupported()` checks for `AudioEncoder`, `AudioData`
+and `navigator.mediaDevices.getUserMedia`; the control center currently hides
+Talk when those APIs are unavailable. Ordinary LAN `http://<device-ip>:8080`
+is not a secure context, so microphone capture and WebCodecs encoding are not
+available there. Receiving device audio does not require browser microphone
+permission, which is why Listen can still work on that same page.
+
+Relay HTTPS supplies a secure context, but is not a transport requirement for
+Talk. Direct local use needs trusted HTTPS or a loopback origin reached through
+an operator-configured SSH/USB forward, plus browser Opus encoding support and
+microphone permission. A certificate warning bypass is not a supported setup.
+Do not disable browser security or expose a forwarding listener to the LAN.
+The public device package does not currently provision trusted local HTTPS.
+See the [Secure Contexts](https://www.w3.org/TR/secure-contexts/),
+[Media Capture](https://www.w3.org/TR/mediacapture-streams/) and
+[WebCodecs](https://www.w3.org/TR/webcodecs/) specifications.
+
 ## App-Side Injection
 
 `rctlapp` is the original Substitute-loaded UIKit tweak. It does not hook
@@ -172,6 +191,20 @@ repeated speaker playback for that test, not lossless startup, real browser
 microphone capture, Safari, app-mic injection or recovery after media-services
 restart. The next check is Safari with the updated control client and actual
 microphone permission/input, separately from this speaker result.
+
+### Control Client Deployment
+
+The updated control client was subsequently deployed to the existing unmanaged
+relay as a web-only change. A private server-side backup retained the previous
+HTML, binary, configuration and a consistent SQLite snapshot. The external
+`index.html` was hash-checked and replaced atomically; the relay binary, database
+and service configuration were not replaced and no service was restarted.
+Trusted HTTPS, admin assets, database integrity and authenticated capability
+tunnels to both approved devices passed. A separate external Chrome UI test
+confirmed exact deployed HTML, advancing video and a visible Talk button for
+both devices without opening a real microphone or sending test audio. Actual
+Safari microphone permission, capture and speaker playback remain the next
+operator acceptance check.
 
 Still required before calling the feature generally qualified:
 
