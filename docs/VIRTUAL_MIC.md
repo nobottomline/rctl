@@ -224,8 +224,17 @@ route-change notifications are logged without device names or audio content;
 notifications never activate playback automatically. Media-services reset is
 logged but orphaned-object recreation remains unqualified. Real acceptance must
 include first/repeated Talk, playback in another app between attempts, and then
-actual Safari microphone input. This latest recovery change is not yet
-physically verified.
+actual Safari microphone input.
+
+On 2026-09-12 the operator installed
+`0.3.4~test.20260911175943.58a27cf0cf74`; dpkg reported `install ok installed`
+and a fresh daemon process was verified. After the requested real-microphone
+Safari/Speaker check, the operator confirmed that Talk now works. That process's
+logs contained one completed burst: 157 buffers enqueued and returned, zero
+queued frames at idle, zero dropped packets, no stall, and volume restoration.
+This confirms audible real-microphone Talk for the reported attempt. The reply
+did not independently confirm both before/after-YouTube attempts, and the logs
+contained only one burst, so the full interruption/repeat matrix remains pending.
 
 Still required before calling the feature generally qualified:
 
