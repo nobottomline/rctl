@@ -39,12 +39,15 @@ POST /v1/media_delete?id=<opaque-id>        Content-Type: application/json
 List pages are capped at 100 items. IDs are stable path hashes; callers cannot
 supply filesystem paths to thumbnail endpoints. Thumbnails are 640-pixel JPEGs
 and photo previews are 2048-pixel JPEGs, so HEIC assets work in browsers without
-native HEIC decoding. Video thumbnails use AVFoundation at a representative
-frame.
+native HEIC decoding. Video thumbnails prefer the device's existing Photos
+poster; AVFoundation generates a frame from the original when no usable poster
+is available.
 
 Generated images live under
 `/var/mobile/Library/Caches/com.greatlove.rctl/media` with a `0700` directory and
-`0600` files. Their cache key includes the original modification time.
+`0600` files. Their cache key includes the original modification time and, when
+using a Photos poster, a SHA-256 digest of that poster. Replacing a poster thus
+invalidates the rendered cache even if the original video is unchanged.
 
 ImageIO and AVFoundation rendering is serialized on the media queue. iOS 14
 assigns third-party launch daemons a 6 MiB jetsam limit even when a larger
@@ -71,13 +74,40 @@ browser image clipboard and Web Share APIs require a secure context. Local plain
 HTTP retains Download; unsupported Copy/Share actions are not offered. HTTPS alone
 does not guarantee Web Share support: the browser must implement it as well.
 
-Video thumbnails use `AVAssetImageGenerator`. On the tested iOS 15.5 rootless
-device, six local videos returned AVFoundation `-11800` / OSStatus `-12437`.
-An isolated `AVAssetReader` probe returned empty samples without image buffers;
-it was not a working fallback and was not retained. Video thumbnails on this
-target remain unresolved. The client shows a video placeholder when decoding
-fails, without fetching entire originals just to fill gallery tiles. Failed
-thumbnail diagnostics contain only error domains/codes, never asset paths.
+On the tested iOS 15.5 rootless device, `AVAssetImageGenerator` failed with
+AVFoundation `-11800` / OSStatus `-12437` for both H.264 and HEVC, as both root
+and mobile. This is a failure of the standalone native extraction path, not
+proof of corrupt originals or a browser playback failure. A previous
+`AVAssetReader` attempt did not provide decoded image buffers either.
+
+Photos already maintains image derivatives under
+`PhotoData/Thumbnails/V2/<original-relative-path>/`. The renderer reads only the
+exact directory corresponding to an asset admitted by the visible, local index.
+It does not globally index thumbnail directories, fetch iCloud originals, modify
+Photos data, or infer assets from cached posters. Directory traversal uses
+`openat` with `O_NOFOLLOW` for every component; candidate files must be regular,
+at most 8 MiB, with image dimensions no greater than 4096 on either axis. At most
+32 entries are inspected per asset. The largest valid candidate is downsampled
+with ImageIO, preserving its orientation. JPEG encoding and the existing private
+render cache remain daemon-owned and serialized.
+
+This Photos cache layout is an optional private-format adapter, not a guaranteed
+iOS API. Missing, incompatible, oversized, symlinked or undecodable derivatives
+fall back to the unchanged `AVAssetImageGenerator` path. If both sources fail,
+the client retains its video placeholder and original playback/download actions.
+The browser never downloads an entire video merely to populate a tile. Failed
+native-generation diagnostics contain only error domains/codes, never paths.
+
+Physical verification on 2026-09-11: all locally indexed video originals on the
+iOS 15.5 rootless target produced decodable, bounded JPEGs, both from an isolated
+build of the real renderer and through the updated daemon's HTTP endpoint. The
+browser's Media -> Videos page decoded all 60 initial tiles with no failed images.
+The same renderer also produced the rootful iOS 14 target's video thumbnail.
+The rootless installation was a backed-up, watchdog-protected daemon-only
+replacement; SpringBoard payloads and package-manager version were unchanged.
+This does not qualify relay transport or a full-package upgrade. Host tests cover
+poster replacement without original changes, portrait/landscape bounds, candidate
+selection, corrupt/missing/oversized data, and symlink rejection.
 
 GIF previews remain static until the user requests the original, then the browser
 renders the original animated file. A Live Photo remains one library item and

@@ -44,6 +44,12 @@ motion channels, replacing the initial stop-and-wait movement prototype.
 execution deadlines. These remain local qualification candidates.
 See [`POINTER.md`](POINTER.md) for the separate mouse qualification record.
 
+Media follow-up (2026-09-11): a daemon-only hotfix over `rootless14` resolved
+video posters using bounded, read-only Photos derivatives. The full local video
+index passed HTTP thumbnail decoding, and the browser's 60 initial video tiles
+loaded successfully. This did not reinstall the package or change its dpkg
+version. See [`MEDIA.md`](MEDIA.md) for implementation, evidence and limitations.
+
 ## First Install
 
 1. Keep physical access to the iPad. Record its model, iOS version, Dopamine

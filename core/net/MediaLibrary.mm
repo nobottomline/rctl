@@ -3,9 +3,14 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
+#import <CommonCrypto/CommonDigest.h>
+#import <dirent.h>
+#import <errno.h>
+#import <fcntl.h>
 #import <sqlite3.h>
 #import <stdlib.h>
 #import <sys/stat.h>
+#import <unistd.h>
 
 #ifndef RCTL_MEDIA_ROOT
 #define RCTL_MEDIA_ROOT "/var/mobile/Media"
@@ -340,15 +345,110 @@ static CGImageRef photo_frame(NSString *path, NSInteger maxPixel) {
     return image;
 }
 
+static NSData *read_thumbnail_file(int directory, const char *name) {
+    int fd = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return nil;
+    struct stat before = {}, after = {};
+    NSData *result = nil;
+    if (fstat(fd, &before) == 0 && S_ISREG(before.st_mode) &&
+        before.st_size > 0 && before.st_size <= 8 * 1024 * 1024) {
+        NSMutableData *data = [NSMutableData dataWithLength:(NSUInteger)before.st_size];
+        size_t offset = 0;
+        while (offset < data.length) {
+            ssize_t count = read(fd, (uint8_t *)data.mutableBytes + offset, data.length - offset);
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) break;
+            offset += (size_t)count;
+        }
+        if (offset == data.length && fstat(fd, &after) == 0 && before.st_size == after.st_size &&
+            before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec &&
+            before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec) result = data;
+    }
+    close(fd);
+    return result;
+}
+
+// Resolve only the derivative directory of an already-visible, local asset.
+// Never enumerate Photos caches globally or follow aliases into other assets.
+static NSData *photos_video_thumbnail(NSString *path) {
+    NSString *root = device_media_root().stringByResolvingSymlinksInPath.stringByStandardizingPath;
+    NSString *prefix = [root stringByAppendingString:@"/"];
+    if (![path hasPrefix:prefix]) return nil;
+    NSString *relative = [path substringFromIndex:prefix.length];
+    NSArray *parts = [[@"PhotoData/Thumbnails/V2" stringByAppendingPathComponent:relative] pathComponents];
+    int fd = open(root.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return nil;
+    for (NSString *part in parts) {
+        int next = -1;
+        if (part.length && ![part isEqualToString:@"."] && ![part isEqualToString:@".."] &&
+            ![part containsString:@"/"])
+            next = openat(fd, part.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        close(fd);
+        if (next < 0) return nil;
+        fd = next;
+    }
+    DIR *directory = fdopendir(fd);
+    if (!directory) { close(fd); return nil; }
+    NSData *best = nil;
+    uint64_t bestPixels = 0;
+    unsigned count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory))) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (++count > 32) { best = nil; break; }
+        @autoreleasepool {
+            NSData *data = read_thumbnail_file(dirfd(directory), entry->d_name);
+            if (!data) continue;
+            CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data,
+                (__bridge CFDictionaryRef)@{(id)kCGImageSourceShouldCache: @NO});
+            if (!source) continue;
+            NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, NULL));
+            CFRelease(source);
+            NSInteger width = [properties[(id)kCGImagePropertyPixelWidth] integerValue];
+            NSInteger height = [properties[(id)kCGImagePropertyPixelHeight] integerValue];
+            if (width <= 0 || height <= 0 || width > 4096 || height > 4096) continue;
+            uint64_t pixels = (uint64_t)width * height;
+            if (pixels > bestPixels) { best = data; bestPixels = pixels; }
+        }
+    }
+    closedir(directory);
+    return best;
+}
+
+static CGImageRef cached_video_frame(NSData *data, NSInteger maxPixel) {
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    if (!source) return NULL;
+    CGImageRef image = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)@{
+        (id)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+        (id)kCGImageSourceCreateThumbnailWithTransform: @YES,
+        (id)kCGImageSourceThumbnailMaxPixelSize: @(maxPixel),
+        (id)kCGImageSourceShouldCacheImmediately: @YES,
+    });
+    CFRelease(source);
+    return image;
+}
+
 static NSString *rendered_path(NSDictionary *asset, NSInteger maxPixel, double quality, NSString *tag) {
     NSString *path = asset[@"path"];
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
     long long stamp = (long long)[attrs[NSFileModificationDate] timeIntervalSince1970];
-    NSString *out = [thumb_root() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%lld-%@.jpg", asset[@"id"], stamp, tag]];
+    BOOL video = [asset[@"type"] isEqualToString:@"video"];
+    NSData *thumbnail = video ? photos_video_thumbnail(path) : nil;
+    NSString *sourceTag = @"";
+    if (thumbnail) {
+        unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(thumbnail.bytes, (CC_LONG)thumbnail.length, digest);
+        NSMutableString *hash = [NSMutableString string];
+        for (unsigned char byte : digest) [hash appendFormat:@"%02x", byte];
+        sourceTag = [@"-" stringByAppendingString:hash];
+    }
+    // Photos can replace its poster without modifying the original video.
+    NSString *out = [thumb_root() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%lld-%@%@.jpg", asset[@"id"], stamp, tag, sourceTag]];
     if ([[NSFileManager defaultManager] fileExistsAtPath:out]) return out;
     [[NSFileManager defaultManager] createDirectoryAtPath:thumb_root() withIntermediateDirectories:YES
                                                 attributes:@{NSFilePosixPermissions: @0700} error:nil];
-    CGImageRef image = [asset[@"type"] isEqualToString:@"video"] ? video_frame(path, maxPixel) : photo_frame(path, maxPixel);
+    CGImageRef image = thumbnail ? cached_video_frame(thumbnail, maxPixel) : NULL;
+    if (!image) image = video ? video_frame(path, maxPixel) : photo_frame(path, maxPixel);
     if (!image) return nil;
     NSMutableData *jpeg = [NSMutableData data];
     CGImageDestinationRef dest = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)jpeg, CFSTR("public.jpeg"), 1, NULL);

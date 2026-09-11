@@ -1,8 +1,11 @@
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
+#import <CoreGraphics/CoreGraphics.h>
 
 #include "net/MediaLibrary.h"
 
 #include <sqlite3.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +55,99 @@ static void write_file(NSString *relative, NSString *contents) {
                               withIntermediateDirectories:YES attributes:nil error:nil];
     require([contents writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil],
             [NSString stringWithFormat:@"could not create %@", relative]);
+}
+
+static void write_image(NSString *path, size_t width, size_t height, CGFloat red) {
+    [NSFileManager.defaultManager createDirectoryAtPath:path.stringByDeletingLastPathComponent
+        withIntermediateDirectories:YES attributes:nil error:nil];
+    CGColorSpaceRef color = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, width * 4, color,
+                                                 kCGImageAlphaPremultipliedLast);
+    require(context != NULL, @"fixture bitmap allocation failed");
+    CGContextSetRGBFillColor(context, red, 0.4, 0.2, 1);
+    CGContextFillRect(context, CGRectMake(0, 0, width, height));
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    CGImageDestinationRef output = CGImageDestinationCreateWithURL(
+        (__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, NULL);
+    require(output != NULL, @"fixture image destination failed");
+    CGImageDestinationAddImage(output, image, NULL);
+    require(CGImageDestinationFinalize(output), @"fixture image write failed");
+    CFRelease(output);
+    CGImageRelease(image);
+    CGContextRelease(context);
+    CGColorSpaceRelease(color);
+}
+
+static NSData *thumbnail(NSString *identifier, int expectedStatus, size_t width, size_t height) {
+    int status = 200, length = 0;
+    const char *type = NULL;
+    NSString *query = [@"id=" stringByAppendingString:identifier];
+    char *body = rctl_media_handle("/v1/media_thumb", query.UTF8String, "", 0, &status, &length, &type);
+    require(body != NULL && status == expectedStatus, @"unexpected video thumbnail status");
+    NSData *data = length > 0 ? [NSData dataWithBytes:body length:(NSUInteger)length] : nil;
+    free(body);
+    if (expectedStatus == 200) {
+        require(type && !strcmp(type, "image/jpeg"), @"thumbnail was not JPEG");
+        CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+        CGImageRef image = source ? CGImageSourceCreateImageAtIndex(source, 0, NULL) : NULL;
+        require(image && CGImageGetWidth(image) == width && CGImageGetHeight(image) == height,
+                @"video thumbnail dimensions or decoding failed");
+        if (image) CGImageRelease(image);
+        if (source) CFRelease(source);
+    }
+    return data;
+}
+
+static void test_video_thumbnails(NSDictionary *video) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSString *directory = [kRoot stringByAppendingPathComponent:
+        @"PhotoData/Thumbnails/V2/DCIM/100APPLE/VID_0002.MOV"];
+    NSString *poster = [directory stringByAppendingPathComponent:@"5005.JPG"];
+    NSString *identifier = video[@"id"];
+    NSString *original = video[@"path"];
+    NSData *originalBefore = [NSData dataWithContentsOfFile:original];
+    thumbnail(identifier, 415, 0, 0); // Invalid original and no derivative.
+    write_image(poster, 360, 640, 0.2);
+    NSData *first = thumbnail(identifier, 200, 360, 640);
+    require([thumbnail(identifier, 200, 360, 640) isEqual:first], @"cached thumbnail changed unexpectedly");
+    write_image(poster, 360, 640, 0.9);
+    require(![thumbnail(identifier, 200, 360, 640) isEqual:first],
+            @"Photos poster replacement reused stale cache for unchanged original");
+    write_image([directory stringByAppendingPathComponent:@"small.png"], 90, 160, 0.5);
+    thumbnail(identifier, 200, 360, 640);
+    write_file(@"PhotoData/Thumbnails/V2/DCIM/100APPLE/VID_0002.MOV/broken.jpg", @"broken");
+    thumbnail(identifier, 200, 360, 640);
+    [files removeItemAtPath:directory error:nil];
+    [files createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *outside = [kWork stringByAppendingPathComponent:@"outside/private-poster.png"];
+    write_image(outside, 640, 360, 0.4);
+    require(symlink(outside.fileSystemRepresentation, poster.fileSystemRepresentation) == 0,
+            @"thumbnail symlink fixture failed");
+    thumbnail(identifier, 415, 0, 0);
+    [files removeItemAtPath:directory error:nil];
+    require(symlink(outside.stringByDeletingLastPathComponent.fileSystemRepresentation,
+                    directory.fileSystemRepresentation) == 0, @"directory symlink fixture failed");
+    thumbnail(identifier, 415, 0, 0);
+    [files removeItemAtPath:directory error:nil];
+    write_image(poster, 640, 360, 0.1);
+    int oversized = open(poster.fileSystemRepresentation, O_WRONLY);
+    require(oversized >= 0 && ftruncate(oversized, 8 * 1024 * 1024 + 1) == 0,
+            @"oversized thumbnail fixture failed");
+    close(oversized);
+    thumbnail(identifier, 415, 0, 0);
+    [files removeItemAtPath:directory error:nil];
+    write_image(poster, 4097, 1, 0.1);
+    thumbnail(identifier, 415, 0, 0);
+    [files removeItemAtPath:directory error:nil];
+    write_image(poster, 640, 360, 0.1);
+    for (unsigned i = 0; i < 32; i++)
+        write_file([@"PhotoData/Thumbnails/V2/DCIM/100APPLE/VID_0002.MOV/" stringByAppendingFormat:@"%u", i], @"invalid");
+    thumbnail(identifier, 415, 0, 0);
+    [files removeItemAtPath:directory error:nil];
+    write_image(poster, 640, 360, 0.1);
+    thumbnail(identifier, 200, 640, 360);
+    require([[NSData dataWithContentsOfFile:original] isEqual:originalBefore],
+            @"thumbnail rendering changed the original video");
 }
 
 static void create_database(void) {
@@ -188,6 +284,7 @@ int main(void) {
         require(video != nil, @"indexed video was not returned");
         require([video[@"duration"] doubleValue] == 12.5, @"video duration metadata was lost");
         require([video[@"width"] integerValue] == 1920, @"video dimensions were lost");
+        test_video_thumbnails(video);
 
         NSDictionary *search = request(@"/v1/media", @"q=new", 200);
         require([search[@"total"] integerValue] == 1, @"case-insensitive filename search failed");

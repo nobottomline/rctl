@@ -72,6 +72,8 @@ by adding an unrestricted URL runner or automatically minting confirmation token
 - Media replaces the main Photos launcher; Copy/Share visibility follows actual
   browser capabilities. Plain LAN HTTP cannot enable secure-context APIs.
 - Pointer hover treatment does not change element dimensions or touch behavior.
+- Video thumbnails now use existing Photos posters on the tested iOS 15.5
+  device; see `MEDIA.md` for the physical verification and fallback limits.
 
 ### Audio Noise Investigation
 
@@ -98,7 +100,6 @@ metrics. This web-only update does not change native input or orientation IPC.
 ### Remaining Qualification
 
 - Confirm no recurring Listen noise over sustained playback and silence.
-- Resolve the native video-thumbnail decoder failure on iOS 15.5; see `MEDIA.md`.
 - Confirm lock-screen keypad visibility separately from corrected key duplication.
 - Exercise front/back camera, room audio, macro playback and new controls on the
   original rootful device when it is reachable.
