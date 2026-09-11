@@ -275,7 +275,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
 // Browser mic -> Opus over the "mic-in" DataChannel -> decode once, then route to
 // the iPad speaker, the foreground app's virtual microphone, or both. Mono 48k
 // matches the browser encoder and the loopback PCM bus.
-extern "C" void rctl_audio_session_activate(void);  // defined in main.mm
+extern "C" bool rctl_audio_session_activate(void);  // defined in main.mm
 extern "C" void rctl_audio_boost_begin(void);       // defined in main.mm
 extern "C" void rctl_audio_boost_end(void);         // defined in main.mm
 static std::mutex g_micMtx;
@@ -283,19 +283,37 @@ static OpusDecoder *g_micDec = nullptr;
 static AudioQueueRef g_micAQ = nullptr;       // created once per process, never disposed
 static bool g_micBoosted = false;             // inside a talk burst (volume raised)
 static bool g_micWatchStarted = false;
+static bool g_micSpeakerFailed = false;       // retry only after the next idle gap
+static std::atomic<unsigned> g_micQueuedFrames{0};
+static std::atomic<unsigned> g_micReturnedBuffers{0};
+static unsigned g_micEnqueuedBuffers = 0;
 static std::chrono::steady_clock::time_point g_micLast{};
 static const int kMicRate = 48000;
 
 static void mic_aq_done(void *user, AudioQueueRef aq, AudioQueueBufferRef buf) {
     (void)user;
+    g_micQueuedFrames.fetch_sub(buf->mAudioDataByteSize / 2);
+    g_micReturnedBuffers.fetch_add(1); // Reset also returns buffers: not proof of sound.
     AudioQueueFreeBuffer(aq, buf);
 }
 
-// Re-creating an AudioQueue after AudioQueueDispose in the same process yields a
-// SILENT queue on iOS (the second talk produced no sound). So the queue + decoder
-// are created exactly once and kept for the process lifetime; talk on/off is just
-// a gap in the frame stream. A watchdog detects that gap to restore the user's
-// volume and flush/reset for the next burst -- without tearing the queue down.
+static void mic_reset_queue() {
+    if (!g_micAQ) return;
+    OSStatus status = AudioQueueReset(g_micAQ);
+    if (status != noErr) wlog("mic intercom: reset failed status=" + std::to_string(status));
+}
+
+static void mic_speaker_failed(const char *operation, OSStatus status) {
+    wlog(std::string("mic intercom: ") + operation + " failed status=" + std::to_string(status));
+    g_micSpeakerFailed = true;
+    if (g_micBoosted) rctl_audio_boost_end();
+    g_micBoosted = false;
+    mic_reset_queue();
+}
+
+// Preserve the queue between bursts: the original iOS 14 qualification found
+// silence after dispose/recreate. A persistent queue can still stop after an
+// interruption; inspect and restart it after enqueueing the first new buffer.
 static void mic_watchdog() {
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -305,7 +323,10 @@ static void mic_watchdog() {
                         std::chrono::steady_clock::now() - g_micLast).count();
         if (idle > 700) {
             rctl_audio_boost_end();
-            if (g_micAQ) AudioQueueReset(g_micAQ);          // drop stale queued audio
+            wlog("mic intercom: idle enqueued=" + std::to_string(g_micEnqueuedBuffers) +
+                 " returned=" + std::to_string(g_micReturnedBuffers.load()) +
+                 " queued_frames=" + std::to_string(g_micQueuedFrames.load()));
+            mic_reset_queue();
             if (g_micDec) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
             g_micBoosted = false;
             wlog("mic intercom: talk idle -> volume restored");
@@ -323,7 +344,10 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
     auto now = std::chrono::steady_clock::now();
     bool newBurst = g_micLast.time_since_epoch().count() == 0 ||
                     std::chrono::duration_cast<std::chrono::milliseconds>(now - g_micLast).count() > 700;
-    if (newBurst) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
+    if (newBurst) {
+        opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
+        g_micSpeakerFailed = false;
+    }
     g_micLast = now;
     int16_t pcm[5760];   // up to 120ms @ 48k mono
     int frames = opus_decode(g_micDec, opus, (opus_int32)len, pcm, 5760, 0);
@@ -334,12 +358,18 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
     if (route == RCTL_TALK_VIRTUAL_MIC) {
         if (g_micBoosted) {
             rctl_audio_boost_end();
-            if (g_micAQ) AudioQueueReset(g_micAQ);
+            mic_reset_queue();
             g_micBoosted = false;
         }
         return;
     }
 
+    if (g_micSpeakerFailed) return;
+    bool starting = !g_micBoosted;
+    if (starting && !rctl_audio_session_activate()) {
+        mic_speaker_failed("session activation", -1);
+        return;
+    }
     if (!g_micAQ) {
         AudioStreamBasicDescription a = {};
         a.mSampleRate = kMicRate;
@@ -350,29 +380,52 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         a.mBytesPerFrame = 2;
         a.mFramesPerPacket = 1;
         a.mBytesPerPacket = 2;
-        rctl_audio_session_activate();
-        if (AudioQueueNewOutput(&a, mic_aq_done, nullptr, nullptr, nullptr, 0, &g_micAQ) != noErr) {
-            g_micAQ = nullptr; return;
+        OSStatus status = AudioQueueNewOutput(&a, mic_aq_done, nullptr, nullptr, nullptr, 0, &g_micAQ);
+        if (status != noErr) {
+            g_micAQ = nullptr;
+            mic_speaker_failed("create", status);
+            return;
         }
-        AudioQueueSetParameter(g_micAQ, kAudioQueueParam_Volume, 1.0f);
-        AudioQueueStart(g_micAQ, nullptr);
-        wlog("mic intercom: AudioQueue started (persistent)");
         if (!g_micWatchStarted) { std::thread(mic_watchdog).detach(); g_micWatchStarted = true; }
     }
-    // Burst start after idle: re-route + raise volume and flush stale speaker audio.
-    if (!g_micBoosted) {
-        rctl_audio_session_activate();
+    if (starting) {
+        OSStatus status = AudioQueueSetParameter(g_micAQ, kAudioQueueParam_Volume, 1.0f);
+        if (status != noErr) { mic_speaker_failed("volume", status); return; }
+        status = AudioQueueReset(g_micAQ);
+        if (status != noErr) { mic_speaker_failed("burst reset", status); return; }
         rctl_audio_boost_begin();
-        AudioQueueReset(g_micAQ);
         g_micBoosted = true;
-        wlog("mic intercom: talk burst start");
+    }
+    // A stopped/orphaned queue must not accumulate unbounded allocations.
+    if (g_micQueuedFrames.load() + (unsigned)frames > kMicRate / 2) {
+        mic_speaker_failed("backlog limit", -1);
+        return;
     }
     UInt32 bytes = (UInt32)frames * 2;
     AudioQueueBufferRef buf = nullptr;
-    if (AudioQueueAllocateBuffer(g_micAQ, bytes, &buf) != noErr) return;
+    OSStatus status = AudioQueueAllocateBuffer(g_micAQ, bytes, &buf);
+    if (status != noErr) { mic_speaker_failed("allocate", status); return; }
     memcpy(buf->mAudioData, pcm, bytes);
     buf->mAudioDataByteSize = bytes;
-    AudioQueueEnqueueBuffer(g_micAQ, buf, 0, nullptr);
+    g_micQueuedFrames.fetch_add((unsigned)frames);
+    status = AudioQueueEnqueueBuffer(g_micAQ, buf, 0, nullptr);
+    if (status != noErr) {
+        g_micQueuedFrames.fetch_sub((unsigned)frames);
+        AudioQueueFreeBuffer(g_micAQ, buf); // Queue never took ownership.
+        mic_speaker_failed("enqueue", status);
+        return;
+    }
+    ++g_micEnqueuedBuffers;
+    if (starting) {
+        UInt32 running = 0, size = sizeof(running);
+        status = AudioQueueGetProperty(g_micAQ, kAudioQueueProperty_IsRunning, &running, &size);
+        if (status != noErr) { mic_speaker_failed("running query", status); return; }
+        if (!running) {
+            status = AudioQueueStart(g_micAQ, nullptr);
+            if (status != noErr) { mic_speaker_failed("start", status); return; }
+        }
+        wlog("mic intercom: talk burst queued; was_running=" + std::to_string(running));
+    }
 }
 
 // Session/channel gone: restore the user's volume promptly and reset, but KEEP the
@@ -381,7 +434,7 @@ static void mic_teardown() {
     std::lock_guard<std::mutex> lk(g_micMtx);
     if (g_micBoosted) {
         rctl_audio_boost_end();
-        if (g_micAQ) AudioQueueReset(g_micAQ);
+        mic_reset_queue();
         if (g_micDec) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
         g_micBoosted = false;
     }

@@ -127,6 +127,31 @@ The original Safari symptom still requires verification with the updated web
 client. Do not claim it fixed solely from the Chrome test or attribute it to
 the lifecycle defects without observing the Safari failure reason.
 
+The subsequent two-tone test exposed a separate speaker failure: approximately
+500 Opus packets traversed the real production control UI in two bursts, but the
+operator heard neither tone on the Pro. YouTube paused during the attempt. This
+confirms that successful transport and an activation log are insufficient;
+it does not establish that Safari caused the silence. The observed mediaserverd
+start preceded this process's first speaker queue creation, so a later media
+services restart has not been demonstrated as the cause.
+
+The speaker path now checks category/activation results and queue creation,
+volume, reset, allocation, enqueue, running-state and start results. The first
+buffer is enqueued before starting a stopped queue, including a persistent queue
+stopped between bursts. Queued PCM is bounded to half a second. Enqueue failure
+frees the unaccepted buffer; a speaker failure restores the volume and suppresses
+further attempts until an idle gap, without disabling the independent app-mic
+route. Existing persistent-queue behavior is retained for the iOS 14 lane.
+
+Logs contain operation/status codes and cumulative enqueued/returned buffer
+counts, never PCM. Returned buffers are not proof of playback: reset also returns
+them. `bash scripts/test-webrtc-ownership.sh` exercises production speaker code
+with real Opus and fake AudioQueue failures, including interrupted/repeated Talk,
+allocation ownership, bounded backlog and retry behavior. Both package lanes
+build and pass the public-package audit. Acoustic verification of the new native
+path and real Safari microphone capture are still required. No production relay
+HTML was replaced during these tests.
+
 Still required before calling the feature generally qualified:
 
 1. Discord voice call with `App mic`: the remote participant hears browser

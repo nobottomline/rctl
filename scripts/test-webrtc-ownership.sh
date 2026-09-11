@@ -16,3 +16,8 @@ clang++ -std=c++17 -Icore -I"$dc/include" -I"$dc/deps/json/single_include" \
     -L"$build" -ldatachannel -L"$opus/lib" -lopus -framework AudioToolbox \
     -Wl,-rpath,"$build" -o "$build/ownership-test"
 "$build/ownership-test"
+clang++ -std=c++17 -Icore -I"$dc/include" -I"$dc/deps/json/single_include" \
+    -I"$opus/include" tests/TalkSpeakerQueueTest.cpp core/net/WebRTCPermissions.cpp \
+    -L"$build" -ldatachannel -L"$opus/lib" -lopus -framework AudioToolbox \
+    -Wl,-rpath,"$build" -o "$build/talk-speaker-test"
+"$build/talk-speaker-test"

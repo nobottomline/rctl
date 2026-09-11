@@ -3,7 +3,7 @@
 #include "../core/net/WebRTCBridge.cpp"
 #include <cassert>
 
-extern "C" void rctl_audio_session_activate(void) {}
+extern "C" bool rctl_audio_session_activate(void) { return true; }
 extern "C" void rctl_audio_boost_begin(void) {}
 extern "C" void rctl_audio_boost_end(void) {}
 extern "C" int rctl_vmic_route(void) { return RCTL_TALK_SPEAKER; }

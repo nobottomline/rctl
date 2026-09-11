@@ -1998,26 +1998,41 @@ static void *audio_lease_thread(void *arg) {
 // no audio session by default and AudioQueue plays into the void -- this is why the
 // mic intercom decoded fine but was silent. Driven via the runtime (AVFoundation
 // dlopen'd lazily) so we don't link it. Idempotent; called on the first mic frame.
-extern "C" void rctl_audio_session_activate(void) {
+extern "C" bool rctl_audio_session_activate(void) {
     // NOT dispatch_once: the OS can deactivate our session when a WebRTC session
-    // tears down or mediaserverd restarts, so we re-assert it every time a new mic
-    // queue is created (once per talk session) -- otherwise playback works once and
-    // is silent on reconnect.
+    // tears down or mediaserverd restarts, so re-assert it for each Talk burst.
     @try {
         dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY);
         Class C = NSClassFromString(@"AVAudioSession");
-        if (!C) { dlog("AVAudioSession class missing"); return; }
+        if (!C) { dlog("AVAudioSession class missing"); return false; }
         id sess = ((id (*)(id, SEL))objc_msgSend)((id)C, NSSelectorFromString(@"sharedInstance"));
-        if (!sess) return;
+        if (!sess) return false;
         NSError *err = nil;
         // Playback category: audible through the media volume, ignores the mute
         // switch. (PlayAndRecord/DefaultToSpeaker comes with the virtual mic.)
-        ((BOOL (*)(id, SEL, id, NSError **))objc_msgSend)(
+        BOOL categoryOK = ((BOOL (*)(id, SEL, id, NSError **))objc_msgSend)(
             sess, NSSelectorFromString(@"setCategory:error:"), @"AVAudioSessionCategoryPlayback", &err);
-        ((BOOL (*)(id, SEL, BOOL, NSError **))objc_msgSend)(
+        if (!categoryOK) {
+            char message[96];
+            snprintf(message, sizeof(message), "Talk audio session category failed: %ld", (long)err.code);
+            dlog(message);
+            return false;
+        }
+        err = nil;
+        BOOL activeOK = ((BOOL (*)(id, SEL, BOOL, NSError **))objc_msgSend)(
             sess, NSSelectorFromString(@"setActive:error:"), YES, &err);
+        if (!activeOK) {
+            char message[96];
+            snprintf(message, sizeof(message), "Talk audio session activation failed: %ld", (long)err.code);
+            dlog(message);
+            return false;
+        }
         dlog("AVAudioSession (re)activated (playback)");
-    } @catch (id e) {}
+        return true;
+    } @catch (id e) {
+        dlog("Talk audio session activation raised an exception");
+        return false;
+    }
 }
 
 // AudioQueue plays through the system media volume, so at min volume the intercom
