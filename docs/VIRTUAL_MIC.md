@@ -64,6 +64,15 @@ ring; the consumer drops stale backlog to keep latency near 60 ms.
 - Switching to `speaker` stops new virtual-mic PCM immediately. Existing short
   ring content drains, then the physical microphone remains in use.
 - SpringBoard is excluded from injection.
+- Browser capture starts are cancellable while permission, AudioContext resume,
+  or codec capability checks are pending. Cancellation and channel replacement
+  release acquired tracks; delayed completion must not restart capture.
+- Each Talk attempt owns one channel generation. A closing old channel or a late
+  encoder callback cannot stop or send audio into a newer attempt. Reconnection
+  never silently resumes microphone capture.
+- The control center reports permission, unavailable input, 48 kHz context,
+  suspended audio, Opus encoding, and channel failures instead of silently
+  reverting the Talk button. Encoder failures and track removal stop capture.
 
 The browser requests raw mono input. Browser-side echo cancellation, noise
 suppression, and automatic gain are disabled because Discord/FaceTime/the target
@@ -90,6 +99,33 @@ Physically verified on iPad11,3 / iOS 14.4 with Voice Memos:
 - stopping Talk returns to the physical input without reloading the app;
 - recording remains live while the hook activates, with no RemoteIO watchdog
   termination.
+
+### Rootless Talk Investigation (2026-09-11)
+
+The operator reported that Safari Talk briefly activates then stops for the
+rootless iPad Pro, while the rootful iPad works. The rootless daemon had not
+restarted after the attempts. Both devices use the relay's shared control HTML;
+this symptom is not, by itself, proof of a rootless AudioQueue failure.
+
+A Chrome UI comparison used a quiet synthetic browser source rather than the
+operator's microphone. Speaker mode sent approximately 250 Opus packets in five
+seconds on each device, with the microphone channel open and encoder configured.
+Rootless daemon logs confirmed persistent AudioQueue startup and a Talk burst.
+The Pro's original `both` route was restored after testing `speaker`. This is
+transport/startup evidence, not an acoustic recording or an app-mic qualification.
+
+The browser implementation had reproducible lifecycle defects: an old channel's
+close callback always stopped Talk, pending microphone permission could outlive
+Stop, and stale encoder errors could affect a subsequent attempt. Generation
+guards and cancellable startup now cover these cases. Unit tests also cover
+permission denial, unsupported Opus, source removal, graph failure, and resume
+cancellation. The new client was checked against both real devices by replacing
+HTML only in the test browser, without replacing production assets. An injected
+asynchronous encoder failure verified the visible error and capture cleanup.
+
+The original Safari symptom still requires verification with the updated web
+client. Do not claim it fixed solely from the Chrome test or attribute it to
+the lifecycle defects without observing the Safari failure reason.
 
 Still required before calling the feature generally qualified:
 

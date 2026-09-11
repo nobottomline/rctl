@@ -217,13 +217,14 @@ function MicGroup({ ctl }: { ctl: ReturnType<typeof useControl> }) {
         {ctl.talk.supported && (
           <Key
             icon={ctl.talk.talking ? Mic : MicOff}
-            label={ctl.talk.talking ? 'Talking' : 'Talk'}
+            label={ctl.talk.pending ? 'Cancel Talk' : ctl.talk.talking ? 'Talking' : 'Talk'}
             active={ctl.talk.talking}
-            onClick={() => (ctl.talk.talking ? ctl.talk.stop() : ctl.talk.start())}
+            onClick={() => (ctl.talk.talking || ctl.talk.pending ? ctl.talk.stop() : ctl.talk.start())}
           />
         )}
       </div>
       {r.error && <p role="alert" className="mt-2 text-xs text-red-500">{r.error}</p>}
+      {ctl.talk.error && <p role="alert" className="mt-2 text-xs text-red-500">{ctl.talk.error}</p>}
       {!r.recording && r.bytes > 0 && (
         <div className="mt-1.5 flex items-center gap-1.5">
           <button

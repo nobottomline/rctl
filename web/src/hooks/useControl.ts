@@ -47,6 +47,8 @@ export function useControl(
   const micRef = useRef(new MicTalk())
   const roomMicRef = useRef(new AudioPlayer(3)) // the iPad's own mic, run a bit louder (raw input is quiet)
   const [talking, setTalking] = useState(false)
+  const [talkPending, setTalkPending] = useState(false)
+  const [talkError, setTalkError] = useState('')
   const [talkMode, setTalkMode] = useState<'speaker' | 'mic' | 'both'>('speaker')
   const [listeningMic, setListeningMic] = useState(false)
   const [micRec, setMicRec] = useState({ recording: false, seconds: 0, bytes: 0 })
@@ -98,6 +100,8 @@ export function useControl(
       onPointerChannel: (ch) => pointer.attach(ch),
     })
     micRef.current.onState = setTalking
+    micRef.current.onPending = setTalkPending
+    micRef.current.onError = setTalkError
     engineRef.current = engine
     engine.start()
 
@@ -238,6 +242,7 @@ export function useControl(
     addEventListener('resize', onResize)
 
     return () => {
+      micRef.current.stop()
       stopKeyboard()
       pointer.detach()
       gamePointerRef.current = null
@@ -511,6 +516,8 @@ export function useControl(
     talk: {
       supported: micSupported(),
       talking,
+      pending: talkPending,
+      error: talkError,
       mode: talkMode,
       setMode: changeTalkMode,
       start: () => micRef.current.start(),
