@@ -3,14 +3,16 @@ import Foundation
 
 /// Static facts a controller reports about itself. Sent once after pairing and
 /// again only when the fingerprint changes (an OS or app update), never on a
-/// schedule. Field names and bounds mirror the relay whitelist; the relay drops
+/// schedule after a compatible schema acknowledgement. Field names and bounds mirror the relay whitelist; the relay drops
 /// unknown keys, so adding a field here is backward compatible.
 public struct ControllerClientProfile: Codable, Equatable, Sendable {
-    /// Bumped when the meaning of existing keys changes; new keys need no bump.
-    public static let schemaVersion: Int64 = 1
+    /// Bumped when the accepted field contract changes, including additive keys.
+    public static let schemaVersion: Int64 = 2
 
     public var schemaVersion: Int64? = Self.schemaVersion
     public var protocolMajor: Int64?
+    public var protocolMinor: Int64?
+    public var buildRevision: String?
     public var installChannel: String?
     /// What this build of the app can do, as stable lowercase tokens. The relay
     /// stores them so a future server can decide per controller instead of
@@ -39,6 +41,8 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
         case protocolMajor = "protocol_major"
+        case protocolMinor = "protocol_minor"
+        case buildRevision = "build_revision"
         case installChannel = "install_channel"
         case capabilities
         case model
@@ -63,6 +67,7 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
         .model: 64, .modelName: 80, .idiom: 16, .systemName: 32, .systemVersion: 32,
         .osBuild: 32, .appVersion: 32, .appBuild: 32, .bundleID: 128, .deviceName: 80,
         .locale: 32, .language: 32, .timezone: 64, .screen: 48, .installChannel: 24,
+        .buildRevision: 64,
     ]
 
     /// A copy with every string trimmed and truncated to the relay bounds.
@@ -71,7 +76,7 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
         func clamp(_ value: String?, _ key: CodingKeys) -> String? {
             guard let value else { return nil }
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "\n", with: " ")
+                .components(separatedBy: .controlCharacters).joined(separator: " ")
             guard !trimmed.isEmpty else { return nil }
             let limit = Self.stringLimits[key] ?? 32
             return trimmed.unicodeScalars.count > limit ? String(String.UnicodeScalarView(trimmed.unicodeScalars.prefix(limit))) : trimmed
@@ -91,14 +96,15 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
         copy.timezone = clamp(timezone, .timezone)
         copy.screen = clamp(screen, .screen)
         copy.installChannel = clamp(installChannel, .installChannel)
-        for key in [\ControllerClientProfile.cpuCount, \.memoryBytes, \.diskBytes, \.protocolMajor, \.schemaVersion] {
-            if let value = copy[keyPath: key], value < 0 { copy[keyPath: key] = nil }
+        copy.buildRevision = clamp(buildRevision, .buildRevision)
+        for key in [\ControllerClientProfile.cpuCount, \.memoryBytes, \.diskBytes, \.protocolMajor, \.protocolMinor, \.schemaVersion] {
+            if let value = copy[keyPath: key], value < 0 || value > 1 << 53 { copy[keyPath: key] = nil }
         }
         var seen = Set<String>()
-        copy.capabilities = capabilities
+        copy.capabilities = Array(capabilities
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            .filter { !$0.isEmpty && $0.unicodeScalars.count <= 32 && seen.insert($0).inserted }
-            .sorted()
+            .filter { $0.range(of: "^[a-z0-9][a-z0-9_.:-]{0,31}$", options: .regularExpression) != nil && seen.insert($0).inserted }
+            .sorted().prefix(32))
         return copy
     }
 
@@ -117,8 +123,7 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
 }
 
 /// Dynamic facts carried by the presence heartbeat while the app is in the
-/// foreground. Nothing here identifies the person; it describes the phone's
-/// current condition so an operator can see why a controller went quiet.
+/// foreground. Reports are linked to the persistent controller identity.
 public struct ControllerTelemetry: Codable, Equatable, Sendable {
     public var batteryLevel: Int? // percent 0...100
     public var batteryState: String? // unplugged | charging | full | unknown

@@ -53,10 +53,12 @@ only while the controller is still active, including a recheck after auth.
 
 Telemetry is optional condition data shown in relay admin: `battery_level`
 (percent), `battery_state` (`unplugged|charging|full|unknown`), `low_power`
-(bool), `thermal` (`nominal|fair|serious|critical`), `network`
+(bool), `thermal` (`nominal|fair|serious|critical|unknown`), `network`
 (`wifi|cellular|wired|none|unknown`), `network_expensive` and
 `network_constrained` (bool), `lan_ip` (private address literal),
-`disk_free_bytes`, `memory_available_bytes`, `uptime_seconds`. The relay validates
+`memory_available_bytes`. Battery percentage is an integer in 0...100; LAN IP
+must be RFC1918 IPv4 or private IPv6, not a public/loopback address. It is not
+evidence that two devices share a network. The relay validates
 types and bounds, drops unknown keys, and rejects a malformed body with
 `400 invalid_telemetry` without touching the lease. An empty heartbeat keeps the
 last telemetry. The heartbeat also refreshes the controller's last IP and
@@ -64,8 +66,26 @@ User-Agent.
 
 The static device profile travels separately through
 `POST /api/controller/me/client` with `{"client": {...}}`, sent once after
-pairing and again only when its fingerprint changes; see
-`docs/CONTROLLER-AUTH.md` for the key whitelist.
+pairing and when its fingerprint changes. Success includes
+`{"ok":true,"accepted_schema_version":2}`. This version denotes the server's
+accepted field contract, not the untrusted `client.schema_version`. Version 2
+adds `protocol_minor` and optional `build_revision`, and retires disk capacity,
+free disk space and boot uptime from automatic reporting. Those legacy keys
+are ignored; other valid fields still work from older clients.
+
+Both bodies have an 8192-byte total limit, including trailing whitespace, and
+must contain exactly one JSON value. Only a matching accepted schema allows
+the iOS client to cache its profile fingerprint. A legacy `{"ok":true}` remains
+successful but unconfirmed: retry at most once per five foreground minutes
+and on later launches until a compatible relay acknowledges the schema.
+See `docs/CONTROLLER-AUTH.md` for the key whitelist.
+
+The native client also reads `GET /api/controller/me` on device-list refresh,
+before signaling, and after a successful presence heartbeat. Mutable name and
+scopes update the saved profile without replacing relay identity, signing key,
+or refresh token. A changed grant closes an already connected native session;
+the user reconnects in View. This client-side behavior does not replace server
+authorization or authorize editing scopes directly in the database.
 
 The controller sends a heartbeat every 30 seconds while the application is
 active, for its selected relay only, including while viewing a remote session.

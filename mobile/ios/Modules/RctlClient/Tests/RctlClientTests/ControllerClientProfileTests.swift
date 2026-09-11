@@ -22,7 +22,7 @@ struct ControllerClientProfileTests {
         #expect(object["memory_bytes"] == nil, "negative numbers are dropped, not sent")
         #expect(object["system_version"] == nil, "nil fields are omitted")
         #expect(object["capabilities"] as? [String] == ["lan", "webrtc.screen"], "tokens are lowercased, trimmed, deduplicated, sorted")
-        #expect(object["schema_version"] as? Int == 1)
+        #expect(object["schema_version"] as? Int == 2)
         #expect(Set(object.keys) == ["model", "model_name", "device_name", "cpu_count", "capabilities", "schema_version"])
     }
 
@@ -57,7 +57,7 @@ struct ControllerClientProfileTests {
         #expect(request.httpMethod == "POST")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
         #expect(request.httpBody == profileBody)
-        #expect(String(decoding: try #require(request.httpBody), as: UTF8.self) == #"{"client":{"capabilities":[],"model":"iPad14,1","schema_version":1}}"#)
+        #expect(String(decoding: try #require(request.httpBody), as: UTF8.self) == #"{"client":{"capabilities":[],"model":"iPad14,1","schema_version":2}}"#)
         #expect(request.value(forHTTPHeaderField: "X-RCTL-Signature") != nil)
 
         let telemetry = ControllerTelemetry(batteryLevel: 81, batteryState: "charging", lowPower: false, network: "wifi", networkExpensive: true, lanIP: "192.168.178.20")

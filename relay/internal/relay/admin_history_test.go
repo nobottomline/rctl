@@ -330,7 +330,7 @@ func TestControllerClientProfileAndTelemetry(t *testing.T) {
 		"network_expensive":"true","lan_ip":"192.168.178.20","uptime_seconds":86400,"memory_available_bytes":1200000000}}`), http.StatusOK)
 	row = findController(listControllers(t, ts, admin), id)
 	if row.Telemetry["battery_level"] != float64(81) || row.Telemetry["low_power"] != false || row.Telemetry["network"] != "wifi" ||
-		row.Telemetry["network_expensive"] != true || row.Telemetry["lan_ip"] != "192.168.178.20" || row.Telemetry["uptime_seconds"] != float64(86400) {
+		row.Telemetry["network_expensive"] != true || row.Telemetry["lan_ip"] != "192.168.178.20" || row.Telemetry["uptime_seconds"] != nil {
 		t.Fatalf("telemetry not stored: %#v", row.Telemetry)
 	}
 	send("/api/controller/presence", []byte(`{"telemetry":{"lan_ip":"not-an-ip"}}`), http.StatusBadRequest)

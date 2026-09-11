@@ -104,15 +104,25 @@ controller deleted only locally stays listed in relay admin until revoked there.
 After pairing the app reports a bounded device profile to the relay (protocol
 and schema version, install channel, the capability tokens this build supports,
 hardware identifier and marketing name, iOS version and build, app version,
-device name, locale, time zone, screen, CPU count, memory and storage) and
-re-sends it only when that profile changes, never on a schedule. The foreground
+device name, locale, time zone, screen, CPU count and memory) and
+re-sends it when that profile changes. Only a matching schema acknowledgement
+confirms synchronization; older relays are retried at most every five foreground
+minutes. The foreground
 heartbeat carries battery level and state, Low Power Mode, thermal state,
 network type with metered/Low Data flags, the phone's private Wi-Fi address,
-free storage, memory available to the app and phone uptime. No vendor,
+and memory available to the app. Disk space and boot uptime are not collected
+for automatic reporting. Release install channel is unknown rather than guessed.
+No vendor,
 advertising or hardware serial identifiers leave the phone. Because iOS 16+
 returns a bare "iPhone" as the device name to apps without Apple's entitlement,
 a new controller is named after its marketing model by default. Relay admin
-shows all of it in the controller's detail card.
+shows last-reported values with their age in the controller's detail card. These
+reports are linked to a persistent controller ID and are not anonymous.
+
+Current controller name and permissions are refreshed from `/api/controller/me`
+on refresh, heartbeat and session preparation. Identity and pairing credentials
+are preserved. If permissions change during a negotiated session, it closes;
+reconnection starts in View and never automatically starts camera or Control.
 
 The selected relay receives a signed heartbeat every 30 seconds while the app
 is active, including during a remote session. Backgrounding or switching relays

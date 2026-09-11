@@ -8,7 +8,7 @@ import os
 /// Builds the self-description a controller reports to its relay. Static facts
 /// go to `ControllerClientProfile` (sent once per change); condition goes to
 /// `ControllerTelemetry` (rides on the foreground heartbeat). Nothing here is a
-/// tracking identifier: no vendor id, no advertising id, no contacts or accounts.
+/// advertising identifier. Reports are nevertheless linked to the controller ID.
 enum ControllerDeviceProfile {
     /// What this build can do, as stable tokens the relay stores per controller.
     /// Keep it honest: a token here means the feature ships in this version.
@@ -28,6 +28,8 @@ enum ControllerDeviceProfile {
     static func current(bundle: Bundle = .main, device: UIDevice = .current) -> ControllerClientProfile {
         var profile = ControllerClientProfile()
         profile.protocolMajor = Int64(WireProtocolVersion.current.major)
+        profile.protocolMinor = Int64(WireProtocolVersion.current.minor)
+        profile.buildRevision = bundle.object(forInfoDictionaryKey: "RCTLBuildRevision") as? String
         profile.installChannel = installChannel(bundle: bundle)
         profile.capabilities = capabilities
         let identifier = hardwareIdentifier()
@@ -53,7 +55,6 @@ enum ControllerDeviceProfile {
         }
         profile.cpuCount = Int64(ProcessInfo.processInfo.activeProcessorCount)
         profile.memoryBytes = Int64(clamping: ProcessInfo.processInfo.physicalMemory)
-        profile.diskBytes = diskCapacity().total
         return profile.bounded()
     }
 
@@ -95,10 +96,8 @@ enum ControllerDeviceProfile {
         telemetry.networkExpensive = network.expensive
         telemetry.networkConstrained = network.constrained
         telemetry.lanIP = lanAddress()
-        telemetry.diskFreeBytes = diskCapacity().free
         let available = os_proc_available_memory()
-        telemetry.memoryAvailableBytes = available > 0 ? Int64(clamping: available) : nil
-        telemetry.uptimeSeconds = Int64(ProcessInfo.processInfo.systemUptime)
+        telemetry.memoryAvailableBytes = Int64(clamping: available)
         return telemetry
     }
 
@@ -108,14 +107,13 @@ enum ControllerDeviceProfile {
 #if DEBUG
         return "debug"
 #else
-        if bundle.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" { return "testflight" }
-        if bundle.path(forResource: "embedded", ofType: "mobileprovision") != nil { return "adhoc" }
-        return "appstore"
+        // Receipts and provisioning files do not reliably identify sideloaded builds.
+        return "unknown"
 #endif
     }
 
-    /// The phone's private IPv4 address on Wi-Fi (en0), which tells the operator
-    /// whether the controller and the device share a network. Nothing else about
+    /// The phone's private IPv4 address on Wi-Fi (en0), not proof that two peers
+    /// share a network. Nothing else about
     /// the network (SSID, gateway, peers) is collected.
     static func lanAddress() -> String? {
         var list: UnsafeMutablePointer<ifaddrs>?
@@ -129,11 +127,21 @@ enum ControllerDeviceProfile {
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
             let value = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            guard isPrivateIPv4(value) else { continue }
             let name = String(cString: interface.ifa_name)
             if name == "en0" { return value }
             if fallback == nil, name.hasPrefix("en") { fallback = value }
         }
         return fallback
+    }
+
+    static func isPrivateIPv4(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        let octets = parts.compactMap { UInt8($0) }
+        guard octets.count == 4 else { return false }
+        return octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1])) ||
+            (octets[0] == 192 && octets[1] == 168)
     }
 
     static func hardwareIdentifier() -> String? {
@@ -153,14 +161,6 @@ enum ControllerDeviceProfile {
         guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
         let value = String(decoding: buffer.prefix { $0 != 0 }, as: UTF8.self)
         return value.isEmpty ? nil : value
-    }
-
-    private static func diskCapacity() -> (total: Int64?, free: Int64?) {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        let values = try? home.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey])
-        let total = values?.volumeTotalCapacity.map(Int64.init)
-        let free = values?.volumeAvailableCapacityForImportantUsage
-        return (total, free)
     }
 
     /// Marketing names for identifiers the relay operator is likely to meet.

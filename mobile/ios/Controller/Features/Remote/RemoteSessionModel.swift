@@ -110,6 +110,7 @@ final class RemoteSessionModel: ObservableObject {
     private var reconnectTask: Task<Void, Never>?
     private var wantsConnection = false
     private var retryableFailure = true
+    private var authorizationObserver: AnyCancellable?
     private var activeTouches: Set<Int> = []
     private static let maximumKeyboardBacklog: TimeInterval = 10.5
 
@@ -126,6 +127,7 @@ final class RemoteSessionModel: ObservableObject {
         self.appModel = appModel
         self.target = target
         self.relayProfile = appModel.profile
+        self.sessionScopes = appModel.profile?.controller.scopes
         switch target {
         case .local(let address): accessPath = .lan(address)
         case .relay: accessPath = .relay(origin: appModel.profile?.origin)
@@ -136,7 +138,25 @@ final class RemoteSessionModel: ObservableObject {
             router.send(event)
         }
         router.owner = self
+        if case .relay = target {
+            authorizationObserver = appModel.$profile.dropFirst().sink { [weak self] updated in
+                guard let self, let original = self.relayProfile else { return }
+                let sameIdentity = updated?.hasSameIdentity(as: original) == true
+                let scopes = updated?.controller.scopes
+                // Existing channels retain their negotiated permissions. A new
+                // grant must never silently turn an existing viewer into Control.
+                let negotiated = [.connecting, .connected, .disconnected].contains(self.state) ||
+                    (self.state == .signaling && self.preparationTask == nil)
+                if !sameIdentity || (negotiated && scopes != self.sessionScopes) {
+                    self.disconnect()
+                    self.errorMessage = "Controller access changed. Reconnect to use current permissions."
+                }
+                self.sessionScopes = scopes
+            }
+        }
     }
+
+    private var sessionScopes: [ControllerScope]?
 
     func connect() async {
         cancelReconnect()

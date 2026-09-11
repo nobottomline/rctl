@@ -6,6 +6,10 @@ struct ControllerProfile: Codable, Equatable, Identifiable, Sendable {
     let relayID: String
     let controller: PairedController
     var id: String { relayID }
+
+    func hasSameIdentity(as other: ControllerProfile) -> Bool {
+        relayID == other.relayID && origin == other.origin && controller.id == other.controller.id
+    }
 }
 
 struct ControllerProfileStore {
@@ -13,7 +17,7 @@ struct ControllerProfileStore {
     private let key = "rctl.controller.profile.v1"
     private let collectionKey = "rctl.controller.profiles.v2"
     private let selectionKey = "rctl.controller.selected-relay.v2"
-    private let clientProfilePrefix = "rctl.controller.client-profile.v1."
+    private let clientProfilePrefix = "rctl.controller.client-profile.v2."
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

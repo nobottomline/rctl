@@ -11,7 +11,6 @@ import {
   Cpu,
   Fingerprint,
   Globe,
-  HardDrive,
   Languages,
   MemoryStick,
   Pencil,
@@ -30,7 +29,7 @@ import { Button } from './ui/Button'
 import { DetailSection, DetailField } from './ui/Detail'
 import { auditLabel } from './ActivityPanel'
 import { concernsController } from '../lib/actors'
-import { fmtAbs, fmtBytes, fmtRel, fmtUptime, shortId } from '../lib/format'
+import { fmtAbs, fmtBytes, fmtRel, shortId } from '../lib/format'
 import { scopeElevated, scopeLabel } from '../lib/scopes'
 import { cn } from '../lib/cn'
 import type { AuditEntry, Controller, ControllerTelemetry } from '../types'
@@ -141,14 +140,10 @@ export function ControllerDetailModal({
                 <DetailField label="Device name" value={client.device_name} />
                 <DetailField label="Screen" value={client.screen} />
                 <DetailField icon={Languages} label="Locale" value={[client.locale, client.timezone].filter(Boolean).join(' · ')} />
-                <DetailField icon={Cpu} label="CPU cores" value={client.cpu_count ? String(client.cpu_count) : undefined} />
-                <DetailField icon={MemoryStick} label="Memory" value={client.memory_bytes ? fmtBytes(client.memory_bytes) : undefined} />
-                <DetailField
-                  icon={HardDrive}
-                  label="Storage"
-                  value={storageLine(client.disk_bytes, telemetry?.disk_free_bytes)}
-                />
-                <DetailField label="Protocol" value={client.protocol_major ? `v${client.protocol_major}` : undefined} />
+                <DetailField icon={Cpu} label="CPU cores" value={client.cpu_count !== undefined ? String(client.cpu_count) : undefined} />
+                <DetailField icon={MemoryStick} label="Memory" value={client.memory_bytes !== undefined ? fmtBytes(client.memory_bytes) : undefined} />
+                <DetailField label="Protocol" value={client.protocol_major !== undefined ? `v${client.protocol_major}.${client.protocol_minor ?? '?'}` : undefined} />
+                <DetailField label="Build revision" value={client.build_revision} />
               </div>
               {!!client.capabilities?.length && (
                 <div className="mt-3">
@@ -167,16 +162,15 @@ export function ControllerDetailModal({
 
           {telemetry && (
             <DetailSection
-              title="Live"
-              action={<span className="text-[10.5px] text-faint">updated {fmtRel(c.telemetry_updated_at)}</span>}
+              title="Last reported condition"
+              action={<span className="text-[10.5px] text-faint">{c.presence === 'online' && c.telemetry_updated_at && Date.now() / 1000 - c.telemetry_updated_at <= 90 ? 'recent' : 'stale'} · {fmtRel(c.telemetry_updated_at)}</span>}
             >
               <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                 <DetailField icon={batteryIcon(telemetry)} label="Battery" value={batteryLine(telemetry)} />
                 <DetailField label="Low power mode" value={onOff(telemetry.low_power)} />
                 <DetailField icon={telemetry.network === 'none' ? WifiOff : Wifi} label="Network" value={networkLine(telemetry)} />
                 <DetailField icon={Thermometer} label="Thermal state" value={telemetry.thermal} />
-                <DetailField icon={MemoryStick} label="Memory available to app" value={telemetry.memory_available_bytes ? fmtBytes(telemetry.memory_available_bytes) : undefined} />
-                <DetailField label="Phone uptime" value={telemetry.uptime_seconds ? fmtUptime(telemetry.uptime_seconds) : undefined} />
+                <DetailField icon={MemoryStick} label="Memory available to app" value={telemetry.memory_available_bytes !== undefined ? fmtBytes(telemetry.memory_available_bytes) : undefined} />
               </div>
             </DetailSection>
           )}
@@ -184,8 +178,8 @@ export function ControllerDetailModal({
           <DetailSection title="Network">
             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
               <DetailField icon={Globe} label="Paired from" value={c.paired_ip || 'unknown'} />
-              <DetailField icon={Globe} label="Last public IP" value={c.last_ip || 'unknown'} />
-              <DetailField icon={Wifi} label="Local network IP" value={telemetry?.lan_ip} />
+              <DetailField icon={Globe} label="Last source IP" value={c.last_ip || 'unknown'} />
+              <DetailField icon={Wifi} label="Last reported LAN IP" value={telemetry?.lan_ip} />
             </div>
             {c.user_agent && (
               <p className="mt-3 break-all font-mono text-[11px] leading-relaxed text-fg-dim">{c.user_agent}</p>
@@ -312,11 +306,6 @@ function networkLine(t: ControllerTelemetry): string | undefined {
   if (!t.network) return undefined
   const flags = [t.network_expensive ? 'metered' : '', t.network_constrained ? 'low data' : ''].filter(Boolean)
   return flags.length ? `${t.network} · ${flags.join(', ')}` : t.network
-}
-
-function storageLine(total?: number, free?: number): string | undefined {
-  if (!total) return undefined
-  return free !== undefined ? `${fmtBytes(free)} free of ${fmtBytes(total)}` : fmtBytes(total)
 }
 
 function batteryLine(t: ControllerTelemetry): string | undefined {

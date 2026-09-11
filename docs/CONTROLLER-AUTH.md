@@ -211,13 +211,66 @@ whitelist of typed keys with size limits (schema and protocol version, install
 channel, a list of capability tokens describing what that app build supports,
 hardware identifier and marketing name, system name/version/build, app
 version/build, bundle id, device name, locale, language, time zone, screen, CPU
-count, memory and storage) and drops anything else, so older relays and newer
+count and memory) and drops anything else, so older relays and newer
 apps interoperate. Booleans are JSON booleans. The presence heartbeat may carry
 `{"telemetry": {...}}` with battery level and state, Low Power Mode, thermal
 state, network type plus metered/Low Data flags, the phone's private LAN IP,
-free storage, memory available to the app and phone uptime; an empty body stays
-valid. The relay also records the public IP the controller paired from, its
-last public IP and its User-Agent.
+memory available to the app; an empty body stays valid. The relay also records
+the source IP the controller paired from, its last source IP and its User-Agent.
+These are observed addresses, not necessarily public addresses behind a proxy.
+
+Schema 2 acknowledges the accepted contract explicitly. The app only caches a
+fingerprint after `accepted_schema_version: 2`; old-relay responses retry with
+a five-minute foreground backoff. The profile also includes `protocol_minor`;
+`build_revision` is optional and comes from an operator-supplied
+`RCTLBuildRevision` Info.plist value, never a guessed revision. Release install
+channel is `unknown` unless trustworthy distribution metadata is implemented;
+receipt/provisioning-file heuristics are not proof of App Store distribution.
+
+Automatic reporting no longer reads or sends boot uptime or disk capacity/free
+space. The manifest declares own-app preferences (CA92.1) and local elapsed
+timers (35F9.1), not remote boot-time diagnostics. A future voluntary diagnostic
+report requires a separate user-visible review and explicit submission flow.
+See [Apple's required-reason API policy](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype).
+This is not an App Store approval claim: audit the final archive and third-party
+SDK manifests before submission. Existing stored reports are not retroactively
+deleted by this change; new full reports replace them. Backup retention remains
+the relay operator's responsibility.
+
+Reports are linked to the persistent controller identity and may contain a
+user-assigned name. They are not anonymous. The privacy manifest declares linked
+device identity, names, diagnostics and interactions for app functionality,
+without advertising tracking. The admin displays last-reported condition and
+its age; offline/older-than-90-seconds readings are stale. Zero memory is a value,
+not missing data, and a private IP alone does not establish network proximity.
+
+### Transport loss and grants
+
+Each relay transport owns only its routed WebRTC sessions. Resetting that
+transport removes its routes and closes those PeerConnections, even if a worker
+still retains a reference. LAN and other relay owners are untouched. Late receive
+callbacks from a replaced transport are ignored by connection generation.
+If relay delivery of a signaling `close` fails, the server closes that exact
+device WebSocket so the daemon fails closed instead of leaving P2P running.
+
+This is not a zero-latency revocation guarantee across a partition. A half-open
+transport is detected by the existing device supervisor (40-second inactivity
+threshold plus scheduling delay). There is no per-session renewable authorization
+lease yet. Before adding a permissions editor, qualify lost-link teardown on
+rootful and rootless and add a versioned grant/revision protocol if bounded
+revocation independent of transport health is required. Never implement scope
+editing as only a database or UI change. The native app refreshes `/me` and closes
+an established session on changed grants; pairing identity and credentials remain.
+
+Verification for this increment (2026-09-11): relay `go test ./...` and targeted
+`-race` tests passed; native `make test` passed; the separate real-libdatachannel
+ownership test passed, including retained PeerConnection references. Swift
+RctlClient tests and iOS app lifecycle tests passed. Both rootful and rootless
+packages compiled. The rootful build was installed through the watchdog deploy
+path and passed real LAN video, diagnostics and suspend/resume qualification.
+Rootless installation of this increment, active P2P revocation under a network
+partition, and physical controller-app validation remain unqualified. Do not
+infer those results from package compilation or the host teardown test.
 
 Deliberately not collected: IMEI, serial number, UDID, advertising or vendor
 identifiers, Wi-Fi SSID/BSSID, contacts or accounts. Apple does not expose the

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -20,8 +21,9 @@ import (
 // blob store or smuggle markup into the admin console. Unknown keys are dropped
 // rather than rejected so a newer app keeps working against an older relay.
 const (
-	controllerClientBodyMax   = 8 << 10
-	controllerClientMaxFields = 32
+	controllerClientBodyMax       = 8 << 10
+	controllerClientMaxFields     = 32
+	controllerClientSchemaVersion = 2
 )
 
 type fieldKind int
@@ -36,15 +38,19 @@ const (
 
 type clientField struct {
 	kind     fieldKind
-	maxRunes int // strings: per value; lists: per token
-	maxItems int // lists
+	maxRunes int     // strings: per value; lists: per token
+	maxItems int     // lists
+	maximum  float64 // optional numeric upper bound
+	values   string  // optional space-separated string enum
 }
 
 // Identity and capabilities: what this controller is and what this build of the
 // app can do. Reported after pairing and on change.
 var controllerClientFields = map[string]clientField{
-	"schema_version":  {kind: kindNumber},               // profile schema, for forward compatibility
-	"protocol_major":  {kind: kindNumber},               // wire protocol the app speaks
+	"schema_version":  {kind: kindNumber}, // profile schema, for forward compatibility
+	"protocol_major":  {kind: kindNumber}, // wire protocol the app speaks
+	"protocol_minor":  {kind: kindNumber},
+	"build_revision":  {kind: kindString, maxRunes: 64},
 	"model":           {kind: kindString, maxRunes: 64}, // hardware identifier, e.g. iPhone15,2
 	"model_name":      {kind: kindString, maxRunes: 80}, // marketing name, e.g. iPhone 14 Pro
 	"idiom":           {kind: kindString, maxRunes: 16}, // phone | pad
@@ -62,24 +68,21 @@ var controllerClientFields = map[string]clientField{
 	"screen":          {kind: kindString, maxRunes: 48}, // e.g. 393×852 @3x
 	"cpu_count":       {kind: kindNumber},
 	"memory_bytes":    {kind: kindNumber},
-	"disk_bytes":      {kind: kindNumber},
 	"capabilities":    {kind: kindList, maxRunes: 32, maxItems: 32}, // what this app build supports
 }
 
 // Condition: what is going on with the phone right now. Carried by the
 // foreground heartbeat.
 var controllerTelemetryFields = map[string]clientField{
-	"battery_level":          {kind: kindNumber},               // percent 0..100
-	"battery_state":          {kind: kindString, maxRunes: 16}, // unplugged | charging | full | unknown
+	"battery_level":          {kind: kindNumber, maximum: 100},
+	"battery_state":          {kind: kindString, maxRunes: 16, values: "unplugged charging full unknown"},
 	"low_power":              {kind: kindBool},
-	"thermal":                {kind: kindString, maxRunes: 16}, // nominal | fair | serious | critical
-	"network":                {kind: kindString, maxRunes: 16}, // wifi | cellular | wired | none | unknown
-	"network_expensive":      {kind: kindBool},                 // NWPath.isExpensive (hotspot / cellular)
-	"network_constrained":    {kind: kindBool},                 // NWPath.isConstrained (Low Data Mode)
-	"lan_ip":                 {kind: kindIP},                   // private address on the local network
-	"disk_free_bytes":        {kind: kindNumber},
+	"thermal":                {kind: kindString, maxRunes: 16, values: "nominal fair serious critical unknown"},
+	"network":                {kind: kindString, maxRunes: 16, values: "wifi cellular wired none unknown"},
+	"network_expensive":      {kind: kindBool},   // NWPath.isExpensive (hotspot / cellular)
+	"network_constrained":    {kind: kindBool},   // NWPath.isConstrained (Low Data Mode)
+	"lan_ip":                 {kind: kindIP},     // private address on the local network
 	"memory_available_bytes": {kind: kindNumber}, // memory the app may still allocate
-	"uptime_seconds":         {kind: kindNumber}, // since the phone booted
 }
 
 var listToken = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]*$`)
@@ -139,11 +142,18 @@ func sanitizeClientValue(key string, raw any, spec clientField) (any, error) {
 		if !ok {
 			return nil, errors.New("expected string for " + key)
 		}
-		return boundedClientString(key, value, spec.maxRunes)
+		bounded, err := boundedClientString(key, value, spec.maxRunes)
+		if err == nil && bounded != nil && spec.values != "" && !slices.Contains(strings.Fields(spec.values), bounded.(string)) {
+			return nil, errors.New("invalid value for " + key)
+		}
+		return bounded, err
 	case kindNumber:
 		value, ok := raw.(float64)
 		if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1<<53 || value != math.Trunc(value) {
 			return nil, errors.New("invalid number for " + key)
+		}
+		if spec.maximum > 0 && value > spec.maximum {
+			return nil, errors.New("number out of range for " + key)
 		}
 		return int64(value), nil
 	case kindBool:
@@ -189,7 +199,7 @@ func sanitizeClientValue(key string, raw any, spec clientField) (any, error) {
 			return nil, nil
 		}
 		ip := net.ParseIP(value)
-		if ip == nil {
+		if ip == nil || !ip.IsPrivate() {
 			return nil, errors.New("invalid ip for " + key)
 		}
 		return ip.String(), nil
@@ -218,7 +228,8 @@ func (s *server) handleUpdateControllerClient(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var req controllerClientRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, controllerClientBodyMax)).Decode(&req); err != nil || req.Client == nil {
+	body, err := io.ReadAll(io.LimitReader(r.Body, controllerClientBodyMax+1))
+	if err != nil || len(body) > controllerClientBodyMax || json.Unmarshal(body, &req) != nil || req.Client == nil {
 		writeErr(w, http.StatusBadRequest, "invalid_json")
 		return
 	}
@@ -241,7 +252,7 @@ WHERE id=? AND status='active'`, nullIfEmpty(clientJSON), now.Unix(), s.clientIP
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	s.audit(r, "controller_client_updated", "controller_id", principal.ControllerID)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted_schema_version": controllerClientSchemaVersion})
 }
 
 // readControllerTelemetry parses the optional presence body. Returns nil JSON for
@@ -251,11 +262,11 @@ func readControllerTelemetry(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(strings.TrimSpace(string(body))) == 0 {
-		return nil, nil
-	}
 	if len(body) > controllerClientBodyMax {
 		return nil, errors.New("telemetry too large")
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return nil, nil
 	}
 	var req controllerPresenceRequest
 	if err := json.Unmarshal(body, &req); err != nil {

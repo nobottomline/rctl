@@ -6,6 +6,67 @@ import XCTest
 
 @MainActor
 final class ControllerLifecycleTests: XCTestCase {
+    func testAccessRefreshKeepsPairingAndClosesNegotiatedSession() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+        let original = try XCTUnwrap(fixture.model.profile)
+        let credential = try XCTUnwrap(fixture.keychain.loadCredential(relayID: fixture.relayID))
+        let remote = RemoteSessionModel(appModel: fixture.model, deviceID: "test-device")
+        remote.handle(.connection(.connected))
+        remote.handle(.channel(label: "control", state: .open))
+        remote.handle(.videoHealth(.flowing))
+        remote.setInteractionMode(.control)
+
+        let refresh = Task { await fixture.model.refreshDevices() }
+        try await request("/api/controller/me").respond(#"{"controller":{"id":"ctl_test","name":"Renamed","platform":"ios","scopes":["screen.view","camera"]}}"#)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await refresh.value
+        XCTAssertEqual(fixture.model.profile?.controller.scopes, [.screenView, .camera])
+        XCTAssertEqual(fixture.profiles.load()?.controller.name, "Renamed")
+        XCTAssertTrue(fixture.model.profile?.hasSameIdentity(as: original) == true)
+        XCTAssertEqual(try fixture.keychain.loadCredential(relayID: fixture.relayID)?.refreshToken, credential.refreshToken)
+        XCTAssertEqual(remote.state, .closed)
+        XCTAssertEqual(remote.interactionMode, .view)
+        XCTAssertFalse(remote.canControl)
+    }
+
+    func testOldRelayAcknowledgementDoesNotCacheUnacceptedSchema() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+        let profile = try XCTUnwrap(fixture.model.profile)
+        fixture.model.syncClientProfile(for: profile)
+        try await request("/api/controller/me/client").respond(#"{"ok":true}"#)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(fixture.profiles.reportedClientProfile(relayID: fixture.relayID))
+        fixture.model.syncClientProfile(for: profile, force: true)
+        try await request("/api/controller/me/client").respond(#"{"ok":true,"accepted_schema_version":2}"#)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNotNil(fixture.profiles.reportedClientProfile(relayID: fixture.relayID))
+    }
+
+    func testDeviceProfilePrivacyAndPrivateAddressFilter() {
+        let profile = ControllerDeviceProfile.current()
+        let telemetry = ControllerDeviceProfile.telemetry(network: .init())
+        XCTAssertNil(profile.diskBytes)
+        XCTAssertNil(telemetry.diskFreeBytes)
+        XCTAssertNil(telemetry.uptimeSeconds)
+        XCTAssertNotNil(profile.protocolMinor)
+        for address in ["10.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.1.2"] {
+            XCTAssertTrue(ControllerDeviceProfile.isPrivateIPv4(address))
+        }
+        for address in ["8.8.8.8", "172.32.0.1", "127.0.0.1", "::1", "192.168.1.bad.2"] {
+            XCTAssertFalse(ControllerDeviceProfile.isPrivateIPv4(address))
+        }
+    }
+
     func testFreshVideoIsRequiredAndRecoveryNeverRestoresControl() {
         let model = RemoteSessionModel(appModel: ControllerAppModel(), deviceID: "test-device")
         model.handle(.connection(.connected))
@@ -204,6 +265,9 @@ final class ControllerLifecycleTests: XCTestCase {
         // this response; a second request would remain pending in the stub.
         await Task.yield()
         refresh.respond(fixture.tokens)
+        for _ in 0..<2 {
+            try await request("/api/controller/me").respond(Self.controllerInfo)
+        }
         _ = try await first.value
         _ = try await second.value
         XCTAssertEqual(RequestStub.requests.count("/api/controller/token/refresh"), 2)
@@ -287,6 +351,9 @@ final class ControllerLifecycleTests: XCTestCase {
     private func request(_ path: String) async throws -> RequestStub {
         let deadline = ContinuousClock.now + .seconds(3)
         while ContinuousClock.now < deadline {
+            if path != "/api/controller/me", let info = RequestStub.requests.take("/api/controller/me") {
+                info.respond(info.request.url?.host == "second.example" ? Self.secondControllerInfo : Self.controllerInfo)
+            }
             if let request = RequestStub.requests.take(path) { return request }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -464,14 +531,16 @@ final class ControllerLifecycleTests: XCTestCase {
         XCTAssertEqual(client["install_channel"] as? String, "debug")
         XCTAssertTrue((client["capabilities"] as? [String] ?? []).contains("webrtc.screen"))
         XCTAssertNil(client["identifier_for_vendor"], "No tracking identifiers leave the phone")
-        report.respond(#"{"ok":true}"#)
+        report.respond(#"{"ok":true,"accepted_schema_version":2}"#)
 
         let pulse = try await request("/api/controller/presence")
         let heartbeat = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(pulse.request.bodyData)) as? [String: Any])
         let telemetry = try XCTUnwrap(heartbeat["telemetry"] as? [String: Any])
         XCTAssertNotNil(telemetry["thermal"])
         XCTAssertTrue(telemetry["low_power"] is Bool, "booleans travel as JSON booleans")
-        XCTAssertNotNil(telemetry["uptime_seconds"])
+        XCTAssertNil(telemetry["uptime_seconds"])
+        XCTAssertNil(telemetry["disk_free_bytes"])
+        XCTAssertNil(client["disk_bytes"])
         presence.cancel()
         await presence.value
 
@@ -489,6 +558,8 @@ final class ControllerLifecycleTests: XCTestCase {
     }
 
     private static let devices = #"{"devices":[{"id":"test-device","name":"Test iPad","status":"approved","online":true,"features":["screen.webrtc","controller.scoped_sessions"],"compatible":true}]}"#
+    private static let controllerInfo = #"{"controller":{"id":"ctl_test","name":"Test","platform":"ios","scopes":["screen.view","device.control"]}}"#
+    private static let secondControllerInfo = #"{"controller":{"id":"ctl_second","name":"Second","platform":"ios","scopes":["screen.view"]}}"#
 }
 
 @MainActor

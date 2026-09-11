@@ -29,6 +29,8 @@ export interface ControllerPairing {
 export interface ControllerClient {
   schema_version?: number
   protocol_major?: number
+  protocol_minor?: number
+  build_revision?: string
   install_channel?: string // appstore | testflight | debug | adhoc
   capabilities?: string[] // what this app build supports
   model?: string // hardware identifier, e.g. iPhone15,2

@@ -148,14 +148,22 @@ public struct ControllerAPIClient: Sendable {
 
     /// Reports the static device profile. Callers send it once per change; the
     /// relay stores the last report and shows it in the admin console.
+    @discardableResult
     public func updateClientProfile(
         origin: String, profile: ControllerClientProfile,
         accessToken: String, signingKey: ControllerSigningKey,
         allowInsecureLoopback: Bool = false
-    ) async throws {
-        try await sendControllerAction(path: "/api/controller/me/client", origin: origin,
+    ) async throws -> Int64? {
+        let request = try makeControllerActionRequest(path: "/api/controller/me/client", origin: origin,
             body: try Self.actionEncoder.encode(ClientProfileEnvelope(client: profile.bounded())),
             accessToken: accessToken, signingKey: signingKey, allowInsecureLoopback: allowInsecureLoopback)
+        struct Acknowledgement: Decodable {
+            let ok: Bool
+            let accepted_schema_version: Int64?
+        }
+        let result = try await send(request, as: Acknowledgement.self)
+        guard result.ok else { throw ControllerClientError.invalidResponse }
+        return result.accepted_schema_version
     }
 
     func makeControllerActionRequest(

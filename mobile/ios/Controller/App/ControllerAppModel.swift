@@ -32,6 +32,8 @@ final class ControllerAppModel: ObservableObject {
     private var refreshOperation: (id: UUID, task: Task<AccessSession, Error>)?
     private let networkPath = NetworkPathObserver()
     private var profileSyncTask: Task<Void, Never>?
+    private var profileSyncAttempt: (relayID: String, at: Date)?
+    private var controllerSyncRevision: UInt64 = 0
 
     init(
         api: ControllerAPIClient = ControllerAPIClient(),
@@ -151,7 +153,7 @@ final class ControllerAppModel: ObservableObject {
     }
 
     func signalingRequest(deviceID: String, media: ControllerMediaRole, expectedProfile: ControllerProfile? = nil) async throws -> URLRequest {
-        if let expectedProfile, profile != expectedProfile { throw CancellationError() }
+        if let expectedProfile, profile?.hasSameIdentity(as: expectedProfile) != true { throw CancellationError() }
         let revision = profileRevision
         guard let device = devices.first(where: { $0.id == deviceID }) else {
             throw SessionPreflightError.deviceUnavailable
@@ -168,12 +170,13 @@ final class ControllerAppModel: ObservableObject {
         guard device.supports(media) else {
             throw SessionPreflightError.unsupportedMedia(media)
         }
+        let session = try await ensureAccessSession(forceRefresh: false)
+        try await synchronizeController(session: session, revision: revision)
         let requiredScope: ControllerScope = media == .camera ? .camera : .screenView
         guard profile?.controller.scopes.contains(requiredScope) == true else {
             throw SessionPreflightError.missingScope(requiredScope)
         }
 
-        let session = try await ensureAccessSession(forceRefresh: false)
         try requireCurrentProfile(revision)
         do {
             return try api.makeSignalingRequest(
@@ -294,11 +297,14 @@ final class ControllerAppModel: ObservableObject {
 
     /// Sends the device profile when it differs from what this relay last
     /// accepted. Runs detached from the caller so pairing and presence never
-    /// wait on it; failures are silent and retried on the next launch.
+    /// wait on it; unconfirmed reports retry with a bounded foreground backoff.
     func syncClientProfile(for expectedProfile: ControllerProfile, force: Bool = false) {
         let fingerprintOnRecord = profiles.reportedClientProfile(relayID: expectedProfile.relayID)
         let current = ControllerDeviceProfile.current()
         guard force || fingerprintOnRecord != current.fingerprint else { return }
+        if !force, let attempt = profileSyncAttempt, attempt.relayID == expectedProfile.relayID,
+           Date().timeIntervalSince(attempt.at) < 300 { return }
+        profileSyncAttempt = (expectedProfile.relayID, Date())
         profileSyncTask?.cancel()
         profileSyncTask = Task { [weak self] in
             guard let self else { return }
@@ -306,22 +312,25 @@ final class ControllerAppModel: ObservableObject {
             do {
                 var session = try await ensureAccessSession(forceRefresh: false)
                 try requireCurrentProfile(revision)
-                guard profile == expectedProfile else { return }
+                guard profile?.hasSameIdentity(as: expectedProfile) == true else { return }
+                let acceptedVersion: Int64?
                 do {
-                    try await api.updateClientProfile(origin: session.profile.origin, profile: current,
+                    acceptedVersion = try await api.updateClientProfile(origin: session.profile.origin, profile: current,
                         accessToken: session.token, signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
                 } catch ControllerClientError.http(status: 401, code: _) {
                     try requireCurrentProfile(revision)
                     session = try await ensureAccessSession(forceRefresh: true)
                     try requireCurrentProfile(revision)
-                    guard profile == expectedProfile else { return }
-                    try await api.updateClientProfile(origin: session.profile.origin, profile: current,
+                    guard profile?.hasSameIdentity(as: expectedProfile) == true else { return }
+                    acceptedVersion = try await api.updateClientProfile(origin: session.profile.origin, profile: current,
                         accessToken: session.token, signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
                 }
                 try requireCurrentProfile(revision)
-                profiles.setReportedClientProfile(current.fingerprint, relayID: expectedProfile.relayID)
+                if acceptedVersion == ControllerClientProfile.schemaVersion {
+                    profiles.setReportedClientProfile(current.fingerprint, relayID: expectedProfile.relayID)
+                }
             } catch {
-                // Old relays answer 404/405; transient failures retry next launch.
+                // Old relays answer 404/405; the next eligible foreground attempt retries.
             }
         }
     }
@@ -330,13 +339,14 @@ final class ControllerAppModel: ObservableObject {
     /// No background keepalive or presence for unselected saved relays.
     func maintainPresence(for expectedProfile: ControllerProfile) async {
         syncClientProfile(for: expectedProfile)
-        while !Task.isCancelled, profile == expectedProfile {
+        while !Task.isCancelled, profile?.hasSameIdentity(as: expectedProfile) == true {
             if isBusy {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
                 continue
             }
             do {
                 try await sendPresence(for: expectedProfile)
+                syncClientProfile(for: expectedProfile)
             } catch is CancellationError { return }
             catch ControllerClientError.http(status: 404, code: _) { return }
             catch ControllerClientError.http(status: 405, code: _) { return }
@@ -347,7 +357,7 @@ final class ControllerAppModel: ObservableObject {
     }
 
     func sendPresence(for expectedProfile: ControllerProfile) async throws {
-        guard profile == expectedProfile, !isRevoking else { throw CancellationError() }
+        guard profile?.hasSameIdentity(as: expectedProfile) == true, !isRevoking else { throw CancellationError() }
         let revision = profileRevision
         var session = try await ensureAccessSession(forceRefresh: false)
         try requireCurrentProfile(revision)
@@ -366,6 +376,29 @@ final class ControllerAppModel: ObservableObject {
                 signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
         }
         try requireCurrentProfile(revision)
+        try await synchronizeController(session: session, revision: revision)
+    }
+
+    /// Authorization is mutable; the relay identity and pairing key are not.
+    private func synchronizeController(session: AccessSession, revision: UInt64) async throws {
+        controllerSyncRevision &+= 1
+        let syncRevision = controllerSyncRevision
+        let controller = try await api.controllerInfo(origin: session.profile.origin,
+            accessToken: session.token, signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+        try requireCurrentProfile(revision)
+        guard controllerSyncRevision == syncRevision else { return }
+        guard let current = profile, current.hasSameIdentity(as: session.profile),
+              controller.id == current.controller.id else { throw ControllerClientError.invalidResponse }
+        guard controller != current.controller else { return }
+        let updated = ControllerProfile(origin: current.origin, relayID: current.relayID, controller: controller)
+        guard let credential = try keychain.loadCredential(relayID: current.relayID) else {
+            throw ControllerClientError.corruptCredential
+        }
+        try keychain.save(ControllerRefreshCredential(origin: current.origin, relayID: current.relayID,
+            controller: controller, refreshToken: credential.refreshToken, refreshExpiresAt: credential.refreshExpiresAt))
+        try profiles.save(updated)
+        savedProfiles = try profiles.loadAll()
+        profile = updated
     }
 
     private func ensureAccessSession(forceRefresh: Bool) async throws -> AccessSession {
@@ -396,7 +429,7 @@ final class ControllerAppModel: ObservableObject {
                 let renewed = ControllerRefreshCredential(
                     origin: profile.origin,
                     relayID: profile.relayID,
-                    controller: profile.controller,
+                    controller: self.profile?.controller ?? profile.controller,
                     refreshToken: tokens.refreshToken,
                     refreshExpiresAt: tokens.refreshExpiresAt
                 )
@@ -418,6 +451,7 @@ final class ControllerAppModel: ObservableObject {
 
     private func loadDevices(session: AccessSession, revision: UInt64) async throws {
         try requireCurrentProfile(revision)
+        try await synchronizeController(session: session, revision: revision)
         let loaded = try await api.devices(
             origin: session.profile.origin,
             accessToken: session.token,
