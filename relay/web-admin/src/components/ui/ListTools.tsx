@@ -28,21 +28,18 @@ export function SegmentedFilter<K extends string>({
       <div role="tablist" className="flex items-center gap-1">
         {options.map((option) => {
           const active = option.key === value
-          // An empty segment is a count, not a destination: it stays visible so
-          // the number is informative, but nothing happens on click.
-          const empty = option.count === 0 && !active
+          // Every segment is reachable, including an empty one: it shows its own
+          // empty state, which says where the items went.
           return (
             <button
               key={option.key}
               type="button"
               role="tab"
               aria-selected={active}
-              aria-disabled={empty || undefined}
-              disabled={empty}
               onClick={() => onChange(option.key)}
               className={cn(
                 'inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium transition-colors',
-                active ? 'bg-surface-2 text-fg ring-1 ring-line-2' : empty ? 'cursor-default text-faint' : 'text-muted hover:text-fg-dim',
+                active ? 'bg-surface-2 text-fg ring-1 ring-line-2' : 'text-muted hover:text-fg-dim',
               )}
             >
               {option.label}

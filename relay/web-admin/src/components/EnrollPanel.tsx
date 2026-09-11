@@ -56,7 +56,11 @@ export type EnrollPanelProps = {
 type View = 'active' | 'history'
 
 export function EnrollPanel({ enrollments, packageAvailable, packageVersion, packages, retentionSeconds = 0, onChanged }: EnrollPanelProps) {
-  const [view, setView] = useState<View>('active')
+  // Panels mount after the first load, so the initial segment can follow the
+  // data: open History when no token is active but history exists.
+  const [view, setView] = useState<View>(() =>
+    enrollments.some((e) => e.status === 'active') || !enrollments.some((e) => e.status !== 'active') ? 'active' : 'history',
+  )
   const [clearOpen, setClearOpen] = useState(false)
   const [open, setOpen] = useState(false)
   const [label, setLabel] = useState('')
@@ -75,10 +79,11 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, pac
   const active = activeTokens.length
   const shown = view === 'active' ? activeTokens : history
 
-  // A history that just emptied (clear / retention) falls back to the live view.
+  // The segment control hides while the list is empty; make sure it reappears
+  // on the live view, not on a stale History selection.
   useEffect(() => {
-    if (view === 'history' && history.length === 0 && enrollments.length > 0) setView('active')
-  }, [view, history.length, enrollments.length])
+    if (enrollments.length === 0) setView('active')
+  }, [enrollments.length])
 
   function openModal() {
     setCreated(null)

@@ -46,7 +46,11 @@ export function ControllersPanel({
   retentionSeconds?: number
   onChanged: () => void
 }) {
-  const [view, setView] = useState<View>('active')
+  // Panels mount after the first load, so the initial segment can follow the
+  // data: open Revoked when nothing is authorized but history exists.
+  const [view, setView] = useState<View>(() =>
+    controllers.some((c) => c.status === 'active') || !controllers.some((c) => c.status !== 'active') ? 'active' : 'revoked',
+  )
   const [pairOpen, setPairOpen] = useState(false)
   const [name, setName] = useState('My phone')
   const [ttl, setTTL] = useState(300)
@@ -82,10 +86,11 @@ export function ControllersPanel({
     return () => window.clearInterval(timer)
   }, [pairing])
 
-  // A revoked list that just emptied (clear / retention) falls back to the live view.
+  // The segment control hides while the list is empty; make sure it reappears
+  // on the live view, not on a stale Revoked selection.
   useEffect(() => {
-    if (view === 'revoked' && revoked.length === 0 && controllers.length > 0) setView('active')
-  }, [view, revoked.length, controllers.length])
+    if (controllers.length === 0) setView('active')
+  }, [controllers.length])
 
   function openPairing() {
     setName('My phone')
