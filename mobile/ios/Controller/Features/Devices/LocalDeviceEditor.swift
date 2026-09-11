@@ -166,8 +166,14 @@ struct LocalDeviceEditor: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(pending != nil)
-        .onAppear {
-            if address.isEmpty { focus = .address }
+        .task {
+            // Focusing in onAppear raises the keyboard while the push is still
+            // animating, and the keyboard avoidance then shifts the content
+            // mid-transition. Wait for the navigation transition to settle.
+            guard address.isEmpty else { return }
+            try? await Task.sleep(for: .milliseconds(560))
+            guard !Task.isCancelled, pending == nil else { return }
+            focus = .address
         }
         .onDisappear { pending?.cancel() }
     }

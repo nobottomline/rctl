@@ -142,19 +142,21 @@ enum ParticleSystem {
     }
 
     /// Particle sets are seeded per canvas size so rotation and split view keep
-    /// a stable field instead of re-rolling positions on every layout pass.
+    /// a stable field instead of re-rolling positions on every layout pass. A
+    /// few sizes are kept because two canvases are alive during a navigation
+    /// transition and may differ by the safe area.
     private final class ParticleCache: @unchecked Sendable {
         private let lock = NSLock()
-        private var size = CGSize.zero
-        private var particles: [Particle] = []
+        private var entries: [(size: CGSize, particles: [Particle])] = []
 
         func particles(for size: CGSize) -> [Particle] {
             lock.lock()
             defer { lock.unlock() }
-            if size == self.size { return particles }
-            self.size = size
-            particles = ParticleSystem.makeParticles(for: size)
-            return particles
+            if let hit = entries.first(where: { $0.size == size }) { return hit.particles }
+            let made = ParticleSystem.makeParticles(for: size)
+            entries.append((size, made))
+            if entries.count > 4 { entries.removeFirst() }
+            return made
         }
     }
 

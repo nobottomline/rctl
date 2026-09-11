@@ -49,6 +49,11 @@ struct DeviceListView: View {
         // preferredColorScheme cannot override an ancestor's, so decide here.
         .preferredColorScheme(topRouteIsDark ? .dark : .light)
         .tint(topRouteIsDark ? nil : ControllerPalette.ink)
+        .onChange(of: path) { path in
+            // Pause the home canvas the moment a push begins; onDisappear only
+            // fires after the transition, when both canvases have been live.
+            if !path.isEmpty { homeVisible = false }
+        }
         .onChange(of: model.profile) { profile in
             // Pairing finished somewhere in the flow: return to the device list.
             if profile != nil, path.contains(where: { $0 == .pairRelay || $0 == .scanPairingCode }) {
