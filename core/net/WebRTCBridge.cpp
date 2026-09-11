@@ -287,6 +287,9 @@ static bool g_micSpeakerFailed = false;       // retry only after the next idle 
 static std::atomic<unsigned> g_micQueuedFrames{0};
 static std::atomic<unsigned> g_micReturnedBuffers{0};
 static unsigned g_micEnqueuedBuffers = 0;
+static unsigned g_micProgressReturned = 0;
+static unsigned g_micDroppedPackets = 0;
+static std::chrono::steady_clock::time_point g_micProgressAt{};
 static std::chrono::steady_clock::time_point g_micLast{};
 static const int kMicRate = 48000;
 
@@ -325,7 +328,8 @@ static void mic_watchdog() {
             rctl_audio_boost_end();
             wlog("mic intercom: idle enqueued=" + std::to_string(g_micEnqueuedBuffers) +
                  " returned=" + std::to_string(g_micReturnedBuffers.load()) +
-                 " queued_frames=" + std::to_string(g_micQueuedFrames.load()));
+                 " queued_frames=" + std::to_string(g_micQueuedFrames.load()) +
+                 " dropped_packets=" + std::to_string(g_micDroppedPackets));
             mic_reset_queue();
             if (g_micDec) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
             g_micBoosted = false;
@@ -395,10 +399,24 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         if (status != noErr) { mic_speaker_failed("burst reset", status); return; }
         rctl_audio_boost_begin();
         g_micBoosted = true;
+        g_micDroppedPackets = 0;
+        g_micProgressReturned = g_micReturnedBuffers.load();
+        g_micProgressAt = std::chrono::steady_clock::now();
     }
-    // A stopped/orphaned queue must not accumulate unbounded allocations.
+    unsigned returned = g_micReturnedBuffers.load();
+    if (returned != g_micProgressReturned) {
+        g_micProgressReturned = returned;
+        g_micProgressAt = std::chrono::steady_clock::now();
+    }
+    // Capacity pressure during asynchronous startup or a network burst is not a
+    // queue failure. Drop excess PCM while retaining the same bounded allocation;
+    // only sustained lack of consumption fails the speaker attempt.
     if (g_micQueuedFrames.load() + (unsigned)frames > kMicRate / 2) {
-        mic_speaker_failed("backlog limit", -1);
+        if (std::chrono::steady_clock::now() - g_micProgressAt > std::chrono::seconds(2)) {
+            mic_speaker_failed("playback stalled", -1);
+        } else if (++g_micDroppedPackets == 1) {
+            wlog("mic intercom: queue full; dropping excess PCM while waiting for progress");
+        }
         return;
     }
     UInt32 bytes = (UInt32)frames * 2;
@@ -424,6 +442,7 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
             status = AudioQueueStart(g_micAQ, nullptr);
             if (status != noErr) { mic_speaker_failed("start", status); return; }
         }
+        g_micProgressAt = std::chrono::steady_clock::now();
         wlog("mic intercom: talk burst queued; was_running=" + std::to_string(running));
     }
 }

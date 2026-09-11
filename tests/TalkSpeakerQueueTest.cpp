@@ -139,7 +139,18 @@ int main() {
     assert(virtualFrames == 960);
     route = RCTL_TALK_SPEAKER;
     nextBurst();
-    for (int i = 0; i < 100; ++i) send(); // Simulate a queue that never consumes.
+    for (int i = 0; i < 100; ++i) send(); // Slow startup stays bounded, not fatal.
+    assert(!g_micSpeakerFailed && boosts == 1 && allocations == 25);
+    assert(g_micQueuedFrames.load() == 24000 && g_micDroppedPackets == 75);
+    auto buffer = queued.front();
+    queued.erase(queued.begin());
+    done(nullptr, g_micAQ, buffer); // Playback starts without another Talk click.
+    g_micProgressAt -= std::chrono::seconds(3);
+    send();
+    assert(!g_micSpeakerFailed && allocations == 25);
+    assert(std::chrono::steady_clock::now() - g_micProgressAt < std::chrono::seconds(1));
+    g_micProgressAt -= std::chrono::seconds(3); // Now simulate a persistent stall.
+    send();
     assert(g_micSpeakerFailed && allocations == 0 && boosts == 0);
     nextBurst();
     opus_decoder_destroy(g_micDec);

@@ -152,6 +152,17 @@ build and pass the public-package audit. Acoustic verification of the new native
 path and real Safari microphone capture are still required. No production relay
 HTML was replaced during these tests.
 
+On-device follow-up found that the first attempt reached the half-second queue
+capacity before buffers were returned; the second attempt drained normally.
+The operator heard one tone, believed to be the second. Capacity pressure is now
+handled separately from failure: excess incoming PCM is dropped without growing
+the queue or cancelling Talk, allowing asynchronous startup to finish. Only two
+seconds without buffer-return progress while capacity is exhausted fails the
+speaker attempt. Mock tests cover bounded warmup, automatic continuation after
+the first callback and a genuine stall. First-attempt acoustic verification is
+still pending; neither queue callbacks nor the user's qualified observation
+establish complete rootless/Safari support.
+
 Still required before calling the feature generally qualified:
 
 1. Discord voice call with `App mic`: the remote participant hears browser
