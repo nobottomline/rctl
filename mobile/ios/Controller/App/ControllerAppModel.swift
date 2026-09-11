@@ -363,6 +363,9 @@ final class ControllerAppModel: ObservableObject {
             "Pairing requires an HTTPS relay."
         case ControllerClientError.invalidPairing:
             "The pairing code is invalid."
+        case ControllerClientError.relayIdentityMismatch,
+             ControllerClientError.http(status: 401, code: "relay_identity_mismatch"):
+            "The relay identity does not match this pairing code. Create a new code on the intended relay."
         case let ControllerClientError.http(status, code):
             "Relay request failed (\(status), \(code))."
         case ControllerClientError.corruptCredential:

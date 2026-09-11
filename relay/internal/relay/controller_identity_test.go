@@ -29,6 +29,7 @@ type pairingFixture struct {
 }
 
 type claimFixture struct {
+	RelayID    string `json:"relay_id"`
 	Controller struct {
 		ID       string   `json:"id"`
 		Name     string   `json:"name"`
@@ -57,7 +58,7 @@ func TestControllerPairingLifecycle(t *testing.T) {
 	key := newControllerKey(t)
 	body := signedClaimBody(t, pairing, key, "Owner iPhone", "ios")
 	claim := claimPairing(t, ts, pairing.PairingID, body, http.StatusCreated)
-	if claim.Controller.Name != "Owner iPhone" || claim.Controller.Platform != "ios" ||
+	if claim.RelayID != pairing.RelayID || claim.Controller.Name != "Owner iPhone" || claim.Controller.Platform != "ios" ||
 		claim.Tokens.AccessToken == "" || claim.Tokens.RefreshToken == "" {
 		t.Fatalf("unexpected claim response: %#v", claim)
 	}
@@ -126,6 +127,71 @@ func TestControllerPairingRejectsBadInputsWithoutConsumption(t *testing.T) {
 		t.Fatalf("unknown scope status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestControllerPairingBindsRelayIdentity(t *testing.T) {
+	ts := newAdminSessionTestServer(t)
+	admin := ts.login(t)
+	pairing := createPairingFixture(t, ts, admin, []string{"screen.view"})
+	key := newControllerKey(t)
+	altered := pairing
+	altered.RelayID = strings.Repeat("7", 43)
+	claimPairing(t, ts, pairing.PairingID,
+		signedClaimBody(t, altered, key, "Test phone", "ios"), http.StatusUnauthorized)
+	altered = pairing
+	altered.Origin = "https://other-relay.example"
+	claimPairing(t, ts, pairing.PairingID,
+		signedClaimBody(t, altered, key, "Test phone", "ios"), http.StatusUnauthorized)
+
+	validBody := signedClaimBody(t, pairing, key, "Test phone", "ios")
+	for _, id := range []any{nil, "", 7, strings.Repeat("7", 43)} {
+		var fields map[string]any
+		if err := json.Unmarshal(validBody, &fields); err != nil {
+			t.Fatal(err)
+		}
+		fields["relay_id"] = id
+		if id == nil {
+			delete(fields, "relay_id")
+		}
+		body, _ := json.Marshal(fields)
+		want := http.StatusUnauthorized
+		if _, numeric := id.(int); numeric {
+			want = http.StatusBadRequest
+		}
+		claimPairing(t, ts, pairing.PairingID, body, want)
+	}
+
+	// A v1 client cannot opt out of audience binding by omitting the new proof.
+	var legacy controllerClaimRequest
+	if err := json.Unmarshal(validBody, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	_, _, fingerprint, err := parseControllerPublicKey(legacy.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := strings.Join([]string{"rctl-pair-v1", pairing.PairingID, pairing.Secret,
+		legacy.Name, legacy.Platform, fingerprint}, "\n")
+	digest := sha256.Sum256([]byte(message))
+	signature, err := ecdsa.SignASN1(rand.Reader, key, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.Proof = base64.RawURLEncoding.EncodeToString(signature)
+	legacyBody, _ := json.Marshal(legacy)
+	claimPairing(t, ts, pairing.PairingID, legacyBody, http.StatusUnauthorized)
+	var controllers, tokens int
+	if err := ts.db.QueryRow(`SELECT COUNT(*) FROM controllers`).Scan(&controllers); err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.db.QueryRow(`SELECT COUNT(*) FROM controller_tokens`).Scan(&tokens); err != nil {
+		t.Fatal(err)
+	}
+	if controllers != 0 || tokens != 0 {
+		t.Fatal("rejected claims created credentials")
+	}
+	claimPairing(t, ts, pairing.PairingID,
+		validBody, http.StatusCreated)
 }
 
 func TestControllerPairingCanBeRevokedBeforeClaim(t *testing.T) {
@@ -453,13 +519,14 @@ func signedClaimBody(t *testing.T, pairing pairingFixture, key *ecdsa.PrivateKey
 	}
 	fingerprintBytes := sha256.Sum256(der)
 	fingerprint := base64.RawURLEncoding.EncodeToString(fingerprintBytes[:])
-	digest := sha256.Sum256(pairingProofMessage(pairing.PairingID, pairing.Secret, normalizeControllerName(name), platform, fingerprint))
+	digest := sha256.Sum256(pairingProofMessage(pairing.RelayID, pairing.Origin, pairing.PairingID, pairing.Secret, normalizeControllerName(name), platform, fingerprint))
 	proof, err := ecdsa.SignASN1(rand.Reader, key, digest[:])
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, err := json.Marshal(controllerClaimRequest{
-		Secret: pairing.Secret, Name: name, Platform: platform,
+		RelayID: pairing.RelayID,
+		Secret:  pairing.Secret, Name: name, Platform: platform,
 		PublicKey: base64.RawURLEncoding.EncodeToString(der),
 		Proof:     base64.RawURLEncoding.EncodeToString(proof),
 	})

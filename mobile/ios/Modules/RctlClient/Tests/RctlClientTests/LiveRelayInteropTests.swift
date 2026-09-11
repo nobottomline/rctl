@@ -44,12 +44,21 @@ struct LiveRelayInteropTests {
             allowInsecureLoopback: true
         )
         let key = try ControllerSigningKey.generate(preferSecureEnclave: false)
+        var alteredFields = try #require(JSONSerialization.jsonObject(with: pairingData) as? [String: Any])
+        alteredFields["relay_id"] = String(repeating: "7", count: 43)
+        let alteredPairing = try client.decodePairing(
+            from: JSONSerialization.data(withJSONObject: alteredFields), allowInsecureLoopback: true)
+        await #expect(throws: ControllerClientError.http(status: 401, code: "relay_identity_mismatch")) {
+            _ = try await client.claim(pairing: alteredPairing, controllerName: "Swift interop",
+                signingKey: key, allowInsecureLoopback: true)
+        }
         let claim = try await client.claim(
             pairing: pairing,
             controllerName: "Swift interop",
             signingKey: key,
             allowInsecureLoopback: true
         )
+        #expect(claim.relayID == pairing.relayID)
 
         let beforeRefresh = try await client.controllerInfo(
             origin: pairing.origin,

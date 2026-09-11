@@ -68,11 +68,13 @@ immediately through `POST /api/admin/controller-pairings/{id}/revoke`; otherwise
 it expires automatically after at most ten minutes.
 
 The app generates a P-256 signing key and submits its X.509 SubjectPublicKeyInfo
-DER as unpadded base64url together with platform, name, pairing secret, and a
-DER-encoded ECDSA/SHA-256 proof. The signed bytes are UTF-8:
+DER as unpadded base64url together with platform, name, pairing secret,
+`relay_id`, and a DER-encoded ECDSA/SHA-256 proof. The signed bytes are UTF-8:
 
 ```text
-rctl-pair-v1\n
+rctl-pair-v2\n
+<relay-id>\n
+<configured-origin-without-trailing-slash>\n
 <pairing-id>\n
 <pairing-secret>\n
 <controller-name>\n
@@ -81,10 +83,29 @@ rctl-pair-v1\n
 ```
 
 Names are trimmed before signing. Platform is `ios` or `android`. The relay
-validates the public key, signature, secret, origin-owned pairing record,
+requires `relay_id` to equal its persisted public identity and verifies the
+proof against its configured origin, never an origin supplied in the claim.
+Missing, empty, substituted identities and old `rctl-pair-v1` proofs fail before
+consuming the pairing or creating credentials. The relay validates the public
+key, signature, secret, origin-owned pairing record,
 expiry, and unused state in one database transaction. At most one concurrent
 claim succeeds. Pairing secrets are stored as keyed hashes and are unrecoverable
 after the create response.
+
+The claim response includes `relay_id`. The client requires it to match the QR
+before saving a profile or credential; missing response identities fail closed.
+The QR envelope remains version 1: its fields did not change. The claim proof
+is version 2 and deliberately has no downgrade fallback. Upgrade both relay
+and native controller before creating new pairings. Existing paired profiles,
+request proofs, access tokens, and refresh tokens are unchanged and do not
+require re-pairing. A previously saved profile with a manually changed ID is
+not automatically merged with another profile.
+
+Identity binding prevents accidental/substituted identities at an honest
+relay; it does not make a QR from an unknown party trustworthy. A malicious
+relay can claim any public ID. Verify the HTTPS origin before pairing, keep QR
+secrets private, and revoke any pairing exposed to another person. Knowing only
+`relay_id` does not grant access.
 
 ## Tokens And Request Proof
 

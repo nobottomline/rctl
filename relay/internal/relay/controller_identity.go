@@ -47,6 +47,7 @@ type controllerPairingRequest struct {
 }
 
 type controllerClaimRequest struct {
+	RelayID   string `json:"relay_id"`
 	Secret    string `json:"secret"`
 	Name      string `json:"name"`
 	Platform  string `json:"platform"`
@@ -207,8 +208,8 @@ func parseControllerPublicKey(encoded string) (*ecdsa.PublicKey, []byte, string,
 	return key, der, base64.RawURLEncoding.EncodeToString(digest[:]), nil
 }
 
-func pairingProofMessage(id, secret, name, platform, fingerprint string) []byte {
-	return []byte(strings.Join([]string{"rctl-pair-v1", id, secret, name, platform, fingerprint}, "\n"))
+func pairingProofMessage(relayID, origin, id, secret, name, platform, fingerprint string) []byte {
+	return []byte(strings.Join([]string{"rctl-pair-v2", relayID, strings.TrimRight(origin, "/"), id, secret, name, platform, fingerprint}, "\n"))
 }
 
 func verifyPairingProof(key *ecdsa.PublicKey, message []byte, encoded string) bool {
@@ -238,9 +239,20 @@ func (s *server) handleClaimControllerPairing(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusBadRequest, "invalid_platform")
 		return
 	}
+	relayID, err := s.relayIdentity(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "relay_identity_failed")
+		return
+	}
+	// Identity is an audience, not a credential. Reject mismatches before
+	// consuming the pairing; the proof also binds the configured origin.
+	if req.RelayID != relayID {
+		writeErr(w, http.StatusUnauthorized, "relay_identity_mismatch")
+		return
+	}
 	name := normalizeControllerName(req.Name)
 	key, der, fingerprint, err := parseControllerPublicKey(req.PublicKey)
-	if err != nil || !verifyPairingProof(key, pairingProofMessage(id, req.Secret, name, req.Platform, fingerprint), req.Proof) {
+	if err != nil || !verifyPairingProof(key, pairingProofMessage(relayID, s.cfg.PublicURL, id, req.Secret, name, req.Platform, fingerprint), req.Proof) {
 		writeErr(w, http.StatusUnauthorized, "invalid_pairing_proof")
 		return
 	}
@@ -297,6 +309,7 @@ UPDATE controller_pairings SET used_at=? WHERE id=? AND used_at IS NULL AND revo
 	w.Header().Set("Cache-Control", "no-store")
 	s.audit(r, "controller_paired", "pairing_id", id, "controller_id", controllerID, "platform", req.Platform)
 	writeJSON(w, http.StatusCreated, map[string]any{
+		"relay_id":   relayID,
 		"controller": map[string]any{"id": controllerID, "name": name, "platform": req.Platform, "scopes": scopes},
 		"tokens":     tokens,
 	})

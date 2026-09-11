@@ -22,10 +22,13 @@ struct ControllerRequestTests {
         #expect(request.url?.absoluteString == "https://relay.example/api/controller/pairings/pair_abcdefghijklmnopqrstuvwxyz/claim")
         #expect(claim.name == "Owner phone")
         #expect(claim.platform == "ios")
+        #expect(claim.relayID == pairing.relayID)
         #expect(claim.publicKey == key.publicKeySPKIDER.base64URLEncodedString)
 
         let message = [
-            "rctl-pair-v1",
+            "rctl-pair-v2",
+            pairing.relayID,
+            pairing.origin,
             pairing.pairingID,
             pairing.secret,
             claim.name,
@@ -253,6 +256,7 @@ struct ControllerRequestTests {
 }
 
 private struct ClaimBody: Decodable {
+    let relayID: String
     let secret: String
     let name: String
     let platform: String
@@ -260,6 +264,7 @@ private struct ClaimBody: Decodable {
     let proof: String
 
     private enum CodingKeys: String, CodingKey {
+        case relayID = "relay_id"
         case secret
         case name
         case platform

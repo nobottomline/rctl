@@ -136,8 +136,14 @@ public struct ControllerTokenPair: Codable, Equatable, Sendable {
 }
 
 public struct ControllerClaimResult: Codable, Equatable, Sendable {
+    public let relayID: String
     public let controller: PairedController
     public let tokens: ControllerTokenPair
+
+    private enum CodingKeys: String, CodingKey {
+        case relayID = "relay_id"
+        case controller, tokens
+    }
 }
 
 public struct ControllerRefreshCredential: Codable, Equatable, Sendable {
@@ -174,6 +180,7 @@ public struct ControllerRefreshCredential: Codable, Equatable, Sendable {
 }
 
 public enum ControllerClientError: Error, Equatable, Sendable {
+    case relayIdentityMismatch
     case invalidPairing
     case unsupportedPairingVersion(Int)
     case incompatibleProtocol(local: Int, remote: Int)

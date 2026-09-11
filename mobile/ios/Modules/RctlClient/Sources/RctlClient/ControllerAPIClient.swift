@@ -35,6 +35,9 @@ public struct ControllerAPIClient: Sendable {
             allowInsecureLoopback: allowInsecureLoopback
         )
         let result = try await send(request, as: ControllerClaimResult.self)
+        guard result.relayID == pairing.relayID else {
+            throw ControllerClientError.relayIdentityMismatch
+        }
         _ = try result.controller.validated()
         _ = try result.tokens.validated()
         return result
@@ -183,7 +186,9 @@ public struct ControllerAPIClient: Sendable {
         let name = normalizedControllerName(controllerName)
         guard !name.isEmpty else { throw ControllerClientError.invalidControllerName }
         let proofMessage = [
-            "rctl-pair-v1",
+            "rctl-pair-v2",
+            validated.relayID,
+            validated.origin.hasSuffix("/") ? String(validated.origin.dropLast()) : validated.origin,
             validated.pairingID,
             validated.secret,
             name,
@@ -191,6 +196,7 @@ public struct ControllerAPIClient: Sendable {
             signingKey.publicKeyFingerprint,
         ].joined(separator: "\n")
         let body = try JSONEncoder().encode(ControllerClaimRequest(
+            relayID: validated.relayID,
             secret: validated.secret,
             name: name,
             platform: "ios",
@@ -330,6 +336,7 @@ public struct ControllerAPIClient: Sendable {
 }
 
 private struct ControllerClaimRequest: Encodable {
+    let relayID: String
     let secret: String
     let name: String
     let platform: String
@@ -337,6 +344,7 @@ private struct ControllerClaimRequest: Encodable {
     let proof: String
 
     private enum CodingKeys: String, CodingKey {
+        case relayID = "relay_id"
         case secret
         case name
         case platform
