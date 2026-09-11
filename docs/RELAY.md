@@ -38,6 +38,20 @@ mount the files explicitly. Startup rejects a path containing the other
 architecture. The setup/release bootstrap still provisions only its qualified
 rootful artifact; automatic rootless provisioning remains a separate gate.
 
+For an existing systemd deployment, add the optional package path in a separate
+service drop-in instead of rewriting the secret environment file. Verify that
+the actual service account can traverse every parent directory and read the
+public DEB before restarting. A dedicated public-package directory can use
+`0755` with a root-owned `0644` DEB; do not put personalized packages or secrets
+there. A root-owned `0700` directory makes the package unreadable to an
+unprivileged relay even when the DEB itself is `0644`.
+
+Back up the current service configuration and database, and use a timed rollback
+for this configuration change. After restart, verify trusted external HTTPS,
+the advertised architecture, and the existing approved devices' authenticated
+tunnels before accepting it. Restore the previous drop-in state on failure;
+adding a public package does not require replacing the binary or database.
+
 `GET /api/admin/status` reports `device_packages` as architecture/version pairs.
 Pair device offers only those variants. `POST /api/admin/device-package` accepts
 `architecture`; omission preserves the rootful API contract. A missing requested

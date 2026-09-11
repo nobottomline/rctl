@@ -126,8 +126,9 @@ must not already contain relay configuration.
 
 The relay has an independent optional `RCTL_RELAY_ROOTLESS_PACKAGE` path and
 advertises only loaded package variants in Pair device. The existing
-`RCTL_RELAY_PUBLIC_PACKAGE` remains rootful. This implementation does not yet
-qualify physical rootless enrollment, remote feature behavior, or updates.
+`RCTL_RELAY_PUBLIC_PACKAGE` remains rootful. Physical enrollment and a limited
+remote smoke test are recorded below; they do not qualify the full remote
+feature matrix or transactional updates.
 
 Signed transactional updates remain unavailable in this test lane. A request returns
 `rootless_updates_not_qualified` instead of attempting to install a rootful
@@ -175,6 +176,92 @@ This qualifies this particular public candidate upgrade and local video/media
 smoke test. It is not evidence of a Sileo repository upgrade, clean install,
 full input/audio/camera regression, remote relay enrollment, or signed update
 and rollback. Those acceptance gates remain open.
+
+### Existing Relay Enrollment (2026-09-11)
+
+An existing self-hosted relay already contained the architecture-aware package
+implementation but had no public base configured. Its binary was left unchanged.
+The physically tested rootless public DEB was added through an isolated systemd
+drop-in, with binary/configuration/database backups and a timed configuration
+rollback. The initial attempt exposed a directory-permission error for the
+unprivileged service account and rolled back. The corrected public directory
+was checked for readability as the service user before repeating the restart.
+
+Trusted external HTTPS, the rootless architecture/version in admin status, and
+the previous approved device's identity, online state, and authenticated
+capabilities tunnel passed before the configuration was accepted. This is a
+configuration-change recovery test, not a signed device-update rollback test.
+
+The actual admin UI then generated and downloaded an `iphoneos-arm64` package
+for a new device with a one-hour enrollment. Independent extraction verified the
+unchanged package version, rootless daemon path, unprefixed mode-`0600` relay
+configuration, canonical WSS endpoint, and enabled local access. The private DEB
+was transferred over SSH to the target with matching SHA-256.
+
+The operator installed this package over the public candidate using Filza,
+restarted SpringBoard, and unlocked the device. Independent SSH checks confirmed
+the expected version with `install ok installed` and a root-owned mode-`0600`
+configuration. The new pending record was matched to the issued package's
+enrollment using the relay's actual token fingerprint algorithm and a read-only
+database query, not its display name. The admin UI's **Approve device** action
+and **Open control** row were then exercised in Chrome.
+
+- Remote WebRTC decoded frames advanced from 172 to 748 in ten seconds at
+  1024 x 1366; no browser page errors were observed.
+- **Media > Videos** loaded all 60 video posters through the remote UI.
+- An authenticated read of the persisted device configuration confirmed the
+  same DeviceID, a stored device secret, removal of the one-time enrollment
+  token, and enabled local access. No secret values were printed or committed.
+- An independent local browser session after enrollment advanced from 171 to
+  632 decoded frames in eight seconds and loaded all 60 video posters.
+- Both the previous rootful device and the new rootless device remained approved
+  and online. The relay, TLS proxy, coturn, and existing AMP services were active.
+
+### Forced TURN Qualification (2026-09-11)
+
+Opening control through the relay domain alone does not establish WAN media
+coverage: the normal test selected a direct ICE path. The browser test therefore
+forced `iceTransportPolicy: 'relay'` both in the peer constructor and in later
+`setConfiguration` calls. Applying it only at construction was insufficient
+because the client subsequently installs the supplied ICE servers. Selected
+candidate-pair statistics independently confirmed a local `relay` candidate
+and a remote `srflx` candidate.
+
+The ordinary profile was not consistently usable on this route. One ten-second
+sample advanced only 26 to 33 decoded frames. Another advanced 19 to 108, while
+received packets increased by 2,902 and reported lost packets by 2,326, with
+heavy NACK/PLI activity. A connected ICE state and occasional decoded frames
+must not count as a performance pass.
+
+Choosing **Saver** through the UI improved the short test: 62 to 245 decoded
+frames in ten seconds at 818 x 1092, with no reported packet loss in that
+interval. Selected-pair RTT was approximately 862 ms. The TURN shared secret
+matched the relay configuration; no explicit `max-bps` or `bps-capacity` setting
+was present. These observations establish route/profile sensitivity, not the
+cause of the network loss or a rootless-specific defect. Automatic bitrate
+adaptation and real separate-network/Safari coverage remain unqualified.
+
+The subsequent minute-long Saver test did **not** pass. An initial attempt
+selected Saver before connection and later observed 1024 x 1366 instead of its
+expected resolution; this cannot qualify that profile. The repeat selected
+Saver after connection and required 818 x 1092 before measuring. It advanced
+62 to 540 decoded frames in 60 seconds (about 8 fps), reported 1,163 lost packets
+after starting at zero, and increased PLI count from 7 to 102. No nominated
+candidate pair was available at the final verification sample. Thus even the
+lower profile is not a demonstrated stable solution on this route. Investigate
+network loss/RTT, route changes, and RTP delivery before accepting WAN streaming;
+do not treat the short successful interval as a completed soak test.
+
+A final read-only route lookup showed that the test Mac reaches the relay host
+through a tunnel interface. Its VPN/routing state was not changed. This is an
+environmental confounder, not proof of the loss cause or of the exact media
+route. Repeat on a known direct route before attributing the result to rootless
+or changing transport constants. The test admin session was signed out afterward.
+
+This enrollment smoke test does not cover every input, audio, camera, terminal,
+revocation, process/network recovery, or signed upgrade/rollback scenario.
+Do not enable the rootless updater or publish a fully qualified release on its
+basis. The device still has its previous public DEBs available for recovery.
 
 ### Screen Geometry Failure (2026-09-07)
 
