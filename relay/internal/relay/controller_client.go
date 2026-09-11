@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -22,40 +24,65 @@ const (
 	controllerClientMaxFields = 32
 )
 
+type fieldKind int
+
+const (
+	kindString fieldKind = iota
+	kindNumber           // non-negative integer
+	kindBool             // JSON boolean ("true"/"false" strings from older clients are accepted)
+	kindList             // list of short lowercase tokens, e.g. capabilities
+	kindIP               // IPv4/IPv6 literal
+)
+
 type clientField struct {
-	maxRunes int  // for strings
-	number   bool // non-negative integer
+	kind     fieldKind
+	maxRunes int // strings: per value; lists: per token
+	maxItems int // lists
 }
 
+// Identity and capabilities: what this controller is and what this build of the
+// app can do. Reported after pairing and on change.
 var controllerClientFields = map[string]clientField{
-	"model":           {maxRunes: 64}, // hardware identifier, e.g. iPhone15,2
-	"model_name":      {maxRunes: 80}, // marketing name, e.g. iPhone 14 Pro
-	"idiom":           {maxRunes: 16}, // phone | pad
-	"system_name":     {maxRunes: 32}, // iOS | iPadOS
-	"system_version":  {maxRunes: 32},
-	"os_build":        {maxRunes: 32},
-	"app_version":     {maxRunes: 32},
-	"app_build":       {maxRunes: 32},
-	"bundle_id":       {maxRunes: 128},
-	"device_name":     {maxRunes: 80},
-	"locale":          {maxRunes: 32},
-	"language":        {maxRunes: 32},
-	"timezone":        {maxRunes: 64},
-	"screen":          {maxRunes: 48}, // e.g. 393×852 @3x
-	"cpu_count":       {number: true},
-	"memory_bytes":    {number: true},
-	"disk_bytes":      {number: true},
-	"disk_free_bytes": {number: true},
+	"schema_version":  {kind: kindNumber},               // profile schema, for forward compatibility
+	"protocol_major":  {kind: kindNumber},               // wire protocol the app speaks
+	"model":           {kind: kindString, maxRunes: 64}, // hardware identifier, e.g. iPhone15,2
+	"model_name":      {kind: kindString, maxRunes: 80}, // marketing name, e.g. iPhone 14 Pro
+	"idiom":           {kind: kindString, maxRunes: 16}, // phone | pad
+	"system_name":     {kind: kindString, maxRunes: 32}, // iOS | iPadOS
+	"system_version":  {kind: kindString, maxRunes: 32},
+	"os_build":        {kind: kindString, maxRunes: 32},
+	"app_version":     {kind: kindString, maxRunes: 32},
+	"app_build":       {kind: kindString, maxRunes: 32},
+	"bundle_id":       {kind: kindString, maxRunes: 128},
+	"install_channel": {kind: kindString, maxRunes: 24}, // appstore | testflight | debug | adhoc | enterprise
+	"device_name":     {kind: kindString, maxRunes: 80},
+	"locale":          {kind: kindString, maxRunes: 32},
+	"language":        {kind: kindString, maxRunes: 32},
+	"timezone":        {kind: kindString, maxRunes: 64},
+	"screen":          {kind: kindString, maxRunes: 48}, // e.g. 393×852 @3x
+	"cpu_count":       {kind: kindNumber},
+	"memory_bytes":    {kind: kindNumber},
+	"disk_bytes":      {kind: kindNumber},
+	"capabilities":    {kind: kindList, maxRunes: 32, maxItems: 32}, // what this app build supports
 }
 
+// Condition: what is going on with the phone right now. Carried by the
+// foreground heartbeat.
 var controllerTelemetryFields = map[string]clientField{
-	"battery_level":   {number: true}, // percent 0..100
-	"battery_state":   {maxRunes: 16}, // unplugged | charging | full | unknown
-	"low_power":       {maxRunes: 5},  // "true" | "false" (kept as string for a single validator)
-	"thermal":         {maxRunes: 16}, // nominal | fair | serious | critical
-	"network":         {maxRunes: 16}, // wifi | cellular | wired | none | unknown
-	"disk_free_bytes": {number: true},
+	"battery_level":          {kind: kindNumber},               // percent 0..100
+	"battery_state":          {kind: kindString, maxRunes: 16}, // unplugged | charging | full | unknown
+	"low_power":              {kind: kindBool},
+	"thermal":                {kind: kindString, maxRunes: 16}, // nominal | fair | serious | critical
+	"network":                {kind: kindString, maxRunes: 16}, // wifi | cellular | wired | none | unknown
+	"network_expensive":      {kind: kindBool},                 // NWPath.isExpensive (hotspot / cellular)
+	"network_constrained":    {kind: kindBool},                 // NWPath.isConstrained (Low Data Mode)
+	"lan_ip":                 {kind: kindIP},                   // private address on the local network
+	"disk_free_bytes":        {kind: kindNumber},
+	"memory_available_bytes": {kind: kindNumber}, // memory the app may still allocate
+	"uptime_seconds":         {kind: kindNumber}, // since the phone booted
 }
+
+var listToken = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]*$`)
 
 type controllerClientRequest struct {
 	Client map[string]any `json:"client"`
@@ -74,42 +101,15 @@ func sanitizeClientFields(input map[string]any, allowed map[string]clientField) 
 	out := make(map[string]any, len(input))
 	for key, raw := range input {
 		spec, ok := allowed[key]
-		if !ok {
+		if !ok || raw == nil { // unknown keys are dropped; explicit null clears
 			continue
 		}
-		switch value := raw.(type) {
-		case string:
-			if spec.number {
-				return "", errors.New("expected number for " + key)
-			}
-			value = strings.TrimSpace(value)
-			if !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n\t") {
-				return "", errors.New("invalid string for " + key)
-			}
-			if utf8.RuneCountInString(value) > spec.maxRunes {
-				return "", errors.New("value too long for " + key)
-			}
-			if value != "" {
-				out[key] = value
-			}
-		case float64:
-			if !spec.number || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1<<53 || value != math.Trunc(value) {
-				return "", errors.New("invalid number for " + key)
-			}
-			out[key] = int64(value)
-		case bool:
-			if spec.number || spec.maxRunes < 5 {
-				return "", errors.New("invalid boolean for " + key)
-			}
-			if value {
-				out[key] = "true"
-			} else {
-				out[key] = "false"
-			}
-		case nil:
-			// Explicit null clears the field: simply omitted.
-		default:
-			return "", errors.New("unsupported value for " + key)
+		value, err := sanitizeClientValue(key, raw, spec)
+		if err != nil {
+			return "", err
+		}
+		if value != nil {
+			out[key] = value
 		}
 	}
 	if len(out) == 0 {
@@ -130,6 +130,85 @@ func sanitizeClientFields(input map[string]any, allowed map[string]clientField) 
 		ordered = append(ordered, string(name)+":"+string(encoded))
 	}
 	return "{" + strings.Join(ordered, ",") + "}", nil
+}
+
+func sanitizeClientValue(key string, raw any, spec clientField) (any, error) {
+	switch spec.kind {
+	case kindString:
+		value, ok := raw.(string)
+		if !ok {
+			return nil, errors.New("expected string for " + key)
+		}
+		return boundedClientString(key, value, spec.maxRunes)
+	case kindNumber:
+		value, ok := raw.(float64)
+		if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1<<53 || value != math.Trunc(value) {
+			return nil, errors.New("invalid number for " + key)
+		}
+		return int64(value), nil
+	case kindBool:
+		switch value := raw.(type) {
+		case bool:
+			return value, nil
+		case string: // first-generation clients sent "true"/"false"
+			if value == "true" || value == "false" {
+				return value == "true", nil
+			}
+		}
+		return nil, errors.New("expected boolean for " + key)
+	case kindList:
+		items, ok := raw.([]any)
+		if !ok || len(items) > spec.maxItems {
+			return nil, errors.New("invalid list for " + key)
+		}
+		seen := make(map[string]struct{}, len(items))
+		tokens := make([]string, 0, len(items))
+		for _, item := range items {
+			token, ok := item.(string)
+			if !ok || utf8.RuneCountInString(token) > spec.maxRunes || !listToken.MatchString(token) {
+				return nil, errors.New("invalid token in " + key)
+			}
+			if _, dup := seen[token]; dup {
+				continue
+			}
+			seen[token] = struct{}{}
+			tokens = append(tokens, token)
+		}
+		sort.Strings(tokens)
+		if len(tokens) == 0 {
+			return nil, nil
+		}
+		return tokens, nil
+	case kindIP:
+		value, ok := raw.(string)
+		if !ok {
+			return nil, errors.New("expected string for " + key)
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, nil
+		}
+		ip := net.ParseIP(value)
+		if ip == nil {
+			return nil, errors.New("invalid ip for " + key)
+		}
+		return ip.String(), nil
+	}
+	return nil, errors.New("unsupported field " + key)
+}
+
+func boundedClientString(key, value string, maxRunes int) (any, error) {
+	value = strings.TrimSpace(value)
+	if !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n\t") {
+		return nil, errors.New("invalid string for " + key)
+	}
+	if utf8.RuneCountInString(value) > maxRunes {
+		return nil, errors.New("value too long for " + key)
+	}
+	if value == "" {
+		return nil, nil
+	}
+	return value, nil
 }
 
 func (s *server) handleUpdateControllerClient(w http.ResponseWriter, r *http.Request) {

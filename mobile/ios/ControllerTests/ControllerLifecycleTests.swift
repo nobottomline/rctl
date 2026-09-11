@@ -460,6 +460,9 @@ final class ControllerLifecycleTests: XCTestCase {
         let client = try XCTUnwrap(reported["client"] as? [String: Any])
         XCTAssertNotNil(client["system_version"])
         XCTAssertNotNil(client["idiom"])
+        XCTAssertEqual(client["protocol_major"] as? Int, 1)
+        XCTAssertEqual(client["install_channel"] as? String, "debug")
+        XCTAssertTrue((client["capabilities"] as? [String] ?? []).contains("webrtc.screen"))
         XCTAssertNil(client["identifier_for_vendor"], "No tracking identifiers leave the phone")
         report.respond(#"{"ok":true}"#)
 
@@ -467,7 +470,8 @@ final class ControllerLifecycleTests: XCTestCase {
         let heartbeat = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(pulse.request.bodyData)) as? [String: Any])
         let telemetry = try XCTUnwrap(heartbeat["telemetry"] as? [String: Any])
         XCTAssertNotNil(telemetry["thermal"])
-        XCTAssertNotNil(telemetry["low_power"])
+        XCTAssertTrue(telemetry["low_power"] is Bool, "booleans travel as JSON booleans")
+        XCTAssertNotNil(telemetry["uptime_seconds"])
         presence.cancel()
         await presence.value
 

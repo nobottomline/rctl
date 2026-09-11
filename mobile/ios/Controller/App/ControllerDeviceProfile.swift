@@ -1,16 +1,35 @@
 import Foundation
 import Network
 import RctlClient
+import RctlProtocol
 import UIKit
+import os
 
 /// Builds the self-description a controller reports to its relay. Static facts
 /// go to `ControllerClientProfile` (sent once per change); condition goes to
 /// `ControllerTelemetry` (rides on the foreground heartbeat). Nothing here is a
 /// tracking identifier: no vendor id, no advertising id, no contacts or accounts.
 enum ControllerDeviceProfile {
+    /// What this build can do, as stable tokens the relay stores per controller.
+    /// Keep it honest: a token here means the feature ships in this version.
+    static let capabilities: [String] = [
+        "relay",            // paired relay sessions
+        "lan",              // direct local-network sessions
+        "nearby",           // Bonjour discovery of local devices
+        "webrtc.screen",    // screen video over WebRTC
+        "webrtc.camera",    // camera video over WebRTC
+        "control.input",    // touch / pointer / keyboard input
+        "device.lock",      // lock the remote device
+        "presence",         // foreground heartbeat with telemetry
+        "client_profile",   // this report
+    ]
+
     @MainActor
     static func current(bundle: Bundle = .main, device: UIDevice = .current) -> ControllerClientProfile {
         var profile = ControllerClientProfile()
+        profile.protocolMajor = Int64(WireProtocolVersion.current.major)
+        profile.installChannel = installChannel(bundle: bundle)
+        profile.capabilities = capabilities
         let identifier = hardwareIdentifier()
         profile.model = identifier
         profile.modelName = marketingName(for: identifier)
@@ -34,14 +53,24 @@ enum ControllerDeviceProfile {
         }
         profile.cpuCount = Int64(ProcessInfo.processInfo.activeProcessorCount)
         profile.memoryBytes = Int64(clamping: ProcessInfo.processInfo.physicalMemory)
-        let disk = diskCapacity()
-        profile.diskBytes = disk.total
-        profile.diskFreeBytes = disk.free
+        profile.diskBytes = diskCapacity().total
         return profile.bounded()
     }
 
+    /// A readable default controller name. iOS 16+ hides the user-assigned
+    /// device name from apps without a special entitlement and returns a bare
+    /// "iPhone"; the marketing name is more useful in the admin list and the
+    /// admin can rename the controller anyway.
     @MainActor
-    static func telemetry(network: String?, device: UIDevice = .current) -> ControllerTelemetry {
+    static func defaultControllerName(device: UIDevice = .current) -> String {
+        let name = device.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generic = ["iphone", "ipad", "ipod touch", "ipod"].contains(name.lowercased())
+        if !generic, !name.isEmpty { return name }
+        return marketingName(for: hardwareIdentifier()) ?? (name.isEmpty ? "My phone" : name)
+    }
+
+    @MainActor
+    static func telemetry(network: NetworkPathObserver.Snapshot, device: UIDevice = .current) -> ControllerTelemetry {
         if !device.isBatteryMonitoringEnabled { device.isBatteryMonitoringEnabled = true }
         var telemetry = ControllerTelemetry()
         if device.batteryLevel >= 0 {
@@ -62,9 +91,49 @@ enum ControllerDeviceProfile {
         case .critical: "critical"
         @unknown default: "unknown"
         }
-        telemetry.network = network
+        telemetry.network = network.kind
+        telemetry.networkExpensive = network.expensive
+        telemetry.networkConstrained = network.constrained
+        telemetry.lanIP = lanAddress()
         telemetry.diskFreeBytes = diskCapacity().free
+        let available = os_proc_available_memory()
+        telemetry.memoryAvailableBytes = available > 0 ? Int64(clamping: available) : nil
+        telemetry.uptimeSeconds = Int64(ProcessInfo.processInfo.systemUptime)
         return telemetry
+    }
+
+    /// How the app got onto the phone: debug build, TestFlight, App Store, or a
+    /// signed distribution profile. Diagnostics only; nothing is gated on it.
+    static func installChannel(bundle: Bundle = .main) -> String {
+#if DEBUG
+        return "debug"
+#else
+        if bundle.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" { return "testflight" }
+        if bundle.path(forResource: "embedded", ofType: "mobileprovision") != nil { return "adhoc" }
+        return "appstore"
+#endif
+    }
+
+    /// The phone's private IPv4 address on Wi-Fi (en0), which tells the operator
+    /// whether the controller and the device share a network. Nothing else about
+    /// the network (SSID, gateway, peers) is collected.
+    static func lanAddress() -> String? {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return nil }
+        defer { freeifaddrs(list) }
+        var fallback: String?
+        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let interface = pointer.pointee
+            guard let address = interface.ifa_addr, address.pointee.sa_family == UInt8(AF_INET),
+                  (Int32(interface.ifa_flags) & IFF_UP) != 0, (Int32(interface.ifa_flags) & IFF_LOOPBACK) == 0 else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let value = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            let name = String(cString: interface.ifa_name)
+            if name == "en0" { return value }
+            if fallback == nil, name.hasPrefix("en") { fallback = value }
+        }
+        return fallback
     }
 
     static func hardwareIdentifier() -> String? {
@@ -139,21 +208,28 @@ enum ControllerDeviceProfile {
 /// whether the controller is on Wi-Fi or cellular. Cheap: one monitor for the
 /// app lifetime, no polling.
 final class NetworkPathObserver: @unchecked Sendable {
+    struct Snapshot: Equatable, Sendable {
+        var kind = "unknown"
+        var expensive: Bool?
+        var constrained: Bool?
+    }
+
     private let monitor = NWPathMonitor()
     private let lock = NSLock()
-    private var kind = "unknown"
+    private var snapshot = Snapshot()
 
     init() {
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            let kind: String
-            if path.status != .satisfied { kind = "none" }
-            else if path.usesInterfaceType(.wifi) { kind = "wifi" }
-            else if path.usesInterfaceType(.cellular) { kind = "cellular" }
-            else if path.usesInterfaceType(.wiredEthernet) { kind = "wired" }
-            else { kind = "unknown" }
+            var next = Snapshot()
+            if path.status != .satisfied { next.kind = "none" }
+            else if path.usesInterfaceType(.wifi) { next.kind = "wifi" }
+            else if path.usesInterfaceType(.cellular) { next.kind = "cellular" }
+            else if path.usesInterfaceType(.wiredEthernet) { next.kind = "wired" }
+            next.expensive = path.isExpensive
+            next.constrained = path.isConstrained
             self.lock.lock()
-            self.kind = kind
+            self.snapshot = next
             self.lock.unlock()
         }
         monitor.start(queue: DispatchQueue(label: "rctl.controller.network-path", qos: .utility))
@@ -161,9 +237,9 @@ final class NetworkPathObserver: @unchecked Sendable {
 
     deinit { monitor.cancel() }
 
-    var current: String {
+    var current: Snapshot {
         lock.lock()
         defer { lock.unlock() }
-        return kind
+        return snapshot
     }
 }

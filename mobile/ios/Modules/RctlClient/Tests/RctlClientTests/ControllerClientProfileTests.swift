@@ -12,6 +12,7 @@ struct ControllerClientProfileTests {
         profile.deviceName = "  " + String(repeating: "n", count: 120) + "\n"
         profile.cpuCount = 6
         profile.memoryBytes = -1
+        profile.capabilities = ["WebRTC.screen", " lan ", "lan", ""]
         let json = try JSONSerialization.jsonObject(with: profile.canonicalJSON()) as? [String: Any]
         let object = try #require(json)
         #expect(object["model"] as? String == "iPhone15,2")
@@ -20,7 +21,9 @@ struct ControllerClientProfileTests {
         #expect(object["cpu_count"] as? Int == 6)
         #expect(object["memory_bytes"] == nil, "negative numbers are dropped, not sent")
         #expect(object["system_version"] == nil, "nil fields are omitted")
-        #expect(Set(object.keys) == ["model", "model_name", "device_name", "cpu_count"])
+        #expect(object["capabilities"] as? [String] == ["lan", "webrtc.screen"], "tokens are lowercased, trimmed, deduplicated, sorted")
+        #expect(object["schema_version"] as? Int == 1)
+        #expect(Set(object.keys) == ["model", "model_name", "device_name", "cpu_count", "capabilities", "schema_version"])
     }
 
     @Test("Fingerprint changes only when the bounded profile changes")
@@ -54,12 +57,12 @@ struct ControllerClientProfileTests {
         #expect(request.httpMethod == "POST")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
         #expect(request.httpBody == profileBody)
-        #expect(String(decoding: try #require(request.httpBody), as: UTF8.self) == #"{"client":{"model":"iPad14,1"}}"#)
+        #expect(String(decoding: try #require(request.httpBody), as: UTF8.self) == #"{"client":{"capabilities":[],"model":"iPad14,1","schema_version":1}}"#)
         #expect(request.value(forHTTPHeaderField: "X-RCTL-Signature") != nil)
 
-        let telemetry = ControllerTelemetry(batteryLevel: 81, batteryState: "charging", lowPower: false, network: "wifi")
+        let telemetry = ControllerTelemetry(batteryLevel: 81, batteryState: "charging", lowPower: false, network: "wifi", networkExpensive: true, lanIP: "192.168.178.20")
         let telemetryBody = try encoder.encode(["telemetry": telemetry])
-        #expect(String(decoding: telemetryBody, as: UTF8.self) == #"{"telemetry":{"battery_level":81,"battery_state":"charging","low_power":false,"network":"wifi"}}"#)
+        #expect(String(decoding: telemetryBody, as: UTF8.self) == #"{"telemetry":{"battery_level":81,"battery_state":"charging","lan_ip":"192.168.178.20","low_power":false,"network":"wifi","network_expensive":true}}"#)
 
         let empty = try client.makeControllerActionRequest(
             path: "/api/controller/presence", origin: "https://relay.example",

@@ -27,6 +27,10 @@ export interface ControllerPairing {
 // Facts the controller app reports about itself once after pairing and again only
 // when something changes (OS/app update). Keys mirror the relay whitelist.
 export interface ControllerClient {
+  schema_version?: number
+  protocol_major?: number
+  install_channel?: string // appstore | testflight | debug | adhoc
+  capabilities?: string[] // what this app build supports
   model?: string // hardware identifier, e.g. iPhone15,2
   model_name?: string // marketing name, e.g. iPhone 14 Pro
   idiom?: string // phone | pad
@@ -44,17 +48,21 @@ export interface ControllerClient {
   cpu_count?: number
   memory_bytes?: number
   disk_bytes?: number
-  disk_free_bytes?: number
 }
 
 // Dynamic facts carried by the presence heartbeat while the app is in the foreground.
 export interface ControllerTelemetry {
   battery_level?: number // percent
   battery_state?: string // unplugged | charging | full | unknown
-  low_power?: 'true' | 'false'
+  low_power?: boolean
   thermal?: string // nominal | fair | serious | critical
   network?: string // wifi | cellular | wired | none | unknown
+  network_expensive?: boolean // hotspot / cellular
+  network_constrained?: boolean // Low Data Mode
+  lan_ip?: string
   disk_free_bytes?: number
+  memory_available_bytes?: number
+  uptime_seconds?: number
 }
 
 export interface Controller {

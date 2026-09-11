@@ -207,14 +207,26 @@ POST /api/admin/enrollments/clear-history     every terminal token
 The controller app reports a bounded device profile through a signed request
 (`POST /api/controller/me/client`, body `{"client": {...}}`) once after pairing
 and again only when the profile's fingerprint changes. The relay keeps a
-whitelist of keys with size limits (hardware identifier and marketing name,
-system name/version/build, app version/build, bundle id, device name, locale,
-language, time zone, screen, CPU count, memory and storage) and drops anything
-else, so older relays and newer apps interoperate. The presence heartbeat may
-carry `{"telemetry": {...}}` with battery level and state, Low Power Mode,
-thermal state, network type and free storage; an empty body stays valid. The
-relay also records the IP the controller paired from, its last IP and its
-User-Agent. None of this includes vendor or advertising identifiers.
+whitelist of typed keys with size limits (schema and protocol version, install
+channel, a list of capability tokens describing what that app build supports,
+hardware identifier and marketing name, system name/version/build, app
+version/build, bundle id, device name, locale, language, time zone, screen, CPU
+count, memory and storage) and drops anything else, so older relays and newer
+apps interoperate. Booleans are JSON booleans. The presence heartbeat may carry
+`{"telemetry": {...}}` with battery level and state, Low Power Mode, thermal
+state, network type plus metered/Low Data flags, the phone's private LAN IP,
+free storage, memory available to the app and phone uptime; an empty body stays
+valid. The relay also records the public IP the controller paired from, its
+last public IP and its User-Agent.
+
+Deliberately not collected: IMEI, serial number, UDID, advertising or vendor
+identifiers, Wi-Fi SSID/BSSID, contacts or accounts. Apple does not expose the
+first group to third-party apps at all, SSID needs location permission, and none
+of them helps operate a controller: the relay-issued controller id and the P-256
+key fingerprint already are its stable identity. `device_name` is the bare
+model word on iOS 16+ unless the app carries Apple's user-assigned-device-name
+entitlement, so the app defaults a new controller's name to the marketing model
+name and the admin can rename it.
 
 The admin page deliberately separates device enrollment from controller
 pairing. Device enrollment creates a personalized iPad package or token;

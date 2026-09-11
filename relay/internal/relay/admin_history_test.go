@@ -303,12 +303,17 @@ func TestControllerClientProfileAndTelemetry(t *testing.T) {
 	}
 	profile := `{"client":{"model":"iPhone15,2","model_name":"iPhone 14 Pro","system_name":"iOS","system_version":"17.4",
 		"app_version":"1.2.0","app_build":"57","device_name":"Grigorij's iPhone","locale":"ru_RU","timezone":"Europe/Moscow",
-		"screen":"393×852 @3x","cpu_count":6,"memory_bytes":6144000000,"unknown_key":"dropped","idiom":"phone"}}`
+		"screen":"393×852 @3x","cpu_count":6,"memory_bytes":6144000000,"unknown_key":"dropped","idiom":"phone",
+		"protocol_major":1,"schema_version":1,"install_channel":"debug","capabilities":["webrtc.screen","lan","webrtc.screen","relay"]}}`
 	send("/api/controller/me/client", []byte(profile), http.StatusOK)
 	row := findController(listControllers(t, ts, admin), id)
 	if row == nil || row.Client["model"] != "iPhone15,2" || row.Client["cpu_count"] != float64(6) || row.Client["unknown_key"] != nil {
 		t.Fatalf("client profile not stored as expected: %#v", row)
 	}
+	if caps, _ := row.Client["capabilities"].([]any); len(caps) != 3 || caps[0] != "lan" || caps[1] != "relay" || caps[2] != "webrtc.screen" {
+		t.Fatalf("capabilities must be deduplicated and sorted: %#v", row.Client["capabilities"])
+	}
+	send("/api/controller/me/client", []byte(`{"client":{"capabilities":["<script>"]}}`), http.StatusBadRequest)
 	if row.PairedIP == "" || row.LastIP == "" || row.UserAgent != "rctl/1.2 CFNetwork/1498 Darwin/23.4.0" || row.KeyFingerprint == "" {
 		t.Fatalf("relay-observed facts missing: %#v", row)
 	}
@@ -321,11 +326,15 @@ func TestControllerClientProfileAndTelemetry(t *testing.T) {
 	}
 
 	// Telemetry rides on the heartbeat; an empty body is still a valid heartbeat.
-	send("/api/controller/presence", []byte(`{"telemetry":{"battery_level":81,"battery_state":"charging","low_power":false,"network":"wifi","thermal":"nominal"}}`), http.StatusOK)
+	send("/api/controller/presence", []byte(`{"telemetry":{"battery_level":81,"battery_state":"charging","low_power":false,"network":"wifi","thermal":"nominal",
+		"network_expensive":"true","lan_ip":"192.168.178.20","uptime_seconds":86400,"memory_available_bytes":1200000000}}`), http.StatusOK)
 	row = findController(listControllers(t, ts, admin), id)
-	if row.Telemetry["battery_level"] != float64(81) || row.Telemetry["low_power"] != "false" || row.Telemetry["network"] != "wifi" {
+	if row.Telemetry["battery_level"] != float64(81) || row.Telemetry["low_power"] != false || row.Telemetry["network"] != "wifi" ||
+		row.Telemetry["network_expensive"] != true || row.Telemetry["lan_ip"] != "192.168.178.20" || row.Telemetry["uptime_seconds"] != float64(86400) {
 		t.Fatalf("telemetry not stored: %#v", row.Telemetry)
 	}
+	send("/api/controller/presence", []byte(`{"telemetry":{"lan_ip":"not-an-ip"}}`), http.StatusBadRequest)
+	send("/api/controller/presence", []byte(`{"telemetry":{"low_power":"yes"}}`), http.StatusBadRequest)
 	send("/api/controller/presence", nil, http.StatusOK)
 	if row = findController(listControllers(t, ts, admin), id); row.Telemetry["battery_level"] != float64(81) {
 		t.Fatalf("empty heartbeat must keep the last telemetry: %#v", row.Telemetry)

@@ -6,6 +6,16 @@ import Foundation
 /// schedule. Field names and bounds mirror the relay whitelist; the relay drops
 /// unknown keys, so adding a field here is backward compatible.
 public struct ControllerClientProfile: Codable, Equatable, Sendable {
+    /// Bumped when the meaning of existing keys changes; new keys need no bump.
+    public static let schemaVersion: Int64 = 1
+
+    public var schemaVersion: Int64? = Self.schemaVersion
+    public var protocolMajor: Int64?
+    public var installChannel: String?
+    /// What this build of the app can do, as stable lowercase tokens. The relay
+    /// stores them so a future server can decide per controller instead of
+    /// guessing from `app_version`.
+    public var capabilities: [String] = []
     public var model: String?
     public var modelName: String?
     public var idiom: String?
@@ -23,11 +33,14 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
     public var cpuCount: Int64?
     public var memoryBytes: Int64?
     public var diskBytes: Int64?
-    public var diskFreeBytes: Int64?
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case protocolMajor = "protocol_major"
+        case installChannel = "install_channel"
+        case capabilities
         case model
         case modelName = "model_name"
         case idiom
@@ -42,7 +55,6 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
         case cpuCount = "cpu_count"
         case memoryBytes = "memory_bytes"
         case diskBytes = "disk_bytes"
-        case diskFreeBytes = "disk_free_bytes"
     }
 
     /// Relay-side limits, applied here too so a long device name never turns a
@@ -50,7 +62,7 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
     private static let stringLimits: [CodingKeys: Int] = [
         .model: 64, .modelName: 80, .idiom: 16, .systemName: 32, .systemVersion: 32,
         .osBuild: 32, .appVersion: 32, .appBuild: 32, .bundleID: 128, .deviceName: 80,
-        .locale: 32, .language: 32, .timezone: 64, .screen: 48,
+        .locale: 32, .language: 32, .timezone: 64, .screen: 48, .installChannel: 24,
     ]
 
     /// A copy with every string trimmed and truncated to the relay bounds.
@@ -78,9 +90,15 @@ public struct ControllerClientProfile: Codable, Equatable, Sendable {
         copy.language = clamp(language, .language)
         copy.timezone = clamp(timezone, .timezone)
         copy.screen = clamp(screen, .screen)
-        for key in [\ControllerClientProfile.cpuCount, \.memoryBytes, \.diskBytes, \.diskFreeBytes] {
+        copy.installChannel = clamp(installChannel, .installChannel)
+        for key in [\ControllerClientProfile.cpuCount, \.memoryBytes, \.diskBytes, \.protocolMajor, \.schemaVersion] {
             if let value = copy[keyPath: key], value < 0 { copy[keyPath: key] = nil }
         }
+        var seen = Set<String>()
+        copy.capabilities = capabilities
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty && $0.unicodeScalars.count <= 32 && seen.insert($0).inserted }
+            .sorted()
         return copy
     }
 
@@ -107,16 +125,28 @@ public struct ControllerTelemetry: Codable, Equatable, Sendable {
     public var lowPower: Bool?
     public var thermal: String? // nominal | fair | serious | critical
     public var network: String? // wifi | cellular | wired | none | unknown
+    public var networkExpensive: Bool? // hotspot or cellular
+    public var networkConstrained: Bool? // Low Data Mode
+    public var lanIP: String? // private address on the local network, for LAN diagnostics
     public var diskFreeBytes: Int64?
+    public var memoryAvailableBytes: Int64?
+    public var uptimeSeconds: Int64?
 
     public init(batteryLevel: Int? = nil, batteryState: String? = nil, lowPower: Bool? = nil,
-                thermal: String? = nil, network: String? = nil, diskFreeBytes: Int64? = nil) {
+                thermal: String? = nil, network: String? = nil, networkExpensive: Bool? = nil,
+                networkConstrained: Bool? = nil, lanIP: String? = nil, diskFreeBytes: Int64? = nil,
+                memoryAvailableBytes: Int64? = nil, uptimeSeconds: Int64? = nil) {
         self.batteryLevel = batteryLevel
         self.batteryState = batteryState
         self.lowPower = lowPower
         self.thermal = thermal
         self.network = network
+        self.networkExpensive = networkExpensive
+        self.networkConstrained = networkConstrained
+        self.lanIP = lanIP
         self.diskFreeBytes = diskFreeBytes
+        self.memoryAvailableBytes = memoryAvailableBytes
+        self.uptimeSeconds = uptimeSeconds
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -124,6 +154,11 @@ public struct ControllerTelemetry: Codable, Equatable, Sendable {
         case batteryState = "battery_state"
         case lowPower = "low_power"
         case thermal, network
+        case networkExpensive = "network_expensive"
+        case networkConstrained = "network_constrained"
+        case lanIP = "lan_ip"
         case diskFreeBytes = "disk_free_bytes"
+        case memoryAvailableBytes = "memory_available_bytes"
+        case uptimeSeconds = "uptime_seconds"
     }
 }

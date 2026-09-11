@@ -84,7 +84,7 @@ final class ControllerAppModel: ObservableObject {
             let key = try keychain.loadOrCreateSigningKey(relayID: pairing.relayID)
             let claim = try await api.claim(
                 pairing: pairing,
-                controllerName: UIDevice.current.name,
+                controllerName: ControllerDeviceProfile.defaultControllerName(),
                 signingKey: key,
                 allowInsecureLoopback: allowInsecureLoopback
             )

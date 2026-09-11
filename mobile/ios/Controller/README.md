@@ -101,13 +101,18 @@ admin, which the app recognizes by a rejected refresh credential) the app says
 so and offers **Delete anyway**; nothing is removed until that choice. A
 controller deleted only locally stays listed in relay admin until revoked there.
 
-After pairing the app reports a bounded device profile to the relay (hardware
-identifier and marketing name, iOS version and build, app version, device name,
-locale, time zone, screen, CPU count, memory and storage) and re-sends it only
-when that profile changes, never on a schedule. The foreground heartbeat carries
-battery level and state, Low Power Mode, thermal state and network type. No
-vendor or advertising identifiers leave the phone. Relay admin shows all of it
-in the controller's detail card.
+After pairing the app reports a bounded device profile to the relay (protocol
+and schema version, install channel, the capability tokens this build supports,
+hardware identifier and marketing name, iOS version and build, app version,
+device name, locale, time zone, screen, CPU count, memory and storage) and
+re-sends it only when that profile changes, never on a schedule. The foreground
+heartbeat carries battery level and state, Low Power Mode, thermal state,
+network type with metered/Low Data flags, the phone's private Wi-Fi address,
+free storage, memory available to the app and phone uptime. No vendor,
+advertising or hardware serial identifiers leave the phone. Because iOS 16+
+returns a bare "iPhone" as the device name to apps without Apple's entitlement,
+a new controller is named after its marketing model by default. Relay admin
+shows all of it in the controller's detail card.
 
 The selected relay receives a signed heartbeat every 30 seconds while the app
 is active, including during a remote session. Backgrounding or switching relays

@@ -30,7 +30,7 @@ import { Button } from './ui/Button'
 import { DetailSection, DetailField } from './ui/Detail'
 import { auditLabel } from './ActivityPanel'
 import { concernsController } from '../lib/actors'
-import { fmtAbs, fmtBytes, fmtRel, shortId } from '../lib/format'
+import { fmtAbs, fmtBytes, fmtRel, fmtUptime, shortId } from '../lib/format'
 import { scopeElevated, scopeLabel } from '../lib/scopes'
 import { cn } from '../lib/cn'
 import type { AuditEntry, Controller, ControllerTelemetry } from '../types'
@@ -137,7 +137,7 @@ export function ControllerDetailModal({
                 <DetailField icon={DeviceIcon} label="Model" value={client.model_name || client.model} />
                 <DetailField label="Identifier" value={client.model} />
                 <DetailField label="System" value={systemLine(client.system_name, client.system_version, client.os_build)} />
-                <DetailField label="App" value={appLine(client.app_version, client.app_build)} />
+                <DetailField label="App" value={appLine(client.app_version, client.app_build, client.install_channel)} />
                 <DetailField label="Device name" value={client.device_name} />
                 <DetailField label="Screen" value={client.screen} />
                 <DetailField icon={Languages} label="Locale" value={[client.locale, client.timezone].filter(Boolean).join(' · ')} />
@@ -146,9 +146,22 @@ export function ControllerDetailModal({
                 <DetailField
                   icon={HardDrive}
                   label="Storage"
-                  value={storageLine(client.disk_bytes, telemetry?.disk_free_bytes ?? client.disk_free_bytes)}
+                  value={storageLine(client.disk_bytes, telemetry?.disk_free_bytes)}
                 />
+                <DetailField label="Protocol" value={client.protocol_major ? `v${client.protocol_major}` : undefined} />
               </div>
+              {!!client.capabilities?.length && (
+                <div className="mt-3">
+                  <div className="mb-1.5 text-[11px] text-muted">App capabilities</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {client.capabilities.map((cap) => (
+                      <span key={cap} className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-[10.5px] text-fg-dim ring-1 ring-line/70">
+                        {cap}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </DetailSection>
           )}
 
@@ -159,9 +172,11 @@ export function ControllerDetailModal({
             >
               <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                 <DetailField icon={batteryIcon(telemetry)} label="Battery" value={batteryLine(telemetry)} />
-                <DetailField label="Low power mode" value={telemetry.low_power === undefined ? undefined : telemetry.low_power === 'true' ? 'on' : 'off'} />
-                <DetailField icon={telemetry.network === 'none' ? WifiOff : Wifi} label="Network" value={telemetry.network} />
+                <DetailField label="Low power mode" value={onOff(telemetry.low_power)} />
+                <DetailField icon={telemetry.network === 'none' ? WifiOff : Wifi} label="Network" value={networkLine(telemetry)} />
                 <DetailField icon={Thermometer} label="Thermal state" value={telemetry.thermal} />
+                <DetailField icon={MemoryStick} label="Memory available to app" value={telemetry.memory_available_bytes ? fmtBytes(telemetry.memory_available_bytes) : undefined} />
+                <DetailField label="Phone uptime" value={telemetry.uptime_seconds ? fmtUptime(telemetry.uptime_seconds) : undefined} />
               </div>
             </DetailSection>
           )}
@@ -169,7 +184,8 @@ export function ControllerDetailModal({
           <DetailSection title="Network">
             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
               <DetailField icon={Globe} label="Paired from" value={c.paired_ip || 'unknown'} />
-              <DetailField icon={Globe} label="Last IP" value={c.last_ip || 'unknown'} />
+              <DetailField icon={Globe} label="Last public IP" value={c.last_ip || 'unknown'} />
+              <DetailField icon={Wifi} label="Local network IP" value={telemetry?.lan_ip} />
             </div>
             {c.user_agent && (
               <p className="mt-3 break-all font-mono text-[11px] leading-relaxed text-fg-dim">{c.user_agent}</p>
@@ -282,10 +298,20 @@ function systemLine(name?: string, version?: string, build?: string): string | u
   return build ? `${base} (${build})` : base
 }
 
-function appLine(version?: string, build?: string): string | undefined {
+function appLine(version?: string, build?: string, channel?: string): string | undefined {
   if (!version && !build) return undefined
-  if (version && build) return `${version} (${build})`
-  return version || build
+  const base = version && build ? `${version} (${build})` : version || build
+  return channel && channel !== 'appstore' ? `${base} · ${channel}` : base
+}
+
+function onOff(value?: boolean): string | undefined {
+  return value === undefined ? undefined : value ? 'on' : 'off'
+}
+
+function networkLine(t: ControllerTelemetry): string | undefined {
+  if (!t.network) return undefined
+  const flags = [t.network_expensive ? 'metered' : '', t.network_constrained ? 'low data' : ''].filter(Boolean)
+  return flags.length ? `${t.network} · ${flags.join(', ')}` : t.network
 }
 
 function storageLine(total?: number, free?: number): string | undefined {

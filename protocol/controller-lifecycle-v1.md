@@ -54,7 +54,9 @@ only while the controller is still active, including a recheck after auth.
 Telemetry is optional condition data shown in relay admin: `battery_level`
 (percent), `battery_state` (`unplugged|charging|full|unknown`), `low_power`
 (bool), `thermal` (`nominal|fair|serious|critical`), `network`
-(`wifi|cellular|wired|none|unknown`), `disk_free_bytes`. The relay validates
+(`wifi|cellular|wired|none|unknown`), `network_expensive` and
+`network_constrained` (bool), `lan_ip` (private address literal),
+`disk_free_bytes`, `memory_available_bytes`, `uptime_seconds`. The relay validates
 types and bounds, drops unknown keys, and rejects a malformed body with
 `400 invalid_telemetry` without touching the lease. An empty heartbeat keeps the
 last telemetry. The heartbeat also refreshes the controller's last IP and
