@@ -9,6 +9,11 @@ struct AmbientBackground: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    /// The field stays static for the first moments after it appears or
+    /// resumes, so a navigation transition never competes with a canvas that
+    /// re-renders 30 times a second.
+    @State private var settled = false
+    @State private var warmUp: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -40,12 +45,26 @@ struct AmbientBackground: View {
                     .position(x: size.width * 0.3, y: size.height * 1.02)
                 }
             }
-            ParticleField(paused: paused || reduceMotion || scenePhase != .active, frozen: reduceMotion)
+            ParticleField(paused: paused || !settled || reduceMotion || scenePhase != .active, frozen: reduceMotion)
                 .opacity(particleOpacity)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onAppear { scheduleWarmUp() }
+        .onDisappear { warmUp?.cancel(); warmUp = nil; settled = false }
+        .onChange(of: paused) { paused in
+            if paused { settled = false; warmUp?.cancel(); warmUp = nil } else { scheduleWarmUp() }
+        }
+    }
+
+    private func scheduleWarmUp() {
+        warmUp?.cancel()
+        warmUp = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled else { return }
+            settled = true
+        }
     }
 }
 
@@ -117,14 +136,18 @@ enum ParticleSystem {
             if particle.ring {
                 canvas.stroke(Path(ellipseIn: rect), with: .color(color.opacity(0.55 * particle.brightness)), lineWidth: 1)
             } else {
-                let glow = rect.insetBy(dx: -particle.radius * 1.6, dy: -particle.radius * 1.6)
-                canvas.fill(
-                    Path(ellipseIn: glow),
-                    with: .radialGradient(
-                        Gradient(colors: [color.opacity(0.22 * particle.brightness), .clear]),
-                        center: point, startRadius: 0, endRadius: glow.width / 2
+                // Only the warm accents get a gradient halo; a gradient per
+                // particle per frame is the most expensive part of the field.
+                if particle.warm {
+                    let glow = rect.insetBy(dx: -particle.radius * 1.6, dy: -particle.radius * 1.6)
+                    canvas.fill(
+                        Path(ellipseIn: glow),
+                        with: .radialGradient(
+                            Gradient(colors: [color.opacity(0.22 * particle.brightness), .clear]),
+                            center: point, startRadius: 0, endRadius: glow.width / 2
+                        )
                     )
-                )
+                }
                 canvas.fill(Path(ellipseIn: rect), with: .color(color.opacity(0.75 * particle.brightness)))
             }
         }

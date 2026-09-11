@@ -228,7 +228,12 @@ rotation does not re-roll it, pauses when its screen is not visible or the
 scene is inactive, and freezes under Reduce Motion. Surfaces are translucent
 parchment with a hairline border and a soft shadow, at most one level deep; do
 not nest surfaces, and do not bring the canvas or decorative gradients into
-the operational control UI.
+the operational control UI. For performance the surfaces use a plain fill,
+never a system material: a blur over a canvas that changes every frame is
+re-rendered every frame and makes pushes stutter on device. Shadows are cast
+by the background shape rather than by composited content so they are
+rasterized once, and the particle field stays static for the first moments
+after a screen appears or resumes so it never competes with a transition.
 
 Spacing follows each platform's native rhythm. Buttons are capsules: ink for
 the default primary action, terracotta for the commit action of a flow, and an

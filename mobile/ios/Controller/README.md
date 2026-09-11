@@ -137,7 +137,11 @@ instead. A session cannot reconnect through a different selected relay.
 Debug builds accept `--rctl-route=pair|scan|local|save|replace|first-local|
 gallery|gallery2` to open a screen directly for screenshots and review;
 `gallery` and `gallery2` render the discovery and session building blocks with
-synthetic data. Release builds ignore the argument.
+synthetic data. `--rctl-push=local|pair` performs a real animated push 1.5 s
+after launch and draws a small marker at that instant, so a Simulator screen
+recording (`xcrun simctl io <udid> recordVideo`) can measure tap-to-transition
+latency and dropped frames. `--rctl-scanner-demo` replays scripted detections
+in the scanner. Release builds ignore all of these.
 
 ## Local Network
 

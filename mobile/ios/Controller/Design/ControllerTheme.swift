@@ -33,8 +33,11 @@ enum ControllerMotion {
     static let immediate = Animation.easeOut(duration: 0.16)
 }
 
-/// A translucent parchment surface that lets the ambient background show
-/// through without competing with the content on top of it.
+/// A parchment surface that lets the ambient background show through faintly.
+/// Deliberately no system material: a blur over a canvas that animates every
+/// frame has to be re-rendered every frame, which makes pushes stutter on
+/// device. The shadow is cast by the plain rounded shape, not by the content,
+/// so it is rasterized once and cached rather than re-blurred on every change.
 struct GlassSurface: ViewModifier {
     var cornerRadius: CGFloat = 20
     var padding: CGFloat = 18
@@ -44,8 +47,8 @@ struct GlassSurface: ViewModifier {
             .padding(padding)
             .background {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(ControllerPalette.elevated.opacity(0.82))
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .fill(ControllerPalette.elevated.opacity(0.9))
+                    .shadow(color: ControllerPalette.ink.opacity(0.07), radius: 12, x: 0, y: 5)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -58,8 +61,6 @@ struct GlassSurface: ViewModifier {
                         lineWidth: 1
                     )
             }
-            .shadow(color: ControllerPalette.ink.opacity(0.05), radius: 14, x: 0, y: 6)
-            .shadow(color: ControllerPalette.ink.opacity(0.04), radius: 2, x: 0, y: 1)
     }
 }
 
@@ -86,11 +87,14 @@ struct PrimaryButtonStyle: ButtonStyle {
             .foregroundStyle(foreground)
             .frame(maxWidth: .infinity, minHeight: 52)
             .padding(.horizontal, 18)
-            .background(background.opacity(configuration.isPressed ? 0.86 : 1), in: Capsule())
+            .background {
+                Capsule()
+                    .fill(background.opacity(configuration.isPressed ? 0.86 : 1))
+                    .shadow(color: background.opacity(configuration.isPressed ? 0.12 : 0.24), radius: 12, x: 0, y: 6)
+            }
             .overlay {
                 Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
             }
-            .shadow(color: background.opacity(configuration.isPressed ? 0.12 : 0.28), radius: 16, x: 0, y: 8)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(ControllerMotion.immediate, value: configuration.isPressed)
     }
@@ -140,15 +144,15 @@ struct HeaderIconButtonStyle: ButtonStyle {
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(prominent ? ControllerPalette.elevated : ControllerPalette.ink)
             .frame(width: 42, height: 42)
-            .background(
-                (prominent ? ControllerPalette.ink : ControllerPalette.elevated)
-                    .opacity(configuration.isPressed ? 0.7 : 0.92),
-                in: Circle()
-            )
+            .background {
+                Circle()
+                    .fill((prominent ? ControllerPalette.ink : ControllerPalette.elevated)
+                        .opacity(configuration.isPressed ? 0.7 : 0.92))
+                    .shadow(color: ControllerPalette.ink.opacity(0.08), radius: 8, x: 0, y: 3)
+            }
             .overlay {
                 Circle().strokeBorder(prominent ? Color.clear : ControllerPalette.line, lineWidth: 1)
             }
-            .shadow(color: ControllerPalette.ink.opacity(0.08), radius: 10, x: 0, y: 4)
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .animation(ControllerMotion.immediate, value: configuration.isPressed)
             .contentShape(Circle())

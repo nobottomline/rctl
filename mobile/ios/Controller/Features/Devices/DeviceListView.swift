@@ -36,6 +36,11 @@ struct DeviceListView: View {
     @State private var nearbySelection: LocalDeviceProfile?
     @State private var nearbyFollowUp: NearbyFollowUp?
     @State private var nearbyTask: Task<Void, Never>?
+#if DEBUG
+    /// Drawn the instant the debug push hook appends a route, so a screen
+    /// recording can measure tap-to-transition latency frame by frame.
+    @State private var debugPushMarker = false
+#endif
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -91,6 +96,14 @@ struct DeviceListView: View {
             }
             .refreshable { await refresh() }
             .animation(ControllerMotion.standard, value: localDevices.discoveryEnabled)
+#if DEBUG
+            if debugPushMarker {
+                Color.black.frame(width: 14, height: 14)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+#endif
         }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
@@ -110,6 +123,7 @@ struct DeviceListView: View {
                 if let route {
                     Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(1500))
+                        debugPushMarker = true
                         path.append(route)
                     }
                 }
@@ -241,8 +255,11 @@ struct DeviceListView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(ControllerPalette.elevated)
                     .frame(width: 42, height: 42)
-                    .background(ControllerPalette.ink, in: Circle())
-                    .shadow(color: ControllerPalette.ink.opacity(0.16), radius: 8, x: 0, y: 4)
+                    .background {
+                        Circle()
+                            .fill(ControllerPalette.ink)
+                            .shadow(color: ControllerPalette.ink.opacity(0.16), radius: 8, x: 0, y: 4)
+                    }
             }
             .menuOrder(.fixed)
             .accessibilityLabel("Add device")

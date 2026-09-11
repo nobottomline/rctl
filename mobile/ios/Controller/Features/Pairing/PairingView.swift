@@ -136,11 +136,11 @@ private struct PairingEmblem: View {
         ZStack {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .fill(ControllerPalette.elevated.opacity(0.9))
+                .shadow(color: ControllerPalette.ink.opacity(0.08), radius: 16, x: 0, y: 8)
                 .overlay {
                     RoundedRectangle(cornerRadius: 28, style: .continuous)
                         .strokeBorder(ControllerPalette.line, lineWidth: 1)
                 }
-                .shadow(color: ControllerPalette.ink.opacity(0.08), radius: 22, x: 0, y: 12)
             Image(systemName: "qrcode")
                 .font(.system(size: 56, weight: .regular))
                 .foregroundStyle(ControllerPalette.ink)
