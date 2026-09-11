@@ -1,4 +1,4 @@
-import { forwardRef, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { cn } from '../../lib/cn'
@@ -28,16 +28,21 @@ export function SegmentedFilter<K extends string>({
       <div role="tablist" className="flex items-center gap-1">
         {options.map((option) => {
           const active = option.key === value
+          // An empty segment is a count, not a destination: it stays visible so
+          // the number is informative, but nothing happens on click.
+          const empty = option.count === 0 && !active
           return (
             <button
               key={option.key}
               type="button"
               role="tab"
               aria-selected={active}
+              aria-disabled={empty || undefined}
+              disabled={empty}
               onClick={() => onChange(option.key)}
               className={cn(
                 'inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium transition-colors',
-                active ? 'bg-surface-2 text-fg ring-1 ring-line-2' : 'text-muted hover:text-fg-dim',
+                active ? 'bg-surface-2 text-fg ring-1 ring-line-2' : empty ? 'cursor-default text-faint' : 'text-muted hover:text-fg-dim',
               )}
             >
               {option.label}
@@ -62,7 +67,9 @@ const HEIGHT_EASE = [0.16, 1, 0.3, 1] as const
 
 // Animates its own height to whatever its content measures. The content is
 // observed, not guessed, so virtualized lists, empty states and footnotes all
-// settle smoothly. The first paint is not animated.
+// settle smoothly. The first paint is not animated. The inner wrapper is the
+// positioning context for a view that ViewSwitch pops out of the flow, and an
+// absolutely positioned child never counts toward the measured height.
 export function AnimatedHeight({ children, className }: { children: ReactNode; className?: string }) {
   const inner = useRef<HTMLDivElement>(null)
   const [height, setHeight] = useState<number | 'auto'>('auto')
@@ -85,27 +92,18 @@ export function AnimatedHeight({ children, className }: { children: ReactNode; c
       transition={reduceMotion ? { duration: 0 } : { duration: 0.32, ease: HEIGHT_EASE }}
       className={cn('overflow-hidden', className)}
     >
-      <div ref={inner}>{children}</div>
+      <div ref={inner} className="relative">
+        {children}
+      </div>
     </motion.div>
   )
 }
 
-// A bounded scroll region: long lists scroll within themselves past a few
-// screens of rows, so the page keeps a single scrollbar. `relative` lets a
-// crossfading previous view sit on top of the incoming one.
-export const BoundedList = forwardRef<HTMLDivElement, { children: ReactNode; className?: string }>(
-  function BoundedList({ children, className }, ref) {
-    return (
-      <div ref={ref} className={cn('relative max-h-[26rem] overflow-y-auto overscroll-contain', className)}>
-        {children}
-      </div>
-    )
-  },
-)
-
 // Crossfades between views keyed by `viewKey`. The outgoing view is popped out
 // of the layout immediately (absolute), so the incoming one and the panel height
-// move at once instead of waiting for an exit animation.
+// move at once instead of waiting for an exit animation. Each view owns its own
+// scroll region (see WindowedList), so the outgoing copy never contributes to
+// the incoming region's scrollable overflow.
 export function ViewSwitch({ viewKey, children }: { viewKey: string; children: ReactNode }) {
   const reduceMotion = useReducedMotion()
   return (
@@ -116,7 +114,7 @@ export function ViewSwitch({ viewKey, children }: { viewKey: string; children: R
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: reduceMotion ? 0 : 0.18, ease: 'easeOut' }}
-        className="w-full"
+        className="w-full overflow-hidden"
       >
         {children}
       </motion.div>
@@ -124,23 +122,25 @@ export function ViewSwitch({ viewKey, children }: { viewKey: string; children: R
   )
 }
 
-// Windowed list: renders only the rows that intersect the scroll region. Row
-// heights are measured, so rows may differ in height. Rows must be plain
-// elements (no per-row exit animation): with windowing, "gone" simply means the
-// list is shorter, and AnimatedHeight makes that smooth.
-export function VirtualList<T>({
+// Windowed list inside its own bounded scroll region: long lists scroll within
+// themselves past a few screens of rows (the page keeps a single scrollbar) and
+// only the rows intersecting the region exist in the DOM. Row heights are
+// measured, so rows may differ. Rows must be plain elements (no per-row exit
+// animation): with windowing, "gone" simply means the list is shorter, and
+// AnimatedHeight makes that smooth. Horizontal overflow is clipped so a scrollbar
+// can never appear on that axis.
+export function WindowedList<T>({
   items,
-  scrollRef,
   getKey,
   estimateSize = 60,
   renderRow,
 }: {
   items: T[]
-  scrollRef: RefObject<HTMLDivElement | null>
   getKey: (item: T) => string
   estimateSize?: number
   renderRow: (item: T, index: number) => ReactNode
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
   const virt = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
@@ -149,19 +149,21 @@ export function VirtualList<T>({
     getItemKey: (index) => getKey(items[index]),
   })
   return (
-    <ul role="list" className="relative w-full" style={{ height: `${virt.getTotalSize()}px` }}>
-      {virt.getVirtualItems().map((row) => (
-        <li
-          key={row.key}
-          ref={virt.measureElement}
-          data-index={row.index}
-          className="absolute left-0 top-0 w-full border-b border-line/60"
-          style={{ transform: `translateY(${row.start}px)` }}
-        >
-          {renderRow(items[row.index], row.index)}
-        </li>
-      ))}
-    </ul>
+    <div ref={scrollRef} className="max-h-[26rem] overflow-x-hidden overflow-y-auto overscroll-contain">
+      <ul role="list" className="relative w-full" style={{ height: `${virt.getTotalSize()}px` }}>
+        {virt.getVirtualItems().map((row) => (
+          <li
+            key={row.key}
+            ref={virt.measureElement}
+            data-index={row.index}
+            className="absolute left-0 top-0 w-full border-b border-line/60"
+            style={{ transform: `translateY(${row.start}px)` }}
+          >
+            {renderRow(items[row.index], row.index)}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 

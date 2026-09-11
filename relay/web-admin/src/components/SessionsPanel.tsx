@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { Activity, Globe, Info, LogOut, Monitor, MoreHorizontal } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Menu, MenuItem, MenuSeparator } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { DetailField, DetailSection } from './ui/Detail'
 import { Panel } from './Shell'
-import { AnimatedHeight, BoundedList, VirtualList } from './ui/ListTools'
+import { AnimatedHeight, WindowedList } from './ui/ListTools'
 import { auditLabel } from './ActivityPanel'
 import { describeClient, fmtAbs, fmtRel, fmtUntil } from '../lib/format'
 import type { AuditEntry, Session } from '../types'
@@ -26,7 +26,6 @@ export function SessionsPanel({
   onRevokeOthers,
 }: SessionsPanelProps) {
   const [detail, setDetail] = useState<Session | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
   const others = sessions.filter((s) => !s.current).length
   const detailLive = detail ? sessions.find((s) => s.id === detail.id) ?? detail : null
 
@@ -44,10 +43,8 @@ export function SessionsPanel({
         }
       >
         <AnimatedHeight>
-          <BoundedList ref={scrollRef}>
-            <VirtualList
+            <WindowedList
               items={sessions}
-              scrollRef={scrollRef}
               getKey={(s) => s.id}
               estimateSize={64}
               renderRow={(s) => (
@@ -103,7 +100,6 @@ export function SessionsPanel({
                 </div>
               )}
             />
-          </BoundedList>
         </AnimatedHeight>
       </Panel>
 

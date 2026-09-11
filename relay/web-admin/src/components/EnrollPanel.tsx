@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Ban,
@@ -16,7 +16,7 @@ import {
 import { toast } from 'sonner'
 import { Button } from './ui/Button'
 import { Field } from './ui/Field'
-import { AnimatedHeight, BoundedList, ListEmpty, ListFootnote, SegmentedFilter, ViewSwitch, VirtualList } from './ui/ListTools'
+import { AnimatedHeight, ListEmpty, ListFootnote, SegmentedFilter, ViewSwitch, WindowedList } from './ui/ListTools'
 import { Menu, MenuItem } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { Panel } from './Shell'
@@ -48,21 +48,24 @@ export type EnrollPanelProps = {
   enrollments: EnrollmentSummary[]
   packageAvailable: boolean
   packageVersion?: string
+  packages?: { architecture: 'iphoneos-arm' | 'iphoneos-arm64'; version: string }[]
   retentionSeconds?: number
   onChanged: () => void
 }
 
 type View = 'active' | 'history'
 
-export function EnrollPanel({ enrollments, packageAvailable, packageVersion, retentionSeconds = 0, onChanged }: EnrollPanelProps) {
+export function EnrollPanel({ enrollments, packageAvailable, packageVersion, packages, retentionSeconds = 0, onChanged }: EnrollPanelProps) {
   const [view, setView] = useState<View>('active')
   const [clearOpen, setClearOpen] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [label, setLabel] = useState('')
   const [ttl, setTtl] = useState(TTLS[0])
   const [creating, setCreating] = useState(false)
   const [packaging, setPackaging] = useState(false)
+  const [architecture, setArchitecture] = useState<'iphoneos-arm' | 'iphoneos-arm64'>('iphoneos-arm')
+  const packageOptions = packages ?? (packageAvailable ? [{ architecture: 'iphoneos-arm' as const, version: packageVersion ?? '' }] : [])
+  const selectedPackage = packageOptions.find((p) => p.architecture === architecture) ?? packageOptions[0]
   const [created, setCreated] = useState<Enrollment | null>(null)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState('')
@@ -76,10 +79,6 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
   useEffect(() => {
     if (view === 'history' && history.length === 0 && enrollments.length > 0) setView('active')
   }, [view, history.length, enrollments.length])
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 })
-  }, [view])
 
   function openModal() {
     setCreated(null)
@@ -110,6 +109,7 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
     try {
       const filename = await api.createDevicePackage({
         device_name: label.trim() || 'iPad',
+        architecture: selectedPackage?.architecture,
         label: label.trim() || undefined,
         ttl_seconds: ttl.value,
       })
@@ -197,18 +197,16 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
         />
       )}
       <AnimatedHeight>
-        <BoundedList ref={scrollRef}>
-          <ViewSwitch viewKey={enrollments.length === 0 ? 'none' : view}>
-            {enrollments.length === 0 ? (
+        <ViewSwitch viewKey={enrollments.length === 0 ? 'none' : view}>
+          {enrollments.length === 0 ? (
               <ListEmpty icon={<Ticket className="size-5" />}>No tokens yet. Create one to pair a device.</ListEmpty>
             ) : shown.length === 0 ? (
               <ListEmpty icon={<Ticket className="size-5" />}>
                 {view === 'active' ? 'No active tokens. Used, expired and revoked ones are under History.' : 'No token history.'}
               </ListEmpty>
             ) : (
-              <VirtualList
+              <WindowedList
                 items={shown}
-                scrollRef={scrollRef}
                 getKey={(e) => e.id}
                 estimateSize={58}
                 renderRow={(e) => (
@@ -261,14 +259,13 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
                 )}
               />
             )}
-          </ViewSwitch>
-        </BoundedList>
-        {view === 'history' && history.length > 0 && (
-          <ListFootnote>
-            Used, expired and revoked tokens cannot enroll a device. They stay here for reference
-            {retentionSeconds > 0 ? ` and are cleared automatically after ${fmtDurationLong(retentionSeconds)}` : ''}. Activity history is never affected.
-          </ListFootnote>
-        )}
+          {view === 'history' && history.length > 0 && (
+            <ListFootnote>
+              Used, expired and revoked tokens cannot enroll a device. They stay here for reference
+              {retentionSeconds > 0 ? ` and are cleared automatically after ${fmtDurationLong(retentionSeconds)}` : ''}. Activity history is never affected.
+            </ListFootnote>
+          )}
+        </ViewSwitch>
       </AnimatedHeight>
 
       <Modal
@@ -296,7 +293,7 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
           created
             ? undefined
             : packageAvailable
-              ? `Download a private rctl${packageVersion ? ` ${packageVersion}` : ''} package configured for this relay.`
+              ? `Download a private rctl${selectedPackage?.version ? ` ${selectedPackage.version}` : ''} package configured for this relay.`
               : 'Create a one-time token for the manual package workflow.'
         }
         className="max-w-lg"
@@ -343,6 +340,24 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
                   ))}
                 </Menu>
               </div>
+              {packageAvailable && selectedPackage && (
+                <div>
+                  <span className="mb-2 block text-[13px] font-medium text-fg-dim">Jailbreak</span>
+                  <Menu align="start" trigger={
+                    <Button variant="secondary" disabled={packaging}>
+                      {selectedPackage.architecture === 'iphoneos-arm64' ? 'Rootless (Dopamine)' : 'Rootful'}
+                      <ChevronDown className="size-4" />
+                    </Button>
+                  }>
+                    {packageOptions.map((p) => (
+                      <MenuItem key={p.architecture} icon={selectedPackage.architecture === p.architecture ? Check : undefined}
+                        onSelect={() => setArchitecture(p.architecture)}>
+                        {p.architecture === 'iphoneos-arm64' ? 'Rootless (Dopamine)' : 'Rootful'}
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2.5 pt-1 sm:flex sm:justify-end">
                 <Button variant="secondary" className="w-full sm:w-auto" onClick={() => setOpen(false)}>
                   Cancel

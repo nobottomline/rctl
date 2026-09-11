@@ -283,6 +283,7 @@ export default function App() {
             enrollments={enrollments}
             packageAvailable={status?.device_package_available ?? false}
             packageVersion={status?.device_package_version}
+            packages={status?.device_packages}
             retentionSeconds={status?.history_retention_seconds ?? 0}
             onChanged={() => {
               loadAll({ silent: true })

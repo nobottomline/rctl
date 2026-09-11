@@ -143,6 +143,7 @@ export interface CreateEnrollmentOptions {
 }
 
 export interface CreateDevicePackageOptions extends CreateEnrollmentOptions {
+	architecture?: 'iphoneos-arm' | 'iphoneos-arm64'
   device_name: string
 }
 
@@ -248,6 +249,7 @@ export interface RelayStatus {
   update_configured: boolean
   update_target_version?: string
   device_package_available: boolean
+  device_packages?: { architecture: 'iphoneos-arm' | 'iphoneos-arm64'; version: string }[]
   device_package_version?: string
   history_retention_seconds?: number // 0 = automatic history purge disabled
 }
