@@ -141,17 +141,78 @@ func inspect(members []member) (Info, int, error) {
 		return Info{}, 0, err
 	}
 	info := Info{Package: fields["Package"], Version: fields["Version"], Architecture: fields["Architecture"], DataFormat: members[dataIndex].name}
-	if info.Package != "com.greatlove.rctl" || info.Version == "" || info.Architecture != "iphoneos-arm" {
+	if info.Package != "com.greatlove.rctl" || info.Version == "" || (info.Architecture != "iphoneos-arm" && info.Architecture != "iphoneos-arm64") {
 		return Info{}, 0, errors.New("base package is not a supported public rctl package")
 	}
-	found, err := tarContains(members[dataIndex].name, members[dataIndex].data, relayConfigPath)
-	if err != nil {
+	if err := validatePublicData(members[dataIndex].name, members[dataIndex].data, info.Architecture); err != nil {
 		return Info{}, 0, fmt.Errorf("inspect data archive: %w", err)
 	}
-	if found {
-		return Info{}, 0, errors.New("base package already contains relay configuration")
-	}
 	return info, dataIndex, nil
+}
+
+// Runtime paths follow the package architecture; identity remains outside /var/jb.
+// Reject pre-existing identity and link ancestors before adding enrollment data.
+func validatePublicData(name string, data []byte, architecture string) error {
+	reader, closeReader, err := compressedReader(name, data)
+	if err != nil {
+		return err
+	}
+	defer closeReader()
+	daemon := "usr/local/bin/rctld"
+	otherDaemon := "var/jb/" + daemon
+	if architecture == "iphoneos-arm64" {
+		daemon, otherDaemon = otherDaemon, daemon
+	}
+	protected := []string{relayConfigPath, "var/jb/" + relayConfigPath, daemon}
+	seen := make(map[string]bool)
+	tr := tar.NewReader(reader)
+	var total int64
+	foundDaemon := false
+	for count := 0; count < maxArchiveEntries; count++ {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			if !foundDaemon {
+				return errors.New("package runtime does not match architecture")
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		clean, err := cleanTarName(header.Name)
+		if err != nil {
+			return err
+		}
+		if seen[clean] {
+			return errors.New("duplicate archive path")
+		}
+		seen[clean] = true
+		if header.Size < 0 || header.Size > maxArchiveEntryBytes {
+			return errors.New("archive entry exceeds size limit")
+		}
+		total += header.Size
+		if total > maxArchiveBytes {
+			return errors.New("archive exceeds uncompressed size limit")
+		}
+		if clean == relayConfigPath || clean == "var/jb/"+relayConfigPath {
+			return errors.New("base package already contains relay configuration")
+		}
+		for _, target := range protected {
+			if strings.HasPrefix(target, clean+"/") && header.Typeflag != tar.TypeDir {
+				return errors.New("package contains a non-directory runtime or identity ancestor")
+			}
+		}
+		if clean == otherDaemon {
+			return errors.New("package runtime does not match architecture")
+		}
+		if clean == daemon {
+			if !header.FileInfo().Mode().IsRegular() || header.Size == 0 {
+				return errors.New("package daemon must be a non-empty regular file")
+			}
+			foundDaemon = true
+		}
+	}
+	return errors.New("archive has too many entries")
 }
 
 func parseAR(raw []byte) ([]member, error) {
@@ -352,7 +413,7 @@ func appendTarFile(archiveName string, data []byte, fileName string, content []b
 			return nil, err
 		}
 	}
-	if err := tw.WriteHeader(&tar.Header{Name: fileName, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(content)), Uid: 0, Gid: 0}); err != nil {
+	if err := tw.WriteHeader(&tar.Header{Name: fileName, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(content)), Uid: 0, Gid: 0}); err != nil {
 		return nil, err
 	}
 	if _, err := tw.Write(content); err != nil {

@@ -138,7 +138,7 @@ func TestExternalPublicPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Package != "com.greatlove.rctl" || info.Architecture != "iphoneos-arm" {
+	if info.Package != "com.greatlove.rctl" || (info.Architecture != "iphoneos-arm" && info.Architecture != "iphoneos-arm64") {
 		t.Fatalf("unexpected package info: %+v", info)
 	}
 	if dpkg, err := exec.LookPath("dpkg-deb"); err == nil {
@@ -153,11 +153,18 @@ func TestExternalPublicPackage(t *testing.T) {
 }
 
 func fixturePackage(t *testing.T, format string, unsafe bool) []byte {
+	return fixtureArchitecturePackage(t, format, unsafe, "iphoneos-arm")
+}
+
+func fixtureArchitecturePackage(t *testing.T, format string, unsafe bool, architecture string) []byte {
 	t.Helper()
-	control := fixtureControl(t, "Package: com.greatlove.rctl\nVersion: 1.2.3\nArchitecture: iphoneos-arm\n")
+	control := fixtureControl(t, "Package: com.greatlove.rctl\nVersion: 1.2.3\nArchitecture: "+architecture+"\n")
 	var tarData bytes.Buffer
 	tw := tar.NewWriter(&tarData)
 	name := "usr/local/bin/rctld"
+	if architecture == "iphoneos-arm64" {
+		name = "var/jb/" + name
+	}
 	if unsafe {
 		name = "../../escape"
 	}

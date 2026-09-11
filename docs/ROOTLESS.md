@@ -16,12 +16,17 @@ scripts/build-rootless.sh
 ```
 
 The script builds all components, runs the public-package audit, and prints the
-exact path in `packages/rootless/`. The version has a `~rootless14` prerelease
-suffix. Objects and staging are isolated from the default rootful lane. The
+exact path in `packages/rootless/`. Default versions now use
+`<control-version>~test.<UTC timestamp>.<Git revision>`; the historical
+`~rootless14` suffix is no longer hard-coded. Objects and staging are isolated from the default rootful lane. The
 package identifier remains `com.greatlove.rctl`, with `iphoneos-arm64`
 architecture and dependencies on `ellekit` and `firmware (>= 15.0)`.
 
-The script does not install, deploy, publish, or personalize the package.
+To build both lanes with the same version, use `scripts/build-packages.sh`.
+For a release candidate with an exact Debian version, pass `--version 0.3.5`
+(replace this example with the intended release version). Both lanes are built
+sequentially because they share the web build and Theos aggregate metadata.
+These scripts do not install, deploy, publish, or personalize the package.
 The public APT feed remains rootful until device qualification is recorded.
 
 Local verification on 2026-09-06: rootful and rootless packages both built and
@@ -111,10 +116,44 @@ record the foreground app and whether another audio/camera session was active.
 | Recovery | Remove; reinstall; jailbreak re-enable; no crash loop | Not tested |
 | Soak | 30-minute stream; idle cleanup; memory/thermal behavior | Not tested |
 
-Signed transactional updates and personalized relay delivery are deliberately
-unavailable in this test lane. An update request returns
+Personalized packages can now be generated from either public architecture.
+The rootless code remains below `/var/jb`; enrollment and persistent relay
+identity remain at `/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist`.
+Use `scripts/personalize_deb.sh PATH_TO_ROOTLESS_DEB` or
+`make THEOS_PACKAGE_SCHEME=rootless package-relay`. These are private artifacts,
+not public APT packages. The base must have the matching runtime layout and
+must not already contain relay configuration.
+
+The relay has an independent optional `RCTL_RELAY_ROOTLESS_PACKAGE` path and
+advertises only loaded package variants in Pair device. The existing
+`RCTL_RELAY_PUBLIC_PACKAGE` remains rootful. This implementation does not yet
+qualify physical rootless enrollment, remote feature behavior, or updates.
+
+Signed transactional updates remain unavailable in this test lane. A request returns
 `rootless_updates_not_qualified` instead of attempting to install a rootful
 release. Upgrade/rollback qualification must precede enabling these features.
+
+### Package Preparation Qualification (2026-09-11)
+
+- The common builder produced both Debian architectures with one automatic
+  prerelease version; both real packages passed `release_check.sh`.
+- Go personalization and independent `dpkg-deb` inspection passed for both
+  real artifacts. Shell tests cover rootless identity placement, private modes,
+  rejection of personalized bases, and mismatched architecture/layout.
+- Build-orchestration tests cover both lanes, explicit version propagation,
+  invalid inputs, rejected metadata mismatches, and default version ordering:
+  newer than the historical `~rootless14` candidate, older than `0.3.4`.
+- An isolated local relay loaded both real artifacts. Chrome UI tests selected
+  Rootless in Pair device and downloaded it at 1280px, then selected Rootful and
+  downloaded it at 390px. Independent inspection of both downloaded DEBs
+  confirmed the requested Debian architecture. No production identity was used.
+- `make test`, all relay Go tests, focused relay/deb race tests, and admin
+  TypeScript/lint checks passed. The UI changes also remain compatible with
+  a rootful-only relay status response.
+
+These checks do not establish a physical install, approval/enrollment, remote
+media/input, relay restart recovery, or transactional update/rollback. Public APT
+publication and release-wizard integration remain gated on those separate paths.
 
 ### Screen Geometry Failure (2026-09-07)
 

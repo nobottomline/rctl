@@ -37,9 +37,11 @@ type server struct {
 	controllerSignalsMu sync.Mutex
 	controllerSignals   map[string]map[string]context.CancelFunc
 
-	packageMu         sync.Mutex
-	publicPackage     []byte
-	publicPackageInfo deb.Info
+	packageMu           sync.Mutex
+	publicPackage       []byte
+	publicPackageInfo   deb.Info
+	rootlessPackage     []byte
+	rootlessPackageInfo deb.Info
 }
 
 func Run() {
@@ -72,13 +74,23 @@ func Run() {
 	}
 	if cfg.PublicPackagePath != "" {
 		packageData, packageInfo, err := loadPublicPackage(cfg.PublicPackagePath)
-		if err != nil {
+		if err != nil || packageInfo.Architecture != "iphoneos-arm" {
 			logger.Error("load public device package", "error", err)
 			os.Exit(1)
 		}
 		s.publicPackage = packageData
 		s.publicPackageInfo = packageInfo
 		logger.Info("public device package ready", "version", packageInfo.Version, "format", packageInfo.DataFormat)
+	}
+	if cfg.RootlessPackagePath != "" {
+		packageData, packageInfo, err := loadPublicPackage(cfg.RootlessPackagePath)
+		if err != nil || packageInfo.Architecture != "iphoneos-arm64" {
+			logger.Error("load rootless device package (expected iphoneos-arm64)", "error", err)
+			os.Exit(1)
+		}
+		s.rootlessPackage = packageData
+		s.rootlessPackageInfo = packageInfo
+		logger.Info("rootless device package ready", "version", packageInfo.Version)
 	}
 	if err := s.migrate(context.Background()); err != nil {
 		logger.Error("migrate database", "error", err)

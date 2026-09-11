@@ -28,6 +28,28 @@ The personalized download is generated in bounded memory and is never stored on
 the VPS. It embeds only the user's relay URL, one-time enrollment token, and
 device display name. It is never a GitHub Release asset.
 
+### Package variants
+
+An advanced deployment may load two independent public bases:
+`RCTL_RELAY_PUBLIC_PACKAGE` for `iphoneos-arm` (rootful), and optional
+`RCTL_RELAY_ROOTLESS_PACKAGE` for `iphoneos-arm64` (ordinary Dopamine rootless).
+Use absolute paths readable by the relay process; container deployments must
+mount the files explicitly. Startup rejects a path containing the other
+architecture. The setup/release bootstrap still provisions only its qualified
+rootful artifact; automatic rootless provisioning remains a separate gate.
+
+`GET /api/admin/status` reports `device_packages` as architecture/version pairs.
+Pair device offers only those variants. `POST /api/admin/device-package` accepts
+`architecture`; omission preserves the rootful API contract. A missing requested
+variant fails before an enrollment is created, without choosing another package.
+The download filename uses the actual Debian architecture. Neither selection
+nor personalization enables the rootless transactional updater; see `ROOTLESS.md`.
+
+Both personalizers reject an existing relay plist (including a relocated copy)
+and mismatched daemon layout. The injected plist is mode `0600` at the shared
+unprefixed identity path. The local CLI also writes private output files with
+mode `0600`. Do not use personalized packages as public base artifacts.
+
 ### Advanced manual flow
 
 Maintainers and custom deployments can still run the lower-level flow:

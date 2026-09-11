@@ -4,6 +4,7 @@
 # The normal release package remains LAN-only. This script injects only the
 # caller-provided relay URL and enrollment token into a copy of an existing .deb.
 set -euo pipefail
+umask 077
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEFAULT_OUT_DIR="$ROOT/personalized"
@@ -151,10 +152,7 @@ if [[ -z "$BASE_DEB" || ! -f "$BASE_DEB" ]]; then
   echo "error: base .deb not found; run 'make package' first or pass a .deb path" >&2
   exit 1
 fi
-if [[ "$(dpkg-deb -f "$BASE_DEB" Architecture)" != "iphoneos-arm" ]]; then
-  echo "error: rootless personalization and relay updates are not yet qualified" >&2
-  exit 1
-fi
+python3 "$ROOT/scripts/inspect_public_deb.py" "$BASE_DEB"
 
 mkdir -p "$OUT_DIR"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rctl-personalize.XXXXXX")"
@@ -162,7 +160,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 dpkg-deb -R "$BASE_DEB" "$WORK/pkg"
 CFG_DIR="$WORK/pkg/var/mobile/Library/Preferences"
-mkdir -p "$CFG_DIR"
+(umask 022; mkdir -p "$CFG_DIR")
 
 {
 cat <<PLIST
@@ -197,10 +195,11 @@ cat <<'PLIST'
 </plist>
 PLIST
 } > "$CFG_DIR/com.greatlove.rctl.relay.plist"
-chmod 0644 "$CFG_DIR/com.greatlove.rctl.relay.plist"
+chmod 0600 "$CFG_DIR/com.greatlove.rctl.relay.plist"
 
 BASE_NAME="$(basename "$BASE_DEB" .deb)"
 OUT_DEB="$OUT_DIR/${BASE_NAME}+relay.deb"
-dpkg-deb -b "$WORK/pkg" "$OUT_DEB" >/dev/null
+dpkg-deb -b "$WORK/pkg" "$WORK/personalized.deb" >/dev/null
+install -m 0600 "$WORK/personalized.deb" "$OUT_DEB"
 
 echo "$OUT_DEB"

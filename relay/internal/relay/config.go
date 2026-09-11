@@ -39,6 +39,7 @@ type config struct {
 	UpdateManifestURL   string
 	UpdateTargetVersion string
 	PublicPackagePath   string
+	RootlessPackagePath string
 	HistoryRetention    time.Duration // 0 disables automatic history purge
 	LoginLimit          rateLimitConfig
 	AdminLimit          rateLimitConfig
@@ -78,6 +79,7 @@ func loadConfig() (config, error) {
 		UpdateManifestURL:   os.Getenv("RCTL_RELAY_UPDATE_MANIFEST_URL"),
 		UpdateTargetVersion: os.Getenv("RCTL_RELAY_UPDATE_TARGET_VERSION"),
 		PublicPackagePath:   os.Getenv("RCTL_RELAY_PUBLIC_PACKAGE"),
+		RootlessPackagePath: os.Getenv("RCTL_RELAY_ROOTLESS_PACKAGE"),
 		// Revoked controllers and spent enrollment tokens leave the admin lists on
 		// their own after this long. Audit history is never purged by this.
 		HistoryRetention: getenvDuration("RCTL_RELAY_HISTORY_RETENTION", 30*24*time.Hour),
@@ -123,6 +125,9 @@ func loadConfig() (config, error) {
 	}
 	if cfg.PublicPackagePath != "" && !strings.HasPrefix(cfg.PublicPackagePath, "/") {
 		return cfg, errors.New("RCTL_RELAY_PUBLIC_PACKAGE must be an absolute container path")
+	}
+	if cfg.RootlessPackagePath != "" && !strings.HasPrefix(cfg.RootlessPackagePath, "/") {
+		return cfg, errors.New("RCTL_RELAY_ROOTLESS_PACKAGE must be an absolute container path")
 	}
 	return cfg, nil
 }

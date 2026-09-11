@@ -35,7 +35,7 @@ func loadPublicPackage(name string) ([]byte, deb.Info, error) {
 }
 
 func (s *server) handleCreateDevicePackage(w http.ResponseWriter, r *http.Request) {
-	if len(s.publicPackage) == 0 {
+	if len(s.publicPackage) == 0 && len(s.rootlessPackage) == 0 {
 		writeErr(w, http.StatusServiceUnavailable, "device_package_unavailable")
 		return
 	}
@@ -48,10 +48,26 @@ func (s *server) handleCreateDevicePackage(w http.ResponseWriter, r *http.Reques
 
 	var req struct {
 		enrollmentOptions
-		DeviceName string `json:"device_name"`
+		DeviceName   string `json:"device_name"`
+		Architecture string `json:"architecture"`
 	}
 	if err := readStrictJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	// Missing architecture preserves the existing rootful API contract. Never
+	// silently substitute a package for a different bootstrap.
+	base := s.publicPackage
+	switch req.Architecture {
+	case "", "iphoneos-arm":
+	case "iphoneos-arm64":
+		base = s.rootlessPackage
+	default:
+		writeErr(w, http.StatusBadRequest, "unsupported_package_architecture")
+		return
+	}
+	if len(base) == 0 {
+		writeErr(w, http.StatusServiceUnavailable, "device_package_unavailable")
 		return
 	}
 	name := strings.TrimSpace(req.DeviceName)
@@ -71,7 +87,7 @@ func (s *server) handleCreateDevicePackage(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "enrollment_create_failed")
 		return
 	}
-	personalized, packageInfo, err := deb.Personalize(s.publicPackage, deb.Personalization{
+	personalized, packageInfo, err := deb.Personalize(base, deb.Personalization{
 		RelayURL: s.deviceWebSocketURL(), Token: enrollment.Token, DeviceName: name,
 	})
 	if err != nil {
@@ -82,7 +98,7 @@ func (s *server) handleCreateDevicePackage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	filename := fmt.Sprintf("rctl_%s+relay_iphoneos-arm.deb", safeFilenameVersion(packageInfo.Version))
+	filename := fmt.Sprintf("rctl_%s+relay_%s.deb", safeFilenameVersion(packageInfo.Version), packageInfo.Architecture)
 	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": filename})
 	w.Header().Set("Content-Type", "application/vnd.debian.binary-package")
 	w.Header().Set("Content-Disposition", disposition)
@@ -97,6 +113,22 @@ func (s *server) handleCreateDevicePackage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.audit(r, "admin_device_package_created", "enrollment_id", enrollment.ID, "package_version", packageInfo.Version)
+}
+
+type devicePackageOption struct {
+	Architecture string `json:"architecture"`
+	Version      string `json:"version"`
+}
+
+func (s *server) devicePackageOptions() []devicePackageOption {
+	options := []devicePackageOption{}
+	if len(s.publicPackage) != 0 {
+		options = append(options, devicePackageOption{"iphoneos-arm", s.publicPackageInfo.Version})
+	}
+	if len(s.rootlessPackage) != 0 {
+		options = append(options, devicePackageOption{"iphoneos-arm64", s.rootlessPackageInfo.Version})
+	}
+	return options
 }
 
 func safeFilenameVersion(version string) string {

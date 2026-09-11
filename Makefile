@@ -61,14 +61,9 @@ before-package::
 	$(ECHO_NOTHING)python3 scripts/stage_package.py "$(THEOS_STAGING_DIR)" "$(THEOS_PACKAGE_SCHEME)"$(ECHO_END)
 
 .PHONY: package-relay
-ifeq ($(THEOS_PACKAGE_SCHEME),rootless)
-package-relay:
-	@echo "error: rootless personalization and relay updates are not yet qualified" >&2; exit 1
-else
 package-relay: package
-	@echo "==> Personalizing latest .deb with relay.env"
-	@scripts/personalize_deb.sh
-endif
+	@echo "==> Personalizing built .deb with relay.env"
+	@scripts/personalize_deb.sh "$(_THEOS_DEB_PACKAGE_FILENAME)"
 
 .PHONY: smoke-relay
 smoke-relay:
@@ -84,6 +79,7 @@ verify-update-key:
 
 .PHONY: test-personalize
 test-personalize:
+	@python3 scripts/test_build_packages.py
 	@scripts/test_personalize_deb.sh
 
 .PHONY: deps

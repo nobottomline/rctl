@@ -140,9 +140,17 @@ func newPackageTestServer(t *testing.T) *server {
 }
 
 func packageFixture(t *testing.T) []byte {
+	return architecturePackageFixture(t, "iphoneos-arm")
+}
+
+func architecturePackageFixture(t *testing.T, architecture string) []byte {
 	t.Helper()
-	control := compressedTarFixture(t, map[string][]byte{"control": []byte("Package: com.greatlove.rctl\nVersion: 1.2.3\nArchitecture: iphoneos-arm\n")})
-	data := compressedTarFixture(t, map[string][]byte{"usr/local/bin/rctld": []byte("fixture")})
+	control := compressedTarFixture(t, map[string][]byte{"control": []byte("Package: com.greatlove.rctl\nVersion: 1.2.3\nArchitecture: " + architecture + "\n")})
+	daemon := "usr/local/bin/rctld"
+	if architecture == "iphoneos-arm64" {
+		daemon = "var/jb/" + daemon
+	}
+	data := compressedTarFixture(t, map[string][]byte{daemon: []byte("fixture")})
 	var out bytes.Buffer
 	out.WriteString("!<arch>\n")
 	writeARFixture(t, &out, "debian-binary", []byte("2.0\n"))

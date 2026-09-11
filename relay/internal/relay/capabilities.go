@@ -19,7 +19,7 @@ func protocolCompatible(major int) bool {
 
 func (s *server) features() []string {
 	features := append([]string(nil), relayFeatures...)
-	if len(s.publicPackage) != 0 {
+	if len(s.publicPackage) != 0 || len(s.rootlessPackage) != 0 {
 		features = append(features, "package.personalization")
 	}
 	return features

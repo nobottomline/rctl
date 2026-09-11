@@ -35,7 +35,8 @@ DEVICE_NAME="iPad <Air> & Friends"
 PLIST="var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist"
 
 say "building minimal public deb fixture"
-mkdir -p "${BASE}/DEBIAN" "${BASE}/var/mobile/rctl"
+mkdir -p "${BASE}/DEBIAN" "${BASE}/var/mobile/rctl" "${BASE}/usr/local/bin"
+printf 'fixture\n' >"${BASE}/usr/local/bin/rctld"
 cat >"${BASE}/DEBIAN/control" <<'CONTROL'
 Package: com.greatlove.rctl
 Name: rctl
@@ -80,7 +81,7 @@ grep -F "<string>${TOKEN}</string>" "${EXTRACTED}/${PLIST}" >/dev/null || fail "
 grep -F '<string>iPad &lt;Air&gt; &amp; Friends</string>' "${EXTRACTED}/${PLIST}" >/dev/null || fail "DeviceName was not XML-escaped"
 
 mode="$(stat -f '%Lp' "${EXTRACTED}/${PLIST}" 2>/dev/null || stat -c '%a' "${EXTRACTED}/${PLIST}")"
-[[ "${mode}" == "644" ]] || fail "relay config mode should be 644, got ${mode}"
+[[ "${mode}" == "600" ]] || fail "relay config mode should be 600, got ${mode}"
 
 say "checking public release gate rejects personalized deb"
 if "${ROOT}/scripts/release_check.sh" "${generated}" >/dev/null 2>&1; then
@@ -123,5 +124,38 @@ multi_plist="${WORK}/multi/${PLIST}"
 grep -F '<string>wss://primary.example.test/device</string>' "${multi_plist}" >/dev/null || fail "primary relay missing"
 grep -F '<string>wss://backup.example.test/device</string>' "${multi_plist}" >/dev/null || fail "secondary relay missing"
 grep -F "<string>${TOKEN2}</string>" "${multi_plist}" >/dev/null || fail "secondary token missing"
+
+say "checking rootless metadata and unprefixed private identity"
+ROOTLESS="${WORK}/rootless"
+mkdir -p "${ROOTLESS}/DEBIAN" "${ROOTLESS}/var/jb/usr/local/bin"
+sed 's/Architecture: iphoneos-arm$/Architecture: iphoneos-arm64/' "${BASE}/DEBIAN/control" >"${ROOTLESS}/DEBIAN/control"
+printf 'fixture\n' >"${ROOTLESS}/var/jb/usr/local/bin/rctld"
+dpkg-deb -b "${ROOTLESS}" "${WORK}/rootless.deb" >/dev/null
+rootless_generated="$(RELAY_URL="$RELAY_URL" ENROLL_TOKEN="$TOKEN" OUT_DIR="$OUT" \
+  "$ROOT/scripts/personalize_deb.sh" "${WORK}/rootless.deb")"
+dpkg-deb -R "$rootless_generated" "${WORK}/rootless-result"
+[[ -s "${WORK}/rootless-result/${PLIST}" ]] || fail 'missing rootless identity'
+[[ ! -e "${WORK}/rootless-result/var/jb/${PLIST}" ]] || fail 'identity incorrectly relocated'
+[[ "$(dpkg-deb -f "$rootless_generated" Architecture)" == iphoneos-arm64 ]] || fail 'architecture changed'
+[[ "$(dpkg-deb -f "$rootless_generated" Version)" == 0.0.0-test ]] || fail 'version changed'
+mode="$(stat -f '%Lp' "$rootless_generated" 2>/dev/null || stat -c '%a' "$rootless_generated")"
+[[ "$mode" == 600 ]] || fail 'private artifact must be mode 600'
+
+say "rejecting existing identity and architecture relabeling"
+if RELAY_URL="$RELAY_URL" ENROLL_TOKEN="$TOKEN" OUT_DIR="$OUT" \
+  "$ROOT/scripts/personalize_deb.sh" "$rootless_generated" >/dev/null 2>&1; then
+  fail 'accepted personalized input'
+fi
+cp "${BASE}/DEBIAN/control" "${ROOTLESS}/DEBIAN/control"
+dpkg-deb -b "${ROOTLESS}" "${WORK}/wrong-arch.deb" >/dev/null
+if python3 "$ROOT/scripts/inspect_public_deb.py" "${WORK}/wrong-arch.deb" >/dev/null 2>&1; then
+  fail 'accepted architecture relabeling'
+fi
+mkdir -p "${BASE}/var/mobile/Library/Preferences"
+printf 'fixture\n' >"${BASE}/${PLIST}"
+dpkg-deb -b "${BASE}" "${WORK}/private-base.deb" >/dev/null
+if python3 "$ROOT/scripts/inspect_public_deb.py" "${WORK}/private-base.deb" >/dev/null 2>&1; then
+  fail 'accepted public base with identity'
+fi
 
 say "personalize deb test passed"
