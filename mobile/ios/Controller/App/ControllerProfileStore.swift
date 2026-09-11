@@ -13,6 +13,7 @@ struct ControllerProfileStore {
     private let key = "rctl.controller.profile.v1"
     private let collectionKey = "rctl.controller.profiles.v2"
     private let selectionKey = "rctl.controller.selected-relay.v2"
+    private let clientProfilePrefix = "rctl.controller.client-profile.v1."
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -61,6 +62,17 @@ struct ControllerProfileStore {
         if defaults.string(forKey: selectionKey) == relayID {
             defaults.set(remaining.first?.relayID, forKey: selectionKey)
         }
+        defaults.removeObject(forKey: clientProfilePrefix + relayID)
+    }
+
+    /// Fingerprint of the device profile this relay last accepted, so the app
+    /// re-sends only after an OS or app update, never on a schedule.
+    func reportedClientProfile(relayID: String) -> String? {
+        defaults.string(forKey: clientProfilePrefix + relayID)
+    }
+
+    func setReportedClientProfile(_ fingerprint: String, relayID: String) {
+        defaults.set(fingerprint, forKey: clientProfilePrefix + relayID)
     }
 
     private func persist(_ profiles: [ControllerProfile]) throws {

@@ -93,11 +93,21 @@ The Relay menu supports **Add relay** and switching between saved servers,
 with a checkmark on the selected server. There is no fixed saved-relay count
 limit. Each server keeps its own Keychain identity; device lists and volatile
 tokens belong to the selected profile only. Removing one profile preserves the
-others. **Revoke access** first revokes the selected controller on its relay and
-removes local credentials only after confirmation. **Forget locally** removes
-only the saved profile and keys, including offline; it does not revoke access
-on the server. Failed or ambiguous revocation preserves the profile and shows
-an error. Already-forgotten controllers must be revoked from relay admin.
+others. **Delete relay** is the single destructive action: it revokes the
+selected controller on its relay, then removes the profile and keys from the
+phone. Local deletion waits for the relay's acknowledgement. When the relay
+cannot confirm (offline, or the controller was already revoked from relay
+admin, which the app recognizes by a rejected refresh credential) the app says
+so and offers **Delete anyway**; nothing is removed until that choice. A
+controller deleted only locally stays listed in relay admin until revoked there.
+
+After pairing the app reports a bounded device profile to the relay (hardware
+identifier and marketing name, iOS version and build, app version, device name,
+locale, time zone, screen, CPU count, memory and storage) and re-sends it only
+when that profile changes, never on a schedule. The foreground heartbeat carries
+battery level and state, Low Power Mode, thermal state and network type. No
+vendor or advertising identifiers leave the phone. Relay admin shows all of it
+in the controller's detail card.
 
 The selected relay receives a signed heartbeat every 30 seconds while the app
 is active, including during a remote session. Backgrounding or switching relays

@@ -11,6 +11,15 @@ final class ControllerAppModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var isRevoking = false
     @Published var presentedError: String?
+    /// Set when "Delete relay" could not get the relay's revocation acknowledgement.
+    /// The view offers to delete locally anyway; nothing is removed until then.
+    @Published var relayDeletionFailure: RelayDeletionFailure?
+
+    struct RelayDeletionFailure: Equatable {
+        let message: String
+        /// The relay no longer recognizes this controller: an admin already revoked it.
+        let alreadyRevoked: Bool
+    }
 
     private let api: ControllerAPIClient
     private let keychain: KeychainControllerStore
@@ -21,6 +30,8 @@ final class ControllerAppModel: ObservableObject {
     private var restored = false
     private var profileRevision: UInt64 = 0
     private var refreshOperation: (id: UUID, task: Task<AccessSession, Error>)?
+    private let networkPath = NetworkPathObserver()
+    private var profileSyncTask: Task<Void, Never>?
 
     init(
         api: ControllerAPIClient = ControllerAPIClient(),
@@ -96,6 +107,7 @@ final class ControllerAppModel: ObservableObject {
                 session: AccessSession(profile: newProfile, token: claim.tokens.accessToken, key: key),
                 revision: revision
             )
+            syncClientProfile(for: newProfile)
             return true
         } catch {
             if profileRevision == revision, !(error is CancellationError), !Task.isCancelled {
@@ -205,10 +217,41 @@ final class ControllerAppModel: ObservableObject {
     }
 
     func revokeProfile() async {
+        await revokeAndForget { [weak self] error in
+            self?.presentedError = Self.revocationNotConfirmedMessage
+        }
+    }
+
+    /// The single destructive action for a saved relay: revoke this controller on
+    /// the relay, then remove the profile and its keys from the phone. Local
+    /// deletion waits for the relay's acknowledgement; if that never comes the
+    /// view offers "Delete anyway" through `relayDeletionFailure`.
+    func deleteRelay() async {
+        await revokeAndForget { [weak self] error in
+            guard let self else { return }
+            let alreadyRevoked = Self.isAlreadyRevoked(error)
+            relayDeletionFailure = RelayDeletionFailure(
+                message: alreadyRevoked
+                    ? "The relay no longer recognizes this controller: its access was already revoked from relay admin. The profile and keys can be removed from this phone."
+                    : "The relay did not confirm the revocation. Deleting anyway removes the profile from this phone, but the controller stays listed in relay admin until you revoke it there.",
+                alreadyRevoked: alreadyRevoked
+            )
+        }
+    }
+
+    /// Completes a delete that the relay could not acknowledge. Only reachable
+    /// through the confirmation the view shows for `relayDeletionFailure`.
+    func forceDeleteRelay() {
+        relayDeletionFailure = nil
+        resetProfile()
+    }
+
+    private func revokeAndForget(onFailure: @MainActor (Error) -> Void) async {
         guard let selected = profile, !isBusy, !isRevoking else { return }
         let revision = profileRevision
         isRevoking = true
         isBusy = true
+        relayDeletionFailure = nil
         defer {
             isRevoking = false
             if profileRevision == revision { isBusy = false }
@@ -216,20 +259,77 @@ final class ControllerAppModel: ObservableObject {
         do {
             let session = try await ensureAccessSession(forceRefresh: false)
             try requireCurrentProfile(revision)
-            try await api.revokeCurrentController(origin: selected.origin, accessToken: session.token,
-                signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+            do {
+                try await api.revokeCurrentController(origin: selected.origin, accessToken: session.token,
+                    signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+            } catch ControllerClientError.http(status: 401, code: _) {
+                // A stale access token is retried once; a rejected refresh
+                // credential is the relay saying the controller is already gone.
+                try requireCurrentProfile(revision)
+                let refreshed = try await ensureAccessSession(forceRefresh: true)
+                try requireCurrentProfile(revision)
+                try await api.revokeCurrentController(origin: selected.origin, accessToken: refreshed.token,
+                    signingKey: refreshed.key, allowInsecureLoopback: allowInsecureLoopback)
+            }
             try requireCurrentProfile(revision)
             // Only a confirmed server acknowledgement permits local deletion.
             resetProfile()
         } catch {
             guard profileRevision == revision, !(error is CancellationError), !Task.isCancelled else { return }
-            presentedError = "Revocation was not confirmed. The local profile has been kept. Check relay admin or retry. Forget locally does not revoke server access."
+            onFailure(error)
+        }
+    }
+
+    private static let revocationNotConfirmedMessage =
+        "Revocation was not confirmed. The local profile has been kept. Check relay admin or retry."
+
+    /// A 401 from the relay means the credential itself is rejected: the
+    /// controller was revoked (or deleted) on the server side already.
+    static func isAlreadyRevoked(_ error: Error) -> Bool {
+        if case ControllerClientError.http(status: 401, code: _) = error { return true }
+        return false
+    }
+
+    // MARK: - Device profile
+
+    /// Sends the device profile when it differs from what this relay last
+    /// accepted. Runs detached from the caller so pairing and presence never
+    /// wait on it; failures are silent and retried on the next launch.
+    func syncClientProfile(for expectedProfile: ControllerProfile, force: Bool = false) {
+        let fingerprintOnRecord = profiles.reportedClientProfile(relayID: expectedProfile.relayID)
+        let current = ControllerDeviceProfile.current()
+        guard force || fingerprintOnRecord != current.fingerprint else { return }
+        profileSyncTask?.cancel()
+        profileSyncTask = Task { [weak self] in
+            guard let self else { return }
+            let revision = profileRevision
+            do {
+                var session = try await ensureAccessSession(forceRefresh: false)
+                try requireCurrentProfile(revision)
+                guard profile == expectedProfile else { return }
+                do {
+                    try await api.updateClientProfile(origin: session.profile.origin, profile: current,
+                        accessToken: session.token, signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+                } catch ControllerClientError.http(status: 401, code: _) {
+                    try requireCurrentProfile(revision)
+                    session = try await ensureAccessSession(forceRefresh: true)
+                    try requireCurrentProfile(revision)
+                    guard profile == expectedProfile else { return }
+                    try await api.updateClientProfile(origin: session.profile.origin, profile: current,
+                        accessToken: session.token, signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
+                }
+                try requireCurrentProfile(revision)
+                profiles.setReportedClientProfile(current.fingerprint, relayID: expectedProfile.relayID)
+            } catch {
+                // Old relays answer 404/405; transient failures retry next launch.
+            }
         }
     }
 
     /// Owned by the root view's foreground task, including while a session is open.
     /// No background keepalive or presence for unselected saved relays.
     func maintainPresence(for expectedProfile: ControllerProfile) async {
+        syncClientProfile(for: expectedProfile)
         while !Task.isCancelled, profile == expectedProfile {
             if isBusy {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
@@ -252,8 +352,9 @@ final class ControllerAppModel: ObservableObject {
         var session = try await ensureAccessSession(forceRefresh: false)
         try requireCurrentProfile(revision)
         guard !isRevoking else { throw CancellationError() }
+        let telemetry = ControllerDeviceProfile.telemetry(network: networkPath.current)
         do {
-            try await api.heartbeat(origin: session.profile.origin, accessToken: session.token,
+            try await api.heartbeat(origin: session.profile.origin, telemetry: telemetry, accessToken: session.token,
                 signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
         } catch ControllerClientError.http(status: 401, code: _) {
             try requireCurrentProfile(revision)
@@ -261,7 +362,7 @@ final class ControllerAppModel: ObservableObject {
             session = try await ensureAccessSession(forceRefresh: true)
             try requireCurrentProfile(revision)
             guard !isRevoking else { throw CancellationError() }
-            try await api.heartbeat(origin: session.profile.origin, accessToken: session.token,
+            try await api.heartbeat(origin: session.profile.origin, telemetry: telemetry, accessToken: session.token,
                 signingKey: session.key, allowInsecureLoopback: allowInsecureLoopback)
         }
         try requireCurrentProfile(revision)
@@ -336,6 +437,9 @@ final class ControllerAppModel: ObservableObject {
         profileRevision &+= 1
         refreshOperation?.task.cancel()
         refreshOperation = nil
+        profileSyncTask?.cancel()
+        profileSyncTask = nil
+        relayDeletionFailure = nil
         isBusy = false
         presentedError = nil
     }

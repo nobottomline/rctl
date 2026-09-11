@@ -134,26 +134,63 @@ public struct ControllerAPIClient: Sendable {
             accessToken: accessToken, signingKey: signingKey, allowInsecureLoopback: allowInsecureLoopback)
     }
 
+    /// Foreground heartbeat. `telemetry` rides along when available; an empty
+    /// body remains a valid heartbeat for relays that predate telemetry.
     public func heartbeat(
-        origin: String, accessToken: String, signingKey: ControllerSigningKey,
+        origin: String, telemetry: ControllerTelemetry? = nil,
+        accessToken: String, signingKey: ControllerSigningKey,
         allowInsecureLoopback: Bool = false
     ) async throws {
         try await sendControllerAction(path: "/api/controller/presence", origin: origin,
+            body: try telemetry.map { try Self.actionEncoder.encode(TelemetryEnvelope(telemetry: $0)) } ?? Data(),
             accessToken: accessToken, signingKey: signingKey, allowInsecureLoopback: allowInsecureLoopback)
     }
 
-    private func sendControllerAction(
-        path: String, origin: String, accessToken: String, signingKey: ControllerSigningKey,
-        allowInsecureLoopback: Bool
+    /// Reports the static device profile. Callers send it once per change; the
+    /// relay stores the last report and shows it in the admin console.
+    public func updateClientProfile(
+        origin: String, profile: ControllerClientProfile,
+        accessToken: String, signingKey: ControllerSigningKey,
+        allowInsecureLoopback: Bool = false
     ) async throws {
-        let request = try makeSignedRequest(origin: origin, path: path, method: "POST",
-            token: accessToken, body: Data(), signingKey: signingKey,
+        try await sendControllerAction(path: "/api/controller/me/client", origin: origin,
+            body: try Self.actionEncoder.encode(ClientProfileEnvelope(client: profile.bounded())),
+            accessToken: accessToken, signingKey: signingKey, allowInsecureLoopback: allowInsecureLoopback)
+    }
+
+    func makeControllerActionRequest(
+        path: String, origin: String, body: Data, accessToken: String,
+        signingKey: ControllerSigningKey, allowInsecureLoopback: Bool = false
+    ) throws -> URLRequest {
+        var request = try makeSignedRequest(origin: origin, path: path, method: "POST",
+            token: accessToken, body: body, signingKey: signingKey,
             expectedTokenPrefix: "cat_", allowInsecureLoopback: allowInsecureLoopback)
+        if !body.isEmpty {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        return request
+    }
+
+    private func sendControllerAction(
+        path: String, origin: String, body: Data = Data(), accessToken: String,
+        signingKey: ControllerSigningKey, allowInsecureLoopback: Bool
+    ) async throws {
+        let request = try makeControllerActionRequest(path: path, origin: origin, body: body,
+            accessToken: accessToken, signingKey: signingKey, allowInsecureLoopback: allowInsecureLoopback)
         struct Acknowledgement: Decodable { let ok: Bool }
         guard try await send(request, as: Acknowledgement.self).ok else {
             throw ControllerClientError.invalidResponse
         }
     }
+
+    private static let actionEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }()
+
+    private struct TelemetryEnvelope: Encodable { let telemetry: ControllerTelemetry }
+    private struct ClientProfileEnvelope: Encodable { let client: ControllerClientProfile }
 
     public func refresh(
         origin: String,

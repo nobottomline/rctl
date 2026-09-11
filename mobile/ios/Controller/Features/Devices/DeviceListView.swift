@@ -29,8 +29,7 @@ struct DeviceListView: View {
     @ObservedObject var model: ControllerAppModel
     @ObservedObject var localDevices: LocalDevicesModel
     @State private var path: [DevicesRoute] = []
-    @State private var resetConfirmation = false
-    @State private var revokeConfirmation = false
+    @State private var deleteRelayConfirmation = false
     @State private var removing: LocalDeviceProfile?
     @State private var unavailableReason: String?
     @State private var homeVisible = true
@@ -93,6 +92,24 @@ struct DeviceListView: View {
             homeVisible = true
             localDevices.setForeground(scenePhase == .active)
             if let route = debugLaunchRoute, path.isEmpty { path = route }
+#if DEBUG
+            // `--rctl-push=local` performs a real animated push after launch so
+            // the transition itself can be recorded in the Simulator.
+            if let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--rctl-push=") }),
+               path.isEmpty {
+                let route: DevicesRoute? = switch argument.dropFirst("--rctl-push=".count) {
+                case "local": .localDevice(nil)
+                case "pair": .pairRelay
+                default: nil
+                }
+                if let route {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(1500))
+                        path.append(route)
+                    }
+                }
+            }
+#endif
         }
         .onDisappear {
             homeVisible = false
@@ -115,22 +132,26 @@ struct DeviceListView: View {
             )
         }
         .confirmationDialog(
-            "Forget this relay locally?",
-            isPresented: $resetConfirmation,
+            "Delete this relay?",
+            isPresented: $deleteRelayConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Forget locally", role: .destructive) { model.resetProfile() }
+            Button("Revoke and delete", role: .destructive) { Task { await model.deleteRelay() } }
         } message: {
-            Text("This does not revoke the controller in relay admin and does not remove saved local devices.")
+            Text("The relay revokes this controller and closes its sessions, then the profile and its keys are removed from this phone. Other relays and saved local devices are not affected.")
         }
-        .confirmationDialog(
-            "Revoke this controller's access?",
-            isPresented: $revokeConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Revoke access", role: .destructive) { Task { await model.revokeProfile() } }
-        } message: {
-            Text("The relay will revoke this controller and close its sessions. Its local profile is removed only after confirmation. Other controllers and local devices are not affected.")
+        .alert(
+            model.relayDeletionFailure?.alreadyRevoked == true ? "Access already revoked" : "Relay did not confirm",
+            isPresented: Binding(
+                get: { model.relayDeletionFailure != nil },
+                set: { if !$0 { model.relayDeletionFailure = nil } }
+            ),
+            presenting: model.relayDeletionFailure
+        ) { _ in
+            Button("Delete anyway", role: .destructive) { model.forceDeleteRelay() }
+            Button("Keep", role: .cancel) { model.relayDeletionFailure = nil }
+        } message: { failure in
+            Text(failure.message)
         }
         .confirmationDialog(
             "Remove saved local device?",
@@ -429,15 +450,9 @@ struct DeviceListView: View {
                         }
                         .disabled(model.isBusy)
                         Button(role: .destructive) {
-                            revokeConfirmation = true
+                            deleteRelayConfirmation = true
                         } label: {
-                            Label("Revoke access", systemImage: "hand.raised")
-                        }
-                        .disabled(model.isBusy)
-                        Button(role: .destructive) {
-                            resetConfirmation = true
-                        } label: {
-                            Label("Forget locally", systemImage: "person.crop.circle.badge.xmark")
+                            Label("Delete relay", systemImage: "trash")
                         }
                         .disabled(model.isBusy)
                     } label: {

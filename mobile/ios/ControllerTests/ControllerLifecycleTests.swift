@@ -376,6 +376,114 @@ final class ControllerLifecycleTests: XCTestCase {
         XCTAssertEqual(fixture.model.profile, profile)
     }
 
+    func testDeleteRelayWaitsForAcknowledgementThenOffersLocalDelete() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+        let original = fixture.model.profile
+
+        let failed = Task { await fixture.model.deleteRelay() }
+        try await request("/api/controller/me/revoke").respond(#"{"error":"unavailable"}"#, status: 503)
+        await failed.value
+        XCTAssertEqual(fixture.model.profile, original, "No acknowledgement: nothing is deleted yet")
+        XCTAssertNotNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+        XCTAssertNil(fixture.model.presentedError)
+        let failure = try XCTUnwrap(fixture.model.relayDeletionFailure)
+        XCTAssertFalse(failure.alreadyRevoked)
+
+        fixture.model.forceDeleteRelay()
+        XCTAssertNil(fixture.model.relayDeletionFailure)
+        XCTAssertNil(fixture.model.profile)
+        XCTAssertNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+    }
+
+    func testDeleteRelayRecognizesServerSideRevocation() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+
+        // A stale access token is retried once through refresh; when the refresh
+        // credential itself is rejected the controller was revoked from admin.
+        let gone = Task { await fixture.model.deleteRelay() }
+        try await request("/api/controller/me/revoke").respond(#"{"error":"controller_unauthorized"}"#, status: 401)
+        try await request("/api/controller/token/refresh").respond(#"{"error":"controller_unauthorized"}"#, status: 401)
+        await gone.value
+        XCTAssertNotNil(fixture.model.profile, "Even a revoked controller is deleted locally only on confirmation")
+        let failure = try XCTUnwrap(fixture.model.relayDeletionFailure)
+        XCTAssertTrue(failure.alreadyRevoked)
+        fixture.model.forceDeleteRelay()
+        XCTAssertNil(fixture.model.profile)
+        XCTAssertNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+    }
+
+    func testDeleteRelayRemovesProfileAfterAcknowledgement() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let other = try fixture.addSecondRelay()
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+
+        let deleted = Task { await fixture.model.deleteRelay() }
+        try await request("/api/controller/me/revoke").respond(#"{"ok":true}"#)
+        await deleted.value
+        XCTAssertNil(fixture.model.relayDeletionFailure)
+        XCTAssertNil(try fixture.keychain.loadCredential(relayID: fixture.relayID))
+        XCTAssertNotNil(try fixture.keychain.loadCredential(relayID: other.relayID))
+        XCTAssertEqual(fixture.model.profile, other)
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await Task.yield()
+    }
+
+    func testDeviceProfileIsReportedOncePerFingerprintAndHeartbeatCarriesTelemetry() async throws {
+        let fixture = try ProfileFixture()
+        defer { fixture.close() }
+        let restore = Task { await fixture.model.restore() }
+        try await request("/api/controller/token/refresh").respond(fixture.tokens)
+        try await request("/api/controller/devices").respond(Self.devices)
+        await restore.value
+        let profile = try XCTUnwrap(fixture.model.profile)
+
+        let presence = Task { await fixture.model.maintainPresence(for: profile) }
+        let report = try await request("/api/controller/me/client")
+        XCTAssertEqual(report.request.httpMethod, "POST")
+        XCTAssertNotNil(report.request.value(forHTTPHeaderField: "X-RCTL-Signature"))
+        let reported = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(report.request.bodyData)) as? [String: Any])
+        let client = try XCTUnwrap(reported["client"] as? [String: Any])
+        XCTAssertNotNil(client["system_version"])
+        XCTAssertNotNil(client["idiom"])
+        XCTAssertNil(client["identifier_for_vendor"], "No tracking identifiers leave the phone")
+        report.respond(#"{"ok":true}"#)
+
+        let pulse = try await request("/api/controller/presence")
+        let heartbeat = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(pulse.request.bodyData)) as? [String: Any])
+        let telemetry = try XCTUnwrap(heartbeat["telemetry"] as? [String: Any])
+        XCTAssertNotNil(telemetry["thermal"])
+        XCTAssertNotNil(telemetry["low_power"])
+        presence.cancel()
+        await presence.value
+
+        let deadline = ContinuousClock.now + .seconds(3)
+        while fixture.profiles.reportedClientProfile(relayID: fixture.relayID) == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(fixture.profiles.reportedClientProfile(relayID: fixture.relayID))
+
+        let again = Task { await fixture.model.maintainPresence(for: profile) }
+        _ = try await request("/api/controller/presence")
+        again.cancel()
+        await again.value
+        XCTAssertEqual(RequestStub.requests.count("/api/controller/me/client"), 1, "Unchanged profile is not re-sent")
+    }
+
     private static let devices = #"{"devices":[{"id":"test-device","name":"Test iPad","status":"approved","online":true,"features":["screen.webrtc","controller.scoped_sessions"],"compatible":true}]}"#
 }
 
@@ -510,5 +618,23 @@ final class StubRequests: @unchecked Sendable {
         defer { lock.unlock() }
         pending.removeAll()
         counts.removeAll()
+    }
+}
+
+extension URLRequest {
+    /// URLProtocol receives upload bodies as a stream; drain it for assertions.
+    var bodyData: Data? {
+        if let httpBody { return httpBody }
+        guard let stream = httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
     }
 }
