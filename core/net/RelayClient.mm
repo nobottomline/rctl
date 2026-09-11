@@ -208,7 +208,7 @@ static NSMutableArray *g_relay_clients;
         self.task = [self.session webSocketTaskWithRequest:request];
         [self.task resume];
         relay_log(@"connecting");
-        self.lastActivityAt = [NSDate timeIntervalSinceReferenceDate];
+        self.lastActivityAt = NSProcessInfo.processInfo.systemUptime;
         [self sendHello];
         [self receiveLoop];
         [self ensureSupervisor];
@@ -221,6 +221,7 @@ static NSMutableArray *g_relay_clients;
 - (void)resetTransport {
     self.connected = NO;
     self.connGen++;
+    rctl_webrtc_close_owner((__bridge void *)self);
     if (@available(iOS 13.0, *)) {
         [self.task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
     } else {
@@ -294,10 +295,12 @@ static NSMutableArray *g_relay_clients;
         [self resetTransport];
         return;
     }
+    NSInteger gen = self.connGen;
     [self.task sendMessage:message completionHandler:^(NSError *error) {
         if (error) {
             relay_log([NSString stringWithFormat:@"hello send failed: %@", error.localizedDescription]);
             dispatch_async(self.queue, ^{
+                if (gen != self.connGen) return;
                 [self scheduleReconnect];
             });
         }
@@ -305,8 +308,10 @@ static NSMutableArray *g_relay_clients;
 }
 
 - (void)receiveLoop API_AVAILABLE(ios(13.0)) {
+    NSInteger gen = self.connGen;
     [self.task receiveMessageWithCompletionHandler:^(id message, NSError *error) {
         dispatch_async(self.queue, ^{
+            if (gen != self.connGen || !self.task) return;
             if (error) {
                 relay_log([NSString stringWithFormat:@"receive failed: %@", error.localizedDescription]);
                 [self scheduleReconnect];
@@ -332,7 +337,7 @@ static NSMutableArray *g_relay_clients;
     NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     if (![dict isKindOfClass:[NSDictionary class]]) return;
     NSString *type = [dict[@"type"] isKindOfClass:[NSString class]] ? dict[@"type"] : @"";
-    self.lastActivityAt = [NSDate timeIntervalSinceReferenceDate];
+    self.lastActivityAt = NSProcessInfo.processInfo.systemUptime;
 
     if ([type isEqualToString:@"hello_ack"]) {
         NSDictionary *protocol = [dict[@"protocol"] isKindOfClass:[NSDictionary class]] ? dict[@"protocol"] : nil;
@@ -884,7 +889,7 @@ didReceiveResponse:(NSURLResponse *)response
         [self releaseWakeAssertion];   // cap: don't stay awake through a long outage
     }
     if (self.task) {
-        if (now - self.lastActivityAt > 40.0) {          // ~3 missed pings: dead/half-open
+        if (NSProcessInfo.processInfo.systemUptime - self.lastActivityAt > 40.0) {
             relay_log(@"supervisor: link stale, reconnecting");
             [self scheduleReconnect];
             return;
@@ -907,7 +912,7 @@ didReceiveResponse:(NSURLResponse *)response
                 relay_log([NSString stringWithFormat:@"keepalive ping failed: %@", error.localizedDescription]);
                 [self scheduleReconnect];
             } else {
-                self.lastActivityAt = [NSDate timeIntervalSinceReferenceDate];
+                self.lastActivityAt = NSProcessInfo.processInfo.systemUptime;
             }
         });
     }];

@@ -267,6 +267,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     auto viewerCb = dead->camera ? g_camera_viewer_cb : g_viewer_cb;
     if (lastGone && viewerCb) viewerCb(false);
     if (dead->micIn) mic_teardown();   // its onClosed is detached above
+    if (dead->pc) dead->pc->close();  // revoke even while another worker holds a shared_ptr
     // `dead` drops at the caller: callbacks detached + none in flight -> safe.
 }
 
@@ -733,6 +734,25 @@ extern "C" void rctl_webrtc_unroute_session(const char *id) {
     if (!id) return;
     std::lock_guard<std::mutex> lk(g_mtx);
     g_session_send.erase(std::string(id));
+}
+
+extern "C" void rctl_webrtc_close_owner(void *ctx) {
+    if (!ctx) return;
+    std::vector<std::shared_ptr<Session>> closing;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        for (auto it = g_session_send.begin(); it != g_session_send.end();) {
+            if (it->second.ctx != ctx) { ++it; continue; }
+            auto session = g_sessions.find(it->first);
+            if (session != g_sessions.end()) {
+                closing.push_back(std::move(session->second));
+                g_sessions.erase(session);
+            }
+            it = g_session_send.erase(it);
+        }
+    }
+    // Callback draining and PeerConnection destruction must run outside g_mtx.
+    for (auto &session : closing) destroy_session(std::move(session));
 }
 
 // The local browser sends {kind, payload}; wrap it with the session id into the

@@ -68,6 +68,8 @@ uint64_t rctl_webrtc_files_buffered(void);
 // and dispatches it. unroute_session detaches the sender on disconnect.
 void rctl_webrtc_route_session(const char *id, void (*send)(void *ctx, const char *json), void *ctx);
 void rctl_webrtc_unroute_session(const char *id);
+// Close only sessions routed to this transport owner; LAN/other relays survive.
+void rctl_webrtc_close_owner(void *ctx);
 void rctl_webrtc_handle_local_signal(const char *id, const char *browser_json);
 
 #ifdef __cplusplus

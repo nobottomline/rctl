@@ -138,8 +138,13 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		dc.unregisterSignal(sessionID)
 		cancelCtx, cancel := context.WithTimeout(context.Background(), s.cfg.WriteTimeout)
-		_ = dc.writeJSON(cancelCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "close"})
+		err := dc.writeJSON(cancelCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "close"})
 		cancel()
+		if err != nil {
+			// This exact transport can no longer deliver revocations. Disconnect
+			// it so the daemon drops all sessions owned by it, not a replacement.
+			_ = dc.ws.CloseNow()
+		}
 	}()
 
 	// Mint the ICE servers once per session (STUN + short-lived TURN creds) and
