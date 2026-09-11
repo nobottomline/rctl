@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Ban,
   Check,
@@ -25,7 +24,7 @@ import type { AuditEntry, Controller, ControllerPairing, ControllerScope } from 
 import { Panel } from './Shell'
 import { Button } from './ui/Button'
 import { Field } from './ui/Field'
-import { BoundedList, ListEmpty, ListFootnote, SegmentedFilter } from './ui/ListTools'
+import { AnimatedHeight, BoundedList, ListEmpty, ListFootnote, SegmentedFilter, ViewSwitch, VirtualList } from './ui/ListTools'
 import { Menu, MenuItem, MenuSeparator } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { ControllerDetailModal, PresenceTag } from './ControllerDetailModal'
@@ -67,6 +66,7 @@ export function ControllersPanel({
   const [remove, setRemove] = useState<Controller | null>(null)
   const [clearOpen, setClearOpen] = useState(false)
   const [busy, setBusy] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const active = useMemo(() => controllers.filter((c) => c.status === 'active'), [controllers])
   const revoked = useMemo(() => controllers.filter((c) => c.status !== 'active'), [controllers])
@@ -87,6 +87,12 @@ export function ControllersPanel({
   useEffect(() => {
     if (view === 'revoked' && revoked.length === 0 && controllers.length > 0) setView('active')
   }, [view, revoked.length, controllers.length])
+
+  // Each view starts at the top; a scroll offset from a longer list must not
+  // leave a shorter one showing blank space.
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+  }, [view])
 
   function openPairing() {
     setName('My phone')
@@ -260,37 +266,42 @@ export function ControllersPanel({
             }
           />
         )}
-        {controllers.length === 0 ? (
-          <ListEmpty icon={<Smartphone className="size-5" />}>No native controllers paired.</ListEmpty>
-        ) : shown.length === 0 ? (
-          <ListEmpty icon={<Smartphone className="size-5" />}>
-            {view === 'active' ? 'No authorized controllers. Revoked ones are kept under Revoked.' : 'No revoked controllers.'}
-          </ListEmpty>
-        ) : (
-          <BoundedList>
-            <ul className="divide-y divide-line/60">
-              <AnimatePresence initial={false}>
-                {shown.map((controller) => (
-                  <ControllerRow
-                    key={controller.id}
-                    controller={controller}
-                    busy={busy === controller.id}
-                    onOpen={() => setDetail(controller)}
-                    onRename={() => openRename(controller)}
-                    onRevoke={() => setRevoke(controller)}
-                    onDelete={() => setRemove(controller)}
-                  />
-                ))}
-              </AnimatePresence>
-            </ul>
+        <AnimatedHeight>
+          <BoundedList ref={scrollRef}>
+            <ViewSwitch viewKey={controllers.length === 0 ? 'none' : view}>
+              {controllers.length === 0 ? (
+                <ListEmpty icon={<Smartphone className="size-5" />}>No native controllers paired.</ListEmpty>
+              ) : shown.length === 0 ? (
+                <ListEmpty icon={<Smartphone className="size-5" />}>
+                  {view === 'active' ? 'No authorized controllers. Revoked ones are kept under Revoked.' : 'No revoked controllers.'}
+                </ListEmpty>
+              ) : (
+                <VirtualList
+                  items={shown}
+                  scrollRef={scrollRef}
+                  getKey={(controller) => controller.id}
+                  estimateSize={62}
+                  renderRow={(controller) => (
+                    <ControllerRow
+                      controller={controller}
+                      busy={busy === controller.id}
+                      onOpen={() => setDetail(controller)}
+                      onRename={() => openRename(controller)}
+                      onRevoke={() => setRevoke(controller)}
+                      onDelete={() => setRemove(controller)}
+                    />
+                  )}
+                />
+              )}
+            </ViewSwitch>
           </BoundedList>
-        )}
-        {view === 'revoked' && revoked.length > 0 && (
-          <ListFootnote>
-            Revoked controllers keep no access; they stay here for reference
-            {retentionSeconds > 0 ? ` and are cleared automatically after ${fmtDurationLong(retentionSeconds)}` : ''}. Activity history is never affected.
-          </ListFootnote>
-        )}
+          {view === 'revoked' && revoked.length > 0 && (
+            <ListFootnote>
+              Revoked controllers keep no access; they stay here for reference
+              {retentionSeconds > 0 ? ` and are cleared automatically after ${fmtDurationLong(retentionSeconds)}` : ''}. Activity history is never affected.
+            </ListFootnote>
+          )}
+        </AnimatedHeight>
       </Panel>
 
       <ControllerDetailModal
@@ -539,12 +550,7 @@ function ControllerRow({
     active ? `seen ${fmtRel(controller.last_seen_at)}` : `revoked ${fmtRel(controller.revoked_at)}`,
   ].join(' · ')
   return (
-    <motion.li
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0, height: 0 }}
-      className="flex items-center gap-3 overflow-hidden px-5 py-3"
-    >
+    <div className="flex items-center gap-3 px-5 py-3">
       <div className={cn('grid size-8 shrink-0 place-items-center rounded-lg bg-surface-2 ring-1 ring-line', active ? 'text-muted' : 'text-faint')}>
         <DeviceIcon className="size-4" />
       </div>
@@ -595,6 +601,6 @@ function ControllerRow({
           </>
         )}
       </Menu>
-    </motion.li>
+    </div>
   )
 }

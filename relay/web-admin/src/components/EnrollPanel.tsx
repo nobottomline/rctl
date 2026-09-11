@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Ban,
@@ -16,7 +16,7 @@ import {
 import { toast } from 'sonner'
 import { Button } from './ui/Button'
 import { Field } from './ui/Field'
-import { BoundedList, ListEmpty, ListFootnote, SegmentedFilter } from './ui/ListTools'
+import { AnimatedHeight, BoundedList, ListEmpty, ListFootnote, SegmentedFilter, ViewSwitch, VirtualList } from './ui/ListTools'
 import { Menu, MenuItem } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { Panel } from './Shell'
@@ -57,6 +57,7 @@ type View = 'active' | 'history'
 export function EnrollPanel({ enrollments, packageAvailable, packageVersion, retentionSeconds = 0, onChanged }: EnrollPanelProps) {
   const [view, setView] = useState<View>('active')
   const [clearOpen, setClearOpen] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [label, setLabel] = useState('')
   const [ttl, setTtl] = useState(TTLS[0])
@@ -75,6 +76,10 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
   useEffect(() => {
     if (view === 'history' && history.length === 0 && enrollments.length > 0) setView('active')
   }, [view, history.length, enrollments.length])
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+  }, [view])
 
   function openModal() {
     setCreated(null)
@@ -191,81 +196,80 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, ret
           }
         />
       )}
-      {enrollments.length === 0 ? (
-        <ListEmpty icon={<Ticket className="size-5" />}>No tokens yet. Create one to pair a device.</ListEmpty>
-      ) : shown.length === 0 ? (
-        <ListEmpty icon={<Ticket className="size-5" />}>
-          {view === 'active' ? 'No active tokens. Used, expired and revoked ones are under History.' : 'No token history.'}
-        </ListEmpty>
-      ) : (
-        <BoundedList>
-        <ul className="divide-y divide-line/60">
-          <AnimatePresence initial={false}>
-            {shown.map((e) => (
-              <motion.li
-                key={e.id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2, ease: 'easeOut' }}
-                className="flex items-center gap-3 overflow-hidden px-5 py-3"
-              >
-                <div className="grid size-7 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted ring-1 ring-line">
-                  <Ticket className="size-3.5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-[13px] font-medium text-fg">
-                      {e.label || 'Untitled token'}
-                    </span>
-                    <span
-                      className={cn(
-                        'shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium uppercase tracking-wide ring-1',
-                        statusStyle[e.status],
+      <AnimatedHeight>
+        <BoundedList ref={scrollRef}>
+          <ViewSwitch viewKey={enrollments.length === 0 ? 'none' : view}>
+            {enrollments.length === 0 ? (
+              <ListEmpty icon={<Ticket className="size-5" />}>No tokens yet. Create one to pair a device.</ListEmpty>
+            ) : shown.length === 0 ? (
+              <ListEmpty icon={<Ticket className="size-5" />}>
+                {view === 'active' ? 'No active tokens. Used, expired and revoked ones are under History.' : 'No token history.'}
+              </ListEmpty>
+            ) : (
+              <VirtualList
+                items={shown}
+                scrollRef={scrollRef}
+                getKey={(e) => e.id}
+                estimateSize={58}
+                renderRow={(e) => (
+                  <div className="flex items-center gap-3 px-5 py-3">
+                    <div className="grid size-7 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted ring-1 ring-line">
+                      <Ticket className="size-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-[13px] font-medium text-fg">
+                          {e.label || 'Untitled token'}
+                        </span>
+                        <span
+                          className={cn(
+                            'shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium uppercase tracking-wide ring-1',
+                            statusStyle[e.status],
+                          )}
+                        >
+                          {e.status}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 font-mono text-[10.5px] text-faint">
+                        {shortId(e.id, 12, 0)} · {expiryText(e)}
+                      </div>
+                    </div>
+                    <Menu
+                      trigger={
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          loading={busy === e.id}
+                          aria-label="Token actions"
+                        >
+                          {busy !== e.id && <MoreHorizontal className="size-4" />}
+                        </Button>
+                      }
+                    >
+                      {e.status === 'active' ? (
+                        <MenuItem icon={Ban} danger onSelect={() => act(e.id, 'revoke')}>
+                          Revoke token
+                        </MenuItem>
+                      ) : (
+                        <MenuItem icon={Trash2} danger onSelect={() => act(e.id, 'delete')}>
+                          Delete from history
+                        </MenuItem>
                       )}
-                    >
-                      {e.status}
-                    </span>
+                    </Menu>
                   </div>
-                  <div className="mt-0.5 font-mono text-[10.5px] text-faint">
-                    {shortId(e.id, 12, 0)} · {expiryText(e)}
-                  </div>
-                </div>
-                <Menu
-                  trigger={
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7"
-                      loading={busy === e.id}
-                      aria-label="Token actions"
-                    >
-                      {busy !== e.id && <MoreHorizontal className="size-4" />}
-                    </Button>
-                  }
-                >
-                  {e.status === 'active' ? (
-                    <MenuItem icon={Ban} danger onSelect={() => act(e.id, 'revoke')}>
-                      Revoke token
-                    </MenuItem>
-                  ) : (
-                    <MenuItem icon={Trash2} danger onSelect={() => act(e.id, 'delete')}>
-                      Delete from history
-                    </MenuItem>
-                  )}
-                </Menu>
-              </motion.li>
-            ))}
-          </AnimatePresence>
-        </ul>
+                )}
+              />
+            )}
+          </ViewSwitch>
         </BoundedList>
-      )}
-      {view === 'history' && history.length > 0 && (
-        <ListFootnote>
-          Used, expired and revoked tokens cannot enroll a device. They stay here for reference
-          {retentionSeconds > 0 ? ` and are cleared automatically after ${fmtDurationLong(retentionSeconds)}` : ''}. Activity history is never affected.
-        </ListFootnote>
-      )}
+        {view === 'history' && history.length > 0 && (
+          <ListFootnote>
+            Used, expired and revoked tokens cannot enroll a device. They stay here for reference
+            {retentionSeconds > 0 ? ` and are cleared automatically after ${fmtDurationLong(retentionSeconds)}` : ''}. Activity history is never affected.
+          </ListFootnote>
+        )}
+      </AnimatedHeight>
 
       <Modal
         open={clearOpen}
