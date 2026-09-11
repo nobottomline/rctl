@@ -23,6 +23,48 @@ implementation:
 - send Home, lock, volume, Control Center, and Notification Center commands over
   the scoped control channel, with confirmation for device lock.
 
+## Connection Reliability
+
+The shared LAN/Relay session has a bounded recovery policy, not an always-on
+background connection:
+
+- Transient failures retry at most three times, after 1, 2, and 4 seconds. Each
+  attempt repeats the capabilities/authentication preparation and replaces the
+  old peer. The budget resets only on an explicit new connection or foreground
+  resume, not on a brief successful connection. Certificate/authentication
+  failures during HTTP preparation, protocol rejection, and input congestion
+  do not trigger this recovery loop. Transport signaling failures use the same
+  bounded budget and must pass HTTP preparation again before opening a socket.
+- Every connection, interruption, suspension, and recovery returns to **View**.
+  Re-entering **Control** always requires an explicit action.
+- A decoded-frame observer samples frame arrival at most every 250 ms; a
+  500 ms watchdog marks video stale after 3 seconds without frames and disables
+  control. After 15 seconds without frames the peer fails and can reconnect.
+  Frame time, session generation, and track identity are checked; a delayed
+  first-frame notification alone cannot authorize input. This detects decoder
+  progress, not proof that the GPU presented the frame.
+- Sent touches and held keys are tracked by the transport. Leaving Control
+  cancels queued input and sends their releases independently of the UI mode.
+  Release delivery is best effort when the channel has already failed; it is
+  not a guarantee of remote cleanup after network loss or process termination.
+- Keyboard batches are admitted atomically, with a 10.5-second total scheduling
+  window. The shared input queue permits at most 1,024 messages / 64 KiB, has
+  one timer and coalesced drain work, and invalidates old queued generations.
+  WebRTC's buffered bytes are limited to 64 KiB. Only intermediate touch moves
+  may be dropped under backpressure; failure to send other input ends control
+  visibly instead of silently losing a press or release.
+- Session Controls displays per-second decoded FPS, video bitrate, interval
+  packet loss, ICE RTT, and the selected Direct/TURN media route. Unavailable
+  metrics remain unknown, not zero. The route is separate from LAN/Relay access:
+  relay signaling can still negotiate direct media.
+- Relay JSON reads enforce the 1 MiB bound while receiving, including error
+  bodies. Declared oversize responses and redirects are rejected, cancellation
+  aborts the task, and a 20-second total deadline bounds slow responses.
+
+Closed and failed sessions show an explicit end/reconnect state, not an endless
+loading indicator. Physical network handoff, forced TURN, long-running camera
+sessions, and release delivery during an active gesture remain release gates.
+
 ## Devices And Pairing
 
 Devices is the root of one `NavigationStack`; pairing, the scanner, the
@@ -110,7 +152,7 @@ controlled iPad:
 6. At least 30 minutes of video with frame, thermal, memory, and reconnect data.
 
 The current product slice does not yet implement Unicode clipboard input, audio
-consumers, files, statistics export, or automatic reconnect policy. These are
+consumers, files, or statistics export. These are
 tracked product increments; a successful build is not a release qualification.
 
 ## Lifecycle Regression Tests
@@ -124,13 +166,15 @@ ad-hoc simulator signing for Keychain; no Apple account or team is needed.
 The tests hold HTTP responses with `URLProtocol` and use isolated Keychain and
 UserDefaults namespaces. They cover profile removal during refresh/device-list
 requests, stale operation cleanup, shared concurrent refresh, terminal control
-cleanup, and explicit control re-arming after transient disconnection. LAN tests
+cleanup, fresh-frame control gating, the three-attempt recovery budget, retry
+cancellation on background, and explicit control re-arming after interruption. LAN tests
 cover bounded capability reads, cancellation, address persistence/deduplication,
 invalid saved data, and credential isolation; native screen attachments are kept
 in the test results. By default no real relay or physical device is contacted.
 
 Set `RCTL_LAN_TEST_ADDRESS` to an owned device's private address to opt into
-real LAN video and suspend/resume testing (no touch or keyboard input).
+real LAN video, live Direct-route diagnostics, and suspend/resume testing
+(no touch or keyboard input).
 `RCTL_IOS_TEST_RUNTIME=18.6 make mobile-ios-app-test` selects a specific installed
 runtime; by default the newest iOS 16+ runtime is used. LAN video/reconnect have
 passed on Simulator 18.6 and 26.1; physical iPhone permission behavior and the
@@ -138,6 +182,11 @@ full input/orientation matrix still need qualification.
 
 Realtime package tests also exercise foreign PeerConnection callbacks through a
 loopback WebSocket endpoint and invalidate already queued main-thread events.
+Pure-state regressions cover input admission, ordered release generation,
+cancelled keyboard batches, frame freshness, and statistics counter resets.
+Client tests cover exact/oversized/unknown-length/error responses and cancellation;
+a real loopback HTTP server verifies header rejection and redirect refusal
+after only one body byte, without waiting for the advertised body to complete.
 Peer ownership checks happen on the transport queue; public start/stop invalidate
 event delivery synchronously, and the app receives events directly on MainActor.
 Refresh results are committed only to the profile generation that requested them.

@@ -381,6 +381,15 @@ to make the local listener loopback-only.
 
 ## Media And Session Lifecycle
 
+The implemented iOS slice uses `RemoteSessionModel` for user intent and
+`RctlRealtimeSession` for transport ownership. It now enforces explicit Control
+re-arming, decoded-frame freshness, bounded input scheduling, three automatic
+reconnect attempts, continuous selected-route diagnostics, and bounded relay
+HTTP reads. See the [controller reliability contract](../mobile/ios/Controller/README.md#connection-reliability)
+for thresholds, cancellation semantics, verification, and remaining physical
+qualification. This does not implement the future audio/PiP/background features
+described below.
+
 `SessionCoordinator` is the single owner of active mobile resources. Views issue
 intent; they do not independently own PeerConnections, audio engines, camera
 leases or background assertions.
