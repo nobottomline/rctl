@@ -299,9 +299,11 @@ public struct ControllerAPIClient: Sendable {
     }
 
     private func send<Response: Decodable>(_ request: URLRequest, as type: Response.Type) async throws -> Response {
-        let (data, response) = try await session.data(for: request)
-        guard data.count <= Self.responseLimit else { throw ControllerClientError.responseTooLarge }
-        guard let http = response as? HTTPURLResponse else { throw ControllerClientError.invalidResponse }
+        let operation = BoundedControllerRequest(session: session, request: request, limit: Self.responseLimit)
+        let (data, http) = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { operation.start($0) }
+        } onCancel: { operation.cancel() }
+        try Task.checkCancellation()
         guard (200..<300).contains(http.statusCode) else {
             let code = (try? JSONDecoder().decode(ErrorEnvelope.self, from: data).error) ?? "http_error"
             throw ControllerClientError.http(status: http.statusCode, code: code)
