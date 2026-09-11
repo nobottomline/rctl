@@ -93,6 +93,7 @@ struct RemoteControlView: View {
                 RemoteToolsSheet(
                     deviceName: deviceName,
                     accessPath: model.accessPath,
+                    diagnostics: model.diagnostics,
                     controlsEnabled: controlsEnabled,
                     send: model.sendHardware,
                     reconnect: { Task { await model.connect() } }
@@ -121,29 +122,36 @@ struct RemoteControlView: View {
 
     @ViewBuilder
     private var sessionOverlay: some View {
-        if model.state == .failed || model.state == .disconnected {
+        if model.state == .closed || model.state == .failed || model.state == .disconnected || model.videoHealth == .stalled {
             VStack(spacing: 14) {
-                Image(systemName: "wifi.exclamationmark")
+                Image(systemName: model.state == .closed ? "stop.circle" : "wifi.exclamationmark")
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(RemotePalette.danger)
-                Text("Connection interrupted")
+                Text(model.state == .closed ? "Session ended" : model.videoHealth == .stalled ? "Video paused" : "Connection interrupted")
                     .font(.headline)
                     .foregroundStyle(RemotePalette.primaryText)
-                Text(model.errorMessage ?? "The device connection was interrupted.")
+                Text(model.videoHealth == .stalled ? "No fresh frames. Control is disabled." :
+                    model.state == .closed ? "Reconnect to start a new session." :
+                    model.errorMessage ?? "The device connection was interrupted.")
                     .font(.subheadline)
                     .foregroundStyle(RemotePalette.secondaryText)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
-                Button {
-                    Task { await model.connect() }
-                } label: {
-                    Text("Reconnect")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(RemotePalette.signalText)
-                        .frame(maxWidth: .infinity, minHeight: 46)
-                        .background(RemotePalette.signal, in: RoundedRectangle(cornerRadius: 8))
+                if model.reconnecting {
+                    ProgressView("Reconnecting \(model.reconnectAttempt)/3")
+                        .tint(RemotePalette.signal)
+                } else {
+                    Button {
+                        Task { await model.connect() }
+                    } label: {
+                        Text("Reconnect")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(RemotePalette.signalText)
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                            .background(RemotePalette.signal, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .padding(20)
             .frame(maxWidth: 320)
@@ -188,7 +196,8 @@ struct RemoteControlView: View {
         case .idle: "Ready"
         case .signaling: isLocal ? "Connecting locally" : "Authorizing"
         case .connecting: "Connecting"
-        case .connected: model.media == .camera ? "Live camera" : "Live screen"
+        case .connected: model.videoHealth == .stalled ? "Video paused" :
+            !model.videoAvailable ? "Waiting for video" : model.media == .camera ? "Live camera" : "Live screen"
         case .disconnected: "Disconnected"
         case .failed: "Connection failed"
         case .closed: "Closed"
@@ -197,7 +206,7 @@ struct RemoteControlView: View {
 
     private var connectionColor: Color {
         switch model.state {
-        case .connected: RemotePalette.online
+        case .connected: model.videoHealth == .flowing ? RemotePalette.online : RemotePalette.signal
         case .failed, .disconnected: RemotePalette.danger
         case .signaling, .connecting: RemotePalette.signal
         default: RemotePalette.mutedText

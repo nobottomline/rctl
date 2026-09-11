@@ -88,6 +88,10 @@ final class RemoteSessionModel: ObservableObject {
 
     @Published private(set) var state: RctlRealtimeConnectionState = .idle
     @Published private(set) var videoAvailable = false
+    @Published private(set) var videoHealth: RctlVideoHealth = .waiting
+    @Published private(set) var diagnostics = RctlRealtimeDiagnostics()
+    @Published private(set) var reconnecting = false
+    @Published private(set) var reconnectAttempt = 0
     @Published private(set) var channelStates: [String: RctlRealtimeChannelState] = [:]
     @Published private(set) var errorMessage: String?
     @Published var media: ControllerMediaRole = .screen
@@ -103,9 +107,15 @@ final class RemoteSessionModel: ObservableObject {
     private var connectionAttempt: UInt64 = 0
     private var preparationTask: Task<URLRequest, Error>?
     private var keyboardAvailableAt: TimeInterval = 0
+    private var reconnectTask: Task<Void, Never>?
+    private var wantsConnection = false
+    private var retryableFailure = true
+    private var activeTouches: Set<Int> = []
+    private static let maximumKeyboardBacklog: TimeInterval = 10.5
 
     var canControl: Bool {
-        state == .connected && media == .screen && channelStates["control"] == .open
+        state == .connected && videoAvailable && videoHealth == .flowing &&
+            media == .screen && channelStates["control"] == .open
     }
 
     convenience init(appModel: ControllerAppModel, deviceID: String) {
@@ -129,14 +139,24 @@ final class RemoteSessionModel: ObservableObject {
     }
 
     func connect() async {
+        cancelReconnect()
+        reconnectAttempt = 0
+        wantsConnection = true
+        await startConnection()
+    }
+
+    private func startConnection() async {
         preparationTask?.cancel()
         suspended = false
         connectionAttempt &+= 1
         let currentAttempt = connectionAttempt
-        cancelKeyboardInput()
+        endControl()
         session.stop(notify: false)
         state = .signaling
         videoAvailable = false
+        videoHealth = .waiting
+        diagnostics = RctlRealtimeDiagnostics()
+        retryableFailure = true
         channelStates = [:]
         interactionMode = .view
         errorMessage = nil
@@ -177,10 +197,18 @@ final class RemoteSessionModel: ObservableObject {
             state = .failed
             if case .local = target { errorMessage = LocalDevicesModel.message(for: error) }
             else { errorMessage = ControllerAppModel.message(for: error) }
+            if let error = error as? URLError,
+               [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
+                .dnsLookupFailed, .notConnectedToInternet].contains(error.code) {
+                scheduleReconnect()
+            }
         }
     }
 
     func disconnect() {
+        wantsConnection = false
+        cancelReconnect()
+        endControl()
         preparationTask?.cancel()
         preparationTask = nil
         connectionAttempt &+= 1
@@ -193,6 +221,8 @@ final class RemoteSessionModel: ObservableObject {
 
     func suspend() {
         guard !suspended else { return }
+        cancelReconnect()
+        endControl()
         preparationTask?.cancel()
         preparationTask = nil
         connectionAttempt &+= 1
@@ -225,34 +255,45 @@ final class RemoteSessionModel: ObservableObject {
     func setInteractionMode(_ value: RemoteInteractionMode) {
         let resolvedValue: RemoteInteractionMode = value == .control && canControl ? .control : .view
         if interactionMode == .control, resolvedValue != .control {
-            cancelKeyboardInput()
+            endControl()
         }
         interactionMode = resolvedValue
     }
 
     func sendTouch(phase: Int, finger: Int, x: Double, y: Double) {
+        // UI cancellation can arrive after the mode changed to View.
+        if phase == 2 {
+            guard activeTouches.remove(finger) != nil else { return }
+            if !session.enqueueControl(.touch(phase: phase, finger: finger, x: x, y: y)) { inputRejected() }
+            return
+        }
         guard interactionMode == .control, canControl else { return }
-        session.enqueueControl(.touch(phase: phase, finger: finger, x: x, y: y))
+        guard phase == 0 || (phase == 1 && activeTouches.contains(finger)) else { return }
+        if session.enqueueControl(.touch(phase: phase, finger: finger, x: x, y: y)) {
+            activeTouches.insert(finger)
+        } else { inputRejected() }
     }
 
     func sendHardware(_ action: RemoteHardwareAction) {
         guard interactionMode == .control, canControl else { return }
         let command = action.command
-        session.enqueueControl(.key(page: command.page, usage: command.usage, down: true))
+        guard session.enqueueControl(.key(page: command.page, usage: command.usage, down: true)) else {
+            inputRejected(); return
+        }
         if command.releases {
-            session.enqueueControl(
+            if !session.enqueueControl(
                 .key(page: command.page, usage: command.usage, down: false),
                 after: 0.07
-            )
+            ) { inputRejected() }
         }
     }
 
     func sendKeyboard(_ key: RemoteKeyboardKey) {
         guard interactionMode == .control, canControl else { return }
-        enqueueKeyTap(
-            usage: key.usage,
-            at: reserveKeyboardWindow(duration: Self.textKeyInterval)
-        )
+        guard let delay = reserveKeyboardWindow(duration: Self.textKeyInterval),
+              session.enqueueKeyboardControl(.keyTap(page: HIDKeyboard.page, usage: key.usage), after: delay) else {
+            inputRejected(); return
+        }
     }
 
     func sendText(_ text: String) -> RemoteTextInputResult {
@@ -277,53 +318,82 @@ final class RemoteSessionModel: ObservableObject {
             return .rejected(message: "The text could not be converted to keyboard input.")
         }
 
-        let baseDelay = reserveKeyboardWindow(
+        guard let baseDelay = reserveKeyboardWindow(
             duration: Double(strokes.count) * Self.textKeyInterval
-        )
+        ) else { return .rejected(message: "The keyboard queue is full. Wait for pending text to finish.") }
+        var messages: [ScheduledControlMessage] = []
         for (index, stroke) in strokes.enumerated() {
             let start = baseDelay + Double(index) * Self.textKeyInterval
             if stroke.requiresShift {
-                session.enqueueKeyboardControl(
+                messages.append(ScheduledControlMessage(
                     .key(page: HIDKeyboard.page, usage: HIDKeyboard.leftShift, down: true),
                     after: start
-                )
+                ))
             }
-            enqueueKeyTap(
-                usage: stroke.usage,
-                at: start + (stroke.requiresShift ? 0.006 : 0)
-            )
+            messages.append(ScheduledControlMessage(.keyTap(page: HIDKeyboard.page, usage: stroke.usage),
+                after: start + (stroke.requiresShift ? 0.006 : 0)))
             if stroke.requiresShift {
-                session.enqueueKeyboardControl(
+                messages.append(ScheduledControlMessage(
                     .key(page: HIDKeyboard.page, usage: HIDKeyboard.leftShift, down: false),
                     after: start + 0.024
-                )
+                ))
             }
+        }
+        guard session.enqueueKeyboardControls(messages) else {
+            inputRejected()
+            return .rejected(message: "Text was not queued. The control connection is unavailable or congested.")
         }
         return .sent(characterCount: strokes.count)
     }
 
-    private func enqueueKeyTap(usage: Int, at delay: Double) {
-        session.enqueueKeyboardControl(
-            .keyTap(page: HIDKeyboard.page, usage: usage),
-            after: delay
-        )
-    }
-
-    private func reserveKeyboardWindow(duration: TimeInterval) -> TimeInterval {
+    private func reserveKeyboardWindow(duration: TimeInterval) -> TimeInterval? {
         let now = ProcessInfo.processInfo.systemUptime
         let start = max(now, keyboardAvailableAt)
+        guard start + duration - now <= Self.maximumKeyboardBacklog else { return nil }
         keyboardAvailableAt = start + duration
         return start - now
     }
 
     private func cancelKeyboardInput() {
-        let hadKeyboardInput = keyboardAvailableAt > 0
         keyboardAvailableAt = 0
         session.cancelQueuedKeyboardControl()
-        guard hadKeyboardInput else { return }
-        session.enqueueControl(
-            .key(page: HIDKeyboard.page, usage: HIDKeyboard.leftShift, down: false)
-        )
+    }
+
+    private func endControl() {
+        interactionMode = .view
+        activeTouches.removeAll()
+        keyboardAvailableAt = 0
+        session.releaseAllControl()
+    }
+
+    private func inputRejected() {
+        endControl()
+        errorMessage = "Input stopped: the control connection is unavailable or congested."
+        retryableFailure = false
+        session.stop(notify: false)
+        handle(.connection(.failed))
+    }
+
+    private func cancelReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnecting = false
+    }
+
+    private func scheduleReconnect() {
+        guard wantsConnection, !suspended, reconnectTask == nil, reconnectAttempt < 3 else { return }
+        reconnectAttempt += 1
+        reconnecting = true
+        let revision = connectionAttempt
+        let delay = UInt64(1 << (reconnectAttempt - 1))
+        reconnectTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            guard let self, !Task.isCancelled, self.wantsConnection, !self.suspended,
+                  self.connectionAttempt == revision else { return }
+            self.reconnectTask = nil
+            self.reconnecting = false
+            await self.startConnection()
+        }
     }
 
     func handle(_ event: RctlRealtimeEvent) {
@@ -331,25 +401,39 @@ final class RemoteSessionModel: ObservableObject {
         case let .connection(value):
             state = value
             if value != .connected {
-                interactionMode = .view
-                cancelKeyboardInput()
+                endControl()
             }
             if value == .failed || value == .closed || value == .idle {
                 channelStates = [:]
                 videoAvailable = false
+                videoHealth = .waiting
+                diagnostics = RctlRealtimeDiagnostics()
             }
+            if (value == .failed || value == .closed), retryableFailure { scheduleReconnect() }
         case .firstVideoFrame:
-            videoAvailable = true
+            // A first-frame callback may already be stale when delivered.
+            // Only the separately evaluated health event enables control.
+            break
+        case let .videoHealth(health):
+            videoHealth = health
+            videoAvailable = health == .flowing
+            if health != .flowing { endControl() }
+        case let .diagnostics(value):
+            diagnostics = value
         case .orientation:
             break
         case let .channel(label, value):
             channelStates[label] = value
             if label == "control", value != .open {
-                cancelKeyboardInput()
-                interactionMode = .view
+                endControl()
             }
         case let .failure(error):
             errorMessage = error.localizedDescription
+            switch error {
+            case .negotiationFailed, .signalingFailed, .signalingClosed, .videoStalled:
+                retryableFailure = true
+            default: retryableFailure = false
+            }
         }
     }
 

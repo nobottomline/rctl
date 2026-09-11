@@ -5,7 +5,7 @@ import UIKit
 public final class RctlRemoteVideoView: UIView {
     private let presentationView: RctlMetalVideoView
     private let renderer: RctlMetalVideoRenderer
-    private let frameObserver = FirstFrameRenderer()
+    private var frameObserver = VideoFrameObserver()
     private var track: LKRTCVideoTrack?
 
     public override init(frame: CGRect) {
@@ -37,15 +37,19 @@ public final class RctlRemoteVideoView: UIView {
 
     func setTrack(
         _ newTrack: LKRTCVideoTrack?,
-        firstFrameHandler: (@Sendable () -> Void)? = nil
+        frameHandler: (@Sendable (TimeInterval) -> Void)? = nil
     ) {
         guard track !== newTrack else {
-            frameObserver.updateHandler(firstFrameHandler)
+            frameObserver.updateHandler(frameHandler)
             return
         }
         track?.remove(renderer)
         track?.remove(frameObserver)
-        frameObserver.reset(handler: firstFrameHandler)
+        // Do not let an in-flight callback from the old track read the new
+        // track's handler and incorrectly renew its freshness.
+        frameObserver.reset(handler: nil)
+        frameObserver = VideoFrameObserver()
+        frameObserver.reset(handler: frameHandler)
         track = newTrack
         if newTrack == nil {
             renderer.clear()
@@ -63,19 +67,19 @@ public final class RctlRemoteVideoView: UIView {
     }
 }
 
-private final class FirstFrameRenderer: NSObject, LKRTCVideoRenderer, @unchecked Sendable {
+private final class VideoFrameObserver: NSObject, LKRTCVideoRenderer, @unchecked Sendable {
     private let lock = NSLock()
-    private var reported = false
-    private var handler: (@Sendable () -> Void)?
+    private var reportedAt: TimeInterval?
+    private var handler: (@Sendable (TimeInterval) -> Void)?
 
-    func reset(handler: (@Sendable () -> Void)?) {
+    func reset(handler: (@Sendable (TimeInterval) -> Void)?) {
         lock.lock()
-        reported = false
+        reportedAt = nil
         self.handler = handler
         lock.unlock()
     }
 
-    func updateHandler(_ handler: (@Sendable () -> Void)?) {
+    func updateHandler(_ handler: (@Sendable (TimeInterval) -> Void)?) {
         lock.lock()
         self.handler = handler
         lock.unlock()
@@ -86,10 +90,11 @@ private final class FirstFrameRenderer: NSObject, LKRTCVideoRenderer, @unchecked
     func renderFrame(_ frame: LKRTCVideoFrame?) {
         guard frame != nil else { return }
         lock.lock()
-        let callback = reported ? nil : handler
-        reported = true
+        let now = ProcessInfo.processInfo.systemUptime
+        let callback = reportedAt.map { now - $0 < 0.25 } == true ? nil : handler
+        if callback != nil { reportedAt = now }
         lock.unlock()
-        callback?()
+        callback?(now)
     }
 }
 #endif

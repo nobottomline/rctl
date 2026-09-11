@@ -229,7 +229,14 @@ final class LocalDeviceTests: XCTestCase {
         XCTAssertEqual(model.state, .connected, model.errorMessage ?? "No connection")
         XCTAssertTrue(model.videoAvailable, model.errorMessage ?? "No decoded frame")
         XCTAssertEqual(model.interactionMode, .view)
-        try await Task.sleep(for: .seconds(1))
+        let diagnosticsDeadline = ContinuousClock.now + .seconds(6)
+        while model.diagnostics.framesPerSecond == nil, ContinuousClock.now < diagnosticsDeadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertNotNil(model.diagnostics.framesPerSecond)
+        XCTAssertNotNil(model.diagnostics.bitsPerSecond)
+        XCTAssertEqual(model.diagnostics.route, .direct)
+        XCTAssertEqual(model.videoHealth, .flowing)
         XCTAssertNotNil(video.normalizedRemotePoint(for: CGPoint(x: video.bounds.midX, y: video.bounds.midY)))
         model.suspend()
         await model.resume()

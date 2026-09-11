@@ -1,4 +1,5 @@
 import SwiftUI
+import RctlRealtime
 
 struct RemoteToolsSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -6,6 +7,7 @@ struct RemoteToolsSheet: View {
 
     let deviceName: String
     let accessPath: RemoteAccessPath
+    var diagnostics = RctlRealtimeDiagnostics()
     let controlsEnabled: Bool
     let send: (RemoteHardwareAction) -> Void
     let reconnect: () -> Void
@@ -17,6 +19,21 @@ struct RemoteToolsSheet: View {
             ScrollView {
                 SessionConnectionBlock(accessPath: accessPath)
                     .padding(.bottom, 14)
+                VStack(spacing: 8) {
+                    diagnostic("Decoded FPS", value: diagnostics.framesPerSecond, suffix: "", digits: 1)
+                    diagnostic("Video bitrate", value: diagnostics.bitsPerSecond.map { $0 / 1000 }, suffix: " kbps")
+                    diagnostic("Packet loss", value: diagnostics.packetLossPercent, suffix: "%", digits: 1)
+                    diagnostic("RTT", value: diagnostics.roundTripMilliseconds, suffix: " ms")
+                    HStack {
+                        Text("Media route")
+                        Spacer()
+                        Text(diagnostics.route.rawValue)
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(RemotePalette.secondaryText)
+                .monospacedDigit()
+                .padding(.bottom, 14)
                 LazyVGrid(columns: columns, spacing: 10) {
                     tool("Control Center", symbol: "switch.2", action: .controlCenter)
                     tool("Notifications", symbol: "bell", action: .notificationCenter)
@@ -85,6 +102,15 @@ struct RemoteToolsSheet: View {
             repeating: GridItem(.flexible(), spacing: 10),
             count: dynamicTypeSize.isAccessibilitySize ? 1 : 2
         )
+    }
+
+    private func diagnostic(_ label: String, value: Double?, suffix: String, digits: Int = 0) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value.map { $0.formatted(.number.precision(.fractionLength(digits))) + suffix } ?? "Unavailable")
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func tool(

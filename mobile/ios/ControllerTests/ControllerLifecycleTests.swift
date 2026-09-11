@@ -6,12 +6,104 @@ import XCTest
 
 @MainActor
 final class ControllerLifecycleTests: XCTestCase {
+    func testFreshVideoIsRequiredAndRecoveryNeverRestoresControl() {
+        let model = RemoteSessionModel(appModel: ControllerAppModel(), deviceID: "test-device")
+        model.handle(.connection(.connected))
+        model.handle(.channel(label: "control", state: .open))
+        XCTAssertFalse(model.canControl)
+        model.handle(.firstVideoFrame)
+        XCTAssertFalse(model.canControl)
+        model.setInteractionMode(.control)
+        XCTAssertEqual(model.interactionMode, .view)
+        model.handle(.videoHealth(.flowing))
+        model.setInteractionMode(.control)
+        XCTAssertTrue(model.canControl)
+        model.handle(.videoHealth(.stalled))
+        XCTAssertFalse(model.canControl)
+        XCTAssertEqual(model.interactionMode, .view)
+        model.handle(.videoHealth(.flowing))
+        XCTAssertTrue(model.canControl)
+        XCTAssertEqual(model.interactionMode, .view)
+        model.disconnect()
+    }
+
+    func testReconnectBudgetAndFreshRequests() async throws {
+        RequestStub.requests.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RequestStub.self]
+        let model = RemoteSessionModel(appModel: ControllerAppModel(),
+            target: .local(try LocalDeviceAddress("192.168.1.2")),
+            localClient: LocalDeviceClient(configuration: configuration))
+        defer { model.disconnect() }
+        let connect = Task { await model.connect() }
+        for attempt in 0...3 {
+            let pending = try await localRetryRequest()
+            XCTAssertEqual(model.interactionMode, .view)
+            pending.fail(URLError(.networkConnectionLost))
+            if attempt == 0 { await connect.value }
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(model.reconnectAttempt, 3)
+        XCTAssertFalse(model.reconnecting)
+        XCTAssertEqual(model.state, .failed)
+        XCTAssertEqual(RequestStub.requests.count("/v1/capabilities"), 4)
+    }
+
+    func testSuspendCancelsPendingAutomaticReconnect() async throws {
+        RequestStub.requests.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RequestStub.self]
+        let model = RemoteSessionModel(appModel: ControllerAppModel(),
+            target: .local(try LocalDeviceAddress("192.168.1.2")),
+            localClient: LocalDeviceClient(configuration: configuration))
+        let connect = Task { await model.connect() }
+        let pending = try await localRetryRequest()
+        pending.fail(URLError(.networkConnectionLost))
+        await connect.value
+        XCTAssertTrue(model.reconnecting)
+        model.suspend()
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertFalse(model.reconnecting)
+        XCTAssertEqual(model.state, .closed)
+        XCTAssertEqual(RequestStub.requests.count("/v1/capabilities"), 1)
+        model.disconnect()
+    }
+
+    private func localRetryRequest() async throws -> RequestStub {
+        let deadline = ContinuousClock.now + .seconds(6)
+        while ContinuousClock.now < deadline {
+            if let pending = RequestStub.requests.take("/v1/capabilities") { return pending }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("A bounded reconnect attempt did not issue a fresh request")
+        throw URLError(.timedOut)
+    }
+
+    func testPreparationDoesNotRetryTrustOrAuthenticationFailures() async throws {
+        for code in [URLError.Code.serverCertificateUntrusted, .userAuthenticationRequired] {
+            RequestStub.requests.reset()
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [RequestStub.self]
+            let model = RemoteSessionModel(appModel: ControllerAppModel(),
+                target: .local(try LocalDeviceAddress("192.168.1.2")),
+                localClient: LocalDeviceClient(configuration: configuration))
+            let connect = Task { await model.connect() }
+            let pending = try await localRetryRequest()
+            pending.fail(URLError(code))
+            await connect.value
+            XCTAssertEqual(model.state, .failed)
+            XCTAssertEqual(model.reconnectAttempt, 0)
+            XCTAssertFalse(model.reconnecting)
+            model.disconnect()
+        }
+    }
+
     func testTerminalConnectionStatesClearControlAndVideo() {
         for state in [RctlRealtimeConnectionState.failed, .closed, .idle] {
             let model = RemoteSessionModel(appModel: ControllerAppModel(), deviceID: "test-device")
             model.handle(.connection(.connected))
             model.handle(.channel(label: "control", state: .open))
-            model.handle(.firstVideoFrame)
+            model.handle(.videoHealth(.flowing))
             model.setInteractionMode(.control)
             XCTAssertTrue(model.canControl)
 
@@ -30,7 +122,7 @@ final class ControllerLifecycleTests: XCTestCase {
         model.handle(.channel(label: "control", state: .open))
         XCTAssertFalse(model.canControl)
         model.handle(.connection(.connected))
-        model.handle(.firstVideoFrame)
+        model.handle(.videoHealth(.flowing))
         model.setInteractionMode(.control)
         model.handle(.connection(.disconnected))
         XCTAssertFalse(model.canControl)
@@ -63,7 +155,7 @@ final class ControllerLifecycleTests: XCTestCase {
         let model = RemoteSessionModel(appModel: ControllerAppModel(), deviceID: "test-device")
         model.handle(.connection(.connected))
         model.handle(.channel(label: "control", state: .open))
-        model.handle(.firstVideoFrame)
+        model.handle(.videoHealth(.flowing))
         model.setInteractionMode(.control)
         model.suspend()
         XCTAssertFalse(model.canControl)
@@ -363,6 +455,14 @@ final class RequestStub: URLProtocol, @unchecked Sendable {
         lock.lock()
         stopped = true
         lock.unlock()
+    }
+
+    func fail(_ error: Error) {
+        lock.lock()
+        guard !stopped else { lock.unlock(); return }
+        stopped = true
+        lock.unlock()
+        client?.urlProtocol(self, didFailWithError: error)
     }
 
     func respond(_ body: String, status: Int = 200) {

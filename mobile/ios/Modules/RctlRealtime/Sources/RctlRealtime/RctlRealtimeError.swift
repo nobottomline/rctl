@@ -9,6 +9,7 @@ public enum RctlRealtimeError: Error, Equatable, Sendable {
     case signalingClosed
     case controlChannelUnavailable
     case controlBackpressure
+    case videoStalled
 }
 
 extension RctlRealtimeError: LocalizedError {
@@ -30,6 +31,8 @@ extension RctlRealtimeError: LocalizedError {
             "The control DataChannel is not open."
         case .controlBackpressure:
             "The control DataChannel is congested."
+        case .videoStalled:
+            "No fresh video frames are arriving."
         }
     }
 }

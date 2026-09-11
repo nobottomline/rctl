@@ -11,7 +11,6 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private static let maximumControlBufferedBytes: UInt64 = 64 * 1_024
     private static let connectionTimeout: TimeInterval = 15
     private static let disconnectGrace: TimeInterval = 5
-    private static let videoDiagnosticDelay: TimeInterval = 5
     private static let logger = Logger(subsystem: "com.greatlove.rctl.controller", category: "WebRTC")
 
     private let factory: RctlPeerConnectionFactory
@@ -19,10 +18,12 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private let localURLSession = LocalNetworkSession.make()
     private let eventDelivery: RealtimeEventDelivery
     private let queue = DispatchQueue(label: "com.greatlove.rctl.realtime.session")
+    private let controlBuffer = RealtimeControlBuffer()
+    private var controlTimer: DispatchSourceTimer?
+    private var pressedControl = PressedControlState()
 
     private var generation: UInt64 = 0
     private var eventRevision: UInt64 = 0
-    private var keyboardGeneration: UInt64 = 0
     private var running = false
     private var localConnection = false
     private var webSocket: URLSessionWebSocketTask?
@@ -40,6 +41,13 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private var orientation: Int?
     private var connectionTimeoutWorkItem: DispatchWorkItem?
     private var disconnectWorkItem: DispatchWorkItem?
+    private var monitorTimer: DispatchSourceTimer?
+    private var freshness = VideoFreshness()
+    private var videoHealth: RctlVideoHealth = .waiting
+    private var connectedAt: TimeInterval?
+    private var statistics = VideoStatisticsAccumulator()
+    private var statisticsPending = false
+    private var lastStatisticsAt: TimeInterval = 0
 #if canImport(UIKit)
     private weak var videoView: RctlRemoteVideoView?
 #endif
@@ -72,6 +80,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     }
 
     public func stop(notify: Bool = true) {
+        controlBuffer.reset(open: false)
         eventDelivery.advance { revision in
             queue.async { [weak self] in
                 guard let self else { return }
@@ -90,6 +99,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
             let previousView = self.videoView
             self.videoView = view
             let track = self.videoTrack
+            let trackID = track?.trackId
             let orientation = self.orientation
             let generation = self.generation
             DispatchQueue.main.async {
@@ -97,9 +107,9 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
                     previousView?.setTrack(nil)
                 }
                 view.setDeviceOrientation(orientation)
-                view.setTrack(track) { [weak self] in
+                view.setTrack(track) { [weak self] timestamp in
                     self?.queue.async {
-                        self?.handleFirstVideoFrameLocked(generation: generation)
+                        self?.handleVideoFrameLocked(at: timestamp, generation: generation, trackID: trackID)
                     }
                 }
             }
@@ -129,12 +139,13 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
                     continuation.resume(throwing: RctlRealtimeError.controlChannelUnavailable)
                     return
                 }
-                guard channel.bufferedAmount <= Self.maximumControlBufferedBytes else {
+                guard channel.bufferedAmount + UInt64(data.count) <= Self.maximumControlBufferedBytes else {
                     continuation.resume(throwing: RctlRealtimeError.controlBackpressure)
                     return
                 }
                 let buffer = LKRTCDataBuffer(data: data, isBinary: false)
                 if channel.sendData(buffer) {
+                    self.pressedControl.sent(message)
                     continuation.resume()
                 } else {
                     continuation.resume(throwing: RctlRealtimeError.controlChannelUnavailable)
@@ -143,59 +154,107 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         }
     }
 
-    public func enqueueControl(_ message: ControlMessage, after delay: TimeInterval = 0) {
+    @discardableResult
+    public func enqueueControl(_ message: ControlMessage, after delay: TimeInterval = 0) -> Bool {
         enqueueControl(message, after: delay, cancellableKeyboardInput: false)
     }
 
-    public func enqueueKeyboardControl(_ message: ControlMessage, after delay: TimeInterval = 0) {
+    @discardableResult
+    public func enqueueKeyboardControl(_ message: ControlMessage, after delay: TimeInterval = 0) -> Bool {
         enqueueControl(message, after: delay, cancellableKeyboardInput: true)
+    }
+
+    @discardableResult
+    public func enqueueKeyboardControls(_ messages: [ScheduledControlMessage]) -> Bool {
+        guard controlBuffer.append(messages, keyboard: true) else { return false }
+        scheduleControlDrain()
+        return true
     }
 
     private func enqueueControl(
         _ message: ControlMessage,
         after delay: TimeInterval,
         cancellableKeyboardInput: Bool
-    ) {
-        guard let data = try? WireJSON.encode(message) else { return }
-        let mayDropForBackpressure: Bool
-        if case let .touch(phase, _, _, _) = message {
-            mayDropForBackpressure = phase == 1
-        } else {
-            mayDropForBackpressure = false
-        }
+    ) -> Bool {
+        guard controlBuffer.append(message, delay: delay, keyboard: cancellableKeyboardInput) else { return false }
+        scheduleControlDrain()
+        return true
+    }
 
+    private func scheduleControlDrain() {
+        guard let revision = controlBuffer.scheduleDrain() else { return }
         queue.async { [weak self] in
-            guard let self else { return }
-            let scheduledGeneration = self.generation
-            let scheduledKeyboardGeneration = cancellableKeyboardInput
-                ? self.keyboardGeneration
-                : nil
-            let send = DispatchWorkItem { [weak self] in
-                guard let self,
-                      self.generation == scheduledGeneration,
-                      scheduledKeyboardGeneration == nil
-                        || self.keyboardGeneration == scheduledKeyboardGeneration,
-                      let channel = self.channels["control"],
-                      channel.readyState == .open else {
-                    return
-                }
-                if mayDropForBackpressure,
-                   channel.bufferedAmount > Self.maximumControlBufferedBytes {
-                    return
-                }
-                _ = channel.sendData(LKRTCDataBuffer(data: data, isBinary: false))
+            guard let self, self.controlBuffer.beginDrain(revision) else { return }
+            self.drainControlLocked(revision: revision)
+        }
+    }
+
+    private func drainControlLocked(revision: UInt64) {
+        guard running, controlBuffer.isCurrent(revision) else { return }
+        controlTimer?.cancel()
+        controlTimer = nil
+        for entry in controlBuffer.takeDue(now: ProcessInfo.processInfo.systemUptime, revision: revision) {
+            guard controlBuffer.isCurrent(entry) else { continue }
+            do {
+                try transmitControlLocked(entry.message, data: entry.data)
+            } catch let error as RctlRealtimeError {
+                // Only intermediate touch motion is lossy. Dropping a down/up
+                // silently can leave the remote device in a pressed state.
+                if case .touch(1, _, _, _) = entry.message, error == .controlBackpressure { continue }
+                failLocked(error, generation: generation)
+                return
+            } catch {
+                failLocked(.controlChannelUnavailable, generation: generation)
+                return
             }
-            if delay > 0 {
-                self.queue.asyncAfter(deadline: .now() + delay, execute: send)
-            } else {
-                send.perform()
+        }
+        if let deadline = controlBuffer.nextDeadline {
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + max(0, deadline - ProcessInfo.processInfo.systemUptime))
+            timer.setEventHandler { [weak self] in self?.drainControlLocked(revision: revision) }
+            controlTimer = timer
+            timer.resume()
+        }
+    }
+
+    private func transmitControlLocked(_ message: ControlMessage, data: Data? = nil) throws {
+        guard let channel = channels["control"], channel.readyState == .open else {
+            throw RctlRealtimeError.controlChannelUnavailable
+        }
+        let data = try data ?? WireJSON.encode(message)
+        guard channel.bufferedAmount + UInt64(data.count) <= Self.maximumControlBufferedBytes else {
+            throw RctlRealtimeError.controlBackpressure
+        }
+        guard channel.sendData(LKRTCDataBuffer(data: data, isBinary: false)) else {
+            throw RctlRealtimeError.controlChannelUnavailable
+        }
+        pressedControl.sent(message)
+    }
+
+    /// Does not consult the app's mode: release remains legal after Control ends.
+    public func releaseAllControl() {
+        controlBuffer.reset()
+        queue.async { [weak self] in
+            guard let self, self.running else { return }
+            self.releasePressedControlLocked()
+        }
+    }
+
+    private func releasePressedControlLocked(keyboardOnly: Bool = false, failOnError: Bool = true) {
+        for message in pressedControl.releases(keyboardOnly: keyboardOnly) {
+            do { try transmitControlLocked(message) }
+            catch {
+                if failOnError { failLocked(.controlChannelUnavailable, generation: generation) }
+                return
             }
         }
     }
 
     public func cancelQueuedKeyboardControl() {
+        controlBuffer.cancelKeyboard()
         queue.async { [weak self] in
-            self?.keyboardGeneration &+= 1
+            guard let self, self.running else { return }
+            self.releasePressedControlLocked(keyboardOnly: true)
         }
     }
 
@@ -207,6 +266,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         generation &+= 1
         let currentGeneration = generation
         running = true
+        controlBuffer.reset(open: true)
         localConnection = local
         readyReceived = false
         remoteDescriptionReady = false
@@ -217,6 +277,12 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         iceConnectionState = "new"
         iceGatheringState = "new"
         firstVideoFrameReceived = false
+        freshness = VideoFreshness()
+        videoHealth = .waiting
+        statistics = VideoStatisticsAccumulator()
+        connectedAt = nil
+        statisticsPending = false
+        lastStatisticsAt = 0
         orientation = nil
         emit(.connection(.signaling))
 
@@ -424,6 +490,14 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     }
 
     private func stopResources() {
+        controlBuffer.reset(open: false)
+        controlTimer?.cancel()
+        controlTimer = nil
+        monitorTimer?.cancel()
+        monitorTimer = nil
+        connectedAt = nil
+        statisticsPending = false
+        releasePressedControlLocked(failOnError: false)
         for label in channels.keys {
             emit(.channel(label: label, state: .closed))
         }
@@ -468,6 +542,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
         case .signalingClosed: "signaling-closed"
         case .controlChannelUnavailable: "control-unavailable"
         case .controlBackpressure: "control-backpressure"
+        case .videoStalled: "video-stalled"
         }
     }
 
@@ -613,10 +688,7 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
                 self.disconnectWorkItem?.cancel()
                 self.disconnectWorkItem = nil
                 self.emit(.connection(.connected))
-                let generation = self.generation
-                self.queue.asyncAfter(deadline: .now() + Self.videoDiagnosticDelay) { [weak self] in
-                    self?.logInboundVideoStatsLocked(generation: generation)
-                }
+                self.startMonitorLocked()
             case .disconnected:
                 self.emit(.connection(.disconnected))
                 if self.disconnectWorkItem == nil {
@@ -644,13 +716,17 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
         guard running, videoTrack?.trackId != track.trackId else { return }
         videoTrack = track
         firstVideoFrameReceived = false
+        freshness = VideoFreshness()
+        videoHealth = .waiting
+        emit(.videoHealth(.waiting))
 #if canImport(UIKit)
         let view = videoView
         let generation = generation
+        let trackID = track.trackId
         DispatchQueue.main.async {
-            view?.setTrack(track) { [weak self] in
+            view?.setTrack(track) { [weak self] timestamp in
                 self?.queue.async {
-                    self?.handleFirstVideoFrameLocked(generation: generation)
+                    self?.handleVideoFrameLocked(at: timestamp, generation: generation, trackID: trackID)
                 }
             }
         }
@@ -658,42 +734,53 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
         Self.logger.debug("Remote video track attached; waiting for decoded frame")
     }
 
-    private func handleFirstVideoFrameLocked(generation currentGeneration: UInt64) {
-        guard running, generation == currentGeneration, !firstVideoFrameReceived else { return }
-        firstVideoFrameReceived = true
-        Self.logger.info("First remote video frame decoded")
-        emit(.firstVideoFrame)
-    }
-
-    private func logInboundVideoStatsLocked(generation currentGeneration: UInt64) {
-        guard running, generation == currentGeneration, let peerConnection else { return }
-        let frameReceived = firstVideoFrameReceived
-        peerConnection.statistics { report in
-            let inboundVideo = report.statistics.values.first { statistic in
-                guard statistic.type == "inbound-rtp" else { return false }
-                let kind = statistic.values["kind"] as? String
-                    ?? statistic.values["mediaType"] as? String
-                return kind == "video"
-            }
-            let values = inboundVideo?.values ?? [:]
-            let packets = Self.statisticInteger(values["packetsReceived"])
-            let bytes = Self.statisticInteger(values["bytesReceived"])
-            let frames = Self.statisticInteger(values["framesReceived"])
-            let decoded = Self.statisticInteger(values["framesDecoded"])
-            Self.logger.info(
-                "Inbound video after 5s: callback=\(frameReceived, privacy: .public) packets=\(packets, privacy: .public) bytes=\(bytes, privacy: .public) frames=\(frames, privacy: .public) decoded=\(decoded, privacy: .public)"
-            )
+    private func handleVideoFrameLocked(at time: TimeInterval, generation currentGeneration: UInt64, trackID: String?) {
+        guard running, generation == currentGeneration, let trackID, videoTrack?.trackId == trackID else { return }
+        freshness.frame(at: time)
+        if !firstVideoFrameReceived {
+            firstVideoFrameReceived = true
+            Self.logger.info("First remote video frame decoded")
+            emit(.firstVideoFrame)
         }
+        updateVideoHealthLocked()
     }
 
-    private static func statisticInteger(_ value: Any?) -> UInt64 {
-        switch value {
-        case let number as NSNumber:
-            number.uint64Value
-        case let string as String:
-            UInt64(string) ?? 0
-        default:
-            0
+    private func startMonitorLocked() {
+        guard monitorTimer == nil else { return }
+        connectedAt = ProcessInfo.processInfo.systemUptime
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: 0.5)
+        timer.setEventHandler { [weak self] in self?.monitorLocked() }
+        monitorTimer = timer
+        timer.resume()
+    }
+
+    private func updateVideoHealthLocked() {
+        let health = freshness.health(at: ProcessInfo.processInfo.systemUptime)
+        guard videoHealth != health else { return }
+        videoHealth = health
+        emit(.videoHealth(health))
+    }
+
+    private func monitorLocked() {
+        guard running, let peerConnection else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        updateVideoHealthLocked()
+        if let lastActivity = freshness.lastFrame ?? connectedAt, now - lastActivity >= 15 {
+            failLocked(.videoStalled, generation: generation)
+            return
+        }
+        guard !statisticsPending, now - lastStatisticsAt >= 1 else { return }
+        statisticsPending = true
+        lastStatisticsAt = now
+        let currentGeneration = generation
+        peerConnection.statistics { [weak self] report in
+            let sample = VideoStatisticsSample(report: report)
+            self?.queue.async { [weak self] in
+                guard let self, self.running, self.generation == currentGeneration else { return }
+                self.statisticsPending = false
+                self.emit(.diagnostics(self.statistics.update(sample)))
+            }
         }
     }
 
