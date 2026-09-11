@@ -279,9 +279,11 @@ SELECT secret_hash,scopes_json,expires_at,used_at,revoked_at FROM controller_pai
 		writeErr(w, http.StatusInternalServerError, "token_generation_failed")
 		return
 	}
+	clientIP := s.clientIP(r)
 	if _, err = tx.ExecContext(r.Context(), `
-INSERT INTO controllers(id,name,platform,public_key_der,public_key_sha256,scopes_json,status,created_at,last_seen_at)
-VALUES(?,?,?,?,?,?, 'active',?,?)`, controllerID, name, req.Platform, der, fingerprint, scopesJSON, now.Unix(), now.Unix()); err != nil {
+INSERT INTO controllers(id,name,platform,public_key_der,public_key_sha256,scopes_json,status,created_at,last_seen_at,paired_ip,last_ip,user_agent)
+VALUES(?,?,?,?,?,?, 'active',?,?,?,?,?)`, controllerID, name, req.Platform, der, fingerprint, scopesJSON, now.Unix(), now.Unix(),
+		clientIP, clientIP, boundedUserAgent(r)); err != nil {
 		writeErr(w, http.StatusConflict, "controller_key_already_registered")
 		return
 	}
@@ -307,7 +309,7 @@ UPDATE controller_pairings SET used_at=? WHERE id=? AND used_at IS NULL AND revo
 	var scopes []string
 	_ = json.Unmarshal([]byte(scopesJSON), &scopes)
 	w.Header().Set("Cache-Control", "no-store")
-	s.audit(r, "controller_paired", "pairing_id", id, "controller_id", controllerID, "platform", req.Platform)
+	s.audit(r, "controller_paired", "pairing_id", id, "controller_id", controllerID, "controller_name", name, "platform", req.Platform)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"relay_id":   relayID,
 		"controller": map[string]any{"id": controllerID, "name": name, "platform": req.Platform, "scopes": scopes},
@@ -370,7 +372,11 @@ VALUES(?,?,?,?,?,?,?)`, accessID, controllerID, "access",
 }
 
 func (s *server) handleListControllers(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,name,platform,scopes_json,status,created_at,last_seen_at,revoked_at,heartbeat_at FROM controllers ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(r.Context(), `
+SELECT id,name,platform,scopes_json,status,created_at,last_seen_at,revoked_at,heartbeat_at,
+       public_key_sha256,paired_ip,last_ip,user_agent,
+       client_json,client_updated_at,telemetry_json,telemetry_updated_at
+FROM controllers ORDER BY created_at DESC`)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "controller_list_failed")
 		return
@@ -388,14 +394,26 @@ func (s *server) handleListControllers(w http.ResponseWriter, r *http.Request) {
 		Presence     string   `json:"presence"`
 		HeartbeatAt  *int64   `json:"heartbeat_at,omitempty"`
 		OpenSessions int      `json:"open_sessions"`
+		// Identity and network facts observed by the relay.
+		KeyFingerprint string `json:"key_fingerprint"`
+		PairedIP       string `json:"paired_ip,omitempty"`
+		LastIP         string `json:"last_ip,omitempty"`
+		UserAgent      string `json:"user_agent,omitempty"`
+		// Facts the controller reported about itself (see controller_client.go).
+		Client             map[string]any `json:"client,omitempty"`
+		ClientUpdatedAt    *int64         `json:"client_updated_at,omitempty"`
+		Telemetry          map[string]any `json:"telemetry,omitempty"`
+		TelemetryUpdatedAt *int64         `json:"telemetry_updated_at,omitempty"`
 	}
 	now := time.Now()
 	out := []item{}
 	for rows.Next() {
 		var v item
 		var scopes string
-		var last, revoked, heartbeat sql.NullInt64
-		if err := rows.Scan(&v.ID, &v.Name, &v.Platform, &scopes, &v.Status, &v.CreatedAt, &last, &revoked, &heartbeat); err != nil {
+		var last, revoked, heartbeat, clientAt, telemetryAt sql.NullInt64
+		var pairedIP, lastIP, userAgent, clientJSON, telemetryJSON sql.NullString
+		if err := rows.Scan(&v.ID, &v.Name, &v.Platform, &scopes, &v.Status, &v.CreatedAt, &last, &revoked, &heartbeat,
+			&v.KeyFingerprint, &pairedIP, &lastIP, &userAgent, &clientJSON, &clientAt, &telemetryJSON, &telemetryAt); err != nil {
 			writeErr(w, http.StatusInternalServerError, "controller_scan_failed")
 			return
 		}
@@ -405,6 +423,19 @@ func (s *server) handleListControllers(w http.ResponseWriter, r *http.Request) {
 		}
 		if revoked.Valid {
 			v.RevokedAt = &revoked.Int64
+		}
+		v.PairedIP, v.LastIP, v.UserAgent = pairedIP.String, lastIP.String, userAgent.String
+		if clientJSON.Valid && clientJSON.String != "" {
+			_ = json.Unmarshal([]byte(clientJSON.String), &v.Client)
+		}
+		if clientAt.Valid {
+			v.ClientUpdatedAt = &clientAt.Int64
+		}
+		if telemetryJSON.Valid && telemetryJSON.String != "" {
+			_ = json.Unmarshal([]byte(telemetryJSON.String), &v.Telemetry)
+		}
+		if telemetryAt.Valid {
+			v.TelemetryUpdatedAt = &telemetryAt.Int64
 		}
 		v.Presence = controllerPresence(v.Status, heartbeat, now)
 		if heartbeat.Valid {
@@ -448,6 +479,52 @@ func (s *server) handleRenameController(w http.ResponseWriter, r *http.Request) 
 
 func (s *server) handleRevokeController(w http.ResponseWriter, r *http.Request) {
 	s.revokeController(w, r, r.PathValue("id"), "controller_revoked")
+}
+
+// handleDeleteController removes a controller from history. Only a revoked
+// controller qualifies: revocation is the security action (it cancels tokens and
+// live sessions), deletion is bookkeeping, and forcing the order keeps a live
+// phone from disappearing in one click. Tokens and nonces cascade; audit rows
+// keep their snapshot of the name.
+func (s *server) handleDeleteController(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "controller_delete_failed")
+		return
+	}
+	defer tx.Rollback()
+	var name, platform, status string
+	if err := tx.QueryRowContext(r.Context(), `SELECT name,platform,status FROM controllers WHERE id=?`, id).Scan(&name, &platform, &status); err != nil {
+		writeErr(w, http.StatusNotFound, "controller_not_found")
+		return
+	}
+	if status != "revoked" {
+		writeErr(w, http.StatusConflict, "controller_active")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM controllers WHERE id=? AND status='revoked'`, id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "controller_delete_failed")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "controller_delete_failed")
+		return
+	}
+	s.audit(r, "controller_deleted", "controller_id", id, "controller_name", name, "platform", platform)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleClearControllerHistory deletes every revoked controller at once.
+func (s *server) handleClearControllerHistory(w http.ResponseWriter, r *http.Request) {
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM controllers WHERE status='revoked'`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "controller_delete_failed")
+		return
+	}
+	n, _ := res.RowsAffected()
+	s.audit(r, "controller_history_cleared", "deleted", n)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": n})
 }
 
 func (s *server) handleRevokeCurrentController(w http.ResponseWriter, r *http.Request) {

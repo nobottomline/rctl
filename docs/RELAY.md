@@ -435,6 +435,31 @@ POST /api/admin/sessions/revoke-others
 POST /api/admin/sessions/revoke-all
 ```
 
+## Controllers, Tokens And History
+
+Controllers (native iOS/Android clients), enrollment tokens, and browser sessions
+share one state model: active, revoked, deleted. Revoke stops access; delete
+removes the record from its list and is only accepted for revoked controllers
+and for used, expired or revoked tokens. Sessions are deleted on revoke or
+expiry and have no history. The activity feed keeps every event with a snapshot
+of who acted (browser fingerprint of the admin session, or controller name), so
+deleting an object never blanks its history.
+
+```text
+GET  /api/admin/controllers                     list with reported device profile
+POST /api/admin/controllers/{id}/rename
+POST /api/admin/controllers/{id}/revoke
+POST /api/admin/controllers/{id}/delete         409 controller_active unless revoked
+POST /api/admin/controllers/clear-history
+POST /api/admin/enrollments/{id}/revoke
+POST /api/admin/enrollments/{id}/delete         409 enrollment_active unless terminal
+POST /api/admin/enrollments/clear-history
+```
+
+`RCTL_RELAY_HISTORY_RETENTION` (default `720h`) removes revoked controllers and
+terminal tokens automatically once they are older than the window; `0` disables
+the purge. Audit history is bounded by row count only.
+
 ## Users Without a Domain
 
 Production remote control should use a domain with trusted TLS. Browser

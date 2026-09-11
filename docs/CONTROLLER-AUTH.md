@@ -178,12 +178,43 @@ the exact original request remains a rejected nonce replay.
 
 ## Lifecycle
 
-Administrators can list, rename, and revoke controllers independently. Revoke
-invalidates all of that controller's tokens and cancels its active native
+Administrators can list, rename, revoke, and delete controllers independently.
+Revoke invalidates all of that controller's tokens and cancels its active native
 signaling WebSockets immediately. Future long-lived native tunnel routes must
 join the same controller-owned cancellation registry before release. Revoke
 does not modify device enrollment, `DeviceSecret`, browser sessions, or another
 controller.
+
+Every object follows the same state model: active, revoked, deleted. Revoke is
+the security action; delete is bookkeeping and is accepted only for a revoked
+controller (`409 controller_active` otherwise), so a live phone can never vanish
+in one click. Deleting removes the controller row, its tokens, nonces, and
+reported device profile. Audit rows are never deleted by this: each row stores a
+snapshot of the actor (admin session browser fingerprint, or controller name) at
+write time, so the activity feed stays readable after the object is gone. The
+same rule applies to enrollment tokens: only used, expired, or revoked tokens can
+be deleted from history (`409 enrollment_active`). Both lists offer a bulk
+clear, and `RCTL_RELAY_HISTORY_RETENTION` (default 720h, `0` disables) purges
+terminal records automatically.
+
+```text
+POST /api/admin/controllers/{id}/delete       revoked only
+POST /api/admin/controllers/clear-history     every revoked controller
+POST /api/admin/enrollments/{id}/delete       used, expired or revoked only
+POST /api/admin/enrollments/clear-history     every terminal token
+```
+
+The controller app reports a bounded device profile through a signed request
+(`POST /api/controller/me/client`, body `{"client": {...}}`) once after pairing
+and again only when the profile's fingerprint changes. The relay keeps a
+whitelist of keys with size limits (hardware identifier and marketing name,
+system name/version/build, app version/build, bundle id, device name, locale,
+language, time zone, screen, CPU count, memory and storage) and drops anything
+else, so older relays and newer apps interoperate. The presence heartbeat may
+carry `{"telemetry": {...}}` with battery level and state, Low Power Mode,
+thermal state, network type and free storage; an empty body stays valid. The
+relay also records the IP the controller paired from, its last IP and its
+User-Agent. None of this includes vendor or advertising identifiers.
 
 The admin page deliberately separates device enrollment from controller
 pairing. Device enrollment creates a personalized iPad package or token;

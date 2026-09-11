@@ -127,10 +127,65 @@ CREATE INDEX IF NOT EXISTS idx_controller_nonces_expiry ON controller_nonces(exp
 		`ALTER TABLE devices ADD COLUMN capabilities_json TEXT`,
 		`ALTER TABLE devices ADD COLUMN compatibility_error TEXT`,
 		`ALTER TABLE controllers ADD COLUMN heartbeat_at INTEGER`,
+		// Controller self-reported profile (static facts sent once per change) and
+		// telemetry (dynamic facts carried by the presence heartbeat), plus the
+		// network metadata the relay observes itself.
+		`ALTER TABLE controllers ADD COLUMN client_json TEXT`,
+		`ALTER TABLE controllers ADD COLUMN client_updated_at INTEGER`,
+		`ALTER TABLE controllers ADD COLUMN telemetry_json TEXT`,
+		`ALTER TABLE controllers ADD COLUMN telemetry_updated_at INTEGER`,
+		`ALTER TABLE controllers ADD COLUMN paired_ip TEXT`,
+		`ALTER TABLE controllers ADD COLUMN last_ip TEXT`,
+		`ALTER TABLE controllers ADD COLUMN user_agent TEXT`,
+		// Audit actor snapshot: who performed the event, captured at write time so
+		// the activity feed keeps a readable label after the session expires or the
+		// controller is deleted from history.
+		`ALTER TABLE audit_log ADD COLUMN actor_kind TEXT`,
+		`ALTER TABLE audit_log ADD COLUMN actor_id TEXT`,
+		`ALTER TABLE audit_log ADD COLUMN actor_label TEXT`,
+		`ALTER TABLE audit_log ADD COLUMN actor_ua TEXT`,
+		`ALTER TABLE audit_log ADD COLUMN actor_hints TEXT`,
+		`ALTER TABLE audit_log ADD COLUMN actor_touch INTEGER`,
 	} {
 		if _, e := s.db.ExecContext(ctx, stmt); e != nil &&
 			!strings.Contains(e.Error(), "duplicate column") {
 			return e
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_id)`); err != nil {
+		return err
+	}
+	return s.backfillAuditActors(ctx)
+}
+
+// backfillAuditActors attributes audit rows written before the actor columns
+// existed. Idempotent: every statement only touches rows still lacking an actor,
+// so a steady-state start is a handful of indexed no-op scans. Best-effort by
+// design: the feed degrades to unlabeled rows, never to a failed start.
+func (s *server) backfillAuditActors(ctx context.Context) error {
+	for _, stmt := range []string{
+		`UPDATE audit_log SET actor_kind='admin', actor_id=session_id
+		 WHERE actor_kind IS NULL AND session_id IS NOT NULL AND session_id<>''`,
+		`UPDATE audit_log SET
+		   actor_ua=(SELECT user_agent FROM sessions s WHERE s.id=audit_log.actor_id),
+		   actor_hints=(SELECT client_hints FROM sessions s WHERE s.id=audit_log.actor_id),
+		   actor_touch=(SELECT touch_points FROM sessions s WHERE s.id=audit_log.actor_id)
+		 WHERE actor_kind='admin' AND actor_ua IS NULL
+		   AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=audit_log.actor_id)`,
+		`UPDATE audit_log SET actor_kind='controller', actor_id=json_extract(detail,'$.controller_id')
+		 WHERE actor_kind IS NULL AND detail IS NOT NULL AND json_valid(detail)
+		   AND event IN ('controller_paired','controller_access_refreshed','controller_self_revoked','webrtc_signal_open')
+		   AND json_extract(detail,'$.controller_id') IS NOT NULL`,
+		`UPDATE audit_log SET actor_label=(SELECT name FROM controllers c WHERE c.id=audit_log.actor_id)
+		 WHERE actor_kind='controller' AND actor_label IS NULL
+		   AND EXISTS(SELECT 1 FROM controllers c WHERE c.id=audit_log.actor_id)`,
+		`UPDATE audit_log SET actor_kind='device', actor_id=json_extract(detail,'$.device_id')
+		 WHERE actor_kind IS NULL AND detail IS NOT NULL AND json_valid(detail)
+		   AND event LIKE 'device\_%' ESCAPE '\'
+		   AND json_extract(detail,'$.device_id') IS NOT NULL`,
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
 		}
 	}
 	return nil

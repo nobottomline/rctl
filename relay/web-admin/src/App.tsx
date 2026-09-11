@@ -267,15 +267,27 @@ export default function App() {
             updateTargetVersion={status?.update_target_version}
             onAction={handleAction}
           />
-          <ActivityPanel entries={audit} sessions={sessions} />
+          <ActivityPanel entries={audit} sessions={sessions} controllers={controllers} />
         </div>
         <div className="flex flex-col gap-5">
-          <ControllersPanel controllers={controllers} onChanged={() => loadAll({ silent: true })} />
+          <ControllersPanel
+            controllers={controllers}
+            audit={audit}
+            retentionSeconds={status?.history_retention_seconds ?? 0}
+            onChanged={() => {
+              loadAll({ silent: true })
+              loadAudit()
+            }}
+          />
           <EnrollPanel
             enrollments={enrollments}
             packageAvailable={status?.device_package_available ?? false}
             packageVersion={status?.device_package_version}
-            onChanged={() => loadAll({ silent: true })}
+            retentionSeconds={status?.history_retention_seconds ?? 0}
+            onChanged={() => {
+              loadAll({ silent: true })
+              loadAudit()
+            }}
           />
           <SessionsPanel
             sessions={sessions}

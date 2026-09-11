@@ -133,3 +133,23 @@ export function rfc3339ToSec(value?: string): number {
   const ms = Date.parse(value)
   return Number.isNaN(ms) ? 0 : Math.floor(ms / 1000)
 }
+
+// "30 days" / "12 hours" for a retention window expressed in seconds.
+export function fmtDurationLong(sec?: number): string {
+  if (!sec || sec <= 0) return '—'
+  const days = Math.round(sec / 86400)
+  if (days >= 1) return `${days} day${days === 1 ? '' : 's'}`
+  const hrs = Math.round(sec / 3600)
+  if (hrs >= 1) return `${hrs} hour${hrs === 1 ? '' : 's'}`
+  const mins = Math.max(1, Math.round(sec / 60))
+  return `${mins} minute${mins === 1 ? '' : 's'}`
+}
+
+// Turns a snake_case audit event into a readable sentence: "controller_renamed"
+// -> "Controller renamed". Only a fallback for events without a curated label.
+export function humanizeEvent(event: string): string {
+  const words = event.split('_').filter(Boolean)
+  if (words.length === 0) return event
+  const text = words.join(' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}

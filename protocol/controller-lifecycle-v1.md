@@ -46,10 +46,24 @@ It must never claim to revoke server access.
 
 ## Foreground Presence
 
-`POST /api/controller/presence`, empty body. Success:
+`POST /api/controller/presence`, empty body or `{"telemetry": {...}}`. Success:
 `200 {"ok":true,"expires_in":90}`. Server time defines the lease; client time
 does not control expiry. A successful heartbeat updates `controllers.heartbeat_at`
 only while the controller is still active, including a recheck after auth.
+
+Telemetry is optional condition data shown in relay admin: `battery_level`
+(percent), `battery_state` (`unplugged|charging|full|unknown`), `low_power`
+(bool), `thermal` (`nominal|fair|serious|critical`), `network`
+(`wifi|cellular|wired|none|unknown`), `disk_free_bytes`. The relay validates
+types and bounds, drops unknown keys, and rejects a malformed body with
+`400 invalid_telemetry` without touching the lease. An empty heartbeat keeps the
+last telemetry. The heartbeat also refreshes the controller's last IP and
+User-Agent.
+
+The static device profile travels separately through
+`POST /api/controller/me/client` with `{"client": {...}}`, sent once after
+pairing and again only when its fingerprint changes; see
+`docs/CONTROLLER-AUTH.md` for the key whitelist.
 
 The controller sends a heartbeat every 30 seconds while the application is
 active, for its selected relay only, including while viewing a remote session.

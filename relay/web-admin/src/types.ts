@@ -24,6 +24,39 @@ export interface ControllerPairing {
   relay_id: string
 }
 
+// Facts the controller app reports about itself once after pairing and again only
+// when something changes (OS/app update). Keys mirror the relay whitelist.
+export interface ControllerClient {
+  model?: string // hardware identifier, e.g. iPhone15,2
+  model_name?: string // marketing name, e.g. iPhone 14 Pro
+  idiom?: string // phone | pad
+  system_name?: string
+  system_version?: string
+  os_build?: string
+  app_version?: string
+  app_build?: string
+  bundle_id?: string
+  device_name?: string
+  locale?: string
+  language?: string
+  timezone?: string
+  screen?: string
+  cpu_count?: number
+  memory_bytes?: number
+  disk_bytes?: number
+  disk_free_bytes?: number
+}
+
+// Dynamic facts carried by the presence heartbeat while the app is in the foreground.
+export interface ControllerTelemetry {
+  battery_level?: number // percent
+  battery_state?: string // unplugged | charging | full | unknown
+  low_power?: 'true' | 'false'
+  thermal?: string // nominal | fair | serious | critical
+  network?: string // wifi | cellular | wired | none | unknown
+  disk_free_bytes?: number
+}
+
 export interface Controller {
   id: string
   name: string
@@ -36,6 +69,14 @@ export interface Controller {
   presence?: 'online' | 'offline' | 'unknown'
   heartbeat_at?: number
   open_sessions?: number
+  key_fingerprint?: string
+  paired_ip?: string
+  last_ip?: string
+  user_agent?: string
+  client?: ControllerClient
+  client_updated_at?: number
+  telemetry?: ControllerTelemetry
+  telemetry_updated_at?: number
 }
 
 export interface Device {
@@ -156,6 +197,8 @@ export interface DiagnosticsResponse {
   categories: DiagCategory[]
 }
 
+export type AuditActorKind = 'admin' | 'controller' | 'device' | 'system'
+
 export interface AuditEntry {
   id: number
   ts: number
@@ -165,6 +208,14 @@ export interface AuditEntry {
   method: string
   path: string
   detail?: string
+  // Actor snapshot taken when the event was written, so labels survive the
+  // session expiring or the controller being deleted from history.
+  actor_kind?: AuditActorKind
+  actor_id?: string
+  actor_label?: string
+  actor_ua?: string
+  actor_hints?: string
+  actor_touch?: number
 }
 
 export interface AuditResponse {
@@ -190,6 +241,7 @@ export interface RelayStatus {
   update_target_version?: string
   device_package_available: boolean
   device_package_version?: string
+  history_retention_seconds?: number // 0 = automatic history purge disabled
 }
 
 export interface UpdateStatus {

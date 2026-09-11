@@ -6,6 +6,7 @@ import { Menu, MenuItem, MenuSeparator } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { DetailField, DetailSection } from './ui/Detail'
 import { Panel } from './Shell'
+import { BoundedList } from './ui/ListTools'
 import { auditLabel } from './ActivityPanel'
 import { describeClient, fmtAbs, fmtRel, fmtUntil } from '../lib/format'
 import type { AuditEntry, Session } from '../types'
@@ -42,6 +43,7 @@ export function SessionsPanel({
           ) : undefined
         }
       >
+        <BoundedList>
         <ul className="divide-y divide-line/70">
           <AnimatePresence initial={false}>
             {sessions.map((s) => (
@@ -107,6 +109,7 @@ export function SessionsPanel({
             ))}
           </AnimatePresence>
         </ul>
+        </BoundedList>
       </Panel>
 
       <SessionDetailModal
@@ -135,7 +138,9 @@ function SessionDetailModal({
 }) {
   // Recent audit events performed by *this* session (each admin action records the
   // acting session id), so it's precise per-session, not just same-IP.
-  const acts = session ? audit.filter((e) => e.session_id && e.session_id === session.id).slice(0, 8) : []
+  const acts = session
+    ? audit.filter((e) => (e.actor_kind === 'admin' ? e.actor_id : e.session_id) === session.id).slice(0, 8)
+    : []
   return (
     <Modal open={!!session} onOpenChange={onOpenChange} title="Session" className="max-w-lg">
       {session && (

@@ -39,6 +39,7 @@ type config struct {
 	UpdateManifestURL   string
 	UpdateTargetVersion string
 	PublicPackagePath   string
+	HistoryRetention    time.Duration // 0 disables automatic history purge
 	LoginLimit          rateLimitConfig
 	AdminLimit          rateLimitConfig
 	DeviceLimit         rateLimitConfig
@@ -77,11 +78,14 @@ func loadConfig() (config, error) {
 		UpdateManifestURL:   os.Getenv("RCTL_RELAY_UPDATE_MANIFEST_URL"),
 		UpdateTargetVersion: os.Getenv("RCTL_RELAY_UPDATE_TARGET_VERSION"),
 		PublicPackagePath:   os.Getenv("RCTL_RELAY_PUBLIC_PACKAGE"),
-		LoginLimit:          loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
-		AdminLimit:          loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
-		DeviceLimit:         loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
-		TunnelLimit:         loadRateLimit("RCTL_RELAY_TUNNEL", 240, time.Minute),
-		ControllerLimit:     loadRateLimit("RCTL_RELAY_CONTROLLER", 20, time.Minute),
+		// Revoked controllers and spent enrollment tokens leave the admin lists on
+		// their own after this long. Audit history is never purged by this.
+		HistoryRetention: getenvDuration("RCTL_RELAY_HISTORY_RETENTION", 30*24*time.Hour),
+		LoginLimit:       loadRateLimit("RCTL_RELAY_LOGIN", 5, time.Minute),
+		AdminLimit:       loadRateLimit("RCTL_RELAY_ADMIN", 60, time.Minute),
+		DeviceLimit:      loadRateLimit("RCTL_RELAY_DEVICE", 20, time.Minute),
+		TunnelLimit:      loadRateLimit("RCTL_RELAY_TUNNEL", 240, time.Minute),
+		ControllerLimit:  loadRateLimit("RCTL_RELAY_CONTROLLER", 20, time.Minute),
 	}
 	cfg.CookieSecure = strings.HasPrefix(cfg.PublicURL, "https://")
 	if cfg.AdminSecret == "" {
@@ -113,6 +117,9 @@ func loadConfig() (config, error) {
 	}
 	if cfg.UpdateTargetVersion != "" && cfg.UpdateManifestURL == "" {
 		return cfg, errors.New("RCTL_RELAY_UPDATE_TARGET_VERSION requires RCTL_RELAY_UPDATE_MANIFEST_URL")
+	}
+	if cfg.HistoryRetention < 0 {
+		return cfg, errors.New("RCTL_RELAY_HISTORY_RETENTION must be 0 (disabled) or a positive duration")
 	}
 	if cfg.PublicPackagePath != "" && !strings.HasPrefix(cfg.PublicPackagePath, "/") {
 		return cfg, errors.New("RCTL_RELAY_PUBLIC_PACKAGE must be an absolute container path")

@@ -152,7 +152,8 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rows, err := s.db.QueryContext(r.Context(), `
-SELECT id, ts, event, ip, session_id, method, path, detail
+SELECT id, ts, event, ip, session_id, method, path, detail,
+       actor_kind, actor_id, actor_label, actor_ua, actor_hints, actor_touch
 FROM audit_log
 ORDER BY id DESC
 LIMIT ?`, limit)
@@ -171,12 +172,21 @@ LIMIT ?`, limit)
 		Method    string `json:"method"`
 		Path      string `json:"path"`
 		Detail    string `json:"detail,omitempty"`
+		// Actor snapshot taken when the event was written (see auditActor).
+		ActorKind  string `json:"actor_kind,omitempty"`
+		ActorID    string `json:"actor_id,omitempty"`
+		ActorLabel string `json:"actor_label,omitempty"`
+		ActorUA    string `json:"actor_ua,omitempty"`
+		ActorHints string `json:"actor_hints,omitempty"`
+		ActorTouch *int   `json:"actor_touch,omitempty"`
 	}
 	out := []entry{}
 	for rows.Next() {
 		var item entry
-		var ip, sid, method, path, detail sql.NullString
-		if err := rows.Scan(&item.ID, &item.TS, &item.Event, &ip, &sid, &method, &path, &detail); err != nil {
+		var ip, sid, method, path, detail, actorKind, actorID, actorLabel, actorUA, actorHints sql.NullString
+		var actorTouch sql.NullInt64
+		if err := rows.Scan(&item.ID, &item.TS, &item.Event, &ip, &sid, &method, &path, &detail,
+			&actorKind, &actorID, &actorLabel, &actorUA, &actorHints, &actorTouch); err != nil {
 			writeErr(w, http.StatusInternalServerError, "audit_scan_failed")
 			return
 		}
@@ -185,6 +195,15 @@ LIMIT ?`, limit)
 		item.Method = method.String
 		item.Path = path.String
 		item.Detail = detail.String
+		item.ActorKind = actorKind.String
+		item.ActorID = actorID.String
+		item.ActorLabel = actorLabel.String
+		item.ActorUA = actorUA.String
+		item.ActorHints = actorHints.String
+		if actorTouch.Valid {
+			touch := int(actorTouch.Int64)
+			item.ActorTouch = &touch
+		}
 		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"audit": out})
@@ -384,19 +403,43 @@ func (s *server) handleRevokeEnrollment(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// enrollmentTerminalWhere matches tokens that can no longer enroll a device:
+// revoked, already used, or expired. Only those may leave history; a live token
+// must be revoked first so the audit trail always shows the revocation.
+const enrollmentTerminalWhere = `(revoked_at IS NOT NULL OR used_at IS NOT NULL OR expires_at<?)`
+
 func (s *server) handleDeleteEnrollment(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	res, err := s.db.ExecContext(r.Context(), `DELETE FROM enrollments WHERE id=?`, id)
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM enrollments WHERE id=? AND `+enrollmentTerminalWhere, id, now)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "enrollment_delete_failed")
 		return
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		var exists int
+		if err := s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM enrollments WHERE id=?`, id).Scan(&exists); err == nil && exists > 0 {
+			writeErr(w, http.StatusConflict, "enrollment_active")
+			return
+		}
 		writeErr(w, http.StatusNotFound, "enrollment_not_found")
 		return
 	}
 	s.audit(r, "admin_enrollment_deleted", "enrollment_id", id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleClearEnrollmentHistory removes every terminal token at once. Active
+// tokens are untouched by construction (same predicate as single delete).
+func (s *server) handleClearEnrollmentHistory(w http.ResponseWriter, r *http.Request) {
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM enrollments WHERE `+enrollmentTerminalWhere, time.Now().Unix())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "enrollment_delete_failed")
+		return
+	}
+	n, _ := res.RowsAffected()
+	s.audit(r, "admin_enrollment_history_cleared", "deleted", n)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": n})
 }
 
 func (s *server) handleListDevices(w http.ResponseWriter, r *http.Request) {

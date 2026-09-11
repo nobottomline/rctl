@@ -166,6 +166,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/enrollments/${encodeURIComponent(id)}/delete`, {
       method: 'POST',
     }),
+  clearEnrollmentHistory: () =>
+    request<Ok & { deleted: number }>('/api/admin/enrollments/clear-history', { method: 'POST' }),
   approveDevice: (id: string) =>
     request<Ok>(`/api/admin/devices/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
   revokeDevice: (id: string) =>
@@ -202,6 +204,12 @@ export const api = {
     request<Ok>(`/api/admin/controllers/${encodeURIComponent(id)}/revoke`, {
       method: 'POST',
     }),
+  deleteController: (id: string) =>
+    request<Ok>(`/api/admin/controllers/${encodeURIComponent(id)}/delete`, {
+      method: 'POST',
+    }),
+  clearControllerHistory: () =>
+    request<Ok & { deleted: number }>('/api/admin/controllers/clear-history', { method: 'POST' }),
 }
 
 export const controlURL = (id: string): string =>

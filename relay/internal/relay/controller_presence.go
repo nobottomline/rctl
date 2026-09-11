@@ -37,8 +37,21 @@ func (s *server) handleControllerPresence(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusTooManyRequests, "rate_limited")
 		return
 	}
+	// The heartbeat may carry a small telemetry object (battery, network, thermal
+	// state). Absent or empty bodies are legacy clients; malformed ones are rejected
+	// without touching presence so a bug in the app cannot spoof liveness.
+	telemetryJSON, err := readControllerTelemetry(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_telemetry")
+		return
+	}
 	// Re-check authorization in the write: revoke may race the request proof.
-	res, err := s.db.ExecContext(r.Context(), `UPDATE controllers SET heartbeat_at=? WHERE id=? AND status='active'`, now.Unix(), principal.ControllerID)
+	res, err := s.db.ExecContext(r.Context(), `
+UPDATE controllers SET heartbeat_at=?, last_ip=?, user_agent=?,
+       telemetry_json=COALESCE(?, telemetry_json),
+       telemetry_updated_at=CASE WHEN ? IS NULL THEN telemetry_updated_at ELSE ? END
+WHERE id=? AND status='active'`,
+		now.Unix(), s.clientIP(r), boundedUserAgent(r), telemetryJSON, telemetryJSON, now.Unix(), principal.ControllerID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "presence_failed")
 		return

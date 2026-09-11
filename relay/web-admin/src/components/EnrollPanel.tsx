@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Ban,
@@ -16,11 +16,12 @@ import {
 import { toast } from 'sonner'
 import { Button } from './ui/Button'
 import { Field } from './ui/Field'
-import { Menu, MenuItem, MenuSeparator } from './ui/Menu'
+import { BoundedList, ListEmpty, ListFootnote, SegmentedFilter } from './ui/ListTools'
+import { Menu, MenuItem } from './ui/Menu'
 import { Modal } from './ui/Modal'
 import { Panel } from './Shell'
-import { api } from '../lib/api'
-import { fmtAbs, fmtRel, rfc3339ToSec, shortId } from '../lib/format'
+import { api, ApiError } from '../lib/api'
+import { fmtAbs, fmtDurationLong, fmtRel, rfc3339ToSec, shortId } from '../lib/format'
 import { cn } from '../lib/cn'
 import type { Enrollment, EnrollmentStatus, EnrollmentSummary } from '../types'
 
@@ -47,10 +48,15 @@ export type EnrollPanelProps = {
   enrollments: EnrollmentSummary[]
   packageAvailable: boolean
   packageVersion?: string
+  retentionSeconds?: number
   onChanged: () => void
 }
 
-export function EnrollPanel({ enrollments, packageAvailable, packageVersion, onChanged }: EnrollPanelProps) {
+type View = 'active' | 'history'
+
+export function EnrollPanel({ enrollments, packageAvailable, packageVersion, retentionSeconds = 0, onChanged }: EnrollPanelProps) {
+  const [view, setView] = useState<View>('active')
+  const [clearOpen, setClearOpen] = useState(false)
   const [open, setOpen] = useState(false)
   const [label, setLabel] = useState('')
   const [ttl, setTtl] = useState(TTLS[0])
@@ -60,7 +66,15 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, onC
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState('')
 
-  const active = enrollments.filter((e) => e.status === 'active').length
+  const activeTokens = enrollments.filter((e) => e.status === 'active')
+  const history = enrollments.filter((e) => e.status !== 'active')
+  const active = activeTokens.length
+  const shown = view === 'active' ? activeTokens : history
+
+  // A history that just emptied (clear / retention) falls back to the live view.
+  useEffect(() => {
+    if (view === 'history' && history.length === 0 && enrollments.length > 0) setView('active')
+  }, [view, history.length, enrollments.length])
 
   function openModal() {
     setCreated(null)
@@ -119,10 +133,25 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, onC
     try {
       if (kind === 'revoke') await api.revokeEnrollment(id)
       else await api.deleteEnrollment(id)
-      toast.success(kind === 'revoke' ? 'Token revoked' : 'Token deleted')
+      toast.success(kind === 'revoke' ? 'Token revoked' : 'Token removed from history')
       onChanged()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `${kind} failed`)
+      if (err instanceof ApiError && err.status === 409) toast.error('Revoke the token before deleting it')
+      else toast.error(err instanceof Error ? err.message : `${kind} failed`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function clearHistory() {
+    setBusy('clear')
+    try {
+      const result = await api.clearEnrollmentHistory()
+      toast.success(`Removed ${result.deleted} token${result.deleted === 1 ? '' : 's'} from history`)
+      setClearOpen(false)
+      onChanged()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not clear history')
     } finally {
       setBusy('')
     }
@@ -144,17 +173,35 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, onC
         </Button>
       }
     >
+      {enrollments.length > 0 && (
+        <SegmentedFilter
+          value={view}
+          onChange={setView}
+          options={[
+            { key: 'active', label: 'Active', count: active },
+            { key: 'history', label: 'History', count: history.length },
+          ]}
+          trailing={
+            view === 'history' && history.length > 0 ? (
+              <Button variant="ghost" size="sm" className="text-danger hover:bg-danger/10" onClick={() => setClearOpen(true)}>
+                <Trash2 className="size-3.5" />
+                Clear history
+              </Button>
+            ) : undefined
+          }
+        />
+      )}
       {enrollments.length === 0 ? (
-        <div className="px-5 py-10 text-center">
-          <div className="mx-auto grid size-10 place-items-center rounded-xl bg-surface-2 text-faint ring-1 ring-line">
-            <Ticket className="size-5" />
-          </div>
-          <p className="mt-3 text-[13px] text-muted">No tokens yet. Create one to pair a device.</p>
-        </div>
+        <ListEmpty icon={<Ticket className="size-5" />}>No tokens yet. Create one to pair a device.</ListEmpty>
+      ) : shown.length === 0 ? (
+        <ListEmpty icon={<Ticket className="size-5" />}>
+          {view === 'active' ? 'No active tokens. Used, expired and revoked ones are under History.' : 'No token history.'}
+        </ListEmpty>
       ) : (
+        <BoundedList>
         <ul className="divide-y divide-line/60">
           <AnimatePresence initial={false}>
-            {enrollments.map((e) => (
+            {shown.map((e) => (
               <motion.li
                 key={e.id}
                 initial={{ opacity: 0 }}
@@ -197,23 +244,45 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, onC
                     </Button>
                   }
                 >
-                  {e.status === 'active' && (
-                    <>
-                      <MenuItem icon={Ban} onSelect={() => act(e.id, 'revoke')}>
-                        Revoke token
-                      </MenuItem>
-                      <MenuSeparator />
-                    </>
+                  {e.status === 'active' ? (
+                    <MenuItem icon={Ban} danger onSelect={() => act(e.id, 'revoke')}>
+                      Revoke token
+                    </MenuItem>
+                  ) : (
+                    <MenuItem icon={Trash2} danger onSelect={() => act(e.id, 'delete')}>
+                      Delete from history
+                    </MenuItem>
                   )}
-                  <MenuItem icon={Trash2} danger onSelect={() => act(e.id, 'delete')}>
-                    Delete from history
-                  </MenuItem>
                 </Menu>
               </motion.li>
             ))}
           </AnimatePresence>
         </ul>
+        </BoundedList>
       )}
+      {view === 'history' && history.length > 0 && (
+        <ListFootnote>
+          Used, expired and revoked tokens cannot enroll a device. They stay here for reference
+          {retentionSeconds > 0 ? ` and are cleared automatically after ${fmtDurationLong(retentionSeconds)}` : ''}. Activity history is never affected.
+        </ListFootnote>
+      )}
+
+      <Modal
+        open={clearOpen}
+        onOpenChange={(o) => !o && busy !== 'clear' && setClearOpen(false)}
+        title="Clear token history?"
+        description={`${history.length} used, expired or revoked token${history.length === 1 ? '' : 's'} will be removed from this list. Active tokens and the activity history are not affected.`}
+      >
+        <div className="flex justify-end gap-2.5">
+          <Button variant="secondary" disabled={busy === 'clear'} onClick={() => setClearOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="danger-solid" loading={busy === 'clear'} onClick={clearHistory}>
+            {busy !== 'clear' && <Trash2 className="size-4" />}
+            Clear history
+          </Button>
+        </div>
+      </Modal>
 
       <Modal
         open={open}
