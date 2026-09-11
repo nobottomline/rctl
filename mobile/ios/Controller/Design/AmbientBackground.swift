@@ -21,19 +21,19 @@ struct AmbientBackground: View {
                 let size = proxy.size
                 ZStack {
                     RadialGradient(
-                        colors: [ControllerPalette.signal.opacity(0.16), .clear],
+                        colors: [ControllerPalette.signal.opacity(0.12), .clear],
                         center: .center, startRadius: 0, endRadius: size.width * 0.72
                     )
                     .frame(width: size.width * 1.5, height: size.width * 1.1)
                     .position(x: size.width * 0.86, y: -size.width * 0.02)
                     RadialGradient(
-                        colors: [ControllerPalette.healthy.opacity(0.10), .clear],
+                        colors: [ControllerPalette.healthy.opacity(0.07), .clear],
                         center: .center, startRadius: 0, endRadius: size.width * 0.6
                     )
                     .frame(width: size.width * 1.2, height: size.width * 1.0)
                     .position(x: size.width * 0.06, y: size.height * 0.08)
                     RadialGradient(
-                        colors: [ControllerPalette.signalHigh.opacity(0.08), .clear],
+                        colors: [ControllerPalette.signalHigh.opacity(0.06), .clear],
                         center: .center, startRadius: 0, endRadius: size.width * 0.7
                     )
                     .frame(width: size.width * 1.4, height: size.width * 1.2)

@@ -68,19 +68,11 @@ struct DeviceListView: View {
                     header
                     titleBlock
                     if showsHero {
-                        DevicesHero(
-                            findNearby: {
-                                ControllerHaptics.tap()
-                                localDevices.setDiscoveryEnabled(true)
-                            },
-                            pairRelay: { path.append(.pairRelay) },
-                            addLocal: { path.append(.localDevice(nil)) },
-                            discoveryEnabled: localDevices.discoveryEnabled
-                        )
-                        if localDevices.discoveryEnabled {
-                            nearbySection
-                        }
-                        ConnectionModesStrip()
+                        // First run: the same groups as the populated screen,
+                        // just without device rows. Nearby is the primary path.
+                        nearbySection
+                        connectSection
+                        firstRunNote
                     } else {
                         localSection
                         nearbySection
@@ -224,7 +216,7 @@ struct DeviceListView: View {
                     .foregroundStyle(ControllerPalette.elevated)
                     .frame(width: 42, height: 42)
                     .background(ControllerPalette.ink, in: Circle())
-                    .shadow(color: ControllerPalette.ink.opacity(0.22), radius: 12, x: 0, y: 6)
+                    .shadow(color: ControllerPalette.ink.opacity(0.16), radius: 8, x: 0, y: 4)
             }
             .menuOrder(.fixed)
             .accessibilityLabel("Add device")
@@ -236,8 +228,8 @@ struct DeviceListView: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Devices")
-                .font(.system(size: 38, weight: .bold))
-                .tracking(-0.8)
+                .font(.system(size: 34, weight: .bold))
+                .tracking(-0.6)
                 .foregroundStyle(ControllerPalette.ink)
                 .accessibilityAddTraits(.isHeader)
             Text(summary)
@@ -248,7 +240,7 @@ struct DeviceListView: View {
 
     private var summary: String {
         let total = localDevices.devices.count + model.devices.count
-        guard total > 0 else { return "Nothing added yet. Start with the network you are on." }
+        guard total > 0 else { return "No devices yet." }
         let online = model.devices.filter(\.online).count + localDevices.devices.filter { device in
             if case .reachable = localDevices.reachability(of: device) { return true }
             return advertisedNearby(device)
@@ -309,6 +301,39 @@ struct DeviceListView: View {
                 .accessibilityIdentifier("add-local-device")
             }
         }
+    }
+
+    /// Quiet alternatives to discovery on the first run: relay pairing and a
+    /// typed address, as plain rows rather than a hero card.
+    private var connectSection: some View {
+        DeviceGroup {
+            AddRow(
+                title: "Pair with relay",
+                subtitle: "Control from anywhere after a one-time pairing",
+                systemImage: "qrcode.viewfinder"
+            ) {
+                path.append(.pairRelay)
+            }
+            .accessibilityIdentifier("pair-relay")
+            RowSeparator()
+            AddRow(
+                title: "Add by address",
+                subtitle: "Private IP address, optional port",
+                systemImage: "wifi"
+            ) {
+                path.append(.localDevice(nil))
+            }
+            .accessibilityIdentifier("add-local-device")
+        }
+    }
+
+    /// One line of orientation under the first-run rows, in the caption tone.
+    private var firstRunNote: some View {
+        Text("Local network works without an account. Relay needs a one-time pairing from relay admin.")
+            .font(.caption)
+            .foregroundStyle(ControllerPalette.faint)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
     }
 
     private var nearbySection: some View {

@@ -54,7 +54,7 @@ struct NearbySection: View {
                 } else {
                     AddRow(
                         title: "Find devices on this network",
-                        subtitle: "Lists devices with LAN control on. Nothing connects until you choose one.",
+                        subtitle: "Nothing connects until you choose one",
                         systemImage: "bonjour"
                     ) {
                         ControllerHaptics.tap()

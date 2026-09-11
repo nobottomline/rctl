@@ -58,7 +58,7 @@ struct GlassSurface: ViewModifier {
                         lineWidth: 1
                     )
             }
-            .shadow(color: ControllerPalette.ink.opacity(0.07), radius: 22, x: 0, y: 10)
+            .shadow(color: ControllerPalette.ink.opacity(0.05), radius: 14, x: 0, y: 6)
             .shadow(color: ControllerPalette.ink.opacity(0.04), radius: 2, x: 0, y: 1)
     }
 }

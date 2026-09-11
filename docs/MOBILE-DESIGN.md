@@ -107,9 +107,13 @@ parchment screens are light; the scanner and the media stage are dark. A pushed
 view cannot override an ancestor's `preferredColorScheme`, so the scheme is
 decided once from the current route rather than per screen.
 
-The first-run state is a hero with the brand mark, the two primary actions, and
-two short explainers of the local and relay paths. The header carries the brand
-mark, the `rctl` wordmark, refresh when a relay profile exists, and an add menu.
+The first-run state is deliberately quiet and has the same shape as the
+populated screen: the title with `No devices yet.`, the `Nearby` group with its
+single opt-in row, one group with `Pair with relay` and `Add by address`, and a
+one-line caption. There is no hero card, emblem, marketing heading, or explainer
+tiles; the ambient canvas is the only expressive element. The header carries the
+brand mark, the `rctl` wordmark, refresh when a relay profile exists, and an add
+menu.
 The product name shown to the user is `rctl`; `RCTL Controller` remains only
 the Xcode target and scheme name.
 
