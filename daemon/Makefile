@@ -20,6 +20,14 @@ OPUS := $(WEBRTC)/.lib/ios/opus-install
 ifeq ($(wildcard $(DC)/build-ios/libdatachannel.a),)
 $(error WebRTC static libs not found; run 'make deps' first - see third_party/webrtc/README.md)
 endif
+ICE_PATCH_DIGEST := $(shell shasum -a 256 $(WEBRTC)/patches/libjuice-ice-role-presence.patch | awk '{print $$1}')
+ICE_BUILT_PATCH_DIGEST := $(shell cat $(DC)/build-ios/rctl-ice-patch.sha256 2>/dev/null)
+ifeq ($(strip $(ICE_PATCH_DIGEST)),)
+$(error Cannot verify WebRTC ICE patch digest; shasum is required)
+endif
+ifneq ($(ICE_PATCH_DIGEST),$(ICE_BUILT_PATCH_DIGEST))
+$(error WebRTC ICE patch changed or is not built; run 'make deps' before packaging)
+endif
 # Prefer the selected SDK's libc++ headers. Older stripped SDKs need the Xcode
 # fallback; mixing both header sets causes Clang module-definition conflicts.
 LIBCPP := $(if $(wildcard $(ISYSROOT)/usr/include/c++/v1/__config),$(ISYSROOT),$(shell xcrun --sdk iphoneos --show-sdk-path))/usr/include/c++/v1

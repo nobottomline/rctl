@@ -88,6 +88,7 @@ if [ ! -d "$LIB/libdatachannel/include/rtc" ]; then
   git submodule update -q --init --recursive --depth 1
 fi
 cd "$LIB/libdatachannel"
+bash "$WEBRTC/apply-patches.sh"
 rm -rf build-ios
 cmake -B build-ios -G Ninja \
   -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
@@ -98,6 +99,7 @@ cmake -B build-ios -G Ninja \
   -DCMAKE_PREFIX_PATH="$MB" -DCMAKE_FIND_ROOT_PATH="$MB" \
   -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 cmake --build build-ios -j
+shasum -a 256 "$WEBRTC/patches/libjuice-ice-role-presence.patch" | awk '{print $1}' > build-ios/rctl-ice-patch.sha256
 
 echo "── iOS arm64/arm64e static libs ready ──"
 find build-ios -name '*.a'

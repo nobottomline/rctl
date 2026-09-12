@@ -42,6 +42,33 @@ libdatachannel's own deps (libsrtp, libjuice, usrsctp, plog, json) come in as
 its git submodules, so they are transitively pinned by the commit above. Every
 pin is an exact commit or release tag, so `make deps` is fully reproducible.
 
+### ICE Role Compatibility Patch
+
+The pinned libjuice submodule (`3c40a354`) conflates a missing ICE role
+attribute with a present zero-valued 64-bit tiebreaker. Chrome TURN/TCP checks
+were observed with `ICE-CONTROLLED=0`; the device rejected these authenticated
+checks with STUN `400` before DTLS could start. RFC 8445 section 16.1 defines
+the attribute as an unsigned 64-bit value, not a nonzero presence marker.
+
+`patches/libjuice-ice-role-presence.patch` keeps role presence separate from
+the value, rejects missing/both role attributes, and compares the correct
+controlled-role tiebreaker during conflict handling. STUN integrity, consent
+freshness, and TURN authentication are unchanged. The internal writer retains
+compatibility with nonzero numeric callers while permitting explicit zero.
+The patch is MPL-2.0, matching the upstream files it modifies.
+
+`apply-patches.sh` checks the exact submodule revision and applies the patch
+idempotently, failing closed on an incompatible source. `make deps` records
+the patch digest with the completed native build. Package builds reject stale
+libraries without that digest. Review/remove this patch when upgrading
+upstream; never carry it forward without rerunning interoperability checks.
+
+Run `bash third_party/webrtc/test-ice-role.sh` after fetching dependencies.
+It builds a temporary host library and exercises authenticated loopback STUN
+requests: zero/nonzero values, missing/both roles, nomination, conflict, and
+invalid credentials. The release-draft workflow runs it before packaging.
+No external STUN service or operator configuration is used by this test.
+
 ## Why pinned-source instead of vendored binaries
 
 End users install a prebuilt `.deb` from the releases page and never build this.
