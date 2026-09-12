@@ -5,12 +5,13 @@ PreferenceBundle, prompt, or other UI on the iPad. The update path is disabled
 when the relay is configured with `device_update_channel: off`. Official wizard
 installations use a signed, version-bound stable catalog by default.
 
-Rootless transaction support is implemented in the qualification lane. Normal
-rootless builds still omit `update.transactional` until physical update and
-rollback acceptance is complete. Build a local candidate with
-`RCTL_ROOTLESS_UPDATE_QUALIFICATION=1 scripts/build-rootless.sh --version 0.4.0~rc.1`;
-this is not permission to publish an unqualified release. The existing Go
-wizard's relay upgrade is a separate lifecycle. See
+Ordinary rootless builds advertise `update.transactional` and
+`update.transactional.rootless`. Physical Dopamine/iPadOS 15.5 acceptance covered
+the relay UI update, failed-runtime rollback, and external-watchdog recovery
+after terminating the updater following installation. No qualification build
+flag is required. A configured architecture-bound catalog and verified target
+and rollback packages are still mandatory. The existing Go wizard's relay
+upgrade is a separate lifecycle. See
 [`ROOTLESS-RELEASE.md`](ROOTLESS-RELEASE.md) for the remaining integration and
 physical acceptance work.
 
@@ -184,7 +185,7 @@ before making the release immutable.
    Upgrade-in-place is deliberately not used because loaded jailbreak dylibs can
    retain stale code-signing state.
 7. It restores the relay plist and verifies all of the following before commit:
-   exact Debian package version from dpkg, live daemon semantic version and
+   exact Debian package version from dpkg, live daemon package version and
    protocol via `/v1/capabilities`, SpringBoard IPC via `/v1/deviceinfo`, and at
    least one relay connection via `/v1/relay_status` when a paired relay was
    present before the update.

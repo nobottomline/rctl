@@ -54,10 +54,60 @@ SpringBoard. Independent dpkg inspection reports `install ok installed` and
 `iphoneos-arm64`; the authenticated relay tunnel advertises the updater. This
 is bootstrap proof, not yet a relay-initiated update or rollback.
 
+### Relay Update Acceptance
+
+The subsequent RC1 to RC2 transaction passed through the real relay admin UI:
+`Device actions` -> `Update device...` -> `Start update`. No SSH package-install
+command replaced this path. The button was available only for the rootless
+qualification lane; the rootful device's unconfigured update action stayed
+hidden.
+
+- The ECDSA-verified schema-2 catalog contained both exact clean public RC DEBs.
+- The observed job progressed through download and runtime verification to
+  terminal `complete`, from `0.4.0~rc.1` to `0.4.0~rc.2`.
+- Independent SSH inspection returned `install ok installed`, exact version
+  `0.4.0~rc.2`, and `iphoneos-arm64`.
+- Capabilities reported the exact new package version; SpringBoard device-info
+  IPC succeeded through the authenticated relay tunnel.
+- The approved device set did not change. Persistent relay identity entries
+  compared equal before and after the transaction without exposing them.
+- The unmanaged relay candidate had a binary/configuration/SQLite backup, and
+  its HTTPS, admin assets, database integrity and both device tunnels passed.
+  The existing control client and unrelated services were unchanged.
+
+Both RC2 package architectures built and passed the public package audit.
+`make test`, the complete Go suite, admin lint/build and release workflow
+actionlint passed. These checks do not establish clean-host wizard qualification
+or acceptance of a future immutable `0.4.0` artifact set.
+
+### Recovery Acceptance
+
+A separate signed qualification catalog paired clean RC2 with
+`0.4.0~rc.3+rollback-test`. Only the test DEB's package metadata version changed;
+the functioning runtime still reported RC2. This deliberately failed exact
+post-install version verification without introducing broken executable code.
+It was never a GitHub Release or APT artifact.
+
+- Runtime-verification failure restored RC2 automatically and reconnected.
+- In the watchdog test, the same admin Update flow reached `verifying` with
+  the test target fully configured in dpkg. Through the real Root Terminal UI,
+  the operator harness terminated only the `--run` process whose request path
+  matched the current job, leaving its independent watchdog alive.
+- The watchdog transitioned to `rolling_back`, then terminal `rolled_back`.
+  Independent dpkg inspection confirmed RC2 `install ok installed`; relay
+  identity, the approved device set, and SpringBoard IPC were preserved.
+- The normal RC2 catalog was restored as soon as the test job had selected its
+  target, before package replacement. No other device received the test feed.
+
+The temporary rootless build gate is removed on this evidence. It does not
+establish recovery from power loss, a hung dpkg subprocess, or every possible
+bootstrap failure. The rootful/rootless release matrix and clean-VPS wizard
+acceptance still apply to the exact future tagged artifacts.
+
 | Boundary | Current implementation | Required change and proof |
 | --- | --- | --- |
-| Device admission | Default rootless gate retained; `RCTL_ROOTLESS_UPDATE_QUALIFICATION=1` enables the physical test lane | Remove the default gate only after update and recovery acceptance |
-| Native updater | Bootstrap-aware paths, exact installed package checks, rootless launchd bootstrap and explicit post-dpkg SpringBoard restart implemented | Verify the complete transaction and recovery on Dopamine |
+| Device admission | Ordinary builds advertise rootless transactional update support | Runtime update and watchdog recovery passed; qualify the exact release artifacts before publication |
+| Native updater | Bootstrap-aware paths, exact installed package checks, rootless launchd bootstrap and explicit post-dpkg SpringBoard restart implemented | Update and recovery passed on Dopamine/iPadOS 15.5; other bootstrap variants remain unqualified |
 | Artifact selection | Rootful schema 1 preserved; rootless schema 2 signs architecture; producer audits public layout and native checks exact ID/version/architecture | Cross-lane, malformed and duplicate-version host tests pass; physical acceptance pending |
 | Catalog availability | No catalog is configured on the deployed relay | Publish exact clean target and rollback artifacts to trusted HTTPS, verify the pinned signature, then explicitly configure the qualification channel |
 | Wizard packaging | Existing wizard/bootstrap now accept both public bases; owned paths cover backup, restore and recovery; upgrades require replacement sources | Go tests and checksum-failure bootstrap tests pass; fresh-host acceptance remains pending |

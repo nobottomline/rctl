@@ -14,10 +14,8 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
             @"media.library",
             @"terminal.pty",
             @"destructive.confirmation",
-#if !defined(RCTL_ROOTLESS) || defined(RCTL_ROOTLESS_UPDATE_QUALIFICATION)
             @"update.transactional",
-#endif
-#if defined(RCTL_ROOTLESS) && defined(RCTL_ROOTLESS_UPDATE_QUALIFICATION)
+#if defined(RCTL_ROOTLESS)
             @"update.transactional.rootless",
 #endif
             @"network.local_access_policy",

@@ -729,10 +729,6 @@ static int updateMain(NSString *requestPath, NSString *executable) {
 }
 
 int main(int argc, char **argv) {
-#if defined(RCTL_ROOTLESS) && !defined(RCTL_ROOTLESS_UPDATE_QUALIFICATION)
-    fprintf(stderr, "rctl: transactional updates are not qualified for rootless packages\n");
-    return 1;
-#endif
     @autoreleasepool {
         if (argc == 3 && !strcmp(argv[1], "--verify-envelope")) {
             NSData *data = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:argv[2]] options:0 error:nil];

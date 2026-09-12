@@ -57,13 +57,16 @@ ports, and Unix sockets retain their existing locations.
 
 Still unqualified or intentionally unavailable:
 
-- Every physical-device runtime check below, including ElleKit loading and
-  the existing private API behavior on iOS 15.5.
-- Rootless transactional updates: the capability is omitted, the API returns
-  `501 rootless_updates_not_qualified`, and the updater executable rejects use.
-  The signed release catalog currently contains rootful artifacts.
-- Rootless personalization, relay-wizard delivery, and automated recovery
-  deployment. The existing personalization/deploy scripts reject this lane.
+- The complete runtime matrix on untested iOS/hardware/bootstrap combinations.
+  Selected iPadOS 15.5/ElleKit results, including relay enrollment and control,
+  are recorded in `ROOTLESS.md`; they must not be generalized to iOS 16 or RootHide.
+- Fresh-host wizard delivery of both package variants. Personalization and
+  wizard staging support both lanes, but package inspection is not deployment
+  acceptance on a clean host.
+- Transactional updates have physical update, runtime-failure rollback and
+  watchdog recovery evidence for the tested rootless device; see
+  `ROOTLESS-RELEASE.md`. The ordinary rootful SSH deployment helper remains
+  inappropriate for rootless recovery.
 - `scripts/audio.sh` is a rootful operator helper, not the rootless test entry
   point. Exercise audio through the web control client.
 - Publishing rootless artifacts to the APT feed or public releases.

@@ -135,11 +135,11 @@ advertises only loaded package variants in Pair device. The existing
 remote smoke test are recorded below; they do not qualify the full remote
 feature matrix or transactional updates.
 
-Signed transactional updates remain gated in default builds. Qualification
-builds can opt in with `RCTL_ROOTLESS_UPDATE_QUALIFICATION=1`; they use a separate
-architecture-bound signed catalog, not the rootful feed. The default rejection
-is `rootless_updates_not_qualified`. Upgrade/rollback qualification must precede
-enabling the public feature; see `UPDATES.md` and `ROOTLESS-RELEASE.md`.
+Signed transactional updates use a separate architecture-bound catalog, never
+the rootful feed. The default build gate was removed after physical relay-UI
+update, failed-runtime rollback, and external-watchdog recovery acceptance on
+Dopamine/iPadOS 15.5. This does not qualify a future release artifact set or an
+untested jailbreak; see `UPDATES.md` and `ROOTLESS-RELEASE.md`.
 
 ### Package Preparation Qualification (2026-09-11)
 
