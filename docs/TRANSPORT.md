@@ -75,6 +75,16 @@ Realtime media/control is WebRTC:
 - Control/audio/bounded file operations: reliable DataChannels.
 - Large downloads: bounded HTTP stream, tunneled through the relay when remote.
 
+The pinned iOS build uses libjuice (`USE_NICE=0`). Its libdatachannel ICE backend
+accepts TURN/UDP but explicitly skips TURN/TCP and TURN/TLS servers. Browser-side
+TURN/TCP support is a separate capability: a successful browser allocation does
+not prove the iPad can reach TURN over TCP, or that browser/device ICE connects.
+Do not advertise an all-TCP fallback for UDP-blocked device networks. The
+September 13 clean-host device test also left browser-TURN/TCP connectivity
+unresolved; see `ROOTLESS-RELEASE.md`. That failure is not explained merely by
+the native transport limitation, because a TCP-connected browser can in
+principle communicate with a UDP-connected device through TURN.
+
 Do not use full `libwebrtc` unless `libdatachannel` proves impossible on the
 jailbroken iOS target. `libwebrtc` is far larger, harder to cross-compile, and
 contains a media stack we do not need because rctl already owns H.264 encode and

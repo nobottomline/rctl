@@ -222,12 +222,48 @@ its original cause is still unknown. This adds corrected-wizard fresh-install
 evidence, not public provenance, certificate renewal, or physical iPad acceptance
 on this new host. Existing device bindings were not modified for these checks.
 
+## Physical Device Supplement (2026-09-13)
+
+The existing Dopamine/iPadOS 15.5 device stayed on `0.4.0~rc.3`. An enrollment
+from the temporary server's UI-generated rootless package was added as a second
+relay entry after backing up the configuration. This was a runtime integration
+test, **not** installation of the private `0.4.1` package on the device.
+
+- `Approve device` and `Open control` were exercised through Chrome UI against
+  the exact physical device identity. The screen decoded 600 new frames over
+  ten seconds; a root-terminal command through the UI returned successfully.
+- Browser-only relay policy with TURN/UDP selected a local relay candidate and
+  a device server-reflexive candidate, decoding 600 frames over ten seconds.
+  This proves one relayed leg, not both-peer relay-only acceptance.
+- Console `Capture` produced a decoded 2732x2048 screenshot preview and exposed
+  its separate save action. The Files modal opened; no destructive file or
+  media action was performed.
+- Browser-only TURN/TCP repeatedly failed to connect. Allocations produced
+  local relay candidates with `relayProtocol=tcp`, but sampled ICE checks had
+  zero responses and peers repeatedly closed/reconnected. Device candidates
+  included host/server-reflexive candidates and, in a later attempt, relay.
+  Extending only the test page's 7-second timer did not establish a connection.
+  Two-browser mixed UDP/TCP TURN echo passed in both directions, isolating this
+  from a general mixed-transport server failure. The exact device-path cause
+  remains unresolved; no production timeout, ICE backend, or VPN was changed.
+- `Revoke access` disconnected an active peer, marked the temporary device
+  revoked/offline, and made its proxied capabilities request return `404`.
+  The temporary record was then deleted through the UI.
+- The temporary relay entry was removed with a compare-before-replace guard.
+  The original DeviceID, relay secret, and LAN policy were preserved. After the
+  daemon restart, the permanent relay decoded 601 new frames over ten seconds
+  and LAN decoded 169 new frames over three seconds. No SpringBoard restart,
+  package replacement, or VPN change was needed.
+
 ## Remaining Release Gates
 
 1. Repeat the clean-host wizard/device acceptance with the exact draft assets
    and anonymously pullable candidate image. The September 13 engineering
    rehearsal above covers the dual-package server lifecycle, not final artifact
-   provenance, renewal, or physical-device enrollment through that new host.
+   provenance, renewal, or the complete device package-install/enrollment path
+   through that new host.
+   Resolve the browser/device TURN/TCP failure above and verify both-peer
+   relay-only media/control; neither is satisfied by the two-browser echo test.
 2. Prepare the exact version-matched `0.4.0` candidate set and provenance.
    Re-run the required release matrix for both package architectures, including
    package-manager upgrade/recovery and rootful transactional compatibility.
