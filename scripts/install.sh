@@ -111,9 +111,18 @@ progress "Downloading and verifying the public device package"
 fetch_asset "$package_asset" "$work/${package_asset}"
 verify_asset "$package_asset"
 
+# Older releases have only a rootful package; never require a missing asset.
+rootless_package_asset="$(awk '$2 ~ /^rctl_[0-9]+\.[0-9]+\.[0-9]+_iphoneos-arm64\.deb$/ { if (found) exit 2; print $2; found=1 }' "$work/SHA256SUMS")" || fail "duplicate rootless public package"
+if [ -n "$rootless_package_asset" ]; then
+  progress "Downloading and verifying the rootless device package"
+  fetch_asset "$rootless_package_asset" "$work/$rootless_package_asset"
+  verify_asset "$rootless_package_asset"
+  set -- "$@" --rootless-public-package "$work/$rootless_package_asset"
+fi
+
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   progress "Verifying GitHub build provenance"
-  for name in "$asset" "$package_asset"; do
+  for name in "$asset" "$package_asset" ${rootless_package_asset:+"$rootless_package_asset"}; do
     gh attestation verify "$work/${name}" --repo "$REPOSITORY" >/dev/null || \
       fail "GitHub build provenance verification failed for ${name}"
   done

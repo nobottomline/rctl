@@ -245,6 +245,7 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	dryRun := flags.Bool("dry-run", false, "validate and print the upgrade plan without changing the host")
 	assumeYes := flags.Bool("yes", false, "upgrade without an interactive confirmation")
 	publicPackage := flags.String("public-package", "", "verified public rctl .deb for the target release")
+	rootlessPackage := flags.String("rootless-public-package", "", "verified rootless public rctl .deb for the target release")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -264,6 +265,9 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		if *publicPackage != "" {
 			cfg.DevicePackages = true
 		}
+		if *rootlessPackage != "" {
+			cfg.RootlessDevicePackages = true
+		}
 		if err := cfg.Validate(); err != nil {
 			fmt.Fprintln(errorsOutput, "config:", err)
 			return 2
@@ -274,7 +278,9 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	options := setup.UpgradeOptions{
 		DryRun: *dryRun, Version: version, RelayImage: relayImage, CaddyImage: caddyImage,
 		CoturnImage: coturnImage, PublicPackageSource: *publicPackage, ExpectedConfig: expectedConfig,
-		DefaultUpdateManifestURL: stableUpdateManifestURL(),
+		DefaultUpdateManifestURL:         stableUpdateManifestURL(),
+		DefaultRootlessUpdateManifestURL: strings.Replace(stableUpdateManifestURL(), "rctl-update-stable.json", "rctl-update-rootless-stable.json", 1),
+		RootlessPackageSource:            *rootlessPackage,
 	}
 	progress := newCLIProgress(output)
 	manager := setup.UpgradeManager{Progress: progress.Step}
@@ -444,19 +450,20 @@ func runDoctor(args []string, output, errorsOutput io.Writer) int {
 }
 
 type configFlags struct {
-	configPath            string
-	publicURL             string
-	relayImage            string
-	caddyImage            string
-	coturnImage           string
-	turnIP                string
-	acmeEmail             string
-	updateManifestURL     string
-	deviceUpdateChannel   string
-	turn                  bool
-	configuration         bool
-	identityConfiguration bool
-	updateConfiguration   bool
+	configPath                string
+	publicURL                 string
+	relayImage                string
+	caddyImage                string
+	coturnImage               string
+	turnIP                    string
+	acmeEmail                 string
+	updateManifestURL         string
+	rootlessUpdateManifestURL string
+	deviceUpdateChannel       string
+	turn                      bool
+	configuration             bool
+	identityConfiguration     bool
+	updateConfiguration       bool
 }
 
 func addConfigFlags(flags *flag.FlagSet) *configFlags {
@@ -469,6 +476,7 @@ func addConfigFlags(flags *flag.FlagSet) *configFlags {
 	flags.StringVar(&values.turnIP, "turn-external-ip", "", "public IPv4 used by TURN (non-secret)")
 	flags.StringVar(&values.acmeEmail, "acme-email", "", "ACME account email (non-secret)")
 	flags.StringVar(&values.updateManifestURL, "update-manifest-url", "", "signed HTTPS device-update catalog (non-secret)")
+	flags.StringVar(&values.rootlessUpdateManifestURL, "rootless-update-manifest-url", "", "signed HTTPS rootless device-update catalog (non-secret)")
 	flags.StringVar(&values.deviceUpdateChannel, "device-updates", setup.UpdateChannelStable, "device update channel: stable, custom, or off")
 	flags.BoolVar(&values.turn, "turn", true, "deploy the recommended TURN service")
 	return values
@@ -484,7 +492,7 @@ func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
 	}
 	channel := v.deviceUpdateChannel
 	manifestURL := v.updateManifestURL
-	if v.updateConfiguration && manifestURL != "" && channel == setup.UpdateChannelStable {
+	if v.updateConfiguration && (manifestURL != "" || v.rootlessUpdateManifestURL != "") && channel == setup.UpdateChannelStable {
 		channel = setup.UpdateChannelCustom
 	}
 	switch channel {
@@ -503,14 +511,14 @@ func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
 		Schema: setup.ConfigSchema, PublicURL: v.publicURL, Profile: setup.ProfileContainer,
 		RelayImage: v.relayImage, CaddyImage: v.caddyImage, CoturnImage: v.coturnImage,
 		TURNExternalIP: v.turnIP, EnableTURN: v.turn, ACMEEmail: v.acmeEmail, Release: version,
-		DeviceUpdateChannel: channel, UpdateManifestURL: manifestURL,
+		DeviceUpdateChannel: channel, UpdateManifestURL: manifestURL, RootlessUpdateManifestURL: v.rootlessUpdateManifestURL,
 	}, nil
 }
 
 func (v *configFlags) observe(flags *flag.FlagSet) {
 	flags.Visit(func(item *flag.Flag) {
 		switch item.Name {
-		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "update-manifest-url", "device-updates", "turn":
+		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "update-manifest-url", "rootless-update-manifest-url", "device-updates", "turn":
 			v.configuration = true
 		}
 		switch item.Name {
@@ -518,7 +526,7 @@ func (v *configFlags) observe(flags *flag.FlagSet) {
 			v.identityConfiguration = true
 		}
 		switch item.Name {
-		case "update-manifest-url", "device-updates":
+		case "update-manifest-url", "rootless-update-manifest-url", "device-updates":
 			v.updateConfiguration = true
 		}
 	})
@@ -565,6 +573,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without changing the host")
 	assumeYes := flags.Bool("yes", false, "apply the displayed plan without an interactive confirmation")
 	publicPackage := flags.String("public-package", "", "verified public rctl .deb used for admin package generation")
+	rootlessPackage := flags.String("rootless-public-package", "", "verified rootless public rctl .deb used for admin package generation")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -593,6 +602,12 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		cfg.DevicePackages = true
 	}
 	reader := bufio.NewReader(input)
+	if *rootlessPackage != "" {
+		cfg.RootlessDevicePackages = true
+		if cfg.DeviceUpdateChannel == setup.UpdateChannelStable {
+			cfg.RootlessUpdateManifestURL = strings.Replace(stableUpdateManifestURL(), "rctl-update-stable.json", "rctl-update-rootless-stable.json", 1)
+		}
+	}
 	interactive := input == os.Stdin && stdinIsTerminal()
 	if configValues.configPath == "" && interactive && !*assumeYes {
 		if cfg.PublicURL == "" {
@@ -658,7 +673,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	progress := newCLIProgress(output)
 	installCtx, cancel := lifecycleContext(12 * time.Minute)
 	defer cancel()
-	result, err := (setup.Installer{Progress: progress.Step}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version, PublicPackageSource: *publicPackage})
+	result, err := (setup.Installer{Progress: progress.Step}).Install(installCtx, cfg, setup.InstallOptions{DryRun: *dryRun, Version: version, PublicPackageSource: *publicPackage, RootlessPackageSource: *rootlessPackage})
 	if err != nil {
 		progress.Fail(lifecycleFailureSummary(err, "Installation", "Installation"))
 		fmt.Fprintln(errorsOutput, "install:", err)

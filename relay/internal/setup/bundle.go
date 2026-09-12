@@ -118,6 +118,15 @@ func RenderDedicatedBundleAt(cfg Config, secrets Secrets, paths Paths) (Bundle, 
 	if cfg.DevicePackages {
 		env["RCTL_RELAY_PUBLIC_PACKAGE"] = "/packages/rctl-public.deb"
 	}
+	if cfg.RootlessDevicePackages {
+		env["RCTL_RELAY_ROOTLESS_PACKAGE"] = "/packages/rctl-public-rootless.deb"
+	}
+	if cfg.RootlessUpdateManifestURL != "" {
+		env["RCTL_RELAY_ROOTLESS_UPDATE_MANIFEST_URL"] = cfg.RootlessUpdateManifestURL
+		if semanticVersionPattern.MatchString(cfg.Release) {
+			env["RCTL_RELAY_ROOTLESS_UPDATE_TARGET_VERSION"] = cfg.Release
+		}
+	}
 	if cfg.UpdateManifestURL != "" {
 		env["RCTL_RELAY_UPDATE_MANIFEST_URL"] = cfg.UpdateManifestURL
 		if semanticVersionPattern.MatchString(cfg.Release) {
@@ -178,6 +187,10 @@ func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 	if cfg.DevicePackages {
 		relay := services["relay"].(map[string]any)
 		relay["volumes"] = append(relay["volumes"].([]string), paths.PublicPackage+":/packages/rctl-public.deb:ro")
+	}
+	if cfg.RootlessDevicePackages {
+		relay := services["relay"].(map[string]any)
+		relay["volumes"] = append(relay["volumes"].([]string), paths.RootlessPackage+":/packages/rctl-public-rootless.deb:ro")
 	}
 	if cfg.EnableTURN {
 		services["coturn"] = map[string]any{

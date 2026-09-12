@@ -3,23 +3,24 @@ package setup
 import "path/filepath"
 
 type Paths struct {
-	EtcDir        string
-	OptDir        string
-	DataDir       string
-	RelayDataDir  string
-	CaddyDataDir  string
-	CaddyConfDir  string
-	BackupDir     string
-	LogDir        string
-	StateDir      string
-	LockPath      string
-	RecoveryPath  string
-	ManifestPath  string
-	RelayEnv      string
-	Compose       string
-	Caddyfile     string
-	Coturn        string
-	PublicPackage string
+	EtcDir          string
+	OptDir          string
+	DataDir         string
+	RelayDataDir    string
+	CaddyDataDir    string
+	CaddyConfDir    string
+	BackupDir       string
+	LogDir          string
+	StateDir        string
+	LockPath        string
+	RecoveryPath    string
+	ManifestPath    string
+	RelayEnv        string
+	Compose         string
+	Caddyfile       string
+	Coturn          string
+	PublicPackage   string
+	RootlessPackage string
 }
 
 func DefaultPaths() Paths { return pathsWithPrefix("") }
@@ -40,7 +41,8 @@ func pathsWithPrefix(root string) Paths {
 		RecoveryPath: join("/var/log/rctl-setup/recovery.json"),
 		RelayEnv:     join("/etc/rctl/relay.env"), Compose: join("/opt/rctl/compose.json"),
 		Caddyfile: join("/opt/rctl/Caddyfile"), Coturn: join("/etc/rctl/turnserver.conf"),
-		PublicPackage: join("/opt/rctl/rctl-public.deb"),
+		PublicPackage:   join("/opt/rctl/rctl-public.deb"),
+		RootlessPackage: join("/opt/rctl/rctl-public-rootless.deb"),
 	}
 	p.RelayDataDir = filepath.Join(p.DataDir, "relay")
 	p.CaddyDataDir = filepath.Join(p.DataDir, "caddy", "data")

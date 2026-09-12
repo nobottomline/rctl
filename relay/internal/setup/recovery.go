@@ -227,7 +227,7 @@ func cleanupRetainedDirectories(root string) {
 }
 
 func removeInterruptedInstall(paths Paths) error {
-	for _, name := range []string{paths.RelayEnv, paths.Compose, paths.Caddyfile, paths.Coturn, paths.PublicPackage, paths.ManifestPath} {
+	for _, name := range []string{paths.RelayEnv, paths.Compose, paths.Caddyfile, paths.Coturn, paths.PublicPackage, paths.RootlessPackage, paths.ManifestPath} {
 		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -245,7 +245,7 @@ func removeKnownManagedExtras(target OwnershipManifest, paths Paths) error {
 	for _, file := range target.Files {
 		wanted[file.Path] = true
 	}
-	for _, name := range []string{paths.RelayEnv, paths.Compose, paths.Caddyfile, paths.Coturn, paths.PublicPackage} {
+	for _, name := range []string{paths.RelayEnv, paths.Compose, paths.Caddyfile, paths.Coturn, paths.PublicPackage, paths.RootlessPackage} {
 		if wanted[name] {
 			continue
 		}

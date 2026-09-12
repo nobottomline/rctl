@@ -7,6 +7,22 @@ reference.
 
 ## Outcome
 
+The release bootstrap recognizes both public package architectures in the
+verified checksum set. It passes the optional rootless artifact through
+`--rootless-public-package`; older rootful-only releases remain supported.
+Direct users supply `--public-package ROOTFUL.deb` and
+`--rootless-public-package ROOTLESS.deb` to install/upgrade. Both must be clean
+public artifacts of the target release, with matching runtime layouts.
+
+Ownership manifests persist `rootless_device_packages` and the optional
+`rootless_update_manifest_url`. The second base is a read-only container mount
+at `/packages/rctl-public-rootless.deb` and a tracked backup/recovery artifact.
+Once installed, upgrade requires its replacement instead of silently dropping
+rootless package generation. Stable installs select the version-bound rootless
+catalog; custom deployments may set `--rootless-update-manifest-url`. Updates
+set to `off` keep both update feeds disabled. Device updater qualification is
+independent of wizard lifecycle tests; see `ROOTLESS-RELEASE.md`.
+
 The normal user journey is:
 
 1. Create a Linux VPS and point one domain or subdomain at it.

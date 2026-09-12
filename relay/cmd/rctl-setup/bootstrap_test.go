@@ -130,6 +130,31 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	if err == nil || !strings.Contains(string(output), "must be a real directory, not a symlink") {
 		t.Fatalf("symlinked offline asset directory: err=%v output=%s", err, output)
 	}
+	rootlessName := "rctl_1.2.3_iphoneos-arm64.deb"
+	rootless := []byte("rootless public fixture")
+	if err := os.WriteFile(filepath.Join(assets, rootlessName), rootless, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checksums += fmt.Sprintf("%x  %s\n", sha256.Sum256(rootless), rootlessName)
+	if err := os.WriteFile(filepath.Join(assets, "SHA256SUMS"), []byte(checksums), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runBootstrap(t, scriptPath, assets, logPath, false, "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	assertLastLog(t, logPath, "upgrade --yes --rootless-public-package ")
+	if err := os.WriteFile(filepath.Join(assets, rootlessName), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := string(mustRead(t, logPath))
+	corrupt := exec.Command("sh", scriptPath, "--yes")
+	corrupt.Env = append(os.Environ(), "ASSET_DIR="+assets, "SETUP_LOG="+logPath, "FAIL_SETUP=0")
+	if out, err := corrupt.CombinedOutput(); err == nil || !strings.Contains(string(out), "checksum mismatch") {
+		t.Fatalf("corrupt rootless package: %v %s", err, out)
+	}
+	if string(mustRead(t, logPath)) != before {
+		t.Fatal("wizard ran before rootless checksum verification")
+	}
 }
 
 func runBootstrapThroughPTY(t *testing.T, script, assets, log string) {

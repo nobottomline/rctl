@@ -12,14 +12,16 @@ import (
 )
 
 type UpgradeOptions struct {
-	DryRun                   bool
-	Version                  string
-	RelayImage               string
-	CaddyImage               string
-	CoturnImage              string
-	PublicPackageSource      string
-	ExpectedConfig           *Config
-	DefaultUpdateManifestURL string
+	DryRun                           bool
+	Version                          string
+	RelayImage                       string
+	CaddyImage                       string
+	CoturnImage                      string
+	PublicPackageSource              string
+	RootlessPackageSource            string
+	ExpectedConfig                   *Config
+	DefaultUpdateManifestURL         string
+	DefaultRootlessUpdateManifestURL string
 }
 
 type UpgradeResult struct {
@@ -207,6 +209,16 @@ func (u UpgradeManager) prepare(options UpgradeOptions) (upgradePlan, error) {
 	if options.ExpectedConfig != nil {
 		targetConfig.DeviceUpdateChannel = options.ExpectedConfig.DeviceUpdateChannel
 		targetConfig.UpdateManifestURL = options.ExpectedConfig.UpdateManifestURL
+		targetConfig.RootlessUpdateManifestURL = options.ExpectedConfig.RootlessUpdateManifestURL
+	}
+	if options.RootlessPackageSource != "" {
+		targetConfig.RootlessDevicePackages = true
+	}
+	if targetConfig.DeviceUpdateChannel == UpdateChannelOff {
+		targetConfig.RootlessUpdateManifestURL = ""
+	}
+	if targetConfig.RootlessDevicePackages && targetConfig.DeviceUpdateChannel == UpdateChannelStable && options.DefaultRootlessUpdateManifestURL != "" {
+		targetConfig.RootlessUpdateManifestURL = options.DefaultRootlessUpdateManifestURL
 	}
 	if targetConfig.DeviceUpdateChannel == UpdateChannelStable && options.DefaultUpdateManifestURL != "" {
 		targetConfig.UpdateManifestURL = options.DefaultUpdateManifestURL
@@ -221,17 +233,8 @@ func (u UpgradeManager) prepare(options UpgradeOptions) (upgradePlan, error) {
 	if err != nil {
 		return upgradePlan{}, err
 	}
-	if targetConfig.DevicePackages {
-		packageData, packageInfo, packageErr := readPublicPackageSource(options.PublicPackageSource)
-		if packageErr != nil {
-			return upgradePlan{}, packageErr
-		}
-		if packageInfo.Version != options.Version {
-			return upgradePlan{}, fmt.Errorf("public device package version %q does not match target release %q", packageInfo.Version, options.Version)
-		}
-		bundle.Files = append(bundle.Files, File{Path: u.Paths.PublicPackage, Mode: 0o644, Content: packageData})
-	} else if options.PublicPackageSource != "" {
-		return upgradePlan{}, errors.New("installed relay does not have device package generation enabled")
+	if err := appendPublicPackages(&bundle, targetConfig, u.Paths, options.PublicPackageSource, options.RootlessPackageSource); err != nil {
+		return upgradePlan{}, err
 	}
 	now := u.Now().Unix()
 	target := manifestFor(targetConfig, bundle, options.Version, current.CreatedAt, now)

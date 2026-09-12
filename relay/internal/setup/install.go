@@ -87,9 +87,10 @@ type Installer struct {
 }
 
 type InstallOptions struct {
-	DryRun              bool
-	Version             string
-	PublicPackageSource string
+	DryRun                bool
+	Version               string
+	PublicPackageSource   string
+	RootlessPackageSource string
 }
 
 type InstallResult struct {
@@ -422,15 +423,8 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	if err != nil {
 		return result, err
 	}
-	if cfg.DevicePackages {
-		packageData, packageInfo, packageErr := readPublicPackageSource(options.PublicPackageSource)
-		if packageErr != nil {
-			return result, packageErr
-		}
-		if cfg.Release != "" && cfg.Release != "dev" && packageInfo.Version != cfg.Release {
-			return result, fmt.Errorf("public device package version %q does not match setup release %q", packageInfo.Version, cfg.Release)
-		}
-		bundle.Files = append(bundle.Files, File{Path: i.Paths.PublicPackage, Mode: 0o644, Content: packageData})
+	if err := appendPublicPackages(&bundle, cfg, i.Paths, options.PublicPackageSource, options.RootlessPackageSource); err != nil {
+		return result, err
 	}
 	result.Files = bundlePaths(bundle)
 	if options.DryRun {
@@ -807,6 +801,12 @@ func validateOwnershipManifest(manifest OwnershipManifest, paths Paths) error {
 	}
 	if manifest.Config.DevicePackages {
 		allowed[paths.PublicPackage] = struct {
+			mode   uint32
+			secret bool
+		}{0o644, false}
+	}
+	if manifest.Config.RootlessDevicePackages {
+		allowed[paths.RootlessPackage] = struct {
 			mode   uint32
 			secret bool
 		}{0o644, false}

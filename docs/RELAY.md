@@ -35,8 +35,11 @@ An advanced deployment may load two independent public bases:
 `RCTL_RELAY_ROOTLESS_PACKAGE` for `iphoneos-arm64` (ordinary Dopamine rootless).
 Use absolute paths readable by the relay process; container deployments must
 mount the files explicitly. Startup rejects a path containing the other
-architecture. The setup/release bootstrap still provisions only its qualified
-rootful artifact; automatic rootless provisioning remains a separate gate.
+architecture. The setup/release bootstrap can provision both public artifacts
+when the signed release set includes them; direct wizard invocation accepts
+`--public-package` and `--rootless-public-package`. See `SETUP.md` for owned
+paths and upgrade requirements. Runtime qualification remains separate from
+package provisioning.
 
 For an existing systemd deployment, add the optional package path in a separate
 service drop-in instead of rewriting the secret environment file. Verify that

@@ -31,19 +31,21 @@ var (
 )
 
 type Config struct {
-	Schema              int    `json:"schema"`
-	PublicURL           string `json:"public_url"`
-	Profile             string `json:"profile"`
-	RelayImage          string `json:"relay_image,omitempty"`
-	CaddyImage          string `json:"caddy_image,omitempty"`
-	CoturnImage         string `json:"coturn_image,omitempty"`
-	TURNExternalIP      string `json:"turn_external_ip,omitempty"`
-	EnableTURN          bool   `json:"enable_turn"`
-	ACMEEmail           string `json:"acme_email,omitempty"`
-	Release             string `json:"release,omitempty"`
-	DevicePackages      bool   `json:"device_packages,omitempty"`
-	DeviceUpdateChannel string `json:"device_update_channel,omitempty"`
-	UpdateManifestURL   string `json:"update_manifest_url,omitempty"`
+	Schema                    int    `json:"schema"`
+	PublicURL                 string `json:"public_url"`
+	Profile                   string `json:"profile"`
+	RelayImage                string `json:"relay_image,omitempty"`
+	CaddyImage                string `json:"caddy_image,omitempty"`
+	CoturnImage               string `json:"coturn_image,omitempty"`
+	TURNExternalIP            string `json:"turn_external_ip,omitempty"`
+	EnableTURN                bool   `json:"enable_turn"`
+	ACMEEmail                 string `json:"acme_email,omitempty"`
+	Release                   string `json:"release,omitempty"`
+	DevicePackages            bool   `json:"device_packages,omitempty"`
+	DeviceUpdateChannel       string `json:"device_update_channel,omitempty"`
+	UpdateManifestURL         string `json:"update_manifest_url,omitempty"`
+	RootlessDevicePackages    bool   `json:"rootless_device_packages,omitempty"`
+	RootlessUpdateManifestURL string `json:"rootless_update_manifest_url,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -125,6 +127,12 @@ func (c Config) Validate() error {
 	if err := validateUpdateManifestURL(c.UpdateManifestURL); err != nil {
 		return err
 	}
+	if err := validateUpdateManifestURL(c.RootlessUpdateManifestURL); err != nil {
+		return err
+	}
+	if c.RootlessDevicePackages && !c.DevicePackages {
+		return errors.New("rootless_device_packages requires device_packages")
+	}
 	switch c.DeviceUpdateChannel {
 	case "":
 		// Legacy schema-1 manifests predate named channels. They are normalized
@@ -134,7 +142,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("device_update_channel %q requires update_manifest_url", c.DeviceUpdateChannel)
 		}
 	case UpdateChannelOff:
-		if c.UpdateManifestURL != "" {
+		if c.UpdateManifestURL != "" || c.RootlessUpdateManifestURL != "" {
 			return errors.New("device_update_channel off cannot have update_manifest_url")
 		}
 	default:
