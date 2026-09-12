@@ -172,10 +172,14 @@ test-rootless-paths:
 		tests/DestructiveActionsTest.mm core/security/DestructiveActions.mm \
 		-framework Foundation -o /tmp/rctl-rootless-paths-test
 	@/tmp/rctl-rootless-paths-test
-	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore -DRCTL_ROOTLESS=1 \
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore -I$(THEOS)/vendor/include -DRCTL_ROOTLESS=1 \
+		-DTHEOS_PACKAGE_INSTALL_PREFIX='"/private/preboot/rctl-test/jb"' \
 		tests/RootlessUpdateTest.mm core/update/UpdateLauncher.mm core/protocol/Capabilities.mm \
 		-framework Foundation -o /tmp/rctl-rootless-update-test
 	@/tmp/rctl-rootless-update-test
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore tests/UpdatePolicyTest.mm \
+		-framework Foundation -o /tmp/rctl-update-policy-test
+	@/tmp/rctl-update-policy-test
 
 .PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-app-test mobile-ios-build mobile-test
 protocol-generate:

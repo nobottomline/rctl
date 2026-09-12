@@ -101,6 +101,7 @@ export interface Device {
   approved_at?: number
   revoked_at?: number
   daemon_version?: string
+  package_version?: string
   browser_version?: string
   protocol_major?: number
   protocol_minor?: number
@@ -251,6 +252,8 @@ export interface RelayStatus {
   features: string[]
   update_configured: boolean
   update_target_version?: string
+  rootless_update_configured?: boolean
+  rootless_update_target_version?: string
   device_package_available: boolean
   device_packages?: { architecture: 'iphoneos-arm' | 'iphoneos-arm64'; version: string }[]
   device_package_version?: string

@@ -12,23 +12,25 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/nobottomline/rctl/relay/internal/deb"
 )
 
 type artifact struct {
-	Version string `json:"version"`
-	URL     string `json:"url"`
-	SHA256  string `json:"sha256"`
-	Size    int64  `json:"size"`
+	Architecture string `json:"-"`
+	Version      string `json:"version"`
+	URL          string `json:"url"`
+	SHA256       string `json:"sha256"`
+	Size         int64  `json:"size"`
 }
 
 type payload struct {
+	Architecture  string     `json:"architecture,omitempty"`
 	Schema        int        `json:"schema"`
 	Channel       string     `json:"channel"`
 	TargetVersion string     `json:"target_version"`
@@ -77,8 +79,8 @@ func run(keyPath, target, baseURL, output, channel string, packagePaths []string
 }
 
 func runWithURLs(keyPath, target, baseURL, output, channel string, packagePaths []string, artifactURLs map[string]string) error {
-	if keyPath == "" || target == "" || len(packagePaths) < 2 {
-		return errors.New("-key, -target, and at least current+target .deb files are required")
+	if keyPath == "" || target == "" || len(packagePaths) == 0 || len(packagePaths) > 128 {
+		return errors.New("-key, -target, and 1 to 128 .deb files are required")
 	}
 	if (baseURL == "") == (len(artifactURLs) == 0) {
 		return errors.New("use exactly one of -base-url or repeated -artifact-url")
@@ -98,6 +100,7 @@ func runWithURLs(keyPath, target, baseURL, output, channel string, packagePaths 
 
 	result := payload{Schema: 1, Channel: channel, TargetVersion: target, ProtocolMajor: 1}
 	versions := make(map[string]bool)
+	architecture := ""
 	for _, packagePath := range packagePaths {
 		entry, err := inspectArtifact(base, artifactURLs, packagePath)
 		if err != nil {
@@ -106,8 +109,20 @@ func runWithURLs(keyPath, target, baseURL, output, channel string, packagePaths 
 		if versions[entry.Version] {
 			return fmt.Errorf("duplicate package version %q", entry.Version)
 		}
+		if architecture != "" && architecture != entry.Architecture {
+			return errors.New("catalog cannot mix rootful and rootless artifacts")
+		}
+		architecture = entry.Architecture
 		versions[entry.Version] = true
 		result.Artifacts = append(result.Artifacts, entry)
+	}
+	// Schema 1 remains rootful-only so existing deployed updaters keep working.
+	// Schema 2 makes the rootless binding explicit and is rejected by old clients.
+	if architecture == "iphoneos-arm64" {
+		result.Schema = 2
+		result.Architecture = architecture
+	} else if len(packagePaths) < 2 {
+		return errors.New("rootful schema 1 requires current and target artifacts")
 	}
 	if !versions[target] {
 		return fmt.Errorf("target version %q is not among artifacts", target)
@@ -171,40 +186,23 @@ func readPrivateKey(name string) (*ecdsa.PrivateKey, error) {
 }
 
 func inspectArtifact(base *url.URL, artifactURLs map[string]string, name string) (artifact, error) {
-	file, err := os.Open(name)
+	info, err := os.Lstat(name)
 	if err != nil {
 		return artifact{}, err
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return artifact{}, err
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > deb.MaxPackageBytes {
+		return artifact{}, errors.New("artifact must be a bounded regular public package")
 	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return artifact{}, err
-	}
-	command := exec.Command("dpkg-deb", "-f", name)
-	metadata, err := command.Output()
+	raw, err := os.ReadFile(name)
 	if err != nil {
 		return artifact{}, fmt.Errorf("inspect %s: %w", name, err)
 	}
-	var packageID, version string
-	for _, line := range strings.Split(string(metadata), "\n") {
-		key, value, ok := strings.Cut(line, ": ")
-		if !ok {
-			continue
-		}
-		switch key {
-		case "Package":
-			packageID = value
-		case "Version":
-			version = value
-		}
+	metadata, err := deb.Inspect(raw)
+	if err != nil {
+		return artifact{}, fmt.Errorf("inspect public artifact: %w", err)
 	}
-	if packageID != "com.greatlove.rctl" || version == "" {
-		return artifact{}, fmt.Errorf("%s is not an rctl package", name)
-	}
+	version := metadata.Version
+	hash := sha256.Sum256(raw)
 	var artifactURL *url.URL
 	if base != nil {
 		resolved := *base
@@ -222,7 +220,8 @@ func inspectArtifact(base *url.URL, artifactURLs map[string]string, name string)
 		artifactURL = parsed
 	}
 	return artifact{
-		Version: version, URL: artifactURL.String(), SHA256: hex.EncodeToString(hash.Sum(nil)), Size: info.Size(),
+		Architecture: metadata.Architecture,
+		Version:      version, URL: artifactURL.String(), SHA256: hex.EncodeToString(hash[:]), Size: int64(len(raw)),
 	}, nil
 }
 

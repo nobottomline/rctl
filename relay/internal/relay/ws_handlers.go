@@ -17,6 +17,7 @@ type deviceConn struct {
 	id             string
 	name           string
 	daemonVersion  string
+	packageVersion string
 	browserVersion string
 	protocolMajor  int
 	protocolMinor  int
@@ -52,6 +53,7 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		DeviceID       string `json:"device_id"`
 		DeviceName     string `json:"device_name"`
 		DaemonVersion  string `json:"daemon_version"`
+		PackageVersion string `json:"package_version"`
 		BrowserVersion string `json:"browser_version"`
 		Protocol       struct {
 			Major int `json:"major"`
@@ -66,7 +68,7 @@ func (s *server) handleDeviceWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hello.DeviceName = normalizeDeviceName(hello.DeviceName)
-	if len(hello.DaemonVersion) > 64 || len(hello.BrowserVersion) > 64 || len(hello.Features) > 128 {
+	if len(hello.DaemonVersion) > 64 || len(hello.PackageVersion) > 128 || len(hello.BrowserVersion) > 64 || len(hello.Features) > 128 {
 		ws.Close(websocket.StatusUnsupportedData, "invalid capabilities")
 		return
 	}
@@ -123,6 +125,7 @@ WHERE id=?`, hello.DaemonVersion, hello.BrowserVersion, hello.Protocol.Major,
 		id:             deviceID,
 		name:           hello.DeviceName,
 		daemonVersion:  hello.DaemonVersion,
+		packageVersion: hello.PackageVersion,
 		browserVersion: hello.BrowserVersion,
 		protocolMajor:  hello.Protocol.Major,
 		protocolMinor:  hello.Protocol.Minor,

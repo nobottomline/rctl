@@ -265,6 +265,8 @@ export default function App() {
             audit={audit}
             updateConfigured={status?.update_configured ?? false}
             updateTargetVersion={status?.update_target_version}
+            rootlessUpdateConfigured={status?.rootless_update_configured ?? false}
+            rootlessUpdateTargetVersion={status?.rootless_update_target_version}
             onAction={handleAction}
           />
           <ActivityPanel entries={audit} sessions={sessions} controllers={controllers} />

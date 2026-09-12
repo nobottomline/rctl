@@ -14,8 +14,11 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
             @"media.library",
             @"terminal.pty",
             @"destructive.confirmation",
-#if !defined(RCTL_ROOTLESS)
+#if !defined(RCTL_ROOTLESS) || defined(RCTL_ROOTLESS_UPDATE_QUALIFICATION)
             @"update.transactional",
+#endif
+#if defined(RCTL_ROOTLESS) && defined(RCTL_ROOTLESS_UPDATE_QUALIFICATION)
+            @"update.transactional.rootless",
 #endif
             @"network.local_access_policy",
             @"controller.scoped_sessions",
@@ -32,6 +35,9 @@ NSDictionary *rctl_device_capabilities(void) {
         @"product": @"rctl",
         @"component": @"daemon",
         @"daemon": @{@"version": version},
+#if defined(RCTL_PACKAGE_VERSION)
+        @"package_version": @RCTL_PACKAGE_VERSION,
+#endif
         @"browser": @{@"version": version},
         @"protocol": @{@"major": @(RCTL_PROTOCOL_MAJOR), @"minor": @(RCTL_PROTOCOL_MINOR)},
         @"features": rctl_device_feature_names(),

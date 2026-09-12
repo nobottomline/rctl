@@ -12,6 +12,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestDeviceUpdateUsesExactPackageVersion(t *testing.T) {
+	dc := deviceConn{daemonVersion: "0.4.0", packageVersion: "0.4.0~rc.1"}
+	if dc.updateVersion() != "0.4.0~rc.1" {
+		t.Fatal("candidate was mistaken for stable")
+	}
+	dc.packageVersion = ""
+	if dc.updateVersion() != "0.4.0" {
+		t.Fatal("legacy version fallback changed")
+	}
+}
+
 func TestDeviceUpdatePreflightRejectsBeforeStartingTransaction(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -28,6 +39,7 @@ func TestDeviceUpdatePreflightRejectsBeforeStartingTransaction(t *testing.T) {
 		{"not approved", true, true, false, []string{"update.transactional"}, "0.3.0", http.StatusForbidden, "device_not_approved"},
 		{"legacy without features", true, true, true, nil, "0.3.0", http.StatusConflict, "device_updater_not_supported"},
 		{"rootless without updater", true, true, true, []string{"screen.webrtc", "destructive.confirmation"}, "0.3.0", http.StatusConflict, "device_updater_not_supported"},
+		{"rootless without its catalog", true, true, true, []string{"update.transactional", "update.transactional.rootless"}, "0.3.0", http.StatusServiceUnavailable, "update_manifest_not_configured"},
 		{"already current", true, true, true, []string{"update.transactional"}, "0.3.1", http.StatusConflict, "device_already_current"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

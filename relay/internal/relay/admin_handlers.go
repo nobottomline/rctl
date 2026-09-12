@@ -479,6 +479,7 @@ FROM devices
 		ApprovedAt         *int64   `json:"approved_at,omitempty"`
 		RevokedAt          *int64   `json:"revoked_at,omitempty"`
 		DaemonVersion      string   `json:"daemon_version,omitempty"`
+		PackageVersion     string   `json:"package_version,omitempty"`
 		BrowserVersion     string   `json:"browser_version,omitempty"`
 		ProtocolMajor      *int     `json:"protocol_major,omitempty"`
 		ProtocolMinor      *int     `json:"protocol_minor,omitempty"`
@@ -525,7 +526,10 @@ FROM devices
 		d.Compatible = d.CompatibilityError == "" &&
 			(!protocolMajorValue.Valid || protocolCompatible(int(protocolMajorValue.Int64)))
 		d.LegacyProtocol = protocolMajorValue.Valid && d.DaemonVersion == "" && len(d.Features) == 0
-		d.Online = s.isDeviceOnline(d.ID)
+		if connection := s.getDevice(d.ID); connection != nil {
+			d.Online = true
+			d.PackageVersion = connection.packageVersion
+		}
 		out = append(out, d)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": out})

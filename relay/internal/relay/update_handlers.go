@@ -50,7 +50,7 @@ func decodeDeviceJSON(response httpTunnelResponse, destination any) error {
 }
 
 func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.UpdateManifestURL == "" {
+	if s.cfg.UpdateManifestURL == "" && s.cfg.RootlessUpdateManifestURL == "" {
 		writeErr(w, http.StatusServiceUnavailable, "update_manifest_not_configured")
 		return
 	}
@@ -68,7 +68,12 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "device_updater_not_supported")
 		return
 	}
-	if s.cfg.UpdateTargetVersion != "" && dc.daemonVersion == s.cfg.UpdateTargetVersion {
+	manifestURL, targetVersion := s.cfg.deviceUpdateCatalog(dc.features)
+	if manifestURL == "" {
+		writeErr(w, http.StatusServiceUnavailable, "update_manifest_not_configured")
+		return
+	}
+	if targetVersion != "" && dc.updateVersion() == targetVersion {
 		writeErr(w, http.StatusConflict, "device_already_current")
 		return
 	}
@@ -80,7 +85,7 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	confirmationBody, _ := json.Marshal(map[string]string{
-		"action": "device_update", "target": s.cfg.UpdateManifestURL,
+		"action": "device_update", "target": manifestURL,
 	})
 	confirmationResponse, err := s.deviceHTTP(r.Context(), dc, http.MethodPost, "/v1/confirmation", confirmationBody)
 	var confirmation struct {
@@ -91,7 +96,7 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updateBody, _ := json.Marshal(map[string]string{
-		"token": confirmation.Token, "manifest_url": s.cfg.UpdateManifestURL,
+		"token": confirmation.Token, "manifest_url": manifestURL,
 	})
 	updateResponse, err := s.deviceHTTP(r.Context(), dc, http.MethodPost, "/v1/update", updateBody)
 	var result map[string]any
@@ -101,6 +106,21 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "admin_device_update_started", "device_id", deviceID, "job_id", result["job_id"])
 	writeJSON(w, http.StatusAccepted, result)
+}
+
+// Never fall back to the rootful feed for a rootless device.
+func (cfg config) deviceUpdateCatalog(features []string) (string, string) {
+	if hasFeature(features, "update.transactional.rootless") {
+		return cfg.RootlessUpdateManifestURL, cfg.RootlessUpdateTargetVersion
+	}
+	return cfg.UpdateManifestURL, cfg.UpdateTargetVersion
+}
+
+func (dc *deviceConn) updateVersion() string {
+	if dc.packageVersion != "" {
+		return dc.packageVersion
+	}
+	return dc.daemonVersion
 }
 
 func hasFeature(features []string, wanted string) bool {

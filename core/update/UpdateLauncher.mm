@@ -1,4 +1,5 @@
 #import "UpdateLauncher.h"
+#import "../platform/Paths.h"
 
 #import <Foundation/Foundation.h>
 #import <fcntl.h>
@@ -12,7 +13,7 @@
 
 extern char **environ;
 
-static NSString *const kUpdater = @"/usr/local/libexec/rctl-updater";
+static NSString *const kUpdater = [] { return RCTL_ROOT_PATH_NS(@"/usr/local/libexec/rctl-updater"); }();
 static NSString *const kStateRoot = @"/var/mobile/Library/Caches/com.greatlove.rctl/update";
 static NSString *const kStatusPath = @"/var/mobile/Library/Caches/com.greatlove.rctl/update/status.json";
 static NSString *const kLaunchGuard = @"/var/mobile/Library/Caches/com.greatlove.rctl/update/active.request";
@@ -74,7 +75,7 @@ static int spawn_updater(NSString *executable, NSString *request) {
 }
 
 char *rctl_update_launch(const char *manifest_url, int *status) {
-#if defined(RCTL_ROOTLESS)
+#if defined(RCTL_ROOTLESS) && !defined(RCTL_ROOTLESS_UPDATE_QUALIFICATION)
     if (status) *status = 501;
     return json_bytes(@{@"error": @"rootless_updates_not_qualified"});
 #endif

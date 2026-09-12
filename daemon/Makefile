@@ -42,7 +42,7 @@ rctld_FILES = main.mm \
               ../core/net/VirtualMicServer.mm \
               ../core/ipc/Ipc.c
 RCTL_PRODUCT_VERSION := $(shell awk '/^Version:/{print $$2; exit}' ../control)
-rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations -DRCTL_VERSION='"$(RCTL_PRODUCT_VERSION)"'
+rctld_CFLAGS = -fobjc-arc -I../core -Wno-deprecated-declarations -DRCTL_VERSION='"$(RCTL_PRODUCT_VERSION)"' -DRCTL_PACKAGE_VERSION='"$(or $(PACKAGE_VERSION),$(RCTL_PRODUCT_VERSION))"'
 rctld_CCFLAGS = -std=gnu++17 -isystem $(LIBCPP) -I$(DC)/include -I$(DC)/deps/json/single_include -I$(OPUS)/include
 rctld_LDFLAGS = $(DC)/build-ios/libdatachannel.a \
                 $(DC)/build-ios/deps/libsrtp/libsrtp2.a \

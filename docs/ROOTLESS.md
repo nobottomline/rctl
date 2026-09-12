@@ -135,9 +135,11 @@ advertises only loaded package variants in Pair device. The existing
 remote smoke test are recorded below; they do not qualify the full remote
 feature matrix or transactional updates.
 
-Signed transactional updates remain unavailable in this test lane. A request returns
-`rootless_updates_not_qualified` instead of attempting to install a rootful
-release. Upgrade/rollback qualification must precede enabling these features.
+Signed transactional updates remain gated in default builds. Qualification
+builds can opt in with `RCTL_ROOTLESS_UPDATE_QUALIFICATION=1`; they use a separate
+architecture-bound signed catalog, not the rootful feed. The default rejection
+is `rootless_updates_not_qualified`. Upgrade/rollback qualification must precede
+enabling the public feature; see `UPDATES.md` and `ROOTLESS-RELEASE.md`.
 
 ### Package Preparation Qualification (2026-09-11)
 

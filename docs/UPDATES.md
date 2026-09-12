@@ -5,10 +5,12 @@ PreferenceBundle, prompt, or other UI on the iPad. The update path is disabled
 when the relay is configured with `device_update_channel: off`. Official wizard
 installations use a signed, version-bound stable catalog by default.
 
-The transaction described below is currently enabled for rootful devices only.
-Rootless packages deliberately omit `update.transactional` and reject updater
-startup. The existing Go wizard's relay upgrade is a separate lifecycle, not
-proof of rootless device-update support. See
+Rootless transaction support is implemented in the qualification lane. Normal
+rootless builds still omit `update.transactional` until physical update and
+rollback acceptance is complete. Build a local candidate with
+`RCTL_ROOTLESS_UPDATE_QUALIFICATION=1 scripts/build-rootless.sh --version 0.4.0~rc.1`;
+this is not permission to publish an unqualified release. The existing Go
+wizard's relay upgrade is a separate lifecycle. See
 [`ROOTLESS-RELEASE.md`](ROOTLESS-RELEASE.md) for the remaining integration and
 physical acceptance work.
 
@@ -62,6 +64,33 @@ make verify-update-key
 ```
 
 ## Release catalog
+
+Catalogs are separate by Debian architecture:
+
+- `rctl-update-stable.json`: unchanged schema 1, rootful `iphoneos-arm` only.
+- `rctl-update-rootless-stable.json`: schema 2 with signed
+  `architecture: "iphoneos-arm64"`. Old updaters reject schema 2 rather than
+  selecting a same-version package from the wrong lane.
+
+The generator infers the lane from inspected clean public DEBs, rejects mixed
+architectures and personalized payloads, and validates runtime layout through
+the shared public-package inspector. Native verification also checks DEB
+architecture before removing anything. A rootless catalog is configured through
+`RCTL_RELAY_ROOTLESS_UPDATE_MANIFEST_URL` and optionally
+`RCTL_RELAY_ROOTLESS_UPDATE_TARGET_VERSION`; it never falls back to the rootful
+URL. The admin menu selects the configured lane from device capabilities.
+
+The first public rootless catalog may contain only its target package because
+no previous public rootless release exists. This does not authorize an update
+without rollback: the installed version must still be present and differ from
+the target. Qualification uses a separate signed catalog containing both exact
+RC artifacts. Future releases list supported historical rootless tags through
+the draft workflow's `rootless_rollback_tags` input.
+
+Current daemons advertise exact `package_version` separately from the product
+version. Update health verification and the relay's already-current check use
+this exact version, including RC suffixes; older rootful daemons retain their
+existing product-version fallback.
 
 Build a catalog with the repository tool. It must include every installed
 version that the release still supports, because each one is its own verified

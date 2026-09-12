@@ -15,6 +15,8 @@
 #include <errno.h>
 #include <time.h>
 #include <vector>
+#import "../core/platform/Paths.h"
+#import "../core/update/UpdatePolicy.h"
 
 extern char **environ;
 
@@ -23,7 +25,7 @@ static NSString *const kStateRoot = @"/var/mobile/Library/Caches/com.greatlove.r
 static NSString *const kStatusPath = @"/var/mobile/Library/Caches/com.greatlove.rctl/update/status.json";
 static NSString *const kLaunchGuard = @"/var/mobile/Library/Caches/com.greatlove.rctl/update/active.request";
 static NSString *const kRelayPreferences = @"/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist";
-static NSString *const kPublicKeyPath = @"/usr/local/share/rctl/update-public-key.pem";
+static NSString *const kPublicKeyPath = [] { return RCTL_ROOT_PATH_NS(@"/usr/local/share/rctl/update-public-key.pem"); }();
 static const NSUInteger kMaximumManifestBytes = 1 << 20;
 static const unsigned long long kMaximumArtifactBytes = 512ULL << 20;
 static char *gCleanupRequest = nullptr;
@@ -84,18 +86,19 @@ static NSDictionary *readJSONObject(NSString *path) {
 }
 
 static NSString *installedVersion(void) {
-    for (NSString *path in @[@"/var/lib/dpkg/status", @"/var/jb/var/lib/dpkg/status"]) {
+    for (NSString *path in @[RCTL_ROOT_PATH_NS(@"/var/lib/dpkg/status")]) {
         NSString *raw = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
         if (!raw) continue;
         for (NSString *stanza in [raw componentsSeparatedByString:@"\n\n"]) {
-            BOOL package = NO, installed = NO;
+            BOOL package = NO, installed = NO, architecture = NO;
             NSString *version = nil;
             for (NSString *line in [stanza componentsSeparatedByString:@"\n"]) {
                 if ([line isEqualToString:[@"Package: " stringByAppendingString:kPackageID]]) package = YES;
-                else if ([line hasPrefix:@"Status: "] && [line containsString:@" installed"]) installed = YES;
+                else if ([line isEqualToString:@"Status: install ok installed"]) installed = YES;
+                else if ([line isEqualToString:[@"Architecture: " stringByAppendingString:RCTL_UPDATE_ARCHITECTURE]]) architecture = YES;
                 else if ([line hasPrefix:@"Version: "]) version = [line substringFromIndex:9];
             }
-            if (package && installed && version.length) return version;
+            if (package && installed && architecture && version.length) return version;
         }
     }
     return nil;
@@ -292,13 +295,7 @@ static BOOL verifyEnvelope(NSData *envelopeData, NSDictionary **payloadOut, NSSt
 }
 
 static NSDictionary *artifactForVersion(NSDictionary *payload, NSString *version) {
-    NSArray *artifacts = [payload[@"artifacts"] isKindOfClass:NSArray.class] ? payload[@"artifacts"] : nil;
-    for (id value in artifacts) {
-        if (![value isKindOfClass:NSDictionary.class]) continue;
-        NSDictionary *artifact = value;
-        if ([artifact[@"version"] isEqualToString:version]) return artifact;
-    }
-    return nil;
+    return rctl_update_artifact(payload, version);
 }
 
 static BOOL validateArtifact(NSDictionary *artifact, NSString **errorOut) {
@@ -375,7 +372,7 @@ static NSString *captureProcess(NSString *executable, NSArray<NSString *> *argum
 }
 
 static NSString *dpkgPath(void) {
-    for (NSString *path in @[@"/usr/bin/dpkg", @"/bin/dpkg"]) {
+    for (NSString *path in @[RCTL_ROOT_PATH_NS(@"/usr/bin/dpkg"), RCTL_ROOT_PATH_NS(@"/bin/dpkg")]) {
         if ([NSFileManager.defaultManager isExecutableFileAtPath:path]) return path;
     }
     return nil;
@@ -383,16 +380,11 @@ static NSString *dpkgPath(void) {
 
 static BOOL packageMatches(NSString *artifact, NSString *expectedVersion) {
     NSString *tool = nil;
-    for (NSString *path in @[@"/usr/bin/dpkg-deb", @"/bin/dpkg-deb"]) {
+    for (NSString *path in @[RCTL_ROOT_PATH_NS(@"/usr/bin/dpkg-deb"), RCTL_ROOT_PATH_NS(@"/bin/dpkg-deb")]) {
         if ([NSFileManager.defaultManager isExecutableFileAtPath:path]) { tool = path; break; }
     }
-    NSString *metadata = tool ? captureProcess(tool, @[@"-f", artifact, @"Package", @"Version"]) : nil;
-    BOOL packageOK = NO, versionOK = NO;
-    for (NSString *line in [metadata componentsSeparatedByString:@"\n"]) {
-        if ([line isEqualToString:[@"Package: " stringByAppendingString:kPackageID]]) packageOK = YES;
-        if ([line isEqualToString:[@"Version: " stringByAppendingString:expectedVersion]]) versionOK = YES;
-    }
-    return packageOK && versionOK;
+    NSString *metadata = tool ? captureProcess(tool, @[@"-f", artifact, @"Package", @"Version", @"Architecture"]) : nil;
+    return rctl_update_package_matches(metadata, expectedVersion, RCTL_UPDATE_ARCHITECTURE);
 }
 
 static BOOL restoreRelay(NSString *backup, NSString *logPath) {
@@ -401,18 +393,32 @@ static BOOL restoreRelay(NSString *backup, NSString *logPath) {
     if (!relayData.length || ![relayData writeToFile:kRelayPreferences atomically:YES]) return NO;
     chmod(kRelayPreferences.fileSystemRepresentation, 0600);
     chown(kRelayPreferences.fileSystemRepresentation, 501, 501);
-    NSString *plist = @"/Library/LaunchDaemons/com.greatlove.rctld.plist";
+    NSString *plist = RCTL_ROOT_PATH_NS(@"/Library/LaunchDaemons/com.greatlove.rctld.plist");
+#if defined(RCTL_ROOTLESS)
+    NSString *launchctl = RCTL_ROOT_PATH_NS(@"/bin/launchctl");
+    runProcess(launchctl, @[@"bootout", @"system/com.greatlove.rctld"], logPath);
+    if (runProcess(launchctl, @[@"bootstrap", @"system", plist], logPath) != 0) return NO;
+#else
     runProcess(@"/bin/launchctl", @[@"unload", plist], logPath);
-    runProcess(@"/bin/launchctl", @[@"load", plist], logPath);
+    if (runProcess(@"/bin/launchctl", @[@"load", plist], logPath) != 0) return NO;
+#endif
     return [[NSData dataWithContentsOfFile:kRelayPreferences] isEqualToData:relayData];
 }
 
 static BOOL cleanInstall(NSString *artifact, NSString *relayBackup, NSString *logPath) {
     NSString *dpkg = dpkgPath();
     if (!dpkg) return NO;
-    if (installedVersion().length && runProcess(dpkg, @[@"-r", kPackageID], logPath) != 0) return NO;
+    // Rollback also removes unpacked or half-configured targets, not only the
+    // fully configured packages accepted by the runtime health check.
+    if (runProcess(dpkg, @[@"-r", kPackageID], logPath) != 0) return NO;
     if (runProcess(dpkg, @[@"-i", artifact], logPath) != 0) return NO;
-    return restoreRelay(relayBackup, logPath);
+    if (!restoreRelay(relayBackup, logPath)) return NO;
+#if defined(RCTL_ROOTLESS)
+    // The rootless package manager deliberately defers GUI restart until dpkg exits.
+    return runProcess(RCTL_ROOT_PATH_NS(@"/usr/bin/sbreload"), @[], logPath) == 0;
+#else
+    return YES;
+#endif
 }
 
 static NSDictionary *localJSON(NSString *path) {
@@ -475,8 +481,10 @@ static BOOL verifyRuntime(NSString *version, BOOL expectRelay, NSTimeInterval ti
         NSDictionary *capabilities = localJSON(@"/v1/capabilities");
         NSString *runningVersion = [capabilities[@"daemon"] isKindOfClass:NSDictionary.class] ? capabilities[@"daemon"][@"version"] : nil;
         NSNumber *major = [capabilities[@"protocol"] isKindOfClass:NSDictionary.class] ? capabilities[@"protocol"][@"major"] : nil;
-        BOOL daemonOK = [installedVersion() isEqualToString:version] &&
-                        daemonVersionMatchesPackage(runningVersion, version) && major.integerValue == 1;
+        id reportedPackage = capabilities[@"package_version"];
+        BOOL versionOK = [reportedPackage isKindOfClass:NSString.class] ? [reportedPackage isEqualToString:version] :
+                         daemonVersionMatchesPackage(runningVersion, version);
+        BOOL daemonOK = [installedVersion() isEqualToString:version] && versionOK && major.integerValue == 1;
         BOOL springBoardOK = localJSON(@"/v1/deviceinfo") != nil;
         BOOL relayOK = !expectRelay;
         if (expectRelay) {
@@ -629,18 +637,26 @@ static int updateMain(NSString *requestPath, NSString *executable) {
     writeStatus(job, @"downloading_manifest", @"Downloading signed release catalog", current, @"", NO);
 
     NSString *error = nil;
+#if defined(RCTL_ROOTLESS)
+    for (NSString *tool in @[RCTL_ROOT_PATH_NS(@"/usr/bin/dpkg"), RCTL_ROOT_PATH_NS(@"/usr/bin/dpkg-deb"),
+                             RCTL_ROOT_PATH_NS(@"/usr/bin/sbreload"), RCTL_ROOT_PATH_NS(@"/bin/launchctl")]) {
+        if (![NSFileManager.defaultManager isExecutableFileAtPath:tool]) {
+            writeStatus(job, @"failed", @"Required rootless update tool is unavailable", current, @"", YES);
+            flock(lock, LOCK_UN); close(lock); return 4;
+        }
+    }
+#endif
     NSData *envelope = downloadData(manifestURL, kMaximumManifestBytes, &error);
     NSDictionary *payload = nil;
     if (!envelope || !verifyEnvelope(envelope, &payload, &error)) {
         writeStatus(job, @"failed", error ?: @"Manifest verification failed", current, @"", YES);
         flock(lock, LOCK_UN); close(lock); return 4;
     }
-    NSNumber *schema = [payload[@"schema"] isKindOfClass:NSNumber.class] ? payload[@"schema"] : nil;
     NSNumber *protocol = [payload[@"protocol_major"] isKindOfClass:NSNumber.class] ? payload[@"protocol_major"] : nil;
     NSString *target = [payload[@"target_version"] isKindOfClass:NSString.class] ? payload[@"target_version"] : nil;
     NSDictionary *currentArtifact = artifactForVersion(payload, current);
     NSDictionary *targetArtifact = artifactForVersion(payload, target);
-    if (schema.integerValue != 1 || protocol.integerValue != 1 || !current.length || !target.length || [target isEqualToString:current] ||
+    if (!rctl_update_catalog_matches(payload, RCTL_UPDATE_ARCHITECTURE) || protocol.integerValue != 1 || !current.length || !target.length || [target isEqualToString:current] ||
         !validateArtifact(currentArtifact, &error) || !validateArtifact(targetArtifact, &error)) {
         writeStatus(job, @"failed", error ?: @"Signed catalog cannot provide a safe update and rollback", current, target, YES);
         flock(lock, LOCK_UN); close(lock); return 5;
@@ -713,7 +729,7 @@ static int updateMain(NSString *requestPath, NSString *executable) {
 }
 
 int main(int argc, char **argv) {
-#if defined(RCTL_ROOTLESS)
+#if defined(RCTL_ROOTLESS) && !defined(RCTL_ROOTLESS_UPDATE_QUALIFICATION)
     fprintf(stderr, "rctl: transactional updates are not qualified for rootless packages\n");
     return 1;
 #endif
@@ -722,7 +738,7 @@ int main(int argc, char **argv) {
             NSData *data = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:argv[2]] options:0 error:nil];
             NSDictionary *payload = nil;
             NSString *error = nil;
-            if (!data || !verifyEnvelope(data, &payload, &error)) {
+            if (!data || !verifyEnvelope(data, &payload, &error) || !rctl_update_catalog_matches(payload, RCTL_UPDATE_ARCHITECTURE)) {
                 fprintf(stderr, "VERIFY_FAILED %s\n", (error ?: @"read failed").UTF8String);
                 return 1;
             }

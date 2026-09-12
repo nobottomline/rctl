@@ -57,7 +57,7 @@ function actionsFor(device: Device, updateConfigured: boolean, updateTargetVersi
     device.compatible &&
     device.features.includes('update.transactional') &&
     updateConfigured &&
-    (!updateTargetVersion || device.daemon_version !== updateTargetVersion)
+    (!updateTargetVersion || (device.package_version || device.daemon_version) !== updateTargetVersion)
   )
     list.push({ key: 'update', label: 'Update device…', icon: Download, accent: true })
   list.push({ key: 'copy', label: 'Copy device ID', icon: Copy })
@@ -72,10 +72,12 @@ export type DevicesPanelProps = {
   audit?: AuditEntry[]
   updateConfigured: boolean
   updateTargetVersion?: string
+  rootlessUpdateConfigured?: boolean
+  rootlessUpdateTargetVersion?: string
   onAction: (key: ActionKey, device: Device) => void
 }
 
-export function DevicesPanel({ devices, loading, busyId, audit, updateConfigured, updateTargetVersion, onAction }: DevicesPanelProps) {
+export function DevicesPanel({ devices, loading, busyId, audit, updateConfigured, updateTargetVersion, rootlessUpdateConfigured = false, rootlessUpdateTargetVersion, onAction }: DevicesPanelProps) {
   const online = devices.filter((d) => d.online).length
   const pending = devices.filter((d) => d.status === 'pending').length
   const incompatible = devices.filter((d) => !d.compatible).length
@@ -137,7 +139,10 @@ export function DevicesPanel({ devices, loading, busyId, audit, updateConfigured
                 transition={{ duration: 0.25, delay: Math.min(i * 0.025, 0.2) }}
                 className="overflow-hidden"
               >
-                <DeviceRow device={d} busy={busyId === d.id} updateConfigured={updateConfigured} updateTargetVersion={updateTargetVersion} run={run} />
+                <DeviceRow device={d} busy={busyId === d.id}
+                  updateConfigured={d.features.includes('update.transactional.rootless') ? rootlessUpdateConfigured : updateConfigured}
+                  updateTargetVersion={d.features.includes('update.transactional.rootless') ? rootlessUpdateTargetVersion : updateTargetVersion}
+                  run={run} />
               </motion.li>
             ))}
           </AnimatePresence>

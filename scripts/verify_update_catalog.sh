@@ -48,13 +48,15 @@ openssl dgst -sha256 -verify "$pin" -signature "$work/signature.der" "$work/payl
 jq -e '
   . as $catalog |
   type == "object" and
-  (keys == ["artifacts", "channel", "protocol_major", "schema", "target_version"]) and
-  .schema == 1 and .protocol_major == 1 and .channel == "stable" and
-  (.target_version | type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")) and
-  (.artifacts | type == "array" and length >= 2 and
+  ((.schema == 1 and (keys == ["artifacts", "channel", "protocol_major", "schema", "target_version"])) or
+   (.schema == 2 and .architecture == "iphoneos-arm64" and
+    (keys == ["architecture", "artifacts", "channel", "protocol_major", "schema", "target_version"]))) and
+  .protocol_major == 1 and .channel == "stable" and
+  (.target_version | type == "string" and test("^[0-9][A-Za-z0-9.+~_-]*$")) and
+  (.artifacts | type == "array" and length >= (if $catalog.schema == 2 then 1 else 2 end) and length <= 128 and
     (map(.version) | unique | length) == length and
     all(type == "object" and (keys == ["sha256", "size", "url", "version"]) and
-      (.version | type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")) and
+      (.version | type == "string" and test("^[0-9][A-Za-z0-9.+~_-]*$")) and
       (.url | type == "string") and
       (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
       (.size | type == "number" and floor == . and . > 0 and . <= 536870912))) and
@@ -62,8 +64,9 @@ jq -e '
 ' "$work/payload.json" >/dev/null || fail "signed payload schema is invalid"
 
 target_version="$(dpkg-deb -f "$target_package" Version)"
+architecture="$(jq -r '.architecture // "iphoneos-arm"' "$work/payload.json")"
 [[ $(dpkg-deb -f "$target_package" Package) == com.greatlove.rctl ]] || fail "target package ID is invalid"
-[[ $(dpkg-deb -f "$target_package" Architecture) == iphoneos-arm ]] || fail "target package architecture is invalid"
+[[ $(dpkg-deb -f "$target_package" Architecture) == "$architecture" ]] || fail "target package architecture is invalid"
 [[ $(jq -r .target_version "$work/payload.json") == "$target_version" ]] || fail "target package version does not match catalog target"
 
 while IFS= read -r encoded; do
@@ -72,7 +75,8 @@ while IFS= read -r encoded; do
   url="$(jq -r .url <<<"$item")"
   expected_sha="$(jq -r .sha256 <<<"$item")"
   expected_size="$(jq -r .size <<<"$item")"
-  expected_name="rctl_${version}_iphoneos-arm.deb"
+  dpkg --validate-version "$version" || fail "artifact Debian version is invalid"
+  expected_name="rctl_${version}_${architecture}.deb"
 
   [[ $url == https://* && $url != *[$'\r\n\t ']* && $url != *'?'* && $url != *'#'* && $url != *'%'* ]] || \
     fail "artifact $version does not use a plain HTTPS URL"
@@ -96,7 +100,7 @@ while IFS= read -r encoded; do
   [[ $(sha256_file "$package") == "$expected_sha" ]] || fail "artifact $version SHA-256 mismatch"
   [[ $(dpkg-deb -f "$package" Package) == com.greatlove.rctl ]] || fail "artifact $version package ID is invalid"
   [[ $(dpkg-deb -f "$package" Version) == "$version" ]] || fail "artifact $version Debian version mismatch"
-  [[ $(dpkg-deb -f "$package" Architecture) == iphoneos-arm ]] || fail "artifact $version architecture is invalid"
+  [[ $(dpkg-deb -f "$package" Architecture) == "$architecture" ]] || fail "artifact $version architecture is invalid"
 done < <(jq -rc '.artifacts[] | @base64' "$work/payload.json")
 
 printf 'signed update catalog verified: target %s, %s rollback-capable artifacts\n' \

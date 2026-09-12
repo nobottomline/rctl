@@ -282,6 +282,9 @@ static NSMutableArray *g_relay_clients;
         @"device_id": self.deviceID ?: @"",
         @"device_name": name,
         @"daemon_version": @RCTL_VERSION,
+#if defined(RCTL_PACKAGE_VERSION)
+        @"package_version": @RCTL_PACKAGE_VERSION,
+#endif
         @"browser_version": @RCTL_VERSION,
         @"protocol": @{@"major": @(RCTL_PROTOCOL_MAJOR), @"minor": @(RCTL_PROTOCOL_MINOR)},
         @"features": rctl_device_feature_names(),

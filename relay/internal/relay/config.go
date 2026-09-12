@@ -2,6 +2,7 @@ package relay
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"regexp"
@@ -13,39 +14,41 @@ import (
 var semanticVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 type config struct {
-	ListenAddr          string
-	PublicURL           string
-	DatabasePath        string
-	WebDir              string
-	AdminSecret         string
-	SessionSecret       string
-	AllowInsecure       bool
-	CookieSecure        bool
-	TrustProxyHeaders   bool
-	TrustedProxyDepth   int
-	EnableWebRTC        bool
-	TurnSecret          string
-	TurnURLs            []string
-	StunURLs            []string
-	TurnTTL             time.Duration
-	TokenTTL            time.Duration
-	ReadLimitBytes      int64
-	HeartbeatEvery      time.Duration
-	WriteTimeout        time.Duration
-	SessionLifetime     time.Duration
-	TunnelTimeout       time.Duration
-	TunnelMaxBody       int64
-	StreamStartTimeout  time.Duration
-	UpdateManifestURL   string
-	UpdateTargetVersion string
-	PublicPackagePath   string
-	RootlessPackagePath string
-	HistoryRetention    time.Duration // 0 disables automatic history purge
-	LoginLimit          rateLimitConfig
-	AdminLimit          rateLimitConfig
-	DeviceLimit         rateLimitConfig
-	TunnelLimit         rateLimitConfig
-	ControllerLimit     rateLimitConfig
+	ListenAddr                  string
+	PublicURL                   string
+	DatabasePath                string
+	WebDir                      string
+	AdminSecret                 string
+	SessionSecret               string
+	AllowInsecure               bool
+	CookieSecure                bool
+	TrustProxyHeaders           bool
+	TrustedProxyDepth           int
+	EnableWebRTC                bool
+	TurnSecret                  string
+	TurnURLs                    []string
+	StunURLs                    []string
+	TurnTTL                     time.Duration
+	TokenTTL                    time.Duration
+	ReadLimitBytes              int64
+	HeartbeatEvery              time.Duration
+	WriteTimeout                time.Duration
+	SessionLifetime             time.Duration
+	TunnelTimeout               time.Duration
+	TunnelMaxBody               int64
+	StreamStartTimeout          time.Duration
+	UpdateManifestURL           string
+	UpdateTargetVersion         string
+	RootlessUpdateManifestURL   string
+	RootlessUpdateTargetVersion string
+	PublicPackagePath           string
+	RootlessPackagePath         string
+	HistoryRetention            time.Duration // 0 disables automatic history purge
+	LoginLimit                  rateLimitConfig
+	AdminLimit                  rateLimitConfig
+	DeviceLimit                 rateLimitConfig
+	TunnelLimit                 rateLimitConfig
+	ControllerLimit             rateLimitConfig
 }
 
 func loadConfig() (config, error) {
@@ -62,24 +65,26 @@ func loadConfig() (config, error) {
 		// taken this many hops from the RIGHT of X-Forwarded-For (the rightmost entry
 		// is the one our own edge proxy appended); entries further left are
 		// client-supplied and spoofable. Default 1 = a single trusted edge proxy.
-		TrustedProxyDepth:   getenvInt("RCTL_RELAY_TRUSTED_PROXY_DEPTH", 1),
-		EnableWebRTC:        getenvBool("RCTL_RELAY_ENABLE_WEBRTC", false),
-		TurnSecret:          os.Getenv("RCTL_RELAY_TURN_SECRET"),
-		TurnURLs:            getenvList("RCTL_RELAY_TURN_URLS"),
-		StunURLs:            getenvList("RCTL_RELAY_STUN_URLS"),
-		TurnTTL:             getenvDuration("RCTL_RELAY_TURN_TTL", time.Hour),
-		TokenTTL:            getenvDuration("RCTL_RELAY_ENROLL_TTL", 30*time.Minute),
-		ReadLimitBytes:      getenvInt64("RCTL_RELAY_READ_LIMIT", 8<<20),
-		HeartbeatEvery:      getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
-		WriteTimeout:        getenvDuration("RCTL_RELAY_WRITE_TIMEOUT", 10*time.Second),
-		SessionLifetime:     getenvDuration("RCTL_RELAY_SESSION_LIFETIME", 30*24*time.Hour),
-		TunnelTimeout:       getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 45*time.Second),
-		TunnelMaxBody:       getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
-		StreamStartTimeout:  getenvDuration("RCTL_RELAY_STREAM_START_TIMEOUT", 20*time.Second),
-		UpdateManifestURL:   os.Getenv("RCTL_RELAY_UPDATE_MANIFEST_URL"),
-		UpdateTargetVersion: os.Getenv("RCTL_RELAY_UPDATE_TARGET_VERSION"),
-		PublicPackagePath:   os.Getenv("RCTL_RELAY_PUBLIC_PACKAGE"),
-		RootlessPackagePath: os.Getenv("RCTL_RELAY_ROOTLESS_PACKAGE"),
+		TrustedProxyDepth:           getenvInt("RCTL_RELAY_TRUSTED_PROXY_DEPTH", 1),
+		EnableWebRTC:                getenvBool("RCTL_RELAY_ENABLE_WEBRTC", false),
+		TurnSecret:                  os.Getenv("RCTL_RELAY_TURN_SECRET"),
+		TurnURLs:                    getenvList("RCTL_RELAY_TURN_URLS"),
+		StunURLs:                    getenvList("RCTL_RELAY_STUN_URLS"),
+		TurnTTL:                     getenvDuration("RCTL_RELAY_TURN_TTL", time.Hour),
+		TokenTTL:                    getenvDuration("RCTL_RELAY_ENROLL_TTL", 30*time.Minute),
+		ReadLimitBytes:              getenvInt64("RCTL_RELAY_READ_LIMIT", 8<<20),
+		HeartbeatEvery:              getenvDuration("RCTL_RELAY_HEARTBEAT", 25*time.Second),
+		WriteTimeout:                getenvDuration("RCTL_RELAY_WRITE_TIMEOUT", 10*time.Second),
+		SessionLifetime:             getenvDuration("RCTL_RELAY_SESSION_LIFETIME", 30*24*time.Hour),
+		TunnelTimeout:               getenvDuration("RCTL_RELAY_TUNNEL_TIMEOUT", 45*time.Second),
+		TunnelMaxBody:               getenvInt64("RCTL_RELAY_TUNNEL_MAX_BODY", 2<<20),
+		StreamStartTimeout:          getenvDuration("RCTL_RELAY_STREAM_START_TIMEOUT", 20*time.Second),
+		UpdateManifestURL:           os.Getenv("RCTL_RELAY_UPDATE_MANIFEST_URL"),
+		UpdateTargetVersion:         os.Getenv("RCTL_RELAY_UPDATE_TARGET_VERSION"),
+		RootlessUpdateManifestURL:   os.Getenv("RCTL_RELAY_ROOTLESS_UPDATE_MANIFEST_URL"),
+		RootlessUpdateTargetVersion: os.Getenv("RCTL_RELAY_ROOTLESS_UPDATE_TARGET_VERSION"),
+		PublicPackagePath:           os.Getenv("RCTL_RELAY_PUBLIC_PACKAGE"),
+		RootlessPackagePath:         os.Getenv("RCTL_RELAY_ROOTLESS_PACKAGE"),
 		// Revoked controllers and spent enrollment tokens leave the admin lists on
 		// their own after this long. Audit history is never purged by this.
 		HistoryRetention: getenvDuration("RCTL_RELAY_HISTORY_RETENTION", 30*24*time.Hour),
@@ -105,20 +110,25 @@ func loadConfig() (config, error) {
 	if !cfg.AllowInsecure && !strings.HasPrefix(cfg.PublicURL, "https://") {
 		return cfg, errors.New("RCTL_RELAY_PUBLIC_URL must be https:// in production; set RCTL_RELAY_ALLOW_INSECURE=1 only for local testing")
 	}
-	if cfg.UpdateManifestURL != "" {
-		manifestURL, err := url.Parse(cfg.UpdateManifestURL)
-		if err != nil || manifestURL.Scheme != "https" || manifestURL.Host == "" ||
-			manifestURL.User != nil || manifestURL.RawQuery != "" || manifestURL.Fragment != "" ||
-			manifestURL.RawPath != "" || strings.ContainsAny(cfg.UpdateManifestURL, "\r\n\t ") ||
-			manifestURL.Path == "" || manifestURL.Path == "/" || strings.HasSuffix(manifestURL.Path, "/") {
-			return cfg, errors.New("RCTL_RELAY_UPDATE_MANIFEST_URL must identify an HTTPS file without credentials, query, fragment, encoded path, or whitespace")
+	for _, lane := range []struct{ prefix, manifest, target string }{
+		{"RCTL_RELAY_UPDATE", cfg.UpdateManifestURL, cfg.UpdateTargetVersion},
+		{"RCTL_RELAY_ROOTLESS_UPDATE", cfg.RootlessUpdateManifestURL, cfg.RootlessUpdateTargetVersion},
+	} {
+		if lane.manifest != "" {
+			manifestURL, err := url.Parse(lane.manifest)
+			if err != nil || manifestURL.Scheme != "https" || manifestURL.Host == "" ||
+				manifestURL.User != nil || manifestURL.RawQuery != "" || manifestURL.Fragment != "" ||
+				manifestURL.RawPath != "" || strings.ContainsAny(lane.manifest, "\r\n\t ") ||
+				manifestURL.Path == "" || manifestURL.Path == "/" || strings.HasSuffix(manifestURL.Path, "/") {
+				return cfg, fmt.Errorf("%s_MANIFEST_URL must identify an HTTPS file without credentials, query, fragment, encoded path, or whitespace", lane.prefix)
+			}
 		}
-	}
-	if cfg.UpdateTargetVersion != "" && !semanticVersion.MatchString(cfg.UpdateTargetVersion) {
-		return cfg, errors.New("RCTL_RELAY_UPDATE_TARGET_VERSION must be MAJOR.MINOR.PATCH")
-	}
-	if cfg.UpdateTargetVersion != "" && cfg.UpdateManifestURL == "" {
-		return cfg, errors.New("RCTL_RELAY_UPDATE_TARGET_VERSION requires RCTL_RELAY_UPDATE_MANIFEST_URL")
+		if lane.target != "" && !semanticVersion.MatchString(lane.target) {
+			return cfg, fmt.Errorf("%s_TARGET_VERSION must be MAJOR.MINOR.PATCH", lane.prefix)
+		}
+		if lane.target != "" && lane.manifest == "" {
+			return cfg, fmt.Errorf("%s_TARGET_VERSION requires %s_MANIFEST_URL", lane.prefix, lane.prefix)
+		}
 	}
 	if cfg.HistoryRetention < 0 {
 		return cfg, errors.New("RCTL_RELAY_HISTORY_RETENTION must be 0 (disabled) or a positive duration")
