@@ -104,15 +104,36 @@ establish recovery from power loss, a hung dpkg subprocess, or every possible
 bootstrap failure. The rootful/rootless release matrix and clean-VPS wizard
 acceptance still apply to the exact future tagged artifacts.
 
+### Ordinary Build and Final State
+
+After removing the compile-time qualification flag, the ordinary builder
+produced `0.4.0~rc.3` from commit `f1b17cb`. It passed the public package audit
+and was installed from RC2 using the same admin Update/Start update buttons.
+The job completed, dpkg and runtime agreed on RC3, and identity and SpringBoard
+IPC checks passed again. This was not the rollback-test artifact.
+
+- An independent LAN browser on RC3 decoded 170 additional frames in three
+  seconds. Relay control decoded new frames on both the rootless and rootful
+  devices after the final relay restart.
+- The temporary update-channel drop-in was removed, both relay/proxy services
+  were checked active, and unrelated service processes remained unchanged.
+- All exact qualification files, including the intentional fault fixture, were
+  withdrawn from the public HTTPS directories. Private backups and clean local
+  candidate artifacts remain available for recovery.
+- Both deployed update channels are unconfigured until an actual release feed
+  is admitted; the admin Update menu is therefore hidden intentionally. The
+  rootless device still advertises updater support and its last job is complete.
+- No stable tag, GitHub release, APT publication, or push was performed.
+
 | Boundary | Current implementation | Required change and proof |
 | --- | --- | --- |
 | Device admission | Ordinary builds advertise rootless transactional update support | Runtime update and watchdog recovery passed; qualify the exact release artifacts before publication |
 | Native updater | Bootstrap-aware paths, exact installed package checks, rootless launchd bootstrap and explicit post-dpkg SpringBoard restart implemented | Update and recovery passed on Dopamine/iPadOS 15.5; other bootstrap variants remain unqualified |
-| Artifact selection | Rootful schema 1 preserved; rootless schema 2 signs architecture; producer audits public layout and native checks exact ID/version/architecture | Cross-lane, malformed and duplicate-version host tests pass; physical acceptance pending |
-| Catalog availability | No catalog is configured on the deployed relay | Publish exact clean target and rollback artifacts to trusted HTTPS, verify the pinned signature, then explicitly configure the qualification channel |
+| Artifact selection | Rootful schema 1 preserved; rootless schema 2 signs architecture; producer audits public layout and native checks exact ID/version/architecture | Cross-lane, malformed and duplicate-version host tests pass; valid schema-2 update/recovery passed physically |
+| Catalog availability | Temporary signed channels passed and were removed; no stable catalog is configured on the deployed relay | Publish and qualify the exact release feed before enabling it |
 | Wizard packaging | Existing wizard/bootstrap now accept both public bases; owned paths cover backup, restore and recovery; upgrades require replacement sources | Go tests and checksum-failure bootstrap tests pass; fresh-host acceptance remains pending |
 | Release pipeline | Draft/publish workflows require both architectures and separate signed catalogs; first rootless release can seed a target-only catalog | Actionlint passes; actual release assembly, provenance and APT admission remain release gates |
-| Candidate identity | Optional `package_version` in capabilities and relay hello carries the exact Debian version, independently of daemon product version | Verify exact RC identity after the relay transaction |
+| Candidate identity | Optional `package_version` in capabilities and relay hello carries the exact Debian version, independently of daemon product version | Exact RC2/RC3 identity was verified after UI-initiated updates |
 
 Do not combine two same-version architectures in schema 1: the producer rejects
 duplicate versions, and existing native clients select the first matching
@@ -122,22 +143,18 @@ The rootless package scripts deliberately defer the GUI restart until the
 package-manager transaction ends. A detached updater must own that restart;
 simply applying `/var/jb` to the rootful paths is insufficient.
 
-## Next Physical Acceptance
+## Remaining Release Gates
 
-After implementing and host-testing these boundaries:
-
-1. Bootstrap one audited updater-capable rootless candidate with physical
-   recovery available. The currently installed updater cannot update itself
-   through a path it deliberately refuses to start.
-2. Prepare a signed target plus an exact clean rollback package for the
-   installed candidate. Never use a personalized DEB as a public rollback asset.
-3. Use the real relay admin Update action and confirmation. Verify the queued
-   job, completed dpkg state, new package/runtime version, SpringBoard IPC,
-   reconnection with the same relay identity, and preserved LAN policy.
-4. Perform an explicitly scheduled controlled failure/recovery test with local
-   access available. Confirm rollback restores the prior version and identity.
-5. Recheck rootful update compatibility, then admit the exact release artifacts
-   to the release and APT workflows. Do not mark an unperformed check passed.
+1. Exercise the existing wizard on a clean dedicated host with both public
+   bases, including bootstrap, upgrade, backup, restore and recovery. The
+   occupied unmanaged production VPS is not a substitute for this test.
+2. Prepare the exact version-matched `0.4.0` candidate set and provenance.
+   Re-run the required release matrix for both package architectures, including
+   package-manager upgrade/recovery and rootful transactional compatibility.
+   The RC tests above cannot sign off different final artifact hashes.
+3. Record only completed schema-4 qualification checks, then publish through
+   the guarded release/APT workflows. Never use a personalized DEB as a public
+   artifact or omit the installed-version rollback source from an update feed.
 
 ## Version Decision
 
