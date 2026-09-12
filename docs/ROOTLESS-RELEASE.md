@@ -143,11 +143,70 @@ The rootless package scripts deliberately defer the GUI restart until the
 package-manager transaction ends. A detached updater must own that restart;
 simply applying `/var/jb` to the rootful paths is insufficient.
 
+## Clean-Host Engineering Rehearsal (2026-09-13)
+
+A newly provisioned Ubuntu 26.04 amd64 VPS with 2 GiB RAM was exercised with
+both clean public package architectures. The baseline was `bc0e0aa`; private
+`0.4.0`/`0.4.1` fixtures tested lifecycle version transitions without creating
+tags, releases, or APT entries. The image was built on the test host and served
+by a loopback-only registry, not a public attested release registry. No GitHub
+credential or device-update signing key was copied to the server.
+
+Observed acceptance:
+
+- Fresh preflight reported stale DNS and missing Docker/Compose without
+  creating a deployment. After prerequisites and DNS propagation, the local
+  checksum bootstrap installed both public bases, obtained trusted HTTPS, and
+  verified authentication and persistence across a relay restart.
+- Repeating bootstrap preserved byte-identical environment and ownership
+  files. Doctor passed the managed services and public routes.
+- Real browser `Pair device` / `Download package` buttons produced both
+  rootful and rootless private packages. Both returned `201` with `no-store`;
+  anonymous package generation returned `401`.
+- A test enrollment was created, backed up, deleted through the API, and
+  restored. Browser readback proved its absence before restore and presence
+  afterward. Both public bases and environment hashes were preserved.
+- The newer server fixture upgraded both bases and retained the test record.
+  An intentionally wrong runtime version rolled back automatically. Killing
+  only the active wizard during post-apply verification left a checkpoint;
+  another upgrade was rejected until `recover` restored the prior deployment.
+- Admin reset invalidated the prior browser session, admitted the new secret,
+  and preserved the TURN secret. Keep-data uninstall retained the database;
+  restore returned the healthy deployment and the same rootless base.
+- Delete-data uninstall removed the live data and both public bases. Its
+  retained recovery archive passed the uninstalled-state restore dry run.
+
+The external TURN test exposed a real configuration defect: `listening-ip=0.0.0.0`
+without an explicit relay bind made coturn use the wildcard as its relay
+address. With public/private reverse mapping, same-server peers were rejected
+with `CHANNEL_BIND 403 Forbidden IP`. STUN health and successful allocation
+alone did not catch this. The wizard now renders a concrete relay bind and
+explicit public/local mapping, validates its local-interface ownership in
+preflight, and preserves the peer ACLs. The corrected managed deployment passed
+browser relay-only DataChannel echo over both UDP and TCP. The independent
+coturn client sent and received 20/20 messages per transport with zero loss.
+
+After delete-data, the previous backups were reserved outside managed paths
+for another fresh-install attempt with the corrected wizard. Preflight first
+rejected a diagnostic TURN allocation still occupying a relay port. After that
+diagnostic container was removed, installation reached public verification but
+failed with a remote TLS internal error after two minutes. Install rolled back
+and bootstrap retained the previous setup binary. The precise ACME/TLS cause
+was not established in this time-limited run; do not count corrected-wizard
+fresh issuance or renewal as passed. Successful TURN evidence above comes from
+the verified managed upgrade, not this failed fresh-install attempt.
+
+This is not a schema-4 publication report. Physical iPad enrollment/control
+through this temporary relay, iPad forced-TURN media, ACME renewal, NAT-host
+acceptance, and exact final draft provenance remain unverified by this run.
+The working VPS, existing iPad bindings, and VPN were not changed.
+
 ## Remaining Release Gates
 
-1. Exercise the existing wizard on a clean dedicated host with both public
-   bases, including bootstrap, upgrade, backup, restore and recovery. The
-   occupied unmanaged production VPS is not a substitute for this test.
+1. Repeat the clean-host wizard/device acceptance with the exact draft assets
+   and anonymously pullable candidate image. The September 13 engineering
+   rehearsal above covers the dual-package server lifecycle, not final artifact
+   provenance, renewal, or physical-device enrollment through that new host.
 2. Prepare the exact version-matched `0.4.0` candidate set and provenance.
    Re-run the required release matrix for both package architectures, including
    package-manager upgrade/recovery and rootful transactional compatibility.
