@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	ReportSchema   = 3
+	ReportSchema   = 4
 	maxReportBytes = 1 << 20
 )
 

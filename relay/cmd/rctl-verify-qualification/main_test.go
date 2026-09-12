@@ -18,7 +18,7 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
 	checksums := strings.Repeat("b", 64)
 	image := "ghcr.io/nobottomline/rctl-relay@sha256:" + strings.Repeat("c", 64)
 	raw := []byte(`{
-  "schema": 3,
+  "schema": 4,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",

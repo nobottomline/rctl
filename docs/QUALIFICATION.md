@@ -56,14 +56,15 @@ assets.
 ## Qualification report
 
 The report is privacy-safe evidence binding the external acceptance run to the
-exact artifacts under review. Schema 3 is strict: unknown fields, trailing
+exact artifacts under review. Schema 4 adds required rootless acceptance checks;
+schema-3 reports do not establish those checks and are rejected. It is strict: unknown fields, trailing
 JSON, symlinks, oversized input, malformed identities, reports older than 30
 days, reports over five minutes in the future, and any false or missing check
 are rejected.
 
 ```json
 {
-  "schema": 3,
+  "schema": 4,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",
@@ -158,6 +159,18 @@ The checks have the following minimum evidence contract:
 - `uninstall_keep_data` and `uninstall_delete_data`: each explicit retention
   mode removed only owned resources, produced a valid recovery backup, and
   respectively preserved or removed the managed data directory.
+- `rootless_install`, `rootless_package_manager_upgrade`,
+  `rootless_personalization`, and `rootless_relay_control`: repeat their
+  corresponding device/package checks on ordinary Dopamine rootless with the
+  exact `iphoneos-arm64` artifact, not a relabeled rootful DEB. Preserve the
+  relay identity and independent LAN control through the package-manager path.
+- `rootless_device_update` and `rootless_device_rollback`: exercise the relay
+  admin Update action and external-watchdog recovery with an architecture-bound
+  catalog on the rootless target. Check the exact dpkg and runtime package
+  versions, configured package state, SpringBoard IPC and automatic reconnection.
+  A manually installed bootstrap is not an updater transaction; a successful
+  update alone is not rollback evidence. The example leaves these checks false
+  intentionally and is not a publishable qualification report.
 
 The `relay_image` value is copied from the draft release notes.
 `checksums_sha256` is the SHA-256 digest of the downloaded `SHA256SUMS` file,
