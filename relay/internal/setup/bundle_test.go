@@ -111,6 +111,48 @@ func TestRenderDedicatedBundleCanDisableTURN(t *testing.T) {
 	}
 }
 
+func TestCoturnUsesConcreteRelayAddressAndExplicitMapping(t *testing.T) {
+	for _, local := range []string{"", "10.0.0.10"} {
+		cfg := validConfig()
+		cfg.TURNRelayIP = local
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		text := string(renderCoturn(cfg, "relay.example.com", strings.Repeat("c", 64)))
+		if !strings.Contains(text, "\nrelay-ip="+cfg.TURNRelayAddress()+"\n") ||
+			!strings.Contains(text, "\nexternal-ip="+cfg.TURNExternalIP+"/"+cfg.TURNRelayAddress()+"\n") {
+			t.Fatal("missing concrete relay bind or explicit public/local mapping")
+		}
+		if strings.Contains(text, "\nrelay-ip=0.0.0.0\n") || strings.Contains(text, "\nallow-loopback-peers") ||
+			!strings.Contains(text, "denied-peer-ip=10.0.0.0-10.255.255.255") {
+			t.Fatal("TURN relay fix weakened peer ACLs or retained a wildcard relay bind")
+		}
+	}
+}
+
+func TestTURNRelayAddressRejectsUnsafeValues(t *testing.T) {
+	for _, address := range []string{"0.0.0.0", "0.1.2.3", "127.0.0.1", "169.254.1.1", "224.0.0.1", "255.255.255.255", "::", "::1", "host.example.com", "10.0.0.1\nno-auth"} {
+		cfg := validConfig()
+		cfg.TURNRelayIP = address
+		if cfg.Validate() == nil {
+			t.Errorf("unsafe relay address accepted: %q", address)
+		}
+	}
+}
+
+func TestUpgradeCannotSilentlyChangeTURNRelayAddress(t *testing.T) {
+	before := validConfig()
+	after := before
+	after.TURNRelayIP = before.TURNExternalIP
+	if !sameDeploymentIdentity(before, after) {
+		t.Fatal("explicit default relay address changed deployment identity")
+	}
+	after.TURNRelayIP = "10.0.0.10"
+	if sameDeploymentIdentity(before, after) {
+		t.Fatal("changed local TURN bind was accepted as the same identity")
+	}
+}
+
 func TestRenderDedicatedBundleMountsPublicPackageReadOnly(t *testing.T) {
 	cfg := validConfig()
 	cfg.DevicePackages = true

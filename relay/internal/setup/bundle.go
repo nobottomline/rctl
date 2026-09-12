@@ -228,8 +228,11 @@ func renderCaddyfile(origin *url.URL, email string) []byte {
 }
 
 func renderCoturn(cfg Config, realm, secret string) []byte {
+	// A wildcard relay address maps same-server peers back to 0.0.0.0 and
+	// coturn correctly rejects them. Keep listener and relay bind independent.
 	lines := []string{
-		"listening-port=3478", "listening-ip=0.0.0.0", "external-ip=" + net.ParseIP(cfg.TURNExternalIP).String(),
+		"listening-port=3478", "listening-ip=0.0.0.0", "relay-ip=" + net.ParseIP(cfg.TURNRelayAddress()).String(),
+		"external-ip=" + net.ParseIP(cfg.TURNExternalIP).String() + "/" + net.ParseIP(cfg.TURNRelayAddress()).String(),
 		"realm=" + realm, "server-name=" + realm, "fingerprint", "use-auth-secret", "static-auth-secret=" + secret,
 		"min-port=49160", "max-port=49260", "no-tls", "no-multicast-peers", "stale-nonce=600", "total-quota=100",
 		"denied-peer-ip=0.0.0.0-0.255.255.255", "denied-peer-ip=10.0.0.0-10.255.255.255",

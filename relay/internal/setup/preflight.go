@@ -159,6 +159,11 @@ func (p Preflight) Run(ctx context.Context, cfg Config) Report {
 		}
 	}
 	if cfg.EnableTURN {
+		if err := p.Probe.LocalIPAvailable(net.ParseIP(cfg.TURNRelayAddress())); err != nil {
+			add("turn_relay_address", Fail, "TURN relay address is not available on this host", err.Error()+"; behind 1:1 NAT set --turn-relay-ip to the local IPv4 and forward the relay ports without port translation")
+		} else {
+			add("turn_relay_address", Pass, "TURN relay address belongs to this host", cfg.TURNRelayAddress())
+		}
 		occupied := make([]string, 0)
 		for port := 49160; port <= 49260; port++ {
 			if err := p.Probe.UDPPortAvailable(port); err != nil {

@@ -42,6 +42,20 @@ func (f fakeProber) UDPPortAvailable(port int) error {
 	return f.ports["udp"]
 }
 func (f fakeProber) PathExists(path string) (bool, error) { return f.paths[path], nil }
+func (f fakeProber) LocalIPAvailable(ip net.IP) error     { return f.ports["local:"+ip.String()] }
+
+func TestPreflightRejectsUnassignedTURNRelayAddress(t *testing.T) {
+	probe := passingProbe()
+	cfg := validConfig()
+	probe.ports["local:"+cfg.TURNRelayAddress()] = errors.New("not assigned")
+	report := (Preflight{Probe: probe}).Run(context.Background(), cfg)
+	for _, check := range report.Checks {
+		if check.ID == "turn_relay_address" && check.Severity == Fail && strings.Contains(check.Detail, "--turn-relay-ip") {
+			return
+		}
+	}
+	t.Fatal("unassigned TURN relay address was not rejected")
+}
 
 func passingProbe() fakeProber {
 	return fakeProber{

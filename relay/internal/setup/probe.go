@@ -30,10 +30,25 @@ type Prober interface {
 	Command(ctx context.Context, name string, args ...string) (string, error)
 	TCPPortAvailable(port int) error
 	UDPPortAvailable(port int) error
+	LocalIPAvailable(ip net.IP) error
 	PathExists(path string) (bool, error)
 }
 
 type SystemProber struct{}
+
+func (SystemProber) LocalIPAvailable(ip net.IP) error {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return err
+	}
+	for _, address := range addresses {
+		local, _, err := net.ParseCIDR(address.String())
+		if err == nil && local.Equal(ip) {
+			return nil
+		}
+	}
+	return errors.New("address is not assigned to a local network interface")
+}
 
 func (SystemProber) Platform(path string) (Platform, error) {
 	p := Platform{OS: runtime.GOOS, Arch: runtime.GOARCH, Root: os.Geteuid() == 0}

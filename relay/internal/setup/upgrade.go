@@ -250,6 +250,7 @@ func sameDeploymentIdentity(current, expected Config) bool {
 		current.PublicURL == expected.PublicURL &&
 		current.Profile == expected.Profile &&
 		current.TURNExternalIP == expected.TURNExternalIP &&
+		current.TURNRelayAddress() == expected.TURNRelayAddress() &&
 		current.EnableTURN == expected.EnableTURN &&
 		current.ACMEEmail == expected.ACMEEmail &&
 		current.DevicePackages == expected.DevicePackages

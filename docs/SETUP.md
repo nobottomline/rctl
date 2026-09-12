@@ -385,6 +385,18 @@ credentials. TURN-over-TLS is not silently claimed: it requires a certificate
 handoff that is independently renewable and must pass forced-TCP/TLS browser and
 iOS 14 qualification before the wizard advertises a `turns:` URL.
 
+The listener may bind all interfaces, but the relay socket must bind a concrete
+local IPv4. By default this is `--turn-external-ip`; preflight checks that the
+address belongs to the host. A 1:1 NAT host can supply `--turn-relay-ip` (JSON:
+`turn_relay_ip`) for its local IPv4, with unchanged external relay ports forwarded
+by the provider. The generated coturn configuration uses explicit `relay-ip`
+and `external-ip=PUBLIC/LOCAL`. Never use `0.0.0.0` as the relay address: coturn's
+reverse address mapping would turn same-server public peers into a forbidden
+unspecified address. Loopback/private-peer ACLs remain enabled. Changing the
+local bind is deployment reconfiguration, not an implicit upgrade option.
+The direct-public-IPv4 profile has live acceptance; 1:1 NAT rendering and input
+validation have host tests but still require a separate NAT-host acceptance run.
+
 Only Caddy and the required TURN listeners are publicly reachable. Relay port
 8080 stays on a private container network and is never published publicly.
 

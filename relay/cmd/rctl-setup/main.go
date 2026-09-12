@@ -456,6 +456,7 @@ type configFlags struct {
 	caddyImage                string
 	coturnImage               string
 	turnIP                    string
+	turnRelayIP               string
 	acmeEmail                 string
 	updateManifestURL         string
 	rootlessUpdateManifestURL string
@@ -474,6 +475,7 @@ func addConfigFlags(flags *flag.FlagSet) *configFlags {
 	flags.StringVar(&values.caddyImage, "caddy-image", defaultCaddy, "digest-pinned Caddy image (non-secret)")
 	flags.StringVar(&values.coturnImage, "coturn-image", defaultCoturn, "digest-pinned coturn image (non-secret)")
 	flags.StringVar(&values.turnIP, "turn-external-ip", "", "public IPv4 used by TURN (non-secret)")
+	flags.StringVar(&values.turnRelayIP, "turn-relay-ip", "", "local TURN relay IPv4 for 1:1 NAT hosts (defaults to the public IPv4)")
 	flags.StringVar(&values.acmeEmail, "acme-email", "", "ACME account email (non-secret)")
 	flags.StringVar(&values.updateManifestURL, "update-manifest-url", "", "signed HTTPS device-update catalog (non-secret)")
 	flags.StringVar(&values.rootlessUpdateManifestURL, "rootless-update-manifest-url", "", "signed HTTPS rootless device-update catalog (non-secret)")
@@ -510,7 +512,7 @@ func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
 	return setup.Config{
 		Schema: setup.ConfigSchema, PublicURL: v.publicURL, Profile: setup.ProfileContainer,
 		RelayImage: v.relayImage, CaddyImage: v.caddyImage, CoturnImage: v.coturnImage,
-		TURNExternalIP: v.turnIP, EnableTURN: v.turn, ACMEEmail: v.acmeEmail, Release: version,
+		TURNExternalIP: v.turnIP, TURNRelayIP: v.turnRelayIP, EnableTURN: v.turn, ACMEEmail: v.acmeEmail, Release: version,
 		DeviceUpdateChannel: channel, UpdateManifestURL: manifestURL, RootlessUpdateManifestURL: v.rootlessUpdateManifestURL,
 	}, nil
 }
@@ -518,11 +520,11 @@ func (v *configFlags) load(flags *flag.FlagSet) (setup.Config, error) {
 func (v *configFlags) observe(flags *flag.FlagSet) {
 	flags.Visit(func(item *flag.Flag) {
 		switch item.Name {
-		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "acme-email", "update-manifest-url", "rootless-update-manifest-url", "device-updates", "turn":
+		case "public-url", "image", "caddy-image", "coturn-image", "turn-external-ip", "turn-relay-ip", "acme-email", "update-manifest-url", "rootless-update-manifest-url", "device-updates", "turn":
 			v.configuration = true
 		}
 		switch item.Name {
-		case "public-url", "turn-external-ip", "acme-email", "turn":
+		case "public-url", "turn-external-ip", "turn-relay-ip", "acme-email", "turn":
 			v.identityConfiguration = true
 		}
 		switch item.Name {

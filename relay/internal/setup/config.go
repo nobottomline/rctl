@@ -38,6 +38,7 @@ type Config struct {
 	CaddyImage                string `json:"caddy_image,omitempty"`
 	CoturnImage               string `json:"coturn_image,omitempty"`
 	TURNExternalIP            string `json:"turn_external_ip,omitempty"`
+	TURNRelayIP               string `json:"turn_relay_ip,omitempty"`
 	EnableTURN                bool   `json:"enable_turn"`
 	ACMEEmail                 string `json:"acme_email,omitempty"`
 	Release                   string `json:"release,omitempty"`
@@ -117,6 +118,10 @@ func (c Config) Validate() error {
 		if !isPublicIP(ip) {
 			return errors.New("turn_external_ip must not be private, loopback, link-local, or unspecified")
 		}
+		relayIP := net.ParseIP(c.TURNRelayAddress()).To4()
+		if relayIP == nil || !relayIP.IsGlobalUnicast() || relayIP.IsLoopback() || relayIP.IsLinkLocalUnicast() || relayIP[0] == 0 {
+			return errors.New("turn_relay_ip must be a concrete unicast IPv4 address assigned to the host")
+		}
 	}
 	if c.ACMEEmail != "" {
 		address, err := mail.ParseAddress(c.ACMEEmail)
@@ -169,6 +174,14 @@ func validateUpdateManifestURL(raw string) error {
 		return fmt.Errorf("update_manifest_url origin: %w", err)
 	}
 	return nil
+}
+
+// NAT hosts may bind a private address while advertising the public mapping.
+func (c Config) TURNRelayAddress() string {
+	if c.TURNRelayIP != "" {
+		return c.TURNRelayIP
+	}
+	return c.TURNExternalIP
 }
 
 func validDigestImage(image string) bool {
