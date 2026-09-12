@@ -465,8 +465,14 @@ operation journal, and the separate crash-recovery checkpoint:
    redacted journal. Upgrade/reconfigure uses the verified backup transaction
    documented above rather than the fresh-install path.
 
-The redacted journal directory is not deployment state. A failed fresh install
-can therefore be retried without deleting its evidence; setup accepts only a
+Rollback must successfully stop containers before deleting or replacing their
+data. A failed stop or cleanup retains the recovery checkpoint and reports an
+incomplete rollback; fresh-install journals use `rollback_failed`, not
+`rolled_back`. Fix the underlying failure and run `rctl-setup recover` before
+retrying. Recovery follows the same stop-before-delete rule.
+
+The redacted journal directory is not deployment state. A successfully rolled
+back fresh install can therefore be retried without deleting its evidence; setup accepts only a
 real directory at that path and still rejects symlinks, non-directories, prior
 configuration/data, retained backups, and unowned Compose resources.
 

@@ -149,8 +149,8 @@ func (r RecoveryManager) Recover(ctx context.Context) (RecoveryState, error) {
 	}
 	installer := Installer{Paths: r.Paths, Runner: r.Runner, Verifier: r.Verifier, Chown: r.Chown}
 	if state.Operation == "install" {
-		if info, statErr := os.Lstat(r.Paths.Compose); statErr == nil && info.Mode().IsRegular() {
-			_, _ = r.Runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...)
+		if err := installer.stopFreshServices(ctx); err != nil {
+			return state, err
 		}
 		if err := removeInterruptedInstall(r.Paths); err != nil {
 			return state, err
@@ -193,8 +193,8 @@ func (r RecoveryManager) Recover(ctx context.Context) (RecoveryState, error) {
 		// A partial manifest is untrusted; target paths still bound cleanup safely.
 		current = target
 	}
-	if info, statErr := os.Lstat(r.Paths.Compose); statErr == nil && info.Mode().IsRegular() {
-		_, _ = r.Runner.Run(ctx, "docker", installer.composeArgs("down", "--remove-orphans")...)
+	if err := installer.stopFreshServices(ctx); err != nil {
+		return state, err
 	}
 	if _, err := applyBackup(state.Backup, current, r.Paths); err != nil {
 		return state, err

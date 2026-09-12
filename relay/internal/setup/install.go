@@ -437,8 +437,9 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 	journalPath := filepath.Join(i.Paths.LogDir, operationID+".json")
 	journal := Journal{Schema: 1, Operation: "install", Status: "running", Stage: "prepare", StartedAt: started, UpdatedAt: started}
 	committed := false
+	recoveryStarted := false
 	defer func() {
-		if committed || err == nil {
+		if committed || err == nil || !recoveryStarted {
 			return
 		}
 		recoveryCtx, cancel := lifecycleRecoveryContext()
@@ -446,15 +447,26 @@ func (i Installer) Install(ctx context.Context, cfg Config, options InstallOptio
 		journal.Status = "rolled_back"
 		journal.Stage = "rollback"
 		journal.UpdatedAt = i.Now().Unix()
+		rollbackErr := i.stopFreshServices(recoveryCtx)
+		if rollbackErr == nil {
+			rollbackErr = removeInterruptedInstall(i.Paths)
+		}
+		if rollbackErr == nil {
+			rollbackErr = clearRecovery(i.Paths)
+		}
+		if rollbackErr != nil {
+			journal.Status = "rollback_failed"
+			err = fmt.Errorf("%w; automatic rollback incomplete: %s; run rctl-setup recover before retrying", err, redact(rollbackErr.Error(), secrets))
+		}
 		journal.Error = redact(err.Error(), secrets)
-		_ = i.stopFreshServices(recoveryCtx)
-		_ = rollbackFresh(i.Paths, bundle)
-		_ = clearRecovery(i.Paths)
-		_ = writeJSONAtomic(journalPath, journal, 0o600)
+		if journalErr := writeJSONAtomic(journalPath, journal, 0o600); journalErr != nil {
+			err = errors.Join(err, fmt.Errorf("save setup journal: %w", journalErr))
+		}
 	}()
 	if err = beginRecovery(i.Paths, "install", "", i.Now()); err != nil {
 		return result, err
 	}
+	recoveryStarted = true
 	i.progress("Preparing protected configuration and data directories")
 	if err = i.prepareDirectories(); err != nil {
 		return result, err
@@ -716,11 +728,17 @@ func requireHealthyServices(states map[string]composeServiceState, turn bool) er
 }
 
 func (i Installer) stopFreshServices(ctx context.Context) error {
-	if _, err := os.Stat(i.Paths.Compose); err != nil {
+	info, err := os.Lstat(i.Paths.Compose)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	_, err := i.Runner.Run(ctx, "docker", i.composeArgs("down", "--remove-orphans")...)
-	return err
+	if err != nil {
+		return fmt.Errorf("inspect Compose file before stopping services: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("cannot stop services: Compose path is not a regular file")
+	}
+	return stopForStateReplacement(ctx, i.Runner, i)
 }
 
 func ensureNoForeignState(paths Paths) error {
@@ -938,17 +956,6 @@ func writeFileAtomic(path string, content []byte, mode os.FileMode) error {
 		directory.Close()
 	}
 	return err
-}
-
-func rollbackFresh(paths Paths, bundle Bundle) error {
-	for _, file := range bundle.Files {
-		_ = os.Remove(file.Path)
-	}
-	_ = os.Remove(paths.ManifestPath)
-	for _, path := range []string{paths.OptDir, paths.EtcDir, paths.DataDir, paths.BackupDir} {
-		_ = os.RemoveAll(path)
-	}
-	return nil
 }
 
 func configsEqual(a, b Config) bool {
