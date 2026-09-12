@@ -210,6 +210,18 @@ failure, secret-field exclusion, and symlink rejection. Full relay tests, setup
 race tests, setup vet, and a Linux amd64 setup build passed. These checks do not
 resolve the preceding TLS incident or substitute for a new live acceptance run.
 
+After the operator confirmed the test VPS rental was extended, a fresh install
+was repeated with setup `1f9ac8d` and the same private `0.4.1` package/image
+fixtures. Bootstrap completed successfully, activated the candidate setup
+binary, and doctor passed trusted HTTPS/WebSocket, ownership, service health,
+and permissions. Chrome UI login and both package download buttons passed
+again (`201`, `no-store`); anonymous generation returned `401`. Browser
+relay-only DataChannel echo passed on both UDP and TCP, with both selected
+candidates confirmed as relay candidates. The earlier TLS error did not recur;
+its original cause is still unknown. This adds corrected-wizard fresh-install
+evidence, not public provenance, certificate renewal, or physical iPad acceptance
+on this new host. Existing device bindings were not modified for these checks.
+
 ## Remaining Release Gates
 
 1. Repeat the clean-host wizard/device acceptance with the exact draft assets
