@@ -97,7 +97,13 @@ are rejected.
     "package_manager_upgrade": true,
     "package_manager_recovery": true,
     "uninstall_keep_data": true,
-    "uninstall_delete_data": true
+    "uninstall_delete_data": true,
+    "rootless_install": false,
+    "rootless_package_manager_upgrade": false,
+    "rootless_personalization": false,
+    "rootless_relay_control": false,
+    "rootless_device_update": false,
+    "rootless_device_rollback": false
   }
 }
 ```

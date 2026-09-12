@@ -11,6 +11,10 @@ on:
         description: Comma-separated immutable stable tags accepted as rollback sources
         required: true
         type: string
+      rootless_rollback_tags:
+        description: Immutable tags with rootless rollback packages (empty only for the first rootless release)
+        required: false
+        type: string
 
 concurrency:
   group: release-${{ inputs.tag }}
@@ -179,20 +183,19 @@ jobs:
           git -C "$RUNNER_TEMP/theos" submodule update --init --recursive
           export THEOS="$RUNNER_TEMP/theos"
           git clone --filter=blob:none --no-checkout https://github.com/theos/sdks.git "$RUNNER_TEMP/theos-sdks"
-          git -C "$RUNNER_TEMP/theos-sdks" sparse-checkout set iPhoneOS14.5.sdk
+          git -C "$RUNNER_TEMP/theos-sdks" sparse-checkout set iPhoneOS14.5.sdk iPhoneOS15.6.sdk
           git -C "$RUNNER_TEMP/theos-sdks" checkout "$THEOS_SDKS_COMMIT"
           mkdir -p "$THEOS/sdks"
           cp -R "$RUNNER_TEMP/theos-sdks/iPhoneOS14.5.sdk" "$THEOS/sdks/"
+          cp -R "$RUNNER_TEMP/theos-sdks/iPhoneOS15.6.sdk" "$THEOS/sdks/"
           python3 -m venv "$RUNNER_TEMP/rctl-venv"
           . "$RUNNER_TEMP/rctl-venv/bin/activate"
           pip install --disable-pip-version-check jsonschema jinja2
           make deps
-          make package FINALPACKAGE=1
-          deb="$(find packages -maxdepth 1 -type f -name '*.deb' -print -quit)"
-          test -n "$deb"
-          scripts/release_check.sh "$deb"
+          scripts/build-packages.sh --version "$VERSION"
           mkdir -p release
-          cp "$deb" "release/rctl_${VERSION}_iphoneos-arm.deb"
+          cp "packages/com.greatlove.rctl_${VERSION}_iphoneos-arm.deb" "release/rctl_${VERSION}_iphoneos-arm.deb"
+          cp "packages/rootless/com.greatlove.rctl_${VERSION}_iphoneos-arm64.deb" "release/rctl_${VERSION}_iphoneos-arm64.deb"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ios-package
@@ -204,6 +207,9 @@ jobs:
     needs: [validate, ios-package]
     runs-on: ubuntu-24.04
     environment: release-signing
+    strategy:
+      matrix:
+        architecture: [iphoneos-arm, iphoneos-arm64]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -222,25 +228,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KEY_B64: ${{ secrets.RCTL_UPDATE_SIGNING_KEY_B64 }}
           ROLLBACK_TAGS: ${{ inputs.rollback_tags }}
+          ROOTLESS_ROLLBACK_TAGS: ${{ inputs.rootless_rollback_tags }}
+          ARCHITECTURE: ${{ matrix.architecture }}
           TARGET_TAG: ${{ inputs.tag }}
           TARGET_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           test -n "$KEY_B64" || { echo "release-signing key is not configured" >&2; exit 1; }
-          target_package="rctl_${TARGET_VERSION}_iphoneos-arm.deb"
+          target_package="rctl_${TARGET_VERSION}_${ARCHITECTURE}.deb"
+          catalog_name=rctl-update-stable.json
+          if [[ "$ARCHITECTURE" == iphoneos-arm64 ]]; then
+            ROLLBACK_TAGS="$ROOTLESS_ROLLBACK_TAGS"
+            catalog_name=rctl-update-rootless-stable.json
+          fi
           test -f "packages/$target_package"
 
           IFS=',' read -r -a rollback_tags <<< "$ROLLBACK_TAGS"
-          test "${#rollback_tags[@]}" -ge 1
+          [[ "$ARCHITECTURE" == iphoneos-arm64 ]] || test "${#rollback_tags[@]}" -ge 1
           declare -A seen_versions=()
           packages=("packages/$target_package")
           artifact_urls=("$TARGET_VERSION=https://github.com/$GITHUB_REPOSITORY/releases/download/$TARGET_TAG/$target_package")
           for rollback_tag in "${rollback_tags[@]}"; do
+            [[ -n "$rollback_tag" ]] || continue
             printf '%s\n' "$rollback_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
             test "$rollback_tag" != "$TARGET_TAG"
             rollback_version="${rollback_tag#v}"
             test -z "${seen_versions[$rollback_version]:-}"
             seen_versions[$rollback_version]=1
-            rollback_package="rctl_${rollback_version}_iphoneos-arm.deb"
+            rollback_package="rctl_${rollback_version}_${ARCHITECTURE}.deb"
             gh release verify "$rollback_tag"
             gh release download "$rollback_tag" --pattern "$rollback_package" --dir packages
             gh release verify-asset "$rollback_tag" "packages/$rollback_package"
@@ -267,14 +281,14 @@ jobs:
               -target "$TARGET_VERSION" \
               -channel stable \
               "${manifest_args[@]}" \
-              -output ../catalog/rctl-update-stable.json \
+              -output "../catalog/$catalog_name" \
               "${packages[@]/#/../}"
           )
           test ! -s "$key" || rm -f "$key"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: update-catalog
-          path: catalog/rctl-update-stable.json
+          name: update-catalog-${{ matrix.architecture }}
+          path: catalog/*.json
           if-no-files-found: error
           retention-days: 7
 
@@ -297,7 +311,8 @@ jobs:
           path: release
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: update-catalog
+          pattern: update-catalog-*
+          merge-multiple: true
           path: release
       - name: Verify and checksum release set
         env:
@@ -305,6 +320,7 @@ jobs:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           RCTL_REQUIRE_EXECUTABLE_CHECK: "1"
           RCTL_REQUIRE_UPDATE_CATALOG: "1"
+          RCTL_REQUIRE_ROOTLESS: "1"
         run: |
           chmod 0755 release/install.sh release/rctl-relay_linux_* release/rctl-setup_linux_*
           scripts/assemble_release_set.sh release "$VERSION" "$SOURCE_SHA"

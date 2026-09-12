@@ -24,6 +24,8 @@ func validReport() (Report, Expected) {
 		UpgradeRollback: true, ResetAdmin: true, InterruptedRecovery: true,
 		DeviceUpdate: true, DeviceUpdateRollback: true, PackageManagerUpgrade: true, PackageManagerRecovery: true,
 		UninstallKeepData: true, UninstallDeleteData: true,
+		RootlessInstall: true, RootlessPackageManagerUpgrade: true, RootlessPersonalization: true,
+		RootlessRelayControl: true, RootlessDeviceUpdate: true, RootlessDeviceRollback: true,
 	}
 	return Report{
 		Schema: ReportSchema, Product: "rctl", Tag: "v1.2.3", Version: "1.2.3", SourceSHA: commit,
@@ -84,6 +86,9 @@ func TestValidateRejectsEveryIncompleteCheck(t *testing.T) {
 		{"device_update_rollback", &checks.DeviceUpdateRollback}, {"package_manager_upgrade", &checks.PackageManagerUpgrade},
 		{"package_manager_recovery", &checks.PackageManagerRecovery}, {"uninstall_keep_data", &checks.UninstallKeepData},
 		{"uninstall_delete_data", &checks.UninstallDeleteData},
+		{"rootless_install", &checks.RootlessInstall}, {"rootless_package_manager_upgrade", &checks.RootlessPackageManagerUpgrade},
+		{"rootless_personalization", &checks.RootlessPersonalization}, {"rootless_relay_control", &checks.RootlessRelayControl},
+		{"rootless_device_update", &checks.RootlessDeviceUpdate}, {"rootless_device_rollback", &checks.RootlessDeviceRollback},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

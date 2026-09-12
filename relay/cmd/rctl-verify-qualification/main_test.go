@@ -38,7 +38,10 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
     "reset_admin": true, "interrupted_recovery": true,
     "device_update": true, "device_update_rollback": true,
     "package_manager_upgrade": true, "package_manager_recovery": true,
-    "uninstall_keep_data": true, "uninstall_delete_data": true
+    "uninstall_keep_data": true, "uninstall_delete_data": true,
+    "rootless_install": true, "rootless_package_manager_upgrade": true,
+    "rootless_personalization": true, "rootless_relay_control": true,
+    "rootless_device_update": true, "rootless_device_rollback": true
   }
 }`)
 	path := filepath.Join(t.TempDir(), "report.json")

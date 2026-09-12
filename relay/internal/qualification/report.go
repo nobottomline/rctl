@@ -27,31 +27,37 @@ var (
 )
 
 type Checks struct {
-	Bootstrap              bool `json:"bootstrap"`
-	BootstrapIdempotent    bool `json:"bootstrap_idempotent"`
-	ACME                   bool `json:"acme"`
-	ACMERenewal            bool `json:"acme_renewal"`
-	HTTPSWSS               bool `json:"https_wss"`
-	TURNUDP                bool `json:"turn_udp"`
-	TURNTCP                bool `json:"turn_tcp"`
-	ForcedTURN             bool `json:"forced_turn"`
-	PackagePersonalization bool `json:"package_personalization"`
-	DeviceEnrollment       bool `json:"device_enrollment"`
-	RelayControl           bool `json:"relay_control"`
-	LANControl             bool `json:"lan_control"`
-	RelayRestart           bool `json:"relay_restart"`
-	Doctor                 bool `json:"doctor"`
-	BackupRestore          bool `json:"backup_restore"`
-	RelayUpgrade           bool `json:"relay_upgrade"`
-	UpgradeRollback        bool `json:"upgrade_rollback"`
-	ResetAdmin             bool `json:"reset_admin"`
-	InterruptedRecovery    bool `json:"interrupted_recovery"`
-	DeviceUpdate           bool `json:"device_update"`
-	DeviceUpdateRollback   bool `json:"device_update_rollback"`
-	PackageManagerUpgrade  bool `json:"package_manager_upgrade"`
-	PackageManagerRecovery bool `json:"package_manager_recovery"`
-	UninstallKeepData      bool `json:"uninstall_keep_data"`
-	UninstallDeleteData    bool `json:"uninstall_delete_data"`
+	Bootstrap                     bool `json:"bootstrap"`
+	BootstrapIdempotent           bool `json:"bootstrap_idempotent"`
+	ACME                          bool `json:"acme"`
+	ACMERenewal                   bool `json:"acme_renewal"`
+	HTTPSWSS                      bool `json:"https_wss"`
+	TURNUDP                       bool `json:"turn_udp"`
+	TURNTCP                       bool `json:"turn_tcp"`
+	ForcedTURN                    bool `json:"forced_turn"`
+	PackagePersonalization        bool `json:"package_personalization"`
+	DeviceEnrollment              bool `json:"device_enrollment"`
+	RelayControl                  bool `json:"relay_control"`
+	LANControl                    bool `json:"lan_control"`
+	RelayRestart                  bool `json:"relay_restart"`
+	Doctor                        bool `json:"doctor"`
+	BackupRestore                 bool `json:"backup_restore"`
+	RelayUpgrade                  bool `json:"relay_upgrade"`
+	UpgradeRollback               bool `json:"upgrade_rollback"`
+	ResetAdmin                    bool `json:"reset_admin"`
+	InterruptedRecovery           bool `json:"interrupted_recovery"`
+	DeviceUpdate                  bool `json:"device_update"`
+	DeviceUpdateRollback          bool `json:"device_update_rollback"`
+	PackageManagerUpgrade         bool `json:"package_manager_upgrade"`
+	PackageManagerRecovery        bool `json:"package_manager_recovery"`
+	UninstallKeepData             bool `json:"uninstall_keep_data"`
+	UninstallDeleteData           bool `json:"uninstall_delete_data"`
+	RootlessInstall               bool `json:"rootless_install"`
+	RootlessPackageManagerUpgrade bool `json:"rootless_package_manager_upgrade"`
+	RootlessPersonalization       bool `json:"rootless_personalization"`
+	RootlessRelayControl          bool `json:"rootless_relay_control"`
+	RootlessDeviceUpdate          bool `json:"rootless_device_update"`
+	RootlessDeviceRollback        bool `json:"rootless_device_rollback"`
 }
 
 type Report struct {
@@ -176,6 +182,9 @@ func failedChecks(checks Checks) []string {
 		{"device_update", checks.DeviceUpdate}, {"device_update_rollback", checks.DeviceUpdateRollback},
 		{"package_manager_upgrade", checks.PackageManagerUpgrade}, {"package_manager_recovery", checks.PackageManagerRecovery},
 		{"uninstall_keep_data", checks.UninstallKeepData}, {"uninstall_delete_data", checks.UninstallDeleteData},
+		{"rootless_install", checks.RootlessInstall}, {"rootless_package_manager_upgrade", checks.RootlessPackageManagerUpgrade},
+		{"rootless_personalization", checks.RootlessPersonalization}, {"rootless_relay_control", checks.RootlessRelayControl},
+		{"rootless_device_update", checks.RootlessDeviceUpdate}, {"rootless_device_rollback", checks.RootlessDeviceRollback},
 	}
 	missing := make([]string, 0)
 	for _, value := range values {

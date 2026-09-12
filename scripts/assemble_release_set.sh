@@ -37,6 +37,10 @@ catalog=rctl-update-stable.json
 if [[ -e "$release_dir/$catalog" || ${RCTL_REQUIRE_UPDATE_CATALOG:-0} == 1 ]]; then
   expected+=("$catalog")
 fi
+rootless_package="rctl_${version}_iphoneos-arm64.deb"
+if [[ -e "$release_dir/$rootless_package" || ${RCTL_REQUIRE_ROOTLESS:-0} == 1 ]]; then
+  expected+=("$rootless_package" rctl-update-rootless-stable.json)
+fi
 
 mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
 
@@ -82,6 +86,13 @@ done
   echo "device package architecture does not match iphoneos-arm" >&2
   exit 1
 }
+if [[ -e "$release_dir/$rootless_package" ]]; then
+  [[ $(dpkg-deb -f "$release_dir/$rootless_package" Package) == com.greatlove.rctl &&
+     $(dpkg-deb -f "$release_dir/$rootless_package" Version) == "$version" &&
+     $(dpkg-deb -f "$release_dir/$rootless_package" Architecture) == iphoneos-arm64 ]] || {
+    echo "rootless package identity does not match the release" >&2; exit 1;
+  }
+fi
 
 assert_elf_arch() {
   local name=$1 pattern=$2 description

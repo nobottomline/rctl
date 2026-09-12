@@ -1,6 +1,6 @@
 # Rootless Release Readiness
 
-## Current Baseline (2026-09-12)
+## Initial Audit (2026-09-12)
 
 This is a release-preparation audit, not a release qualification certificate.
 The operator confirms that Talk now works and that the device functions they
@@ -46,17 +46,23 @@ Success on one path does not qualify either of the others. In particular, the
 existing rootless personalized-package generator and successful enrollment do
 not enable the rootless transactional updater.
 
-## Remaining Integration Work
+## Implementation and Qualification (2026-09-12)
+
+The updater-capable `0.4.0~rc.1` bootstrap is now installed on the physical
+rootless device. The operator installed it through Filza and restarted
+SpringBoard. Independent dpkg inspection reports `install ok installed` and
+`iphoneos-arm64`; the authenticated relay tunnel advertises the updater. This
+is bootstrap proof, not yet a relay-initiated update or rollback.
 
 | Boundary | Current implementation | Required change and proof |
 | --- | --- | --- |
-| Device admission | `Capabilities.mm` omits `update.transactional`; `UpdateLauncher.mm` and `updater/main.mm` reject rootless | Retain these gates until the complete rootless transaction and recovery path is tested |
-| Native updater | Key, executable, dpkg tools and launchd paths are rootful; daemon reload uses `unload/load` | Use the existing package/runtime path conventions; verify actual Dopamine launchd and SpringBoard lifecycle after dpkg exits |
-| Artifact selection | Signed schema 1 identifies artifacts by version only; native `packageMatches` checks ID/version, not architecture | Bind selection and DEB verification to architecture/layout; explicitly reject cross-lane target and rollback artifacts; preserve old rootful clients |
+| Device admission | Default rootless gate retained; `RCTL_ROOTLESS_UPDATE_QUALIFICATION=1` enables the physical test lane | Remove the default gate only after update and recovery acceptance |
+| Native updater | Bootstrap-aware paths, exact installed package checks, rootless launchd bootstrap and explicit post-dpkg SpringBoard restart implemented | Verify the complete transaction and recovery on Dopamine |
+| Artifact selection | Rootful schema 1 preserved; rootless schema 2 signs architecture; producer audits public layout and native checks exact ID/version/architecture | Cross-lane, malformed and duplicate-version host tests pass; physical acceptance pending |
 | Catalog availability | No catalog is configured on the deployed relay | Publish exact clean target and rollback artifacts to trusted HTTPS, verify the pinned signature, then explicitly configure the qualification channel |
-| Wizard packaging | Setup stages one `PublicPackage`; bootstrap expects the rootful asset | Deliver and preserve both public base variants through install, upgrade, backup, restore, and recovery; reuse the existing wizard |
-| Release pipeline | Draft, release assembly and catalog verifier require `iphoneos-arm` | Build both lanes using the common builder, and include both in the signed/provenance-verified release and APT admission |
-| Candidate identity | Test DEB version includes a timestamp while the running daemon reports the version from `control` | Reconcile exact package identity and runtime version checks before testing; current updater matching does not strip `~test` versions |
+| Wizard packaging | Existing wizard/bootstrap now accept both public bases; owned paths cover backup, restore and recovery; upgrades require replacement sources | Go tests and checksum-failure bootstrap tests pass; fresh-host acceptance remains pending |
+| Release pipeline | Draft/publish workflows require both architectures and separate signed catalogs; first rootless release can seed a target-only catalog | Actionlint passes; actual release assembly, provenance and APT admission remain release gates |
+| Candidate identity | Optional `package_version` in capabilities and relay hello carries the exact Debian version, independently of daemon product version | Verify exact RC identity after the relay transaction |
 
 Do not combine two same-version architectures in schema 1: the producer rejects
 duplicate versions, and existing native clients select the first matching
@@ -91,6 +97,6 @@ they do not by themselves establish the support guarantees of `1.0.0`. Keep the
 wire protocol major unchanged unless an actual incompatible contract requires
 a migration. Do not replace or retag existing release artifacts.
 
-Local candidate DEBs may use `0.4.0~rc.N` only after the candidate-identity issue
-above is resolved. The current GitHub draft workflow accepts `vMAJOR.MINOR.PATCH`
+Local qualification DEBs use `0.4.0~rc.N` with exact package identity. The
+GitHub draft workflow accepts `vMAJOR.MINOR.PATCH`
 tags only; do not assume it already supports `v0.4.0-rc.N` tags.
