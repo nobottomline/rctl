@@ -5,6 +5,13 @@ PreferenceBundle, prompt, or other UI on the iPad. The update path is disabled
 when the relay is configured with `device_update_channel: off`. Official wizard
 installations use a signed, version-bound stable catalog by default.
 
+The transaction described below is currently enabled for rootful devices only.
+Rootless packages deliberately omit `update.transactional` and reject updater
+startup. The existing Go wizard's relay upgrade is a separate lifecycle, not
+proof of rootless device-update support. See
+[`ROOTLESS-RELEASE.md`](ROOTLESS-RELEASE.md) for the remaining integration and
+physical acceptance work.
+
 The public Cydia/Installer/Sileo/Zebra feed is a separate distribution channel.
 Relay installations should continue to use this transactional updater. A
 release is eligible for the public APT ledger only after its qualification

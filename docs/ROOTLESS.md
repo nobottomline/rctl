@@ -5,6 +5,11 @@ iPadOS 15.5 with ordinary Dopamine and ElleKit. Compilation and package audits
 are not proof that the private APIs work on that device. RootHide and other
 bootstrap variants are outside this first test lane.
 
+For the current release-preparation status, including the existing wizard,
+operator-confirmed Talk fix, and the still-disabled transactional updater, see
+[`ROOTLESS-RELEASE.md`](ROOTLESS-RELEASE.md). Historical test notes below are not
+a replacement for that current integration checklist.
+
 ## Build
 
 Use the same native dependencies as the rootful build, plus the Theos iOS 15.6
