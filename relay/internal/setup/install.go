@@ -592,34 +592,47 @@ func (i Installer) progress(message string) {
 	}
 }
 
-func (i Installer) verifyServices(ctx context.Context, cfg Config, adminSecret string, start bool) error {
+func (i Installer) verifyServices(ctx context.Context, cfg Config, adminSecret string, start bool) (err error) {
+	stage := "service_health"
+	defer func() {
+		if err != nil {
+			i.saveFailureDiagnostics(stage)
+		}
+	}()
 	if start {
+		stage = "compose_validation"
 		i.progress("Validating the Docker Compose deployment")
 		if output, err := i.Runner.Run(ctx, "docker", i.composeArgs("config", "--quiet")...); err != nil {
 			return fmt.Errorf("compose validation: %s", commandFailure(output, err))
 		}
 		i.progress("Pulling digest-pinned container images")
+		stage = "image_pull"
 		if output, err := i.Runner.Run(ctx, "docker", i.composeArgs("pull")...); err != nil {
 			return fmt.Errorf("image pull: %s", commandFailure(output, err))
 		}
 		i.progress("Validating the HTTPS reverse-proxy configuration")
+		stage = "caddy_validation"
 		if output, err := i.Runner.Run(ctx, "docker", "run", "--rm", "--network", "none", "-v", i.Paths.Caddyfile+":/etc/caddy/Caddyfile:ro", cfg.CaddyImage, "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"); err != nil {
 			return fmt.Errorf("Caddy validation: %s", commandFailure(output, err))
 		}
 		i.progress("Starting relay, HTTPS, and TURN services")
+		stage = "service_start"
 		if output, err := i.Runner.Run(ctx, "docker", i.composeArgs("up", "-d", "--remove-orphans")...); err != nil {
 			return fmt.Errorf("service start: %s", commandFailure(output, err))
 		}
 	}
+	stage = "service_health"
 	i.progress("Waiting for services to become healthy")
 	if err := i.waitForServices(ctx, cfg.EnableTURN); err != nil {
 		return err
 	}
 	i.progress("Verifying public HTTPS, WebSocket, and admin authentication")
+	stage = "public_https"
 	if err := i.Verifier.Verify(ctx, cfg, adminSecret); err != nil {
 		return err
 	}
 	if start {
+		stage = "persistence"
 		i.progress("Verifying state persistence across a relay restart")
 		restart := func(restartCtx context.Context) error {
 			if output, err := i.Runner.Run(restartCtx, "docker", i.composeArgs("restart", "relay")...); err != nil {

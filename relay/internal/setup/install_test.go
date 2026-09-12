@@ -324,11 +324,11 @@ func TestInstallerRollsBackFailedFreshInstallAndRedactsJournal(t *testing.T) {
 			t.Errorf("rollback retained %s: %v", path, statErr)
 		}
 	}
-	entries, readErr := os.ReadDir(installer.Paths.LogDir)
+	entries, readErr := filepath.Glob(filepath.Join(installer.Paths.LogDir, "install-*.json"))
 	if readErr != nil || len(entries) != 1 {
 		t.Fatalf("rollback journal missing: entries=%v err=%v", entries, readErr)
 	}
-	raw, _ := os.ReadFile(filepath.Join(installer.Paths.LogDir, entries[0].Name()))
+	raw, _ := os.ReadFile(entries[0])
 	if !strings.Contains(string(raw), `"status": "rolled_back"`) || strings.Contains(string(raw), "0123456789abcdef") {
 		t.Fatalf("journal status/redaction invalid: %s", raw)
 	}

@@ -472,9 +472,26 @@ incomplete rollback; fresh-install journals use `rollback_failed`, not
 retrying. Recovery follows the same stop-before-delete rule.
 
 The redacted journal directory is not deployment state. A successfully rolled
-back fresh install can therefore be retried without deleting its evidence; setup accepts only a
-real directory at that path and still rejects symlinks, non-directories, prior
+back fresh install can therefore be retried without deleting its evidence; setup
+accepts only a real directory at that path and still rejects symlinks, non-directories, prior
 configuration/data, retained backups, and unowned Compose resources.
+
+Failed service verification saves a mode-0600 `failure-*.json` in the protected
+setup journal directory **before** rollback removes container logs. Collection
+has an independent 15-second total budget, including after cancellation. It is
+best-effort and cannot replace the original error or prevent rollback. Reports
+include the verification stage, allowlisted service states, and a projection of
+at most 200 Caddy log lines into known TLS events and ACME error codes. Unknown
+messages remain `unknown`; no raw log messages, domains, URLs, headers, tokens,
+environment, database, or certificate contents are saved in these reports.
+Reported signals describe matching log text, not a definitive diagnosis.
+
+For a public TLS failure, inspect that report alongside the operation journal.
+Do not repeatedly reinstall to retry certificate issuance: Caddy retries ACME
+with backoff, and repeated issuance can encounter CA limits (see
+[Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https#errors)).
+The two-minute HTTPS verification window remains unchanged; collecting evidence
+does not bypass certificate validation or prove certificate renewal works.
 
 The ownership manifest records paths, modes, secret classification, hashes,
 deployment configuration, and release version. Immutable Compose content owns

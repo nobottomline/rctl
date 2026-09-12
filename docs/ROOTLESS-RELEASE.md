@@ -201,6 +201,15 @@ through this temporary relay, iPad forced-TURN media, ACME renewal, NAT-host
 acceptance, and exact final draft provenance remain unverified by this run.
 The working VPS, existing iPad bindings, and VPN were not changed.
 
+Post-rehearsal installer hardening was verified locally: failed container stops
+now retain deployment data and the recovery checkpoint, including during
+explicit recovery of an interrupted upgrade. Failed service verification saves
+a bounded, allowlisted Caddy/ACME diagnostic report before rollback. Tests cover
+failed stop/retry/recover, cleanup failure, cancellation, diagnostic collection
+failure, secret-field exclusion, and symlink rejection. Full relay tests, setup
+race tests, setup vet, and a Linux amd64 setup build passed. These checks do not
+resolve the preceding TLS incident or substitute for a new live acceptance run.
+
 ## Remaining Release Gates
 
 1. Repeat the clean-host wizard/device acceptance with the exact draft assets
