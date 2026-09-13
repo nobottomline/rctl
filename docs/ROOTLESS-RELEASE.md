@@ -2,17 +2,19 @@
 
 ## Current Checkpoint (2026-09-13)
 
-The last independently verified rootless device version is `0.4.0~rc.4`; the
-rootful device remains on `0.3.4-24+debug`. No device package was installed
-during the latest VPS-only checks. The operator confirmed
-normal operation and that the earlier black capture coincided with the physical
-display switching off. No always-on display or keepalive behavior was added.
+The last independently verified rootless device version is the exact draft
+`0.4.0`, after a successful UI update and an external-watchdog rollback test.
+The rootful device remains on `0.3.4-24+debug`. No always-on display or keepalive
+behavior was added; the earlier black capture coincided with the physical
+display switching off and is distinct from the packet-loss symptom below.
 
 Both public `0.4.0` package variants now pass the draft checks below. The
 temporary server now runs the exact GitHub candidate after a clean install,
 repeated bootstrap, trusted admin UI, package downloads, and browser TURN
-checks. Certificate renewal and the full lifecycle were previously exercised
-on engineering fixtures and still need exact-candidate acceptance. The
+checks. Exact-candidate backup/restore, admin reset, and both uninstall/restore
+paths now pass. Renewal is blocked by an ACME rate limit, while managed upgrade
+and interrupted recovery still need exact-candidate acceptance. Forced-TURN
+device media has a new unresolved failure described below. The
 `v0.4.0` tag and GitHub draft exist; no stable release or APT publication has
 occurred. The
 [remaining gates](#remaining-release-gates) distinguish this
@@ -44,8 +46,8 @@ Independent checks of the downloaded draft passed:
   exact version/source, release-set assembly reproduced `SHA256SUMS` byte for
   byte, and an empty Docker configuration pulled the pinned image anonymously.
 
-These artifact checks do not establish device acceptance of the final bytes.
-In particular, the installed rootless RC4 and rootful debug
+These artifact checks alone do not establish device acceptance of the final
+bytes. In particular, the former rootless RC4 and current rootful debug
 build are absent from the public rollback catalogs. Their update tests require
 separate signed qualification catalogs with the exact clean installed-version
 DEBs; do not substitute a different package version or publish those test feeds.
@@ -70,6 +72,87 @@ outside the fresh-install paths; no unrelated services or images were removed.
 Device update channels remain disabled on this temporary server while the
 release is a draft. The permanent relay, its device bindings, and VPN were
 not modified. No schema-4 publication report has been signed off.
+
+### Exact Candidate Lifecycle and Device Update
+
+The downloaded `0.4.0` setup binary passed these additional managed-host tests:
+
+- Backup and actual restore preserved the environment and both public package
+  hashes. An enrollment marker created, deleted, and recovered through the
+  admin UI independently demonstrated database restoration.
+- Admin reset invalidated the previous browser session (`401`), accepted the
+  new credentials, rotated admin/session secrets, and preserved the TURN secret.
+- Both keep-data and delete-data uninstall paths were followed by actual
+  restoration and doctor checks. Recovery archives were retained; deleting
+  the live deployment was not treated as proof of successful recovery.
+- A controlled production renewal attempt returned an ACME rate limit. The
+  existing trusted certificate and Caddy were restored and doctor passed.
+  Further production attempts were stopped. The earlier fixture renewal is
+  not evidence of successful exact-candidate renewal.
+
+Updater qualification used a separate, temporary relay with the exact candidate
+image, its own database, and private architecture-specific signed catalogs.
+The managed deployment's update channels remained disabled. A diagnostic
+additional device binding preserved the permanent binding; this setup is not
+proof of personalized-package installation through Sileo.
+
+- Real admin UI `Update device` / `Start update` upgraded rootless RC4 to the
+  exact clean draft `0.4.0` DEB. The job completed, dpkg reported
+  `install ok installed` / `iphoneos-arm64`, and the device identity, existing
+  relay credentials, and SpringBoard IPC were preserved.
+- The initial post-update UI check delivered 594 additional frames, submitted
+  Control/Home commands over the control DataChannel, loaded a 2732x2048
+  screenshot preview, and opened Files.
+- A private fault package declared `0.4.1~rollback-test` but retained the exact
+  final runtime data archive. After full installation reached verification,
+  only the matching updater worker was terminated, leaving its external
+  watchdog alive. The job reached `rolled_back` and restored exact `0.4.0`,
+  with clean dpkg state, the same identity/bindings, and working SpringBoard IPC.
+  The normal catalog was restored and the fault DEB removed from HTTP serving.
+
+### Post-Rollback Transport Finding
+
+After the operator unlocked the device, a forced-TURN/TCP browser displayed
+the actual home screen. However, repeated TCP and UDP runs then decoded very
+few or no additional frames while ICE/DTLS remained connected. One TCP sample
+received 611 additional frames but decoded only one over ten seconds; cumulative
+packet loss increased from 4 to 231 and PLI requests from 6 to 29. A screenshot
+UI check also timed out. Successful command submission alone does not prove
+its visible effect during this failure.
+
+The symptom also reproduced using the permanent signaling relay with the
+browser still forced through the temporary TURN server. An independent LAN
+check of final `0.4.0` delivered 163 frames in three seconds. The temporary
+relay/proxy/TURN containers were not CPU- or memory-saturated at inspection.
+These observations narrow the failing path but do not prove its root cause;
+neither VPN nor runtime settings were changed to conceal it. A harness exit
+success based on a single new decoded frame is not sustained-video acceptance.
+Forced-TURN media and reconnect remain release blockers.
+
+Ordinary control through the permanent relay, with direct ICE permitted,
+subsequently delivered 443 new frames over ten seconds and loaded the native
+screenshot and Files. This is not an off-LAN or forced-TURN acceptance result.
+
+### Qualification Cleanup
+
+The temporary device access was revoked through the admin UI: its active peer
+disconnected and the device tunnel returned `404`. Only the added test binding
+was removed from the device; the original configuration was restored
+byte-for-byte and dpkg audit was clean. The revoked test device was then deleted
+through the UI. Private configuration snapshots were removed from the device
+and local staging.
+
+The isolated relay/proxy containers, their separate database, test catalogs,
+and secrets were removed. The managed deployment's ownership file was unchanged,
+its three services remained running, and doctor passed; recovery backups were
+retained. No permanent-relay configuration, VPN setting, release asset, or APT
+publication was changed.
+
+After cleanup, another permanent-relay browser session decoded 603 additional
+frames over ten seconds with no reported RTP packet loss. The screenshot preview
+showed actual device content and Files opened. The device remains on `0.4.0`
+with its original identity. This closes the test cleanup, not the outstanding
+forced-TURN or complete release matrix.
 
 ## Initial Audit (2026-09-12)
 
@@ -465,13 +548,16 @@ replacement for the tag-bound draft's artifact provenance.
 
 1. Finish exact-candidate wizard/device acceptance. Fresh staged bootstrap,
    idempotence, trusted HTTPS/admin, package-generation UI, and browser TURN
-   passed. Repeat lifecycle/renewal checks and complete the physical-device
+   passed, as did exact-candidate backup/restore, admin reset, both uninstall
+   recovery paths, and rootless updater/watchdog recovery. Complete managed
+   upgrade/failure/interruption checks, renewal, and the physical-device
    package-install/enrollment path through the new host; engineering-fixture
    results do not qualify those final bytes.
    The RC4 browser/device TURN/TCP handshake fix and both-peer relay transport
    passed, and one unlocked session has visual screen/input proof. Repeat
    forced-relay media/control and reconnect checks with the exact candidate
-   artifacts and a recorded physical display state.
+   artifacts and a recorded physical display state. Resolve the newly observed
+   packet-loss/decoder-stall failure before signing off those checks.
 2. The tag-bound draft and independent file/image provenance checks are
    complete. Re-run the required release matrix for both package architectures,
    including package-manager upgrade/recovery and rootful transactional compatibility.
