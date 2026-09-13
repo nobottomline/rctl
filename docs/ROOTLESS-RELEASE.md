@@ -2,8 +2,10 @@
 
 ## Current Checkpoint (2026-09-14)
 
-The last independently verified rootless device version is the exact draft
-`0.4.0`, after a successful UI update and an external-watchdog rollback test.
+The rootless device now has an installed packet-sizing test prerelease,
+`0.4.0~test.20260913211054.35140b41f7d6`. The exact draft `0.4.0` previously passed
+the UI update and external-watchdog rollback tests described below; those
+results do not qualify the new prerelease.
 The rootful device remains on `0.3.4-24+debug`. No always-on display or keepalive
 behavior was added; the earlier black capture coincided with the physical
 display switching off and is distinct from the packet-loss symptom below.
@@ -143,10 +145,11 @@ overhead. Main now limits H.264 fragments to 1100 bytes for both video tracks;
 the actual production-chain test fails before the change and passes afterward,
 including payload/marker integrity and session teardown. See the
 [packet budget](TRANSPORT.md#video-packet-budget). This is a verified sizing
-defect, not yet a proven explanation of the observed stalls. Both local package
+defect, not a sufficient fix for the observed stalls. Both local package
 lanes built and passed the public audit. The rootless prerelease was transferred
-for manual installation, with matching local/device SHA-256; physical comparison
-is pending. These are not the existing tag-bound draft, and no release asset or
+with matching local/device SHA-256, installed by the operator, and independently
+reported `install ok installed` / `iphoneos-arm64`. These are not the existing
+tag-bound draft, and no release asset or
 tag was replaced. The draft workflow now runs the native packet-budget,
 authorization/teardown, and Talk queue tests before either package build;
 workflow lint passed locally, but the updated GitHub job has not run yet.
@@ -154,6 +157,52 @@ workflow lint passed locally, but the updated GitHub job has not run yet.
 Ordinary control through the permanent relay, with direct ICE permitted,
 subsequently delivered 443 new frames over ten seconds and loaded the native
 screenshot and Files. This is not an off-LAN or forced-TURN acceptance result.
+
+### Packet-Sizing Prerelease Comparison
+
+On the installed prerelease, LAN decoded 181 additional frames in three seconds.
+A separate real browser displayed actual device content, loaded the screenshot
+preview with its Save link, and restored visible video after a page reload.
+
+The following thirty-second runs used permanent signaling, temporary browser
+TURN, and relay-only candidates on both peers. No profile downgrade, VPN change,
+or signaling-timeout override was used. Each run failed the minimum requirement
+of ten additional decoded frames in every two-second sample:
+
+- TURN/TCP: 1028 additional decoded frames overall, but multiple stalled
+  intervals; PLI increased from 0 to 45 while ICE/DTLS stayed connected.
+- TURN/TCP with playout constraints removed only in the test browser: 1407
+  additional frames, but still a stalled interval; PLI increased from 0 to 14.
+  This diagnostic override was not added to the product.
+- TURN/UDP: 550 additional frames overall, with repeated stalled intervals;
+  PLI increased from 2 to 51 while ICE/DTLS stayed connected.
+
+Reported cumulative loss returned to zero after some retransmissions; this is
+not evidence of loss-free delivery. The first sustained stalls in both TCP
+runs occurred near frame 600, consistent with the configured ten-second GOP
+at 60 fps. Device logs confirmed repeated recovery keyframes around 116 KB.
+This is a correlation, not proof of the cause. Inspect burst delivery and
+keyframe recovery before further buffer tuning; do not add an unbounded pacer
+or drop arbitrary parts of an access unit to hide the failure.
+
+A subsequent ordinary permanent-relay session selected direct ICE, decoded
+401 additional frames in ten seconds, and loaded the screenshot and Files.
+It also reported dropped frames and additional PLI, so it is not smooth-video
+acceptance and does not close the forced-TURN gate.
+
+The LAN UI exposed a separate build defect: stale `web/dist/index.html` carried
+browser version `0.3.4` into this test package despite product version `0.4.0`.
+Package staging now always rebuilds the client and stops on build failure.
+Regression tests execute the real staging recipe for both lanes, proving stale
+HTML is refreshed and cannot mask a failed build. Both replacement local DEBs
+built, passed the public audit, and contain byte-identical fresh client HTML.
+Those replacements have not been installed or published; the device remains on
+the packet-sizing prerelease above.
+
+After these comparisons, the live relay configuration matched the retained
+pre-install snapshot byte-for-byte, dpkg audit was clean, and the temporary
+private snapshot was removed. All test viewers were closed; no permanent
+binding or VPN setting was changed.
 
 ### Qualification Cleanup
 
@@ -172,8 +221,8 @@ publication was changed.
 
 After cleanup, another permanent-relay browser session decoded 603 additional
 frames over ten seconds with no reported RTP packet loss. The screenshot preview
-showed actual device content and Files opened. The device remains on `0.4.0`
-with its original identity. This closes the test cleanup, not the outstanding
+showed actual device content and Files opened. At that checkpoint the device
+was on `0.4.0` with its original identity. This closes the test cleanup, not the outstanding
 forced-TURN or complete release matrix.
 
 ## Initial Audit (2026-09-12)
