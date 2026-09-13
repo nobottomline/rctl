@@ -22,6 +22,13 @@ It does not create the stable GHCR version tag. The setup binaries embed the
 immutable candidate digest, so a qualified draft can be exercised without a
 mutable image reference.
 
+The draft's update-catalog jobs use the protected `release-signing`
+environment. When it requires a reviewer, approving it grants those jobs access
+to the update-signing key; it does not publish the release. This is a deliberate
+project policy, not a requirement of GitHub Releases. Keep it separate from the
+final publication decision and never bypass it by moving the signing key into
+an unprotected repository secret.
+
 The publication report must come from the public candidate image. Because a
 GitHub draft's assets are never anonymously readable, the reversible
 pre-publication run uses the complete locally staged draft set after checksum

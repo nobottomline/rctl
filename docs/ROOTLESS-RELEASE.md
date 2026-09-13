@@ -2,17 +2,74 @@
 
 ## Current Checkpoint (2026-09-13)
 
-The last independently verified rootless device version is `0.4.0~rc.4`; no device
-package was installed during the latest VPS-only checks. The operator confirmed
+The last independently verified rootless device version is `0.4.0~rc.4`; the
+rootful device remains on `0.3.4-24+debug`. No device package was installed
+during the latest VPS-only checks. The operator confirmed
 normal operation and that the earlier black capture coincided with the physical
 display switching off. No always-on display or keepalive behavior was added.
 
-Both public `0.4.0` package variants now build and pass local release audits.
-The temporary managed server's certificate renewal, trusted admin UI, package
-downloads, and external TURN probes passed. That server still uses engineering
-fixtures, not the final `0.4.0` draft. No tag, release, or APT publication was
-created. The [remaining gates](#remaining-release-gates) distinguish this
+Both public `0.4.0` package variants now pass the draft checks below. The
+temporary server now runs the exact GitHub candidate after a clean install,
+repeated bootstrap, trusted admin UI, package downloads, and browser TURN
+checks. Certificate renewal and the full lifecycle were previously exercised
+on engineering fixtures and still need exact-candidate acceptance. The
+`v0.4.0` tag and GitHub draft exist; no stable release or APT publication has
+occurred. The
+[remaining gates](#remaining-release-gates) distinguish this
 preparation from exact-artifact acceptance; older sections below are historical.
+
+### Exact Draft Verification
+
+The draft is bound to `92f450e529a9e1a80ea9f996773ff5cb757e6e2c`.
+[CI](https://github.com/nobottomline/rctl/actions/runs/34770984859),
+[CodeQL](https://github.com/nobottomline/rctl/actions/runs/34770984444), and
+the [draft workflow](https://github.com/nobottomline/rctl/actions/runs/34771064286)
+completed successfully. An earlier Ubuntu test failure was corrected by
+explicitly building test DEBs with gzip instead of relying on the host's
+compression default; the runtime archive policy was not broadened.
+
+Independent checks of the downloaded draft passed:
+
+- Exactly ten expected files, repository/workflow/tag/source-bound provenance
+  for every file, and all SHA256 checksums.
+- Both `0.4.0` public DEBs, including package identity, architecture, and the
+  public-package audit.
+- Both signed update catalogs against the pinned key. The rootful catalog
+  includes verified `0.3.0` and `0.3.2` rollback artifacts; the first rootless
+  stable catalog contains only its `0.4.0` target.
+- Candidate OCI provenance, anonymous index access for Linux amd64/arm64,
+  and a nonempty BuildKit SBOM. The index digest is
+  `sha256:08b159983f2c399b4455bb926e3e01481f5ebf43a7c34f5f106dc42c06c2603e`.
+- On the temporary Linux amd64 host, the downloaded setup binary reported the
+  exact version/source, release-set assembly reproduced `SHA256SUMS` byte for
+  byte, and an empty Docker configuration pulled the pinned image anonymously.
+
+These artifact checks do not establish device acceptance of the final bytes.
+In particular, the installed rootless RC4 and rootful debug
+build are absent from the public rollback catalogs. Their update tests require
+separate signed qualification catalogs with the exact clean installed-version
+DEBs; do not substitute a different package version or publish those test feeds.
+
+### Exact Candidate Server Check
+
+The temporary host had zero enrolled devices and passed SQLite integrity
+checks before its engineering deployment was removed through the wizard.
+The uninstall's recovery archive passed restore validation and was retained
+outside the fresh-install paths; no unrelated services or images were removed.
+
+- Staged, checksum-verified draft bootstrap installed `0.4.0` from the embedded
+  candidate digest with both package lanes. Trusted HTTPS and doctor passed.
+- Repeating bootstrap preserved byte-identical environment and ownership
+  files; doctor passed again.
+- Real Chrome admin buttons generated and downloaded both personalized package
+  variants (`201`, `no-store`); anonymous generation returned `401`. The two
+  unused test enrollments were revoked/deleted and private downloads removed.
+- Off-host browser DataChannel echo passed for UDP and TCP with both peers
+  restricted to relay candidates. This is not physical-device media proof.
+
+Device update channels remain disabled on this temporary server while the
+release is a draft. The permanent relay, its device bindings, and VPN were
+not modified. No schema-4 publication report has been signed off.
 
 ## Initial Audit (2026-09-12)
 
@@ -406,19 +463,18 @@ replacement for the tag-bound draft's artifact provenance.
 
 ## Remaining Release Gates
 
-1. Repeat the clean-host wizard/device acceptance with the exact draft assets
-   and anonymously pullable candidate image. The September 13 engineering
-   rehearsal above covers the dual-package server lifecycle and forced renewal,
-   not final artifact provenance or the complete device package-install/enrollment
-   path through that new host.
+1. Finish exact-candidate wizard/device acceptance. Fresh staged bootstrap,
+   idempotence, trusted HTTPS/admin, package-generation UI, and browser TURN
+   passed. Repeat lifecycle/renewal checks and complete the physical-device
+   package-install/enrollment path through the new host; engineering-fixture
+   results do not qualify those final bytes.
    The RC4 browser/device TURN/TCP handshake fix and both-peer relay transport
    passed, and one unlocked session has visual screen/input proof. Repeat
    forced-relay media/control and reconnect checks with the exact candidate
    artifacts and a recorded physical display state.
-2. Build the tag-bound `0.4.0` draft set and verify its provenance. The local
-   dual-package build is complete, but is not that attested draft set.
-   Re-run the required release matrix for both package architectures, including
-   package-manager upgrade/recovery and rootful transactional compatibility.
+2. The tag-bound draft and independent file/image provenance checks are
+   complete. Re-run the required release matrix for both package architectures,
+   including package-manager upgrade/recovery and rootful transactional compatibility.
    The RC tests above cannot sign off different final artifact hashes.
 3. Record only completed schema-4 qualification checks, then publish through
    the guarded release/APT workflows. Never use a personalized DEB as a public
@@ -426,7 +482,7 @@ replacement for the tag-bound draft's artifact provenance.
 
 ## Version Decision
 
-Prepare `0.4.0` as the next feature release, without creating a tag yet. Rootless
+The `v0.4.0` tag now identifies the draft candidate, not a published release. Rootless
 support and the accumulated features justify a minor increase over `0.3.x`;
 they do not by themselves establish the support guarantees of `1.0.0`. Keep the
 wire protocol major unchanged unless an actual incompatible contract requires
