@@ -156,6 +156,40 @@ The draft workflow runs it before building either public package lane.
 Actual TURN performance, camera playback, and device compatibility still require
 physical testing; passing this test alone does not close the release gate.
 
+### Remote Screen Pacing
+
+Remote screen sessions wrap the existing libdatachannel H.264, sender-report,
+NACK and PLI chain in a session-owned `VideoPacer`. LAN screen and camera
+sessions retain their previous send path. The daemon feeds the pacer the same
+bitrate it requests from the screen encoder, including profile/adaptation
+changes; this is not a new bandwidth estimator or congestion controller.
+
+The queue admits complete access units and is bounded to 512 KiB, 64 frames,
+and 500 ms residence. It releases packets in 2 ms ticks at 1.5 times the encoder
+bitrate, with no accumulated catch-up burst after a scheduling stall. Overflow,
+expiry or a send exception discards the remaining queue and dependent delta
+frames until a fresh keyframe arrives, requesting recovery through the existing
+debounced PLI path. An already in-flight packet cannot be recalled. Session
+retirement stops admission and clears queued packets; destruction joins the
+worker. Idle workers wait rather than polling, and no power assertion is added.
+
+The upstream packet-level pacer was not used because its packet eviction does
+not retire the rest of a damaged frame and dependent frames. RTP serialization
+and repair remain upstream-owned: RTCP and NACK retransmissions still bypass
+the original-media queue. Thus the rate is a pacing target, not a total wire
+bandwidth limit. Loss, available bandwidth, and larger-than-bound keyframes
+can still prevent useful playback and require physical qualification.
+
+Remote screen SDP no longer constrains receiver playout to 0-60 ms, and the web
+client no longer forces its remote receiver delay hint to zero. This lets the
+browser adapt to repair RTT; it does not guarantee low latency. The existing
+LAN floor and camera policy are unchanged. Test both the new device package and
+new web client: an old relay-served client can still force the previous hint.
+
+The native ownership suite covers spacing, overflow/expiry recovery, send
+failure, stop, and the real asynchronous RTP packet budget. Runtime acceptance
+remains tracked separately in `ROOTLESS-RELEASE.md`.
+
 ## Browser Decode Rules
 
 WebRTC H.264 is decoded natively by the browser's video pipeline. WebCodecs is

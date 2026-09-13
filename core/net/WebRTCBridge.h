@@ -18,6 +18,8 @@ void rctl_webrtc_handle_signal(const char *json);
 // main.mm pushes each Annex-B access unit (the same one it gives /stream) to all
 // open WebRTC video channels.
 void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us);
+// Keep remote-screen pacing aligned with the encoder's current target.
+void rctl_webrtc_set_screen_bitrate(int bitrate);
 // Camera video uses a separate PeerConnection/session. The current iOS SRTP
 // backend is stable with one media SSRC per connection, but not with a second
 // media track on the screen connection.

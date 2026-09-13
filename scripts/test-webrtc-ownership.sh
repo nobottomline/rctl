@@ -10,6 +10,9 @@ cmake -S "$dc" -B "$build" -DNO_TESTS=ON -DNO_EXAMPLES=ON -DNO_WEBSOCKET=ON \
     -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release \
     -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
 cmake --build "$build" --target datachannel -j "${RCTL_TEST_JOBS:-4}"
+clang++ -std=c++17 -Icore -I"$dc/include" tests/VideoPacerTest.cpp \
+    -L"$build" -ldatachannel -Wl,-rpath,"$build" -o "$build/video-pacer-test"
+"$build/video-pacer-test"
 opus=$(brew --prefix opus)
 clang++ -std=c++17 -Icore -I"$dc/include" -I"$dc/deps/json/single_include" \
     -I"$opus/include" tests/WebRTCSessionOwnershipTest.cpp core/net/WebRTCPermissions.cpp \

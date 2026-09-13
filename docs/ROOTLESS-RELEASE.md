@@ -204,6 +204,27 @@ pre-install snapshot byte-for-byte, dpkg audit was clean, and the temporary
 private snapshot was removed. All test viewers were closed; no permanent
 binding or VPN setting was changed.
 
+### Bounded Pacing Candidate
+
+A subsequent header-only capture on the temporary TURN host retained only
+link/IP/UDP/RTP headers in memory, not media payloads or a saved capture file.
+It covered 1312 frames and 2684 packets with no capture-kernel drops. Some
+complete large frames arrived within 80 ms; others required 687-1110 ms and
+25-36 repeated packets. Zero remaining sequence gaps after repair does not mean
+the initial delivery was loss-free. A simultaneous ordinary-profile TURN/TCP
+run still stalled despite connected ICE/DTLS. This supports investigating burst
+delivery and repair deadlines, not attributing the fault to rootless or VPN.
+
+The next local candidate adds bounded remote-screen pacing and leaves remote
+playout timing to the receiver; see `TRANSPORT.md`. Both package lanes built
+and passed public-artifact audits. The focused native transport suite, all 43
+web tests, web build, and `make test` passed. The rootless package was transferred
+with matching SHA-256 for operator installation; physical pacing acceptance is
+still pending. No draft tag, published asset, permanent relay client, binding,
+or VPN setting has been replaced. Repeat forced TURN in both transports with
+the candidate client and without diagnostic playout/timeout overrides before
+calling this a fix.
+
 ### Qualification Cleanup
 
 The temporary device access was revoked through the admin UI: its active peer

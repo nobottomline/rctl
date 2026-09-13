@@ -15,6 +15,7 @@
 #include "net/WebRTCBridge.h"
 #include "net/WebRTCPermissions.h"
 #include "net/ControllerAuthorizationLease.h"
+#include "net/VideoPacer.h"
 #include <mach/mach_time.h>
 #include <cstdlib>
 #include "net/VirtualMicServer.h"
@@ -76,6 +77,7 @@ struct Session {
     std::shared_ptr<rctl::ControllerAuthorizationLease> lease;
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rctl::VideoPacer> videoPacer;
     bool camera = false;
     std::shared_ptr<rtc::DataChannel> audioDc;
     std::shared_ptr<rtc::DataChannel> control;
@@ -90,6 +92,7 @@ static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 // Open send tracks across all sessions (one browser may watch per session).
 static std::vector<std::shared_ptr<rtc::Track>> g_tracks;
 static std::vector<std::shared_ptr<rtc::Track>> g_camera_tracks;
+static auto g_screenBitrate = std::make_shared<std::atomic<int>>(20000000);
 static std::vector<std::shared_ptr<rtc::DataChannel>> g_audio_dcs;
 // Room-mic (listen to the iPad mic): device->browser over its own channel + its own
 // Opus encoder, kept separate from the system-output "audio" path.
@@ -168,11 +171,13 @@ static void request_keyframe(bool camera) {
 static void retire_track(const std::string &id) {
     bool lastGone = false;
     bool camera = false;
+    std::shared_ptr<rctl::VideoPacer> pacer;
     {
         std::lock_guard<std::mutex> lk(g_mtx);
         auto it = g_sessions.find(id);
         if (it == g_sessions.end() || !it->second->track) return;
         camera = it->second->camera;
+        pacer = it->second->videoPacer;
         rtc::Track *tptr = it->second->track.get();
         auto &tracks = camera ? g_camera_tracks : g_tracks;
         size_t before = tracks.size();
@@ -181,6 +186,7 @@ static void retire_track(const std::string &id) {
                        tracks.end());
         lastGone = (before > 0 && tracks.empty());
     }
+    if (pacer) pacer->stop();
     auto viewerCb = camera ? g_camera_viewer_cb : g_viewer_cb;
     if (lastGone && viewerCb) viewerCb(false);
 }
@@ -248,6 +254,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     if (dead->micIn)   dead->micIn->resetCallbacks();
     if (dead->roomMic) dead->roomMic->resetCallbacks();
     if (dead->stateDc) dead->stateDc->resetCallbacks();
+    if (dead->videoPacer) dead->videoPacer->stop();
     if (dead->track)   dead->track->resetCallbacks();
     if (dead->pc)      dead->pc->resetCallbacks();
     // Purge from the global send lists; the onClosed that normally does this is
@@ -514,32 +521,24 @@ static void start_session(const std::string &id, const json &ice, bool camera,
     const char *mediaName = camera ? "camera" : "video";
     const char *cname = camera ? "rctl-camera" : "rctl-video";
     const int kPlayoutDelayExtId = 1;
+    const bool localSession = id.rfind("lws_", 0) == 0 || id.rfind("lcam_", 0) == 0;
+    const bool pacedScreen = !camera && !localSession;
     rtc::Description::Video media(mediaName, rtc::Description::Direction::SendOnly);
     media.addH264Codec(96);
     media.addSSRC(ssrc, cname);
-    // Ask the receiver to play out with zero added delay (min = max = 0). For
-    // remote control we want the freshest frame, not a smoothing buffer; this is
-    // the standard playout-delay RTP header extension, which the packetizer
-    // stamps on every packet -- far more reliable than the browser-side
-    // jitterBufferTarget hint (Safari ignores it, leaving ~110ms of buffer).
-    media.addExtMap(rtc::Description::Media::ExtMap(
-        kPlayoutDelayExtId, "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay"));
+    // Remote screen recovery needs the receiver's adaptive jitter buffer. A
+    // fixed 60ms maximum cannot accommodate TURN retransmission RTT. Preserve
+    // the existing local/camera policy until those lanes are separately tested.
+    if (!pacedScreen)
+        media.addExtMap(rtc::Description::Media::ExtMap(
+            kPlayoutDelayExtId, "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay"));
     auto track = pc->addTrack(media);
     sess->track = track;
 
     auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
         ssrc, cname, 96, rtc::H264RtpPacketizer::ClockRate);
-    // min = 0 keeps latency at the floor when the link is clean; max = 6 (60ms)
-    // lets the receiver's jitter buffer grow just enough to ride out an occasional
-    // Wi-Fi loss/jitter burst (giving NACK retransmits time to arrive) instead of
-    // freezing -- the buffer shrinks back toward 0 once the link settles.
-    rtpConfig->playoutDelayId = kPlayoutDelayExtId;
-    // Direct-LAN (local /ws/signal) sessions have near-zero network latency, so the
-    // receiver's jitter buffer sits almost empty -> the encoder's bursty delivery
-    // (keyframes, motion spikes) shows as freezes. Give the local path a small floor
-    // so it rides those out; the relay path keeps the freshest-frame floor since its
-    // own RTT already buffers. Units are 10ms (min 5 = 50ms, max 15 = 150ms).
-    bool localSession = id.rfind("lws_", 0) == 0 || id.rfind("lcam_", 0) == 0;
+    rtpConfig->playoutDelayId = pacedScreen ? 0 : kPlayoutDelayExtId;
+    // Units are 10ms; unused when no extension is advertised.
     rtpConfig->playoutDelayMin = localSession ? 5 : 0;
     rtpConfig->playoutDelayMax = localSession ? 15 : 6;
     // StartSequence auto-detects 3- and 4-byte Annex-B start codes; the encoder
@@ -558,7 +557,13 @@ static void start_session(const std::string &id, const json &ice, bool camera,
     // second viewer, or loss that NACK can't repair, gets a keyframe right away
     // instead of waiting up to the encoder's GOP for the next periodic IDR.
     packetizer->addToChain(std::make_shared<rtc::PliHandler>([camera]() { request_keyframe(camera); }));
-    track->setMediaHandler(packetizer);
+    if (pacedScreen) {
+        sess->videoPacer = std::make_shared<rctl::VideoPacer>(
+            packetizer, g_screenBitrate, [] { request_keyframe(false); });
+        track->setMediaHandler(sess->videoPacer);
+    } else {
+        track->setMediaHandler(packetizer);
+    }
 
     rtc::Track *tptr = track.get();
     // Capture the raw pointer, not the shared_ptr: a track that owns a callback
@@ -1147,6 +1152,10 @@ extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyfra
 
     if (keyframe)
         wlog("keyframe " + std::to_string(len) + "B -> " + std::to_string(tracks.size()) + " track(s)");
+}
+
+extern "C" void rctl_webrtc_set_screen_bitrate(int bitrate) {
+    if (bitrate >= 100000 && bitrate <= 100000000) g_screenBitrate->store(bitrate);
 }
 
 extern "C" void rctl_webrtc_push_camera_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us) {

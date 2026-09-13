@@ -801,9 +801,11 @@ export class ControlEngine {
     pc.ontrack = (e) => {
       vid.srcObject = e.streams[0] || new MediaStream([e.track])
       try {
-        // Direct-LAN local sessions need a small playout buffer (~50ms) to ride out
-        // bursty delivery; the relay path stays at 0 (its RTT already buffers).
-        ;(e.receiver as RTCRtpReceiver & { playoutDelayHint?: number }).playoutDelayHint = this.localMode ? 0.05 : 0
+        // Keep the qualified LAN floor; let the remote receiver adapt to jitter
+        // and retransmission RTT instead of forcing a zero-delay buffer.
+        if (this.localMode) {
+          ;(e.receiver as RTCRtpReceiver & { playoutDelayHint?: number }).playoutDelayHint = 0.05
+        }
       } catch {
         /* ignore */
       }

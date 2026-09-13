@@ -27,7 +27,22 @@ static void testVideoPacketBudget() {
         auto info = std::make_shared<rtc::FrameInfo>(std::chrono::duration<double>(0));
         info->isKeyFrame = true;
         rtc::message_vector packets{rtc::make_message(frame.begin(), frame.end(), info)};
-        handler->outgoingChain(packets, [](rtc::message_ptr) {});
+        std::mutex receivedMutex;
+        std::condition_variable received;
+        rtc::message_vector paced;
+        handler->outgoingChain(packets, [&](rtc::message_ptr packet) {
+            if (packet->type == rtc::Message::Control) return;
+            std::lock_guard<std::mutex> lock(receivedMutex);
+            paced.push_back(std::move(packet));
+            received.notify_all();
+        });
+        if (!camera) {
+            std::unique_lock<std::mutex> lock(receivedMutex);
+            assert(received.wait_for(lock, std::chrono::seconds(3), [&] {
+                return !paced.empty() && reinterpret_cast<const rtc::RtpHeader *>(paced.back()->data())->marker();
+            }));
+            packets = paced;
+        }
         assert(packets.size() > 100);
         size_t markers = 0;
         size_t payloadBytes = 0;
@@ -49,6 +64,7 @@ static void testVideoPacketBudget() {
         assert(payloadBytes == frame.size() - 5);
         rctl_webrtc_close_owner(&owner);
         assert(!g_sessions.count(id));
+        handler.reset(); // Join the pacer before destroying its callback captures.
     }
     puts("Screen/camera RTP packets fit the IPv6/TURN/SRTP budget without losing NAL bytes");
 }
