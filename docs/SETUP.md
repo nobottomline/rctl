@@ -109,8 +109,18 @@ Both release workflows must be dispatched from the release tag itself, not
 from a branch. Draft creation uses:
 
 ```sh
-gh workflow run release-draft.yml --ref "$TAG" -f tag="$TAG"
+gh workflow run release-draft.yml --ref "$TAG" \
+  -f tag="$TAG" -f rollback_tags="$ROOTFUL_ROLLBACK_TAGS" \
+  -f rootless_rollback_tags="$ROOTLESS_ROLLBACK_TAGS"
 ```
+
+Set `TAG` to the existing candidate tag and `ROOTFUL_ROLLBACK_TAGS` to a
+non-empty comma-separated list of prior immutable stable tags whose rootful
+packages must remain available for rollback. `ROOTLESS_ROLLBACK_TAGS` is the
+separate list for rootless packages; leave it empty only for the first rootless
+release. A target-only first-rootless catalog cannot transactionally update an
+installed RC package: qualification must supply that exact RC rollback artifact
+through a separately signed, private test catalog. See [device updates](UPDATES.md).
 
 This binds GitHub OIDC provenance to the same immutable source ref and commit
 that supply the device package and binaries. Branch-based dispatch is rejected

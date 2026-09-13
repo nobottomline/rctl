@@ -48,10 +48,14 @@ with tempfile.TemporaryDirectory() as temp:
         return subprocess.run([str(self.root / "scripts" / wrapper), *args], env=self.env, capture_output=True, text=True)
 
     def test_both_architectures_share_explicit_version(self):
-        result = self.run_build("--version", "0.3.5")
+        result = self.run_build("--version", "0.4.0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(sorted(p.name for p in (self.root / "packages").rglob("*.deb")), [
-            "com.greatlove.rctl_0.3.5_iphoneos-arm.deb", "com.greatlove.rctl_0.3.5_iphoneos-arm64.deb"])
+            "com.greatlove.rctl_0.4.0_iphoneos-arm.deb", "com.greatlove.rctl_0.4.0_iphoneos-arm64.deb"])
+        for package in (self.root / "packages").rglob("*.deb"):
+            version = subprocess.check_output(["dpkg-deb", "-f", str(package), "Version"], text=True).strip()
+            for previous in ("0.3.4", "0.3.4~rootless14", "0.4.0~rc.4"):
+                self.assertEqual(subprocess.run(["dpkg", "--compare-versions", version, "gt", previous]).returncode, 0)
 
     def test_default_version_upgrades_legacy_candidate(self):
         result = self.run_build(wrapper="build-rootless.sh")

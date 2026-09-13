@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (Unreleased)
 
 - Added separate rootful and ordinary Dopamine rootless package builds with a
   shared release version, isolated staging, and clean-public-artifact checks.

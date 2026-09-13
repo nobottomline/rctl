@@ -1,6 +1,6 @@
 Package: com.greatlove.rctl
 Name: rctl
-Version: 0.3.4
+Version: 0.4.0
 Architecture: iphoneos-arm
 Description: Secure remote control for jailbroken iOS devices.
 Maintainer: GreatLove
