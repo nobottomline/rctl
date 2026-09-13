@@ -225,7 +225,7 @@ func TestRootlessCatalogIsArchitectureBound(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(personal, "com.greatlove.rctl.relay.plist"), []byte("private fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("dpkg-deb", "--build", filepath.Join(directory, "pkg-0.4.0~rc.2-iphoneos-arm64"), target).CombinedOutput(); err != nil {
+	if output, err := exec.Command("dpkg-deb", "-Zgzip", "--uniform-compression", "--build", filepath.Join(directory, "pkg-0.4.0~rc.2-iphoneos-arm64"), target).CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, output)
 	}
 	if err := run(keyPath, "0.4.0~rc.2", "https://releases.example.test", manifest, "stable", []string{current, target}); err == nil {
@@ -254,7 +254,8 @@ func buildArchitectureFixturePackage(t *testing.T, root, version, architecture s
 		t.Fatal(err)
 	}
 	result := filepath.Join(root, "rctl_"+version+"_"+architecture+".deb")
-	if output, err := exec.Command("dpkg-deb", "--build", directory, result).CombinedOutput(); err != nil {
+	// Ubuntu defaults to zstd; fixtures must use the supported public DEB format.
+	if output, err := exec.Command("dpkg-deb", "-Zgzip", "--uniform-compression", "--build", directory, result).CombinedOutput(); err != nil {
 		t.Fatalf("dpkg-deb: %v: %s", err, output)
 	}
 	return result

@@ -59,7 +59,7 @@ func TestReleaseSetArchitectureAdmission(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(data, "DEBIAN/control"), []byte(control), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if out, err := exec.Command("dpkg-deb", "--build", data, filepath.Join(assets, filename)).CombinedOutput(); err != nil {
+				if out, err := exec.Command("dpkg-deb", "-Zgzip", "--uniform-compression", "--build", data, filepath.Join(assets, filename)).CombinedOutput(); err != nil {
 					t.Fatalf("%v: %s", err, out)
 				}
 			}

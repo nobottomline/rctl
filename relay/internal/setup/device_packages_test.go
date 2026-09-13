@@ -33,7 +33,8 @@ func fixturePublicDevicePackage(t *testing.T, architecture, version string) stri
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, "package.deb")
-	if out, err := exec.Command("dpkg-deb", "--build", data, target).CombinedOutput(); err != nil {
+	// Do not inherit a platform-specific compressor such as Ubuntu's zstd.
+	if out, err := exec.Command("dpkg-deb", "-Zgzip", "--uniform-compression", "--build", data, target).CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
 	return target
