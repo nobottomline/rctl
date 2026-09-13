@@ -21,3 +21,13 @@ Record remaining gates. Omit private endpoints, identifiers, secrets, and media.
 
 - [ ] No secrets, personal data, generated build artifacts, or unrelated changes.
 - [ ] Documentation and generated contracts are updated where needed, or unchanged for a stated reason.
+
+## AI Assistance
+
+<!-- If an AI agent contributed, list each model and harness (the app or CLI
+running it). Use "unknown" if the exact model is unavailable; do not guess.
+If no AI agent was used, replace the fields below with "None".
+Keep this disclosure in the PR body, not commit messages or Co-authored-by trailers. -->
+
+- Model:
+- Harness:

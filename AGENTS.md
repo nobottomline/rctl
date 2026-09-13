@@ -1,9 +1,13 @@
 # rctl
 
-rctl controls jailbroken iOS devices from browser and native clients, directly
-over a trusted LAN or through a self-hosted relay. The device exposes root-level
-capabilities. A working UI is not enough: authorization, process ownership, and
-recovery must still work when a connection or injected process disappears.
+rctl lets people use their iPhone or iPad remotely, from a browser or a native
+app. It supports local connections and a self-hosted relay for access away from
+home. We aim for responsive control, predictable behavior, and clear ownership
+of devices and data.
+
+Changes should make the product easier to use and maintain without weakening
+privacy, compatibility, or reliability. The sections below explain the
+engineering boundaries that support those goals.
 
 ## What We Protect
 
@@ -121,8 +125,15 @@ needed and report anything not exercised. An untested path stays unqualified.
 
 Work on the current primary branch unless the task requires another branch or
 worktree. Stage only task-owned files and commit coherent, verified work with
-concise English Conventional Commit messages. No AI branding or `Co-authored-by`
-trailers; no generated build artifacts or personalized packages.
+concise English Conventional Commit messages. Keep AI signatures and
+`Co-authored-by` trailers out of commit messages. Do not commit generated build
+artifacts or personalized packages.
+
+For AI-assisted work, end the PR description with the model and harness used
+(the app or CLI running the agent). List each model/harness pair that contributed;
+if the exact model is unavailable, say so rather than guess. This disclosure
+belongs in the PR body, not a commit message or attribution trailer. It does not
+replace verification or the contributor's responsibility for the change.
 
 Do not create PRs, push, publish, deploy to a VPS, or replace release artifacts
 unless the user requests that step. The owner has granted standing permission

@@ -56,10 +56,22 @@ behavior. Keep generated protocol sources synchronized. Follow the
 [documentation rules](AGENTS.md#documentation): update guidance made inaccurate
 by the change, not a second narrative of the implementation.
 
-Use concise English Conventional Commit messages without AI branding or
+Use concise English Conventional Commit messages without AI signatures or
 `Co-authored-by` trailers. Do not commit generated packages or PR-only evidence.
 Publishing and deployment are separate maintainer operations, not consequences
 of a successful local build.
+
+## AI-Assisted Contributions
+
+If you used an AI agent, end the PR description with the model and harness used.
+The harness is the application or CLI running the agent, such as Codex or Claude
+Code. List each model/harness pair that contributed. If the exact model is not
+available, write `unknown`; do not infer it from the harness name.
+
+Keep this disclosure in the PR body, not in commit messages or `Co-authored-by`
+trailers. You remain responsible for reviewing the changes, running appropriate
+checks, and explaining the result. If no AI agent was used, state `None` in the
+template's AI assistance section.
 
 By contributing, you agree that your contribution is licensed under the
 [Apache License 2.0](LICENSE) used by this repository.
