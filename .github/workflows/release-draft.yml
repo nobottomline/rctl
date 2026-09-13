@@ -69,6 +69,10 @@ jobs:
           }
           version="${TAG#v}"
           test "$(sed -n 's/^Version: //p' control)" = "$version"
+          grep -Fxq -- "## $version" CHANGELOG.md || {
+            echo "changelog must contain an exact version heading before building" >&2
+            exit 1
+          }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 

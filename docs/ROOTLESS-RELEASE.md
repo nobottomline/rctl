@@ -397,7 +397,7 @@ schema-4 report for different final artifacts or qualify the NAT-host profile.
 
 ### Local 0.4.0 Preparation
 
-`control` now uses `0.4.0`; the changelog still marks it unreleased.
+`control` now uses `0.4.0`; the changelog entry does not imply publication.
 `scripts/build-packages.sh --version 0.4.0` built both `iphoneos-arm` and
 `iphoneos-arm64` public packages and audited each successfully. Build
 orchestration tests and setup/personalization race tests passed. These local
