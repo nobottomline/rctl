@@ -1,5 +1,19 @@
 # Rootless Release Readiness
 
+## Current Checkpoint (2026-09-13)
+
+The last independently verified rootless device version is `0.4.0~rc.4`; no device
+package was installed during the latest VPS-only checks. The operator confirmed
+normal operation and that the earlier black capture coincided with the physical
+display switching off. No always-on display or keepalive behavior was added.
+
+Both public `0.4.0` package variants now build and pass local release audits.
+The temporary managed server's certificate renewal, trusted admin UI, package
+downloads, and external TURN probes passed. That server still uses engineering
+fixtures, not the final `0.4.0` draft. No tag, release, or APT publication was
+created. The [remaining gates](#remaining-release-gates) distinguish this
+preparation from exact-artifact acceptance; older sections below are historical.
+
 ## Initial Audit (2026-09-12)
 
 This is a release-preparation audit, not a release qualification certificate.
@@ -341,26 +355,68 @@ five seconds apart, with `readyState=4`, a playing 1024x1366 video, and successf
 native screenshot responses that were also black. Therefore the later symptom
 is not specific to TURN or the browser's rendered page.
 
-The physical display/lock state at the time of the recurrence is not yet
-confirmed. Do not label this a proven reload regression, dismiss it as a
-transport failure, or assume another unlock fixes the capture lifecycle. Ask
-the operator whether the physical screen remained on, then correlate that state
-with the capture and keep-awake lifecycle. No private wake selector, timeout,
-VPN setting, or package was changed during this follow-up. Final `0.4.0`
-artifact preparation remains on hold until this boundary is understood.
+At the time of the automated run, the physical display/lock state was not
+confirmed. The operator subsequently confirmed that the display switched off
+automatically and reported normal operation afterward. This supplies the missing
+physical-state observation; it is not an independently measured capture or
+power-assertion fix. Do not count black frames as visible-screen acceptance or
+claim a proven reload regression from that run. Final candidate visual tests
+must record the display state before and after reconnect. No private wake
+selector, always-on assertion, timeout, VPN setting, or package was changed.
+
+### Certificate Renewal and Post-Renewal Checks
+
+The retained temporary managed `0.4.1` fixture passed a fresh wizard backup and
+doctor before a controlled renewal. A qualification-only helper used the
+installed Caddy `v2.11.4` dependency, CertMagic `v0.25.3`, and the existing ACME
+account/storage to force one synchronous renewal. Only Caddy was stopped; an
+independent timed restart guarded the maintenance window. Relay and coturn were
+not restarted by the renewal helper. The helper was not added to the product.
+
+The certificate changed, its expiration advanced, and Caddy served the new leaf
+with normal hostname/trust verification after restart. This proves forced
+renewal and subsequent serving, not observation of the long-term renewal timer.
+Doctor passed ownership, managed files, secrets, Compose, services, local health,
+and public routes afterward. Its external-TURN warning was checked separately:
+
+- The coturn client sent and received 20/20 messages over each of UDP and TCP.
+- Browser relay-only DataChannel echo passed for UDP/UDP, TCP/TCP, and mixed
+  UDP/TCP paths. An initial same-transport run timed out despite connected ICE;
+  a later mixed run delivered its echo but failed only the test's nominated-pair
+  lookup. The harness now reads `transport.selectedCandidatePairId` first.
+  Repeated same-transport and mixed runs passed without server, VPN, or product
+  changes. The initial timeout's cause was not established; it is not evidence
+  of a production fix or a substitute for final device reconnect acceptance.
+- Trusted browser login and both `Pair device` / `Download package` paths
+  returned version-matched packages with `201` and `no-store`; anonymous
+  generation returned `401`. Unused qualification enrollments were revoked and
+  removed, and the private downloaded packages were deleted.
+
+This closes the engineering fixture's renewal gap. It does not populate a
+schema-4 report for different final artifacts or qualify the NAT-host profile.
+
+### Local 0.4.0 Preparation
+
+`control` now uses `0.4.0`; the changelog still marks it unreleased.
+`scripts/build-packages.sh --version 0.4.0` built both `iphoneos-arm` and
+`iphoneos-arm64` public packages and audited each successfully. Build
+orchestration tests and setup/personalization race tests passed. These local
+packages were not installed or published, and their checksums are not a
+replacement for the tag-bound draft's artifact provenance.
 
 ## Remaining Release Gates
 
 1. Repeat the clean-host wizard/device acceptance with the exact draft assets
    and anonymously pullable candidate image. The September 13 engineering
-   rehearsal above covers the dual-package server lifecycle, not final artifact
-   provenance, renewal, or the complete device package-install/enrollment path
-   through that new host.
+   rehearsal above covers the dual-package server lifecycle and forced renewal,
+   not final artifact provenance or the complete device package-install/enrollment
+   path through that new host.
    The RC4 browser/device TURN/TCP handshake fix and both-peer relay transport
-   passed, and one unlocked session has visual screen/input proof. Resolve the
-   later black-capture recurrence above, then repeat forced-relay media/control
-   and reconnect checks with the exact candidate artifacts.
-2. Prepare the exact version-matched `0.4.0` candidate set and provenance.
+   passed, and one unlocked session has visual screen/input proof. Repeat
+   forced-relay media/control and reconnect checks with the exact candidate
+   artifacts and a recorded physical display state.
+2. Build the tag-bound `0.4.0` draft set and verify its provenance. The local
+   dual-package build is complete, but is not that attested draft set.
    Re-run the required release matrix for both package architectures, including
    package-manager upgrade/recovery and rootful transactional compatibility.
    The RC tests above cannot sign off different final artifact hashes.
