@@ -31,7 +31,7 @@ Reliable ordered TCP remains the wrong default for realtime screen video over
 the public internet, so the relay stream should not be treated as the preferred
 remote-desktop transport.
 
-## Why The Current Relay Video Freezes
+## Why The Legacy Relay Stream Freezes
 
 Remote desktop video must prefer the newest useful frame over complete delivery
 of every old frame. The current relay path does the opposite:
@@ -87,8 +87,9 @@ presence independently; see `third_party/webrtc/README.md` for the patch and
 authenticated regression tests. Physical RC4 tests established browser TURN/TCP
 and both-peer relay connectivity, including a 90-second ordinary-UI session.
 An unlocked session also passed visual screen/input checks. A later black-frame
-recurrence reproduced in native screenshots and LAN video, so capture-lifecycle
-acceptance remains open; see `ROOTLESS-RELEASE.md`. A TCP-connected browser can
+recurrence coincided with the physical display switching off. Exact-candidate
+tests subsequently found a distinct decoder stall on forced-TURN paths;
+see `ROOTLESS-RELEASE.md` for current evidence. A TCP-connected browser can
 communicate with a UDP-connected device through TURN, but this is not an
 all-TCP path.
 
@@ -134,6 +135,26 @@ files
 
 The terminal still uses its dedicated WebSocket tunnel. General REST calls still
 use the authenticated HTTP tunnel.
+
+### Video Packet Budget
+
+Screen and camera use a maximum H.264 fragment of 1100 bytes. The pinned
+packetizer's default fragment size does not reserve space for all of our
+playout-delay RTP extension, SRTP authentication, and TURN encapsulation.
+With those additions it can exceed a 1280-byte IPv6 packet, even though the
+fragment itself fits the upstream default. Reserve 20 bytes for the current
+RTP header/extension, 16 for SRTP, 64 for a TURN indication including padding,
+and 48 for IPv6/UDP: the resulting bound is 1248 bytes. ChannelData uses less
+overhead than the indication allowance. This avoids depending on fragmentation
+at that MTU; it does not discover or guarantee every VPN's effective path MTU.
+
+`bash scripts/test-webrtc-ownership.sh` exercises the production packetizer for
+screen and camera using a synthetic large IDR. It checks every emitted packet's
+wire budget, the final marker, and preservation of NAL payload bytes. The test
+fails with the former default and passes with the explicit fragment size.
+The draft workflow runs it before building either public package lane.
+Actual TURN performance, camera playback, and device compatibility still require
+physical testing; passing this test alone does not close the release gate.
 
 ## Browser Decode Rules
 

@@ -545,8 +545,13 @@ static void start_session(const std::string &id, const json &ice, bool camera,
     // StartSequence auto-detects 3- and 4-byte Annex-B start codes; the encoder
     // mixes them (SPS/PPS vs SEI/IDR), and LongStartSequence would mis-parse the
     // keyframe's NALs so the browser could never assemble a frame.
+    // The upstream payload default excludes our RTP extension, SRTP tag and
+    // TURN envelope. Reserve those bytes as well as IPv6/UDP within 1280 bytes:
+    // 1100 payload + 20 RTP + 16 SRTP + 64 TURN + 48 IP/UDP = 1248.
+    // Avoid relying on IP fragmentation on either LAN or relayed paths.
+    constexpr size_t kVideoFragmentBytes = 1100;
     auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(
-        rtc::NalUnit::Separator::StartSequence, rtpConfig);
+        rtc::NalUnit::Separator::StartSequence, rtpConfig, kVideoFragmentBytes);
     packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
     packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
     // Let the browser pull a fresh intra frame on demand (PLI): a late-joining

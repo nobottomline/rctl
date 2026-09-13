@@ -1,6 +1,6 @@
 # Rootless Release Readiness
 
-## Current Checkpoint (2026-09-13)
+## Current Checkpoint (2026-09-14)
 
 The last independently verified rootless device version is the exact draft
 `0.4.0`, after a successful UI update and an external-watchdog rollback test.
@@ -128,6 +128,28 @@ These observations narrow the failing path but do not prove its root cause;
 neither VPN nor runtime settings were changed to conceal it. A harness exit
 success based on a single new decoded frame is not sustained-video acceptance.
 Forced-TURN media and reconnect remain release blockers.
+
+Follow-up on September 14 reproduced interval stalls on the unchanged `0.4.0`
+package. Removing playout-delay constraints only in the test browser improved
+decoding but did not eliminate the stalls. Existing Saver mode delivered 479
+new frames over twenty seconds, with at least ten decoded frames in every
+two-second sample. That is a useful comparison, not proof of smooth motion or
+all-profile acceptance. The device logged PLI handling and new keyframes; the
+temporary TURN host's UDP receive/send-buffer error counters were zero.
+
+A separate deterministic regression test found that the production packetizer
+could exceed a 1280-byte packet after RTP extensions, SRTP, TURN, IPv6 and UDP
+overhead. Main now limits H.264 fragments to 1100 bytes for both video tracks;
+the actual production-chain test fails before the change and passes afterward,
+including payload/marker integrity and session teardown. See the
+[packet budget](TRANSPORT.md#video-packet-budget). This is a verified sizing
+defect, not yet a proven explanation of the observed stalls. Both local package
+lanes built and passed the public audit. The rootless prerelease was transferred
+for manual installation, with matching local/device SHA-256; physical comparison
+is pending. These are not the existing tag-bound draft, and no release asset or
+tag was replaced. The draft workflow now runs the native packet-budget,
+authorization/teardown, and Talk queue tests before either package build;
+workflow lint passed locally, but the updated GitHub job has not run yet.
 
 Ordinary control through the permanent relay, with direct ICE permitted,
 subsequently delivered 443 new frames over ten seconds and loaded the native

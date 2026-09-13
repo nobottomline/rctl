@@ -10,6 +10,48 @@ extern "C" int rctl_vmic_route(void) { return RCTL_TALK_SPEAKER; }
 extern "C" void rctl_vmic_push(const int16_t *, int) {}
 
 static void discard(void *, const char *) {}
+
+static void testVideoPacketBudget() {
+    int owner;
+    for (bool camera : {false, true}) {
+        const char *id = camera ? "packet-budget-camera" : "packet-budget-screen";
+        rctl_webrtc_route_session(id, discard, &owner);
+        start_session(id, json::array(), camera, rctl::legacyWebRTCPermissions());
+        auto handler = g_sessions.at(id)->track->getMediaHandler();
+        // A large synthetic Annex-B IDR exercises every FU-A fragment, including
+        // the short final fragment. No actual screen or camera data is needed.
+        rtc::binary frame(128 * 1024, std::byte{0x55});
+        frame[0] = frame[1] = frame[2] = std::byte{0};
+        frame[3] = std::byte{1};
+        frame[4] = std::byte{0x65};
+        auto info = std::make_shared<rtc::FrameInfo>(std::chrono::duration<double>(0));
+        info->isKeyFrame = true;
+        rtc::message_vector packets{rtc::make_message(frame.begin(), frame.end(), info)};
+        handler->outgoingChain(packets, [](rtc::message_ptr) {});
+        assert(packets.size() > 100);
+        size_t markers = 0;
+        size_t payloadBytes = 0;
+        for (const auto &packet : packets) {
+            if (packet->type == rtc::Message::Control) continue;
+            // IPv6 + UDP + TURN indication allowance + maximum negotiated SRTP
+            // tag must fit the minimum IPv6 MTU, not just the H.264 payload.
+            constexpr size_t transportOverhead = 40 + 8 + 64 + 16;
+            assert(packet->size() + transportOverhead <= 1280);
+            const auto *rtp = reinterpret_cast<const rtc::RtpHeader *>(packet->data());
+            const auto *payload = reinterpret_cast<const std::byte *>(rtp->getBody());
+            const size_t headerSize = payload - packet->data();
+            assert(packet->size() > headerSize + 2);
+            assert((std::to_integer<unsigned>(payload[0]) & 0x1f) == 28);
+            markers += rtp->marker() ? 1 : 0;
+            payloadBytes += packet->size() - headerSize - 2;
+        }
+        assert(markers == 1);
+        assert(payloadBytes == frame.size() - 5);
+        rctl_webrtc_close_owner(&owner);
+        assert(!g_sessions.count(id));
+    }
+    puts("Screen/camera RTP packets fit the IPv6/TURN/SRTP budget without losing NAL bytes");
+}
 static std::string challengeNonce;
 static void captureChallenge(void *, const char *raw) {
     auto message = json::parse(raw);
@@ -46,6 +88,7 @@ static std::shared_ptr<rtc::PeerConnection> add(const char *id, void *owner) {
 }
 
 int main() {
+    testVideoPacketBudget();
     testLeaseClock();
     int relayA, relayB, local;
     auto a = add("a:screen", &relayA);

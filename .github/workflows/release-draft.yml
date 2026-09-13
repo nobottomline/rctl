@@ -181,7 +181,7 @@ jobs:
           THEOS_SDKS_COMMIT: 0222fd5413cf4b9af096f37b4621afa2688572f7
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          brew install cmake ninja dpkg ldid make
+          brew install cmake ninja dpkg ldid make opus openssl@3
           git clone --filter=blob:none --no-checkout https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
           git -C "$RUNNER_TEMP/theos" checkout "$THEOS_COMMIT"
           git -C "$RUNNER_TEMP/theos" submodule update --init --recursive
@@ -197,6 +197,7 @@ jobs:
           pip install --disable-pip-version-check jsonschema jinja2
           make deps
           bash third_party/webrtc/test-ice-role.sh
+          bash scripts/test-webrtc-ownership.sh
           scripts/build-packages.sh --version "$VERSION"
           mkdir -p release
           cp "packages/com.greatlove.rctl_${VERSION}_iphoneos-arm.deb" "release/rctl_${VERSION}_iphoneos-arm.deb"
