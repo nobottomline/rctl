@@ -44,11 +44,12 @@ RCTL_WEB_STAGE = var/mobile/rctl
 endif
 
 # Stage the React/Vite control client (web/) as the device control page.
-# It's one self-contained index.html (xterm etc. inlined), rebuilt only when its
-# sources changed. The old vanilla page is kept under web/legacy/ for reference.
+# Always rebuild: Vite also consumes control/protocol versions, configuration,
+# and dependencies outside web/src. A cached HTML must not mask a build failure.
+# The old vanilla page is kept under web/legacy/ for reference.
 after-stage::
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/$(RCTL_WEB_STAGE)"$(ECHO_END)
-	$(ECHO_NOTHING)if [ ! -f web/dist/index.html ] || find web/src web/index.html web/package.json -newer web/dist/index.html 2>/dev/null | grep -q .; then echo "==> Building web client"; ( cd web && { [ -d node_modules ] || npm ci; } && npm run build ); fi$(ECHO_END)
+	$(ECHO_NOTHING) ( cd web && { [ -d node_modules ] || npm ci; } && npm run build )$(ECHO_END)
 	$(ECHO_NOTHING)cp web/dist/index.html "$(THEOS_STAGING_DIR)/$(RCTL_WEB_STAGE)/index.html"$(ECHO_END)
 	$(ECHO_NOTHING)test -s "$(THEOS_STAGING_DIR)/$(RCTL_WEB_STAGE)/index.html" || { echo "error: required control client is missing or empty" >&2; exit 1; }$(ECHO_END)
 	$(ECHO_NOTHING)cp "$(THEOS_OBJ_DIR)/rctlappmedia.dylib" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/rctlappmedia.dylib"$(ECHO_END)

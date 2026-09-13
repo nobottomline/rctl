@@ -59,6 +59,10 @@ Build the admin client before compiling a standalone Go relay binary. See the
 [relay guide](../relay/README.md) for its build boundary.
 
 For an incremental device development build, use `make package FINALPACKAGE=0`.
+Package staging always rebuilds the device web client, including its product
+and protocol version constants; an existing `web/dist/index.html` is not a
+freshness guarantee. A failed web build stops packaging instead of shipping
+the previous HTML. Native compilation remains incremental.
 For audited LAN-only test artifacts, with `THEOS` configured, use:
 
 ```sh

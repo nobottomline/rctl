@@ -74,5 +74,72 @@ with tempfile.TemporaryDirectory() as temp:
         self.assertNotEqual(self.run_build("--version", "0.3.5").returncode, 0)
 
 
+class WebStagingTest(unittest.TestCase):
+    """Run the real staging recipe with isolated Theos and npm fixtures."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        source = Path(__file__).resolve().parent.parent
+        for directory in ("mk", "theos/makefiles", "bin", "audio", "obj",
+                          "web/src", "web/dist", "web/node_modules"):
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "Makefile", self.root / "Makefile")
+        shutil.copy2(source / "mk/native-target.mk", self.root / "mk/native-target.mk")
+        for include in ("common.mk", "aggregate.mk"):
+            (self.root / "theos/makefiles" / include).touch()
+        (self.root / "theos/makefiles/common.mk").write_text(
+            "SHELL := /bin/bash\nECHO_NOTHING = @(\nECHO_END = )\n")
+        (self.root / "audio/Makefile").write_text("all:\n\t@true\n")
+        for name in ("rctlappmedia.dylib", "rctlaudio.dylib"):
+            (self.root / "obj" / name).write_text("native fixture\n")
+        (self.root / "audio/rctlaudio.plist").write_text("plist fixture\n")
+        (self.root / "control").write_text("Version: 0.4.0\n")
+        for name in ("index.html", "package.json"):
+            (self.root / "web" / name).write_text("fixture\n")
+        stale = self.root / "web/dist/index.html"
+        stale.write_text("Version: 0.3.4\n")
+        # Even a newer cached output must not hide changed external inputs.
+        os.utime(stale, (2000000000, 2000000000))
+        npm = self.root / "bin/npm"
+        npm.write_text('''#!/bin/sh
+set -eu
+test "$*" = "run build"
+test "${FAIL_WEB_BUILD:-0}" != 1
+cp ../control dist/index.html
+''')
+        npm.chmod(0o755)
+        self.env = dict(os.environ, PATH=str(self.root / "bin") + os.pathsep + os.environ["PATH"])
+
+    def stage(self, scheme):
+        staging = self.root / ("stage-" + (scheme or "rootful"))
+        (staging / "Library/MobileSubstrate/DynamicLibraries").mkdir(parents=True)
+        result = subprocess.run([
+            "make", "after-stage", "THEOS=" + str(self.root / "theos"),
+            "THEOS_PACKAGE_SCHEME=" + scheme, "THEOS_STAGING_DIR=" + str(staging),
+            "THEOS_OBJ_DIR=" + str(self.root / "obj"),
+        ], cwd=self.root, env=self.env, capture_output=True, text=True)
+        path = "usr/local/share/rctl/web" if scheme else "var/mobile/rctl"
+        return result, staging / path / "index.html"
+
+    def test_both_lanes_refresh_cached_client(self):
+        for scheme in ("", "rootless"):
+            with self.subTest(scheme=scheme):
+                (self.root / "web/dist/index.html").write_text("Version: 0.3.4\n")
+                os.utime(self.root / "web/dist/index.html", (2000000000, 2000000000))
+                result, artifact = self.stage(scheme)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(artifact.read_text(), "Version: 0.4.0\n")
+
+    def test_failed_build_cannot_package_stale_client(self):
+        self.env["FAIL_WEB_BUILD"] = "1"
+        for scheme in ("", "rootless"):
+            with self.subTest(scheme=scheme):
+                result, artifact = self.stage(scheme)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(artifact.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
