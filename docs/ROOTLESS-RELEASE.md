@@ -278,8 +278,50 @@ Verification completed before device installation:
 - Native host tests and release-workflow lint passed. Both public
   `0.4.0~rc.4` package architectures built and passed the public package audit.
 
-Physical RC4 installation and browser/device TURN/TCP acceptance remain pending.
-The regression tests and candidate builds alone do not close the release gate.
+### RC4 Physical Transport Verification
+
+Independent package inspection confirmed `0.4.0~rc.4` on the rootless device.
+The following checks ran with the existing permanent relay identity, a temporary
+TURN server for the browser, and the permanent TURN server for the device. No
+VPN change, native ICE-server reconfiguration, or timeout extension was used.
+
+- Browser TURN/TCP to a device server-reflexive candidate connected with DTLS
+  and decoded 299 additional frames over five seconds. The prior STUN `400`
+  did not recur; TURN's initial authentication challenge was expected.
+- With browser policy set to relay-only and non-relay remote candidates rejected,
+  both selected candidates were relay candidates. The ordinary control UI
+  remained on one connected peer through 65- and 90-second TCP checks, with
+  decoded frame counts increasing. The 90-second check decoded 2358 more frames.
+- The same forced-relay UI check over browser TURN/UDP decoded 594 more frames
+  over ten seconds. Candidate gathering reported two `701` errors, but the
+  selected relay pair remained connected and delivered media.
+- UI `Control` and `Home` emitted three messages on the actual control
+  DataChannel. Console `Capture` returned a decodable 2732x2048 image with a
+  save action, and the Files modal opened. These do not prove the visible
+  effect of the input commands or file transfer.
+- An independent LAN browser reported RC4 and decoded 170 new frames over
+  three seconds with relay configuration still installed.
+
+The decoded screen and native screenshot were black during visual inspection.
+The device's unlocked/display-on state was not independently established; the
+operator was asked to unlock it. Therefore transport connectivity and decoding
+are confirmed, but visible screen content and input effects still need an
+unlocked-device check. Do not treat black decoded frames as complete media or
+control acceptance.
+
+One earlier UI run could not identify a nominated pair in its final statistics
+sample. The diagnostic was corrected to use the transport's
+`selectedCandidatePairId`, with nomination as a fallback. Later long runs
+recorded no ICE failure, peer replacement, or signaling closure. This was a
+test-harness change, not a production reconnect-policy change.
+
+Full Go tests, relay/setup/personalization race tests, Go vet, the 43 web-client
+tests, both web builds, admin lint, the isolated relay smoke test, and audits of
+both RC4 DEBs passed. Final immutable release hashes remain unqualified.
+The Root Terminal UI independently confirmed clean dpkg configuration and a
+byte-identical persistent relay configuration after installation and testing.
+The private diagnostic configuration copy was then removed; the live
+configuration and VPN were left unchanged.
 
 ## Remaining Release Gates
 
@@ -288,8 +330,9 @@ The regression tests and candidate builds alone do not close the release gate.
    rehearsal above covers the dual-package server lifecycle, not final artifact
    provenance, renewal, or the complete device package-install/enrollment path
    through that new host.
-   Resolve the browser/device TURN/TCP failure above and verify both-peer
-   relay-only media/control; neither is satisfied by the two-browser echo test.
+   The RC4 browser/device TURN/TCP handshake fix and both-peer relay transport
+   passed. Complete the unlocked-screen and visible input checks above, then
+   repeat forced-relay media/control with the exact candidate artifacts.
 2. Prepare the exact version-matched `0.4.0` candidate set and provenance.
    Re-run the required release matrix for both package architectures, including
    package-manager upgrade/recovery and rootful transactional compatibility.
