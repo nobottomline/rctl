@@ -2,11 +2,15 @@
 
 Remote-control system for a jailbroken iPad: view the screen, hear the device's
 real playback audio, inject touch/keyboard/buttons from a browser, plus camera,
-file transfer, a root web terminal, automation, and device control. "scrcpy /
-AnyDesk for jailbroken iOS." LAN today; internet is the north star.
+file transfer, a root web terminal, automation, and device control. Local LAN
+control and self-hosted relay signaling with WebRTC are implemented; current
+release acceptance and transport limitations are recorded in
+`ROOTLESS-RELEASE.md` and `TRANSPORT.md`.
 
-Target device this was built on: **iPad Air 3 (A12, arm64e), iOS 14.4, unc0ver +
-Substitute** (NOT Cydia Substrate), with Choicy + Heimdallr installed.
+The original target is **iPad Air 3 (A12, arm64e), iOS 14.4, unc0ver +
+Substitute** (NOT Cydia Substrate). Rootless qualification also uses an iPad Pro
+on iPadOS 15.5 with ordinary Dopamine and ElleKit. Other bootstrap variants are
+not implied to be qualified.
 
 Why jailbreak is required: App Store remote apps (TeamViewer/AnyDesk/RustDesk) can
 only *view* an iOS screen — they can never inject input. Only root + a jailbreak's

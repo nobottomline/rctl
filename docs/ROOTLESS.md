@@ -6,7 +6,7 @@ are not proof that the private APIs work on that device. RootHide and other
 bootstrap variants are outside this first test lane.
 
 For the current release-preparation status, including the existing wizard,
-operator-confirmed Talk fix, and the still-disabled transactional updater, see
+operator-confirmed Talk fix, and verified transactional update/recovery, see
 [`ROOTLESS-RELEASE.md`](ROOTLESS-RELEASE.md). Historical test notes below are not
 a replacement for that current integration checklist.
 
@@ -28,8 +28,9 @@ package identifier remains `com.greatlove.rctl`, with `iphoneos-arm64`
 architecture and dependencies on `ellekit` and `firmware (>= 15.0)`.
 
 To build both lanes with the same version, use `scripts/build-packages.sh`.
-For a release candidate with an exact Debian version, pass `--version 0.3.5`
-(replace this example with the intended release version). Both lanes are built
+For a release candidate with an exact Debian version, pass
+`--version '0.4.0~rc.4'` (replace this example with the intended candidate).
+Both lanes are built
 sequentially because they share the web build and Theos aggregate metadata.
 These scripts do not install, deploy, publish, or personalize the package.
 The public APT feed remains rootful until device qualification is recorded.

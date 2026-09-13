@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added separate rootful and ordinary Dopamine rootless package builds with a
+  shared release version, isolated staging, and clean-public-artifact checks.
+- Added rootless package personalization and architecture-bound transactional
+  updates, preserving relay identity and LAN policy through verified updates
+  and external-watchdog rollback on the qualification device.
+- Extended the self-hosted wizard to retain both package variants through
+  install, upgrade, backup, restore, and recovery. Failed service stops retain
+  recovery data; failed TLS activation produces bounded, redacted diagnostics.
+- Fixed libjuice rejecting authenticated ICE requests with a present zero-valued
+  role tie-breaker, which prevented browser TURN/TCP connections to the device.
+  Native device TURN remains UDP-only.
+- Fixed rootless video thumbnails using bounded, read-only Photos derivatives
+  and repeated Talk speaker playback on the qualification iPad.
 - Redesigned the iOS controller's Devices, pairing, and local-device screens:
   warm parchment theme with an ambient particle canvas, push navigation instead
   of sheets, LAN reachability chips, a code-tracking QR scanner with torch and

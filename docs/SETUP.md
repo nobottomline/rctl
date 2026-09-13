@@ -60,6 +60,7 @@ Every stable tag publishes version-matched artifacts:
 
 ```text
 rctl_<version>_iphoneos-arm.deb
+rctl_<version>_iphoneos-arm64.deb
 rctl-setup_<version>_linux_amd64
 rctl-setup_<version>_linux_arm64
 rctl-relay_<version>_linux_amd64
@@ -67,6 +68,10 @@ rctl-relay_<version>_linux_arm64
 install.sh
 SHA256SUMS
 ```
+
+The dual-package release contract applies to the upcoming `0.4.0` release;
+older rootful-only releases remain valid inputs to the bootstrap. Each package
+has its own architecture-bound update catalog; see `UPDATES.md`.
 
 The relay container is published separately as:
 
