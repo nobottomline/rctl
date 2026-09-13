@@ -244,8 +244,8 @@ test, **not** installation of the private `0.4.1` package on the device.
   included host/server-reflexive candidates and, in a later attempt, relay.
   Extending only the test page's 7-second timer did not establish a connection.
   Two-browser mixed UDP/TCP TURN echo passed in both directions, isolating this
-  from a general mixed-transport server failure. The exact device-path cause
-  remains unresolved; no production timeout, ICE backend, or VPN was changed.
+  from a general mixed-transport server failure. The subsequent diagnosis is
+  recorded below; no production timeout, ICE backend, or VPN was changed.
 - `Revoke access` disconnected an active peer, marked the temporary device
   revoked/offline, and made its proxied capabilities request return `404`.
   The temporary record was then deleted through the UI.
@@ -254,6 +254,32 @@ test, **not** installation of the private `0.4.1` package on the device.
   daemon restart, the permanent relay decoded 601 new frames over ten seconds
   and LAN decoded 169 new frames over three seconds. No SpringBoard restart,
   package replacement, or VPN change was needed.
+
+### TURN/TCP Diagnosis and RC4 Candidate
+
+An isolated browser peer without automatic reconnection reproduced the failure
+before the video-start watchdog. In-memory STUN inspection confirmed that the
+browser sent an authenticated Binding request containing `ICE-CONTROLLED` with
+a zero tie-breaker. The native peer returned `400`: pinned libjuice used the
+numeric role values to infer whether the attributes were present, so it treated
+the present zero-valued attribute as missing.
+
+Commit `a807605` separates attribute presence from value in the pinned dependency
+and corrects the controlled-role conflict comparison. It retains authentication
+and rejects missing or simultaneous role attributes and invalid nomination.
+The patch does not change VPN configuration or add native TURN/TCP support.
+
+Verification completed before device installation:
+
+- Authenticated host loopback tests cover zero and nonzero role values, missing
+  and duplicate roles, role conflicts, invalid nomination, and wrong passwords.
+- Both iOS library architectures rebuilt successfully; packaging checks the
+  applied patch digest to reject stale native libraries.
+- Native host tests and release-workflow lint passed. Both public
+  `0.4.0~rc.4` package architectures built and passed the public package audit.
+
+Physical RC4 installation and browser/device TURN/TCP acceptance remain pending.
+The regression tests and candidate builds alone do not close the release gate.
 
 ## Remaining Release Gates
 

@@ -80,10 +80,13 @@ accepts TURN/UDP but explicitly skips TURN/TCP and TURN/TLS servers. Browser-sid
 TURN/TCP support is a separate capability: a successful browser allocation does
 not prove the iPad can reach TURN over TCP, or that browser/device ICE connects.
 Do not advertise an all-TCP fallback for UDP-blocked device networks. The
-September 13 clean-host device test also left browser-TURN/TCP connectivity
-unresolved; see `ROOTLESS-RELEASE.md`. That failure is not explained merely by
-the native transport limitation, because a TCP-connected browser can in
-principle communicate with a UDP-connected device through TURN.
+September 13 clean-host device test exposed a separate libjuice parsing defect:
+a present `ICE-CONTROLLED` attribute with a zero tie-breaker was treated as
+missing and rejected with `400`. The pinned dependency now tracks role-attribute
+presence independently; see `third_party/webrtc/README.md` for the patch and
+authenticated regression tests. Physical acceptance of the RC4 candidate is
+still pending; see `ROOTLESS-RELEASE.md`. A TCP-connected browser can communicate
+with a UDP-connected device through TURN, but this is not an all-TCP path.
 
 Do not use full `libwebrtc` unless `libdatachannel` proves impossible on the
 jailbroken iOS target. `libwebrtc` is far larger, harder to cross-compile, and
