@@ -1,50 +1,65 @@
 # Contributing to rctl
 
-Thank you for improving rctl. Changes must preserve the project's security,
-compatibility, and package-isolation boundaries.
+rctl exposes root-level device control. Small, reproducible fixes are easier to
+review and qualify than broad rewrites. Start with one problem and explain why
+the change belongs in the project.
 
-## Before opening a change
+## Start Here
 
-1. Read `docs/ARCHITECTURE.md` and the feature document for the component.
-2. Search existing issues and keep one change focused on one problem.
-3. Never include credentials, private hostnames, device identifiers, personal
-   media, relay databases, personalized packages, or production logs.
-4. Preserve local LAN control when relay configuration is absent or unavailable.
-5. Preserve iOS 14, `arm64`, and `arm64e` unless the change explicitly updates
-   the documented compatibility contract.
+- [Development guide](docs/DEVELOPMENT.md): prerequisites, builds, and checks.
+- [Architecture](docs/ARCHITECTURE.md): process ownership and data flow.
+- [Documentation index](docs/README.md): the contract for the affected feature.
+- [Security policy](SECURITY.md): private vulnerability reporting.
 
-Security vulnerabilities must not be reported in a public issue. Use
-[GitHub private vulnerability reporting](https://github.com/nobottomline/rctl/security/advisories/new).
+You do not need a jailbroken device or a VPS for every contribution. Web,
+protocol, and many relay changes can be tested locally. Be explicit when a
+change still needs physical-device qualification.
 
-## Development
+## Propose One Change
 
-Run the narrowest relevant checks first, followed by the broader checks required
-by the affected boundary:
+Search existing issues before starting. For a new feature, ownership change,
+protocol break, or large rewrite, discuss the problem and scope with maintainers
+before implementing it. A focused bug fix should include the reproduction and
+expected behavior; it does not need an architecture proposal.
 
-```sh
-make test
-(cd web && npm ci && npm run build)
-(cd relay && go test ./...)
-(cd relay/web-admin && npm ci && npm run lint && npm run build)
-make package FINALPACKAGE=0
-make release-check
-```
+Keep unrelated fixes and formatting out of the change. Dependency updates also
+need evidence: a green build is not proof that audio still plays or a release
+workflow still publishes correct artifacts.
 
-Native compilation alone does not qualify camera, audio, input, lifecycle, or
-relay behavior. Describe the physical-device and browser paths that were
-actually exercised, and state clearly what was not tested.
+## Protect Users
 
-Use `scripts/deploy.sh` for physical-device deployment. Do not use `make package
-install`, commit generated `.deb` files, or add personalized configuration to a
-public artifact.
+- Preserve LAN access when a relay is absent or unavailable, except for the
+  administrator's explicitly selected Relay-only policy.
+- Keep public packages free of personalized relay configuration and credentials.
+- Preserve the documented platform targets and process ownership. A rootless
+  build does not establish support for every rootless jailbreak.
+- Do not test on devices, accounts, or infrastructure without permission.
+- Never attach real tokens, signing keys, private endpoints, device identifiers,
+  personal media, relay databases, or unsanitized logs.
 
-## Pull requests
+Report suspected vulnerabilities privately through [SECURITY.md](SECURITY.md),
+not a public issue. Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-- Explain the user-visible behavior and material engineering tradeoffs.
-- Add focused tests for changed protocol, lifecycle, security, or parsing logic.
-- Update durable documentation when behavior or an invariant changes.
-- Keep generated sources synchronized and avoid unrelated formatting churn.
-- Use concise English commit messages without generated attribution trailers.
+## Make Review Possible
 
-By contributing, you agree that your contribution is licensed under the Apache
-License 2.0 used by this repository.
+Explain the problem, the fix, and any material tradeoff. Use the
+[PR template](.github/pull_request_template.md) to record:
+
+- Exact tests and commands run, with their results.
+- Relevant connection modes and device/jailbreak combinations exercised.
+- Known gaps, unsupported paths, and any remaining qualification gates.
+- Sanitized before/after images for visible UI changes; a short recording when
+  timing or interaction is the behavior under review.
+
+Add focused tests for changed parsing, authorization, protocol, and lifecycle
+behavior. Keep generated protocol sources synchronized. Follow the
+[documentation rules](AGENTS.md#documentation): update guidance made inaccurate
+by the change, not a second narrative of the implementation.
+
+Use concise English Conventional Commit messages without AI branding or
+`Co-authored-by` trailers. Do not commit generated packages or PR-only evidence.
+Publishing and deployment are separate maintainer operations, not consequences
+of a successful local build.
+
+By contributing, you agree that your contribution is licensed under the
+[Apache License 2.0](LICENSE) used by this repository.

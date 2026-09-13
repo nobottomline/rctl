@@ -1,90 +1,136 @@
-# Repository Agent Guide
+# rctl
 
-This file is the operational entry point for coding agents. Keep it short and
-keep durable product and protocol details in `docs/`.
+rctl controls jailbroken iOS devices from browser and native clients, directly
+over a trusted LAN or through a self-hosted relay. The device exposes root-level
+capabilities. A working UI is not enough: authorization, process ownership, and
+recovery must still work when a connection or injected process disappears.
 
-## Start Here
+## What We Protect
 
-- Read `docs/ARCHITECTURE.md` before changing runtime ownership or data flow.
-- Read the feature document relevant to the change, especially `docs/RELAY.md`,
-  `docs/CAM.md`, `docs/MEDIA.md`, `docs/TERMINAL.md`, or
-  `docs/VIRTUAL_MIC.md`.
-- Inspect `git status` and recent commits before editing. Other work may be in
-  progress in the same worktree.
+- **Local control remains useful.** Installing, disabling, or losing a relay
+  must not break LAN access. The exception is the administrator's explicitly
+  approved, persisted `Relay only` policy.
+- **Public packages stay public.** A public `.deb` contains no relay credentials
+  or personalized configuration. Personalization derives from a clean public
+  artifact; upgrades preserve the installed device's identity.
+- **Capabilities belong to their processes.** Screen capture and input belong
+  to SpringBoard, live camera and virtual-mic hooks to the foreground app, and
+  playback-audio capture to `mediaserverd`. The daemon coordinates transport.
+- **Idle means idle.** Viewer loss, lease expiry, process exit, and failed
+  handoff release held input, capture sessions, encoders, recordings, and power
+  assertions. Keep realtime queues bounded; do not fix latency by accumulating
+  more work.
+- **Compatibility needs evidence.** Preserve the rootful iOS 14 target and
+  `arm64`/`arm64e`. Keep rootless paths and private-API availability explicit.
+  A successful build on one lane does not qualify another device or jailbreak.
 
-The main ownership boundaries are:
+## Before Changing Code
+
+Read `git status` and recent commits. Other engineers may be working in this
+checkout. Re-read shared files before editing; do not reset, clean, revert, or
+reformat unrelated work.
+
+Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing ownership or data
+flow, then the relevant feature contract from the [docs index](docs/README.md).
+Prefer the smallest complete change within those boundaries. Add an abstraction
+only when an existing consumer or duplicated behavior justifies it.
+
+## Where Code Lives
 
 - `springboard/`: screen capture, input injection, and SpringBoard-only actions.
 - `daemon/`: root HTTP/WebSocket server, IPC coordination, and WebRTC transport.
-- `app/` and `app/media/`: foreground-app camera and virtual microphone hooks.
-- `audio/`: opt-in playback-audio capture inside `mediaserverd`.
-- `core/`: shared native implementation used by the runtime components.
-- `web/`: device control client; `web/legacy/` is reference-only.
-- `relay/`: Go relay and its separate admin client in `relay/web-admin/`.
-- `mobile/`: independent native iOS and Android controller products.
-- `protocol/`: versioned cross-client contracts, fixtures, and deterministic
-  generated constants; it is not a shared runtime.
-- `layout/`: package-owned static files and maintainer scripts.
+- `app/`, `app/media/`: foreground-app camera and virtual microphone hooks.
+- `audio/`: opt-in playback capture inside `mediaserverd`.
+- `core/`: native code shared by those processes, not a new runtime owner.
+- `web/`: device control client for LAN and relay; `web/legacy/` is reference-only.
+- `relay/`: Go relay and setup wizard; `relay/web-admin/` is a separate admin UI
+  with its own build, not the device client.
+- `mobile/`: independent native controllers, not payloads in the device `.deb`.
+- `protocol/`: versioned contracts, fixtures, and generated constants, not a
+  shared runtime. See its [generation rules](protocol/README.md).
+- `layout/`, `updater/`: package payload/lifecycle and transactional device updates.
 
-## Product Invariants
+## Mistakes To Avoid
 
-- Local LAN control must continue to work when relay configuration is installed,
-  unreachable, or disabled unless the administrator explicitly selected the
-  persisted `Relay only` policy after approval.
-- The public `.deb` must never contain relay credentials or personalized
-  configuration. Personalized packages are derived from a clean public artifact.
-- Preserve the established process ownership above. In particular, live camera
-  capture belongs to the foreground app, screen capture to SpringBoard, and
-  playback-audio capture to `mediaserverd`.
-- Media features are idle by default. Viewer loss, lease expiry, process exit,
-  and failed handoff must release capture sessions, encoders, recordings, and
-  power assertions.
-- Preserve iOS 14 support and both `arm64` and `arm64e`; do not assume APIs from a
-  newer deployment target.
-- Treat HTTP, IPC, loopback ingest, DataChannel messages, package files, and
-  relay state as compatibility and security boundaries. Validate sizes, state,
-  paths, identities, and authorization at those boundaries.
-- Never put secrets, enrollment tokens, device secrets, private hostnames,
-  personal identifiers, or production data in source, fixtures, logs, docs, or
-  commits.
+1. **Testing against live state.** Use disposable databases, profiles, and
+   simulators. Do not point a test server at production state or copy real keys,
+   enrollment tokens, personal media, or identifiers into fixtures. If a real
+   dataset is necessary, obtain approval and sanitize an isolated snapshot.
+2. **Trusting a transport.** HTTP, IPC, loopback ingest, DataChannels, package
+   files, and relay state are trust boundaries. Validate identity, authorization,
+   state, lengths, and paths. A UI capability flag is not server authorization.
+3. **Treating all failures alike.** Unsupported optional private APIs should
+   degrade without crashing. Failed authorization or package verification must
+   fail closed, not silently enable a less protected path.
+4. **Losing the recovery path.** Do not kill processes by name or reuse personal
+   simulators for tests. Stop only test resources you created and tracked;
+   service restarts need task authorization. On-device work can disconnect the
+   controller you are using; establish recovery access before changing services
+   or packages.
 
-## Working Safely
+Never include secrets, private endpoints, personal identifiers, or production
+data in source, logs, fixtures, docs, commits, or review evidence.
 
-- Preserve unrelated and concurrent changes. Do not reset, clean, revert, or
-  reformat files outside the task.
-- Re-read shared files before editing and stage only task-owned paths.
-- Prefer the smallest complete change that uses existing component boundaries
-  and helpers. Record material architectural decisions in the relevant document.
-- Do not push, publish, deploy to a VPS, or replace a release artifact unless
-  the user explicitly requests that delivery step. The user has granted
-  standing authorization to deploy verified device-side changes to the
-  configured target iPad unless they explicitly opt out; use
-  `scripts/deploy.sh` with the operator-configured `RCTL_SSH`, and never
-  hard-code device addresses or aliases.
-- Device compilation is not runtime proof. Camera, audio, input, process
-  lifecycle, and relay behavior require validation of the real execution path.
+## Check Every Affected Path
+
+Before calling a feature done, state which of these apply and what was tested:
+
+- **Connections:** direct LAN, relay, reconnect, relay unavailable, and the
+  explicit Relay-only policy. Browser secure-context restrictions still apply.
+- **Clients:** device web UI, relay admin UI, and native controllers. Not every
+  feature needs every client, but unsupported paths need an explicit decision.
+- **Platforms:** rootful/rootless, iOS/private-API availability, package paths,
+  and architecture. Do not infer support from a different working iPad.
+- **Lifecycle:** start, stop, cancellation, lease expiry, backgrounding, and
+  process/viewer loss. Include release of held keys and media resources.
+- **Contracts:** both senders and receivers, capability negotiation, older
+  peers, and generated fixtures. A protocol change is not a one-client edit.
+- **Delivery:** fresh install, upgrade, identity preservation, and rollback
+  when package or updater behavior changes.
 
 ## Verification
 
-Run the narrowest relevant checks first, then broaden based on blast radius:
+Use the [development guide](docs/DEVELOPMENT.md) for setup and commands. Start
+with focused tests, then broaden for shared behavior, contracts, or packaging.
+Do not run every toolchain for a docs-only change; do not use that shortcut for
+a cross-component runtime change.
 
-- Native host tests: `make test`
-- Device package: `make package FINALPACKAGE=0`
-- Control client: `(cd web && npm run build)`
-- Relay: `(cd relay && go test ./...)`
-- Relay admin client: `(cd relay/web-admin && npm run lint && npm run build)`
-- Relay smoke test: `./scripts/smoke_relay.sh`
-- Public package audit: `make release-check`
+Tests should prove observable behavior, including failure and recovery, rather
+than mirror implementation details. Compilation does not prove camera, audio,
+input, lifecycle, or relay behavior. Exercise the real device/browser path when
+needed and report anything not exercised. An untested path stays unqualified.
 
-Deploy verified device-side changes by default with `scripts/deploy.sh` and the
-operator-configured target unless the user explicitly says not to deploy; do
-not use `make package install`. Follow the feature document for physical-device
-and browser validation. Report what was not exercised.
+## Documentation
 
-## Commits
+- `README.md` helps users choose and install the product. `CONTRIBUTING.md`
+  explains contribution expectations. This file guides agents; the development
+  guide owns setup and verification commands. Link instead of duplicating them.
+- Internal docs explain decisions, cross-process constraints, compatibility,
+  and traps that code alone does not make clear. Keep local implementation
+  explanations near the code; avoid catalogs of functions or narrated diffs.
+- Rewrite outdated guidance when behavior changes. Do not append a competing
+  description beneath it or create a new page for every control or patch.
+- Qualification records are different: retain version-scoped evidence and
+  unresolved gates. Distinguish a local fix, a tested artifact, and a published
+  release; do not turn a successful smoke test into a support claim.
+- Keep temporary plans, raw logs, and PR-only screenshots outside tracked
+  source. Sanitize evidence before sharing it. Do not erase existing planning
+  or qualification documents as unrelated cleanup.
 
-- Work on the current primary branch unless the task requires another branch.
-- Commit coherent, verified work with concise Conventional Commit messages.
-- Do not add AI branding or `Co-authored-by` trailers.
-- Keep generated artifacts, personalized packages, credentials, and unrelated
-  work out of commits.
+## Delivery
+
+Work on the current primary branch unless the task requires another branch or
+worktree. Stage only task-owned files and commit coherent, verified work with
+concise English Conventional Commit messages. No AI branding or `Co-authored-by`
+trailers; no generated build artifacts or personalized packages.
+
+Do not create PRs, push, publish, deploy to a VPS, or replace release artifacts
+unless the user requests that step. The owner has granted standing permission
+to deploy verified device-side changes to the configured test iPad unless they
+opt out. Use `scripts/deploy.sh` with operator-configured `RCTL_SSH` for its
+supported rootful lane, never `make package install`. For rootless, follow
+[ROOTLESS.md](docs/ROOTLESS.md); do not bypass the deploy script's lane guard.
+Do not hard-code device addresses or aliases.
+
+End with what changed, what actually passed, and remaining limits. Follow the
+[PR template](.github/pull_request_template.md) when a PR is requested.

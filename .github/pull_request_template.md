@@ -1,15 +1,23 @@
-## Summary
+## Problem
 
-Describe the user-visible behavior and the reason for the change.
+<!-- What fails or is missing? Include a minimal reproduction when applicable. -->
+
+## Change
+
+<!-- Explain the fix and material tradeoffs. Keep this PR focused on one concern. -->
 
 ## Verification
 
-- [ ] Relevant automated tests pass.
-- [ ] Device or browser behavior was exercised when compilation alone is insufficient.
-- [ ] Documentation and compatibility notes are updated when needed.
+<!-- List exact commands and results, not just "tests pass".
+For runtime changes, identify the tested client, connection mode, OS/jailbreak,
+and lifecycle cases. For UI changes, attach sanitized before/after evidence.
+State what was NOT tested; docs-only changes can say "not applicable". -->
 
-## Safety
+## Compatibility and Safety
 
-- [ ] The public package contains no relay credentials, private hostnames, or personalized configuration.
-- [ ] Local LAN control still works when relay configuration is absent or unavailable.
-- [ ] No generated artifacts, private data, or unrelated changes are included.
+<!-- Describe applicable LAN/relay, older-peer, rootful/rootless, authorization,
+package isolation, upgrade/rollback, or media/input cleanup effects.
+Record remaining gates. Omit private endpoints, identifiers, secrets, and media. -->
+
+- [ ] No secrets, personal data, generated build artifacts, or unrelated changes.
+- [ ] Documentation and generated contracts are updated where needed, or unchanged for a stated reason.

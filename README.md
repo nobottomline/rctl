@@ -136,31 +136,14 @@ trust boundaries.
 
 ## Build From Source
 
-Device builds require macOS, Theos, an iOS 14.5 SDK, and the pinned WebRTC native
-dependencies. The web clients require Node.js; the relay and VPS wizard require
-Go.
+Start with the [development guide](docs/DEVELOPMENT.md) for prerequisites,
+component-specific checks, and rootful/rootless package builds. Web and relay
+work do not require a jailbroken device; native device builds require macOS,
+Theos, the appropriate iOS SDK, and pinned native dependencies.
 
-```sh
-make deps
-make test
-make package FINALPACKAGE=0
-```
-
-Use `scripts/deploy.sh` for a physical test device. Do not use `make package
-install`: the deployment script uses a clean verified flow that avoids stale
-`arm64e` signing state and preserves relay identity.
-
-Relevant checks:
-
-```sh
-(cd web && npm ci && npm run build)
-(cd relay && go test ./...)
-(cd relay/web-admin && npm ci && npm run lint && npm run build)
-make release-check
-```
-
-Read [docs/PORTABILITY.md](docs/PORTABILITY.md) before changing platform paths
-and [docs/QUALIFICATION.md](docs/QUALIFICATION.md) before publishing artifacts.
+Installation is separate from building. Use the documented deployment path,
+never `make package install`, and complete the
+[qualification gates](docs/QUALIFICATION.md) before publishing artifacts.
 
 ## Repository Layout
 

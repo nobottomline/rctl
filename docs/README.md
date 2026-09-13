@@ -1,5 +1,14 @@
 # Documentation
 
+## Start Here
+
+- Installing or choosing a connection mode: [project README](../README.md).
+- Changing the project: [development guide](DEVELOPMENT.md) and
+  [contribution guide](../CONTRIBUTING.md).
+- Reporting a vulnerability: [security policy](../SECURITY.md).
+
+## Architecture and Feature Contracts
+
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for process ownership and data
 flow, then read the feature document for the code being changed.
 
@@ -29,3 +38,6 @@ flow, then read the feature document for the code being changed.
 
 Historical qualification records describe evidence for a specific release;
 they are not substitutes for the current architecture and feature contracts.
+Keep decisions and hard-to-discover constraints here, not a duplicate of the
+source. Follow the [documentation rules](../AGENTS.md#documentation) when adding
+or revising a page.
