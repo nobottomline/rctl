@@ -323,6 +323,32 @@ byte-identical persistent relay configuration after installation and testing.
 The private diagnostic configuration copy was then removed; the live
 configuration and VPN were left unchanged.
 
+### Unlocked Visual Follow-up
+
+After the operator confirmed unlocking the iPad, the ordinary control UI over
+forced TURN/TCP showed the device's application and the actual iOS Control
+Center after clicking `Control`. Clicking `Home` dismissed Control Center;
+the subsequent native screenshot showed the application again. Both selected
+ICE candidates were relay candidates and the UI actions used the control
+DataChannel. This establishes visible screen and input effects for that session,
+not merely decoded frames or successful command submission.
+
+A following forced-TURN/UDP run decoded 427 additional frames over ten seconds
+and loaded the native screenshot and Files UI. After reloading the control
+page, ICE and frame delivery recovered, but a video-pixel check found a black
+image. An independent LAN session then reproduced black video in three samples
+five seconds apart, with `readyState=4`, a playing 1024x1366 video, and successful
+native screenshot responses that were also black. Therefore the later symptom
+is not specific to TURN or the browser's rendered page.
+
+The physical display/lock state at the time of the recurrence is not yet
+confirmed. Do not label this a proven reload regression, dismiss it as a
+transport failure, or assume another unlock fixes the capture lifecycle. Ask
+the operator whether the physical screen remained on, then correlate that state
+with the capture and keep-awake lifecycle. No private wake selector, timeout,
+VPN setting, or package was changed during this follow-up. Final `0.4.0`
+artifact preparation remains on hold until this boundary is understood.
+
 ## Remaining Release Gates
 
 1. Repeat the clean-host wizard/device acceptance with the exact draft assets
@@ -331,8 +357,9 @@ configuration and VPN were left unchanged.
    provenance, renewal, or the complete device package-install/enrollment path
    through that new host.
    The RC4 browser/device TURN/TCP handshake fix and both-peer relay transport
-   passed. Complete the unlocked-screen and visible input checks above, then
-   repeat forced-relay media/control with the exact candidate artifacts.
+   passed, and one unlocked session has visual screen/input proof. Resolve the
+   later black-capture recurrence above, then repeat forced-relay media/control
+   and reconnect checks with the exact candidate artifacts.
 2. Prepare the exact version-matched `0.4.0` candidate set and provenance.
    Re-run the required release matrix for both package architectures, including
    package-manager upgrade/recovery and rootful transactional compatibility.

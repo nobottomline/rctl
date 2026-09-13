@@ -86,9 +86,11 @@ missing and rejected with `400`. The pinned dependency now tracks role-attribute
 presence independently; see `third_party/webrtc/README.md` for the patch and
 authenticated regression tests. Physical RC4 tests established browser TURN/TCP
 and both-peer relay connectivity, including a 90-second ordinary-UI session.
-Visual screen/input acceptance remains open because the inspected frames were
-black; see `ROOTLESS-RELEASE.md`. A TCP-connected browser can communicate with a
-UDP-connected device through TURN, but this is not an all-TCP path.
+An unlocked session also passed visual screen/input checks. A later black-frame
+recurrence reproduced in native screenshots and LAN video, so capture-lifecycle
+acceptance remains open; see `ROOTLESS-RELEASE.md`. A TCP-connected browser can
+communicate with a UDP-connected device through TURN, but this is not an
+all-TCP path.
 
 Do not use full `libwebrtc` unless `libdatachannel` proves impossible on the
 jailbroken iOS target. `libwebrtc` is far larger, harder to cross-compile, and
