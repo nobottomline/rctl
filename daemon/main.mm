@@ -336,7 +336,6 @@ static void on_files_message(const uint8_t *data, size_t len, int is_binary) {
 }
 
 static void on_reconfigure(void *ctx, int fps, double scale, int bitrate) {
-    rctl_webrtc_set_screen_bitrate(bitrate);
     rctl_ipc_config m = { (int32_t)fps, scale, (int32_t)bitrate };
     send_to_sb(RCTL_MSG_CONFIG, &m, sizeof m);
     pthread_mutex_lock(&gAdaptLock);
@@ -466,7 +465,6 @@ static void on_webrtc_viewers(bool any) {
             rctl_ipc_config m = { 60, 0.5, 5000000 };
             gBitrateCeiling = 5000000;
             gBitrateCurrent = 5000000;
-            rctl_webrtc_set_screen_bitrate(5000000);
             send_to_sb(RCTL_MSG_CONFIG, &m, sizeof m);
             send_to_sb(RCTL_MSG_KEYFRAME, NULL, 0);
         }
@@ -1935,11 +1933,7 @@ static void *adapt_thread(void *unused) {
         gBitrateCurrent = next;
         pthread_mutex_unlock(&gAdaptLock);
 
-        if (next != cur) {
-            rctl_webrtc_set_screen_bitrate(next);
-            int32_t br = next;
-            send_to_sb(RCTL_MSG_BITRATE, &br, sizeof br);
-        }
+        if (next != cur) { int32_t br = next; send_to_sb(RCTL_MSG_BITRATE, &br, sizeof br); }
         if (back_off) send_to_sb(RCTL_MSG_KEYFRAME, NULL, 0);
     }
     return NULL;

@@ -2,9 +2,10 @@
 
 ## Current Checkpoint (2026-09-14)
 
-The rootless device now has an installed diagnostic pacing test prerelease,
-`0.4.0~test.20260913222134.266c6220b91b`. Its predecessor regressed remote-screen playback
-even on direct ICE and is not acceptable for release. The exact draft `0.4.0` previously passed
+The rootless device currently has pacing test prerelease
+`0.4.0~test.20260913222939.63e8b112a091`; restoring the non-pacing baseline is
+pending. Pacing failed physical acceptance and has been withdrawn from the
+source. The exact draft `0.4.0` previously passed
 the UI update and external-watchdog rollback tests described below; those
 results do not qualify the new prerelease.
 The rootful device remains on `0.3.4-24+debug`. No always-on display or keepalive
@@ -247,9 +248,19 @@ The next candidate fixes a separate timing-model defect: the old budget credited
 exactly 2 ms per wake even when the scheduler woke later. It now credits elapsed
 time with a 10 ms catch-up bound, excludes idle intervals from cadence diagnostics,
 and requests user-initiated QoS for the active session worker. The focused native
-suite and rootless package audit pass; physical acceptance is pending. Do not
-publish this candidate or promote its pacing policy until the direct-path
-regression is resolved and the forced-TURN tests pass.
+suite and both package-lane audits passed. Physical direct-ICE playback improved
+to 659 additional frames over thirty seconds but still stalled. The queue
+reported one expiry, four overflows, no send exceptions, maximum send time
+4722 microseconds, and mean active tick interval 10028 microseconds. This does
+not isolate scheduling from encoder bursts or establish a useful pacing budget.
+
+The implementation and its paired remote playout-policy change were therefore
+withdrawn, not left enabled in the release branch. Historical commits
+`266c622`, `63e8b11`, and `842ceba` retain the experiment and tests. The existing
+1100-byte packet budget and mandatory fresh web build are retained. Reproduce
+encoder output bursts and queue admission with measured traces before another
+transport change; do not treat repeated constant adjustments as qualification.
+No stable assets or public APT metadata have been changed.
 
 ### Qualification Cleanup
 

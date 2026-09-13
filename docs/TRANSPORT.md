@@ -156,42 +156,22 @@ The draft workflow runs it before building either public package lane.
 Actual TURN performance, camera playback, and device compatibility still require
 physical testing; passing this test alone does not close the release gate.
 
-### Remote Screen Pacing
+### Pacing Qualification Limit
 
-Remote screen sessions wrap the existing libdatachannel H.264, sender-report,
-NACK and PLI chain in a session-owned `VideoPacer`. LAN screen and camera
-sessions retain their previous send path. The daemon feeds the pacer the same
-bitrate it requests from the screen encoder, including profile/adaptation
-changes; this is not a new bandwidth estimator or congestion controller.
+A bounded asynchronous screen pacer was tested and withdrawn after physical
+tests regressed direct-ICE playback. Its queue expired or overflowed despite
+passing host tests. Elapsed-time credit and interactive worker QoS improved but
+did not resolve the failure. The experiment also removed remote playout limits;
+that paired policy change was withdrawn rather than accepted without isolated
+evidence. See `ROOTLESS-RELEASE.md` for the measurements and historical commits.
 
-The queue admits complete access units and is bounded to 512 KiB, 64 frames,
-and 500 ms residence. It schedules packets in 2 ms ticks at 1.5 times the encoder
-bitrate, accruing credit from actual elapsed time rather than assuming the
-scheduler meets every deadline. Catch-up is capped at 10 ms of traffic. On Apple
-platforms the session worker requests user-initiated QoS; it still waits when
-idle and is destroyed with the session. Overflow,
-expiry or a send exception discards the remaining queue and dependent delta
-frames until a fresh keyframe arrives, requesting recovery through the existing
-debounced PLI path. An already in-flight packet cannot be recalled. Session
-retirement stops admission and clears queued packets; destruction joins the
-worker. Idle workers wait rather than polling, and no power assertion is added.
-
-The upstream packet-level pacer was not used because its packet eviction does
-not retire the rest of a damaged frame and dependent frames. RTP serialization
-and repair remain upstream-owned: RTCP and NACK retransmissions still bypass
-the original-media queue. Thus the rate is a pacing target, not a total wire
-bandwidth limit. Loss, available bandwidth, and larger-than-bound keyframes
-can still prevent useful playback and require physical qualification.
-
-Remote screen SDP no longer constrains receiver playout to 0-60 ms, and the web
-client no longer forces its remote receiver delay hint to zero. This lets the
-browser adapt to repair RTT; it does not guarantee low latency. The existing
-LAN floor and camera policy are unchanged. Test both the new device package and
-new web client: an old relay-served client can still force the previous hint.
-
-The native ownership suite covers spacing, overflow/expiry recovery, send
-failure, stop, and the real asynchronous RTP packet budget. Runtime acceptance
-remains tracked separately in `ROOTLESS-RELEASE.md`.
+The production path retains the existing libdatachannel H.264/SR/NACK/PLI chain,
+1100-byte fragments, and previous receiver-delay policy. WAN stability remains
+unqualified. A future pacer needs measured encoder burst bounds, actual egress
+rate, queue residence and retransmission behavior on iOS; a nominal encoder
+bitrate alone is not a demonstrated network budget. Do not fix this by growing
+an unbounded queue, repeatedly tuning deadlines, or claiming a lower profile
+qualifies the ordinary profile.
 
 ## Browser Decode Rules
 
