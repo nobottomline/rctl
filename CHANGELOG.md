@@ -1,38 +1,81 @@
 # Changelog
 
-## 0.4.0 (Unreleased)
+Version headings may describe unpublished candidates. Release availability is
+determined by GitHub Releases, not by the presence of a changelog entry.
 
-- Added separate rootful and ordinary Dopamine rootless package builds with a
-  shared release version, isolated staging, and clean-public-artifact checks.
-- Added rootless package personalization and architecture-bound transactional
-  updates, preserving relay identity and LAN policy through verified updates
-  and external-watchdog rollback on the qualification device.
-- Extended the self-hosted wizard to retain both package variants through
-  install, upgrade, backup, restore, and recovery. Failed service stops retain
-  recovery data; failed TLS activation produces bounded, redacted diagnostics.
-- Fixed libjuice rejecting authenticated ICE requests with a present zero-valued
-  role tie-breaker, which prevented browser TURN/TCP connections to the device.
-  Native device TURN remains UDP-only.
-- Fixed rootless video thumbnails using bounded, read-only Photos derivatives
-  and repeated Talk speaker playback on the qualification iPad.
-- Redesigned the iOS controller's Devices, pairing, and local-device screens:
-  warm parchment theme with an ambient particle canvas, push navigation instead
-  of sheets, LAN reachability chips, a code-tracking QR scanner with torch and
-  paste fallbacks, an app icon, and the `rctl` product name.
-- Added native iOS aspect-fit multitouch control with safe `View` / `Control`
-  modes, system controls, and a compact responsive control dock.
-- Added the native RCTL operator visual system, responsive remote-session chrome,
-  haptic feedback, accessible compact modes, and a dedicated session-tools sheet.
-- Added native iOS text composition and remote keyboard controls, including
-  bounded ASCII-to-HID mapping, atomic key taps, and special navigation keys.
-- Added a versioned WebRTC state DataChannel for automatic screen orientation
-  and orientation-correct native input mapping.
-- Promoted the native iOS qualification host to the RCTL Controller product,
-  hardened relay ICE bootstrap diagnostics, and added decoded-frame telemetry.
-- Added bounded Core Image/Metal presentation for native WebRTC video and aligned
-  the device encoder with its advertised H.264 Baseline profile.
-- Made native camera tracks own a fail-closed capture lease, so Camera starts on
-  first viewer, renews while connected, and stops when the last viewer leaves.
+## 0.4.0
+
+Changes since the last published release, `0.3.2`, including the unpublished
+`0.3.3` and `0.3.4` work recorded below.
+
+### Device and Web Control
+
+- Added ordinary Dopamine rootless packages alongside rootful builds, with
+  separate `iphoneos-arm64` / `iphoneos-arm` artifacts and a shared version.
+- Added Game Keyboard for held keys and WASD, plus Capture Mouse for relative
+  movement, clicks, and wheel input. Ownership leases release input on session
+  loss; mouse movement uses a separate, bounded WebRTC channel.
+- Added real device orientation locking and automatic rotation through the
+  console and API, independently of the browser's visual rotation setting.
+- Added pause/resume during recorded-input playback and JSON script export.
+  Invalid or unsupported script actions are rejected instead of silently skipped.
+- Added screenshot preview with a separate save action, device volume display,
+  and custom alerts without a forced title. Renamed Photos to Media.
+- Added Bonjour LAN discovery and an explicit `LAN + Relay` / `Relay only`
+  access policy. Installing relay configuration alone does not disable LAN.
+- Added signed APT repository publishing for Cydia, Sileo, Zebra, and Installer,
+  with architecture-specific admission and release qualification gates.
+
+### Relay and Updates
+
+- Extended the setup wizard to provision both public package variants through
+  install, upgrade, backup, restore, and recovery. Relay admin can now generate
+  personalized rootless packages as well as rootful ones.
+- Added architecture-bound rootless device updates with verified rollback,
+  preserving relay identities and LAN policy. Rootless packages cannot be
+  replaced by a rootful update catalog.
+- Added visible wizard stages and timing, bounded TLS failure diagnostics, and
+  preservation of recovery state when rollback cannot safely stop services.
+- Added controller permissions, presence, device profiles, connection history,
+  and attributed audit events. Large admin lists are virtualized, with view
+  switches kept reachable outside scrolling content.
+- Bound controller pairing to the relay identity and HTTPS origin. Permission
+  edits invalidate stale sessions; authorization leases and transport-loss
+  cleanup prevent disconnected controllers from retaining an unchecked session.
+
+### Fixes
+
+- Corrected sideways capture and touch geometry on the 12.9-inch rootless iPad
+  Pro by normalizing the native panel before encoding.
+- Fixed duplicate passcode digits and stuck keyboard modifiers after browser
+  focus loss, and corrected inverted trackpad scrolling during mouse capture.
+- Fixed rootless video posters, microphone recording startup, and repeated Talk
+  speaker playback. Browser Talk sessions now report microphone failures and
+  ignore stale callbacks from an earlier session.
+- Hardened Listen capture against invalid PCM layouts, short buffers, and stale
+  samples in silent renders; sustained intermittent-noise testing remains open.
+- Fixed literal shell prompt escapes in the rootless terminal and duplicate
+  tweak entries caused by scanning symlinked injection directories twice.
+- Replaced shifting hover styles with scoped feedback, used the shared
+  orientation dropdown, added copied-state icons, and removed the doubled
+  battery percent sign.
+- Hid image-copy and file-sharing actions when browser security requirements
+  are unmet; Download remains available on local HTTP.
+- Fixed TURN relay-address selection and valid zero-valued ICE role attributes
+  being rejected, which blocked browser TURN/TCP connections to the device.
+- Fixed stale relay-admin assets in builds and updated vulnerable dependencies.
+
+### Native iOS Controller (In Development)
+
+- Added a native controller with multiple relay profiles, QR pairing, LAN
+  discovery, access-path indicators, multitouch, keyboard input, and media tools.
+- Added orientation-aware video/input, session recovery with fresh-video input
+  gating, bounded responses, and camera leases that stop capture on viewer loss.
+
+RootHide is outside this rootless target. Native device TURN remains UDP-only;
+browser Talk, image copy, and sharing still require a supported secure context.
+See [release readiness](docs/ROOTLESS-RELEASE.md) for the remaining acceptance
+checks; these changes do not imply that final release qualification is complete.
 
 ## 0.3.4
 
