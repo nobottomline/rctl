@@ -163,6 +163,17 @@ static void request_keyframe(bool camera) {
     cb();
 }
 
+static void stop_video_pacer(const std::shared_ptr<rctl::VideoPacer> &pacer) {
+    if (!pacer || !pacer->stop()) return;
+    const auto stats = pacer->stats();
+    wlog("video pacer packets=" + std::to_string(stats.packets) +
+         " expired=" + std::to_string(stats.expired) +
+         " overflow=" + std::to_string(stats.overflow) +
+         " send_errors=" + std::to_string(stats.sendErrors) +
+         " max_send_us=" + std::to_string(stats.longestSendUs) +
+         " max_tick_us=" + std::to_string(stats.longestTickUs));
+}
+
 // Drop a session's track from the active send list when its connection dies (ICE
 // disconnected/failed/closed). Otherwise a viewer that vanishes without a clean
 // "close" leaves a zombie track that push_au keeps feeding, and -- worse -- the
@@ -186,7 +197,7 @@ static void retire_track(const std::string &id) {
                        tracks.end());
         lastGone = (before > 0 && tracks.empty());
     }
-    if (pacer) pacer->stop();
+    stop_video_pacer(pacer);
     auto viewerCb = camera ? g_camera_viewer_cb : g_viewer_cb;
     if (lastGone && viewerCb) viewerCb(false);
 }
@@ -254,7 +265,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     if (dead->micIn)   dead->micIn->resetCallbacks();
     if (dead->roomMic) dead->roomMic->resetCallbacks();
     if (dead->stateDc) dead->stateDc->resetCallbacks();
-    if (dead->videoPacer) dead->videoPacer->stop();
+    stop_video_pacer(dead->videoPacer);
     if (dead->track)   dead->track->resetCallbacks();
     if (dead->pc)      dead->pc->resetCallbacks();
     // Purge from the global send lists; the onClosed that normally does this is

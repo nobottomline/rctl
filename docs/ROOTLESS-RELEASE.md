@@ -2,8 +2,9 @@
 
 ## Current Checkpoint (2026-09-14)
 
-The rootless device now has an installed packet-sizing test prerelease,
-`0.4.0~test.20260913211054.35140b41f7d6`. The exact draft `0.4.0` previously passed
+The rootless device now has an installed pacing test prerelease,
+`0.4.0~test.20260913215953.2b9be9d6c194`. It regressed remote-screen playback
+even on direct ICE and is not acceptable for release. The exact draft `0.4.0` previously passed
 the UI update and external-watchdog rollback tests described below; those
 results do not qualify the new prerelease.
 The rootful device remains on `0.3.4-24+debug`. No always-on display or keepalive
@@ -219,11 +220,28 @@ The next local candidate adds bounded remote-screen pacing and leaves remote
 playout timing to the receiver; see `TRANSPORT.md`. Both package lanes built
 and passed public-artifact audits. The focused native transport suite, all 43
 web tests, web build, and `make test` passed. The rootless package was transferred
-with matching SHA-256 for operator installation; physical pacing acceptance is
-still pending. No draft tag, published asset, permanent relay client, binding,
-or VPN setting has been replaced. Repeat forced TURN in both transports with
-the candidate client and without diagnostic playout/timeout overrides before
-calling this a fix.
+with matching SHA-256 for operator installation. No draft tag, published asset,
+permanent relay client, binding, or VPN setting has been replaced.
+
+The operator installed the candidate and restarted SpringBoard. Independent
+inspection confirmed its exact version and `install ok installed`. The new
+client was supplied only inside an isolated browser context after fetching the
+authorized control page and retaining its server-generated bootstrap and
+security headers; permanent relay files were not changed.
+
+All three thirty-second comparisons failed the sustained-frame requirement:
+TURN/TCP advanced 104 frames, TURN/UDP 130, and ordinary direct ICE 97. Direct
+ICE initially had approximately 8 ms RTT with zero reported packet loss, yet
+still stalled. Therefore the pacing candidate itself has a regression; neither
+VPN nor rootless can be blamed based on these runs. The unchanged LAN path
+advanced 165 frames in three seconds, a smoke pass rather than a full soak.
+
+A follow-up diagnostic build counts queue expiry, overflow, send exceptions and
+send duration at session teardown without logging media, secrets or device
+identities. Native transport tests and its rootless package audit pass; runtime
+diagnosis remains pending. The maximum tick interval includes idle time and must
+not alone be interpreted as scheduler lateness. Do not publish this candidate
+or promote its pacing policy until the direct-path regression is understood.
 
 ### Qualification Cleanup
 

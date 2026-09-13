@@ -15,6 +15,12 @@ namespace rctl {
 // Own complete access units around the existing RTP/NACK chain. The upstream
 // packet pacer can discard the tail of an AU without retiring dependent frames.
 class VideoPacer final : public rtc::MediaHandler {
+public:
+    struct Stats {
+        size_t packets = 0, expired = 0, overflow = 0, sendErrors = 0;
+        int64_t longestSendUs = 0, longestTickUs = 0;
+    };
+private:
     using Clock = std::chrono::steady_clock;
     struct Frame {
         rtc::message_vector packets;
@@ -31,6 +37,7 @@ class VideoPacer final : public rtc::MediaHandler {
         bool needsKeyframe = true;
         std::function<void()> requestKeyframe;
         std::shared_ptr<std::atomic<int>> bitrate;
+        Stats stats;
     };
     static constexpr size_t MaxBytes = 512 * 1024;
     static constexpr size_t MaxFrames = 64;
@@ -52,12 +59,14 @@ class VideoPacer final : public rtc::MediaHandler {
     static void run(std::shared_ptr<State> s) {
         std::unique_lock<std::mutex> lock(s->mutex);
         auto nextTick = Clock::now();
+        auto lastTick = nextTick;
         double budget = 0;
         while (!s->stopped) {
             s->changed.wait(lock, [&] { return s->stopped || !s->frames.empty(); });
             if (s->stopped) break;
             auto now = Clock::now();
             if (now - s->frames.front().queued > MaxAge) {
+                s->stats.expired++;
                 discard(*s);
                 lock.unlock(); recover(s); lock.lock();
                 continue;
@@ -69,10 +78,14 @@ class VideoPacer final : public rtc::MediaHandler {
             // Bound catch-up after scheduler stalls to one tick, not a burst of
             // accumulated credit. Include headroom for RTP and repair traffic.
             const double bytesPerTick = std::max(100000, s->bitrate->load()) * 1.5 / 8 * 0.002;
+            s->stats.longestTickUs = std::max(s->stats.longestTickUs,
+                std::chrono::duration_cast<std::chrono::microseconds>(now - lastTick).count());
+            lastTick = now;
             budget = std::min(budget + bytesPerTick, bytesPerTick);
             nextTick = now + Tick;
             while (budget > 0 && !s->frames.empty() && !s->stopped) {
                 if (Clock::now() - s->frames.front().queued > MaxAge) {
+                    s->stats.expired++;
                     discard(*s);
                     lock.unlock(); recover(s); lock.lock();
                     break;
@@ -85,9 +98,14 @@ class VideoPacer final : public rtc::MediaHandler {
                 if (frame.next == frame.packets.size()) s->frames.pop_front();
                 lock.unlock();
                 bool failed = false;
+                const auto started = Clock::now();
                 try { send(std::move(packet)); } catch (...) { failed = true; }
+                const auto sendUs = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started).count();
                 lock.lock();
+                s->stats.longestSendUs = std::max(s->stats.longestSendUs, sendUs);
+                s->stats.packets++;
                 if (failed) {
+                    s->stats.sendErrors++;
                     discard(*s);
                     lock.unlock(); recover(s); lock.lock();
                     break;
@@ -111,11 +129,17 @@ public:
         if (worker_.get_id() == std::this_thread::get_id()) worker_.detach();
         else worker_.join();
     }
-    void stop() {
+    bool stop() {
         std::lock_guard<std::mutex> lock(state_->mutex);
+        if (state_->stopped) return false;
         state_->stopped = true;
         discard(*state_);
         state_->changed.notify_all();
+        return true;
+    }
+    Stats stats() const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        return state_->stats;
     }
     void media(const rtc::Description::Media &description) override {
         packetizer_->mediaChain(description);
@@ -144,6 +168,7 @@ public:
                 std::lock_guard<std::mutex> lock(state_->mutex);
                 if (state_->stopped) continue;
                 if (bytes > MaxBytes || state_->bytes + bytes > MaxBytes || state_->frames.size() >= MaxFrames) {
+                    state_->stats.overflow++;
                     discard(*state_);
                     request = true;
                 }
