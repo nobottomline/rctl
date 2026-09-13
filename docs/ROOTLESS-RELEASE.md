@@ -2,8 +2,8 @@
 
 ## Current Checkpoint (2026-09-14)
 
-The rootless device now has an installed pacing test prerelease,
-`0.4.0~test.20260913215953.2b9be9d6c194`. It regressed remote-screen playback
+The rootless device now has an installed diagnostic pacing test prerelease,
+`0.4.0~test.20260913222134.266c6220b91b`. Its predecessor regressed remote-screen playback
 even on direct ICE and is not acceptable for release. The exact draft `0.4.0` previously passed
 the UI update and external-watchdog rollback tests described below; those
 results do not qualify the new prerelease.
@@ -238,10 +238,18 @@ advanced 165 frames in three seconds, a smoke pass rather than a full soak.
 
 A follow-up diagnostic build counts queue expiry, overflow, send exceptions and
 send duration at session teardown without logging media, secrets or device
-identities. Native transport tests and its rootless package audit pass; runtime
-diagnosis remains pending. The maximum tick interval includes idle time and must
-not alone be interpreted as scheduler lateness. Do not publish this candidate
-or promote its pacing policy until the direct-path regression is understood.
+identities. Native transport tests and its rootless package audit pass. After
+operator installation, a direct-path run counted 12 queue expirations, no
+overflow, no send exceptions, and a maximum send call of 2302 microseconds. Its
+maximum tick interval included idle time and cannot establish scheduler lateness.
+
+The next candidate fixes a separate timing-model defect: the old budget credited
+exactly 2 ms per wake even when the scheduler woke later. It now credits elapsed
+time with a 10 ms catch-up bound, excludes idle intervals from cadence diagnostics,
+and requests user-initiated QoS for the active session worker. The focused native
+suite and rootless package audit pass; physical acceptance is pending. Do not
+publish this candidate or promote its pacing policy until the direct-path
+regression is resolved and the forced-TURN tests pass.
 
 ### Qualification Cleanup
 

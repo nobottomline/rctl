@@ -165,8 +165,11 @@ bitrate it requests from the screen encoder, including profile/adaptation
 changes; this is not a new bandwidth estimator or congestion controller.
 
 The queue admits complete access units and is bounded to 512 KiB, 64 frames,
-and 500 ms residence. It releases packets in 2 ms ticks at 1.5 times the encoder
-bitrate, with no accumulated catch-up burst after a scheduling stall. Overflow,
+and 500 ms residence. It schedules packets in 2 ms ticks at 1.5 times the encoder
+bitrate, accruing credit from actual elapsed time rather than assuming the
+scheduler meets every deadline. Catch-up is capped at 10 ms of traffic. On Apple
+platforms the session worker requests user-initiated QoS; it still waits when
+idle and is destroyed with the session. Overflow,
 expiry or a send exception discards the remaining queue and dependent delta
 frames until a fresh keyframe arrives, requesting recovery through the existing
 debounced PLI path. An already in-flight packet cannot be recalled. Session

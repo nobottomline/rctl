@@ -171,7 +171,9 @@ static void stop_video_pacer(const std::shared_ptr<rctl::VideoPacer> &pacer) {
          " overflow=" + std::to_string(stats.overflow) +
          " send_errors=" + std::to_string(stats.sendErrors) +
          " max_send_us=" + std::to_string(stats.longestSendUs) +
-         " max_tick_us=" + std::to_string(stats.longestTickUs));
+         " max_tick_us=" + std::to_string(stats.longestTickUs) +
+         " active_ticks=" + std::to_string(stats.activeWaits) +
+         " mean_tick_us=" + std::to_string(stats.activeWaits ? stats.activeWaitUs / stats.activeWaits : 0));
 }
 
 // Drop a session's track from the active send list when its connection dies (ICE

@@ -9,6 +9,9 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 
 namespace rctl {
 
@@ -18,7 +21,8 @@ class VideoPacer final : public rtc::MediaHandler {
 public:
     struct Stats {
         size_t packets = 0, expired = 0, overflow = 0, sendErrors = 0;
-        int64_t longestSendUs = 0, longestTickUs = 0;
+        int64_t longestSendUs = 0, longestTickUs = 0, activeWaitUs = 0;
+        size_t activeWaits = 0;
     };
 private:
     using Clock = std::chrono::steady_clock;
@@ -57,14 +61,20 @@ private:
         try { s->requestKeyframe(); } catch (...) {}
     }
     static void run(std::shared_ptr<State> s) {
+#ifdef __APPLE__
+        // This worker exists only for an active interactive video session.
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+#endif
         std::unique_lock<std::mutex> lock(s->mutex);
         auto nextTick = Clock::now();
         auto lastTick = nextTick;
         double budget = 0;
         while (!s->stopped) {
+            const bool idle = s->frames.empty();
             s->changed.wait(lock, [&] { return s->stopped || !s->frames.empty(); });
             if (s->stopped) break;
             auto now = Clock::now();
+            if (idle) lastTick = now - Tick;
             if (now - s->frames.front().queued > MaxAge) {
                 s->stats.expired++;
                 discard(*s);
@@ -75,13 +85,18 @@ private:
                 s->changed.wait_until(lock, nextTick, [&] { return s->stopped; });
                 continue;
             }
-            // Bound catch-up after scheduler stalls to one tick, not a burst of
-            // accumulated credit. Include headroom for RTP and repair traffic.
-            const double bytesPerTick = std::max(100000, s->bitrate->load()) * 1.5 / 8 * 0.002;
+            // Timer wakeups are not a clock: accrue actual elapsed credit. Bound
+            // catch-up to 10ms of traffic even after a long scheduling stall.
+            const double bytesPerSecond = std::max(100000, s->bitrate->load()) * 1.5 / 8;
+            const double elapsed = std::chrono::duration<double>(now - lastTick).count();
             s->stats.longestTickUs = std::max(s->stats.longestTickUs,
                 std::chrono::duration_cast<std::chrono::microseconds>(now - lastTick).count());
+            if (!idle) {
+                s->stats.activeWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(now - lastTick).count();
+                s->stats.activeWaits++;
+            }
             lastTick = now;
-            budget = std::min(budget + bytesPerTick, bytesPerTick);
+            budget = std::min(budget + bytesPerSecond * elapsed, bytesPerSecond * 0.010);
             nextTick = now + Tick;
             while (budget > 0 && !s->frames.empty() && !s->stopped) {
                 if (Clock::now() - s->frames.front().queued > MaxAge) {
