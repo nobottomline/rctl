@@ -1,0 +1,10 @@
+// Optional per-machine signing settings (DEVELOPMENT_TEAM). The file is git-ignored.
+#include? "../../Config/Local.xcconfig"
+#include "Base.xcconfig"
+
+SWIFT_OPTIMIZATION_LEVEL = -O
+SWIFT_COMPILATION_MODE = wholemodule
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+ENABLE_NS_ASSERTIONS = NO
+VALIDATE_PRODUCT = YES
+STRIP_SWIFT_SYMBOLS = YES
