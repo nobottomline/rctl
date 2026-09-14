@@ -194,6 +194,30 @@ struct ControllerRequestTests {
         }
     }
 
+    @Test("Signed requests decode success and surface relay status codes", arguments: requestDelegations)
+    func signedRequestStatus(_ delegation: RequestDelegation) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SignedRequestStatusStub.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = ControllerAPIClient(session: session, delegation: delegation)
+        let key = try deterministicKey()
+        func info(_ scenario: String) async throws -> PairedController {
+            try await client.controllerInfo(origin: "https://\(scenario).relay.example",
+                accessToken: "cat_example.secret-value", signingKey: key)
+        }
+
+        #expect(try await info("ok") == PairedController(id: "ctl_example", name: "Owner phone",
+            platform: "ios", scopes: [.screenView]))
+        await #expect(throws: ControllerClientError.http(status: 401, code: "token_revoked")) {
+            _ = try await info("revoked")
+        }
+        await #expect(throws: ControllerClientError.http(status: 503, code: "http_error")) {
+            _ = try await info("unavailable")
+        }
+        await #expect(throws: ControllerClientError.invalidResponse) { _ = try await info("malformed") }
+    }
+
     @Test("Decoded credentials reject malformed and stale server data")
     func responseValidation() throws {
         let controller = PairedController(
@@ -252,6 +276,31 @@ struct ControllerRequestTests {
         let parsed = try P256.Signing.ECDSASignature(derRepresentation: signature)
         let publicKey = try P256.Signing.PublicKey(x963Representation: key.publicKeySPKIDER.suffix(65))
         return publicKey.isValidSignature(parsed, for: SHA256.hash(data: message))
+    }
+}
+
+private final class SignedRequestStatusStub: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        let url = request.url!
+        guard request.value(forHTTPHeaderField: "X-RCTL-Signature")?.isEmpty == false,
+              url.path == "/api/controller/me" else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let (status, body): (Int, String) = switch url.host!.split(separator: ".")[0] {
+        case "ok": (200, #"{"controller":{"id":"ctl_example","name":"Owner phone","platform":"ios","scopes":["screen.view"]}}"#)
+        case "revoked": (401, #"{"error":"token_revoked"}"#)
+        case "unavailable": (503, "Service Unavailable")
+        default: (200, #"{"controller":{}}"#)
+        }
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
     }
 }
 

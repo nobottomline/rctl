@@ -184,6 +184,21 @@ struct LocalDiscoveryTests {
         }
     }
 
+    @MainActor @Test func resolveTimeoutIsInSecondsAndClamped() async throws {
+        let resolver = LocalDeviceResolver()
+        let identity = try LocalServiceIdentity(name: "synthetic timeout", type: "_rctl._tcp", domain: "local.")
+        let localOnly = UInt32.max // kDNSServiceInterfaceIndexLocalOnly: no query leaves this host.
+        for timeout: TimeInterval in [0.3, 0, -1, .nan] {
+            let started = ProcessInfo.processInfo.systemUptime
+            await #expect(throws: LocalDiscoveryError.timedOut, "timeout \(timeout)") {
+                try await resolver.resolve(identity, interfaceIndex: localOnly, timeout: timeout)
+            }
+            let elapsed = ProcessInfo.processInfo.systemUptime - started
+            let minimum = timeout > 0 ? timeout * 0.9 : 0
+            #expect(elapsed >= minimum && elapsed < 2, "timeout \(timeout) took \(elapsed)")
+        }
+    }
+
     @MainActor @Test func cancellationBeforeDNSAndEmptyInterfaces() async throws {
         let resolver = LocalDeviceResolver()
         let identity = try LocalServiceIdentity(name: "synthetic", type: "_rctl._tcp", domain: "local.")

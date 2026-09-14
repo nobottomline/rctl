@@ -39,7 +39,7 @@ public struct LocalDeviceAddress: Codable, Equatable, Hashable, Sendable {
         var output = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
         let converted = bytes.withUnsafeBytes { inet_ntop(family, $0.baseAddress, &output, socklen_t(output.count)) }
         guard converted != nil else { throw LocalConnectionError.invalidAddress }
-        let canonicalHost = String(cString: output)
+        let canonicalHost = String(decoding: output.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         guard family != AF_INET || canonicalHost == host else { throw LocalConnectionError.invalidAddress }
         self.host = canonicalHost
         self.port = port

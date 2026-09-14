@@ -47,7 +47,7 @@ public final class LocalDeviceBrowser {
         state = .searching
         searchSettled = false
         emptyDeadline = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(6)) } catch { return }
+            do { try await Task.sleep(nanoseconds: 6_000_000_000) } catch { return }
             guard let self, generation == attempt else { return }
             searchSettled = true
             onChange?()
@@ -58,7 +58,7 @@ public final class LocalDeviceBrowser {
         self.browser = browser
         maintenance = Task { [weak self] in
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
                 guard let self, self.generation == attempt else { return }
                 self.catalog.expire(now: ProcessInfo.processInfo.systemUptime)
                 self.publish()
@@ -98,7 +98,7 @@ public final class LocalDeviceBrowser {
                 let bounded = Array(results.prefix(64))
                 self.debounce?.cancel()
                 self.debounce = Task { [weak self] in
-                    do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                    do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
                     guard let self, self.generation == attempt else { return }
                     self.update(bounded)
                 }

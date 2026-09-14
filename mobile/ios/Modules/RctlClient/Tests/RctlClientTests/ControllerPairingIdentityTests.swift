@@ -4,13 +4,13 @@ import Testing
 
 @Suite("Controller pairing identity")
 struct ControllerPairingIdentityTests {
-    @Test(arguments: ["match", "different", "missing", "numeric", "empty"])
-    func validatesClaimResponseIdentity(_ scenario: String) async throws {
+    @Test(arguments: ["match", "different", "missing", "numeric", "empty"], requestDelegations)
+    func validatesClaimResponseIdentity(_ scenario: String, _ delegation: RequestDelegation) async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PairingIdentityResponse.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
-        let client = ControllerAPIClient(session: session)
+        let client = ControllerAPIClient(session: session, delegation: delegation)
         let pairing = try client.decodePairing(from: payload(scenario: scenario))
         let key = try ControllerSigningKey.generate(preferSecureEnclave: false)
         if scenario == "match" {

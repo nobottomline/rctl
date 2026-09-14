@@ -5,9 +5,15 @@ import Security
 public struct ControllerAPIClient: Sendable {
     private static let responseLimit = 1 << 20
     private let session: URLSession
+    private let delegation: RequestDelegation
 
     public init(session: URLSession = .shared) {
+        self.init(session: session, delegation: .preferred)
+    }
+
+    init(session: URLSession, delegation: RequestDelegation) {
         self.session = session
+        self.delegation = delegation
     }
 
     public func decodePairing(
@@ -344,7 +350,8 @@ public struct ControllerAPIClient: Sendable {
     }
 
     private func send<Response: Decodable>(_ request: URLRequest, as type: Response.Type) async throws -> Response {
-        let operation = BoundedControllerRequest(session: session, request: request, limit: Self.responseLimit)
+        let operation = BoundedControllerRequest(session: session, request: request, limit: Self.responseLimit,
+                                                 delegation: delegation)
         let (data, http) = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { operation.start($0) }
         } onCancel: { operation.cancel() }

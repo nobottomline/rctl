@@ -91,4 +91,156 @@ struct LocalConnectionTests {
         }
         #expect(destination == nil)
     }
+
+    /// The macOS test host supports task delegates, so the pre-iOS 15 dedicated
+    /// session path runs only when a test selects it explicitly.
+    static let delegations: [RequestDelegation] = [.taskDelegate, .dedicatedSession]
+
+    @Test("LAN capabilities decode on both delegate paths", arguments: delegations)
+    func capabilities(_ delegation: RequestDelegation) async throws {
+        let client = LocalDeviceClient(configuration: stubConfiguration(), delegation: delegation)
+        let capabilities = try await client.capabilities(at: LocalDeviceAddress("192.168.2.3:\(CapabilitiesScenario.valid.rawValue)"))
+        #expect(capabilities.component == "daemon")
+        #expect(capabilities.features.contains("screen.webrtc"))
+        await #expect(throws: LocalConnectionError.unsupportedMedia) {
+            _ = try await client.capabilities(at: LocalDeviceAddress("192.168.2.3:\(CapabilitiesScenario.valid.rawValue)"), camera: true)
+        }
+    }
+
+    @Test("LAN capabilities reject unsafe responses on both delegate paths",
+          arguments: CapabilitiesScenario.failures, delegations)
+    func capabilityFailures(_ scenario: CapabilitiesScenario, _ delegation: RequestDelegation) async throws {
+        let client = LocalDeviceClient(configuration: stubConfiguration(), delegation: delegation)
+        let address = try LocalDeviceAddress("192.168.2.3:\(scenario.rawValue)")
+        await #expect(throws: scenario.expected) { _ = try await client.capabilities(at: address) }
+    }
+
+    @Test("LAN capabilities cancellation aborts a stalled request", arguments: delegations)
+    func capabilityCancellation(_ delegation: RequestDelegation) async throws {
+        let client = LocalDeviceClient(configuration: stubConfiguration(), delegation: delegation)
+        let address = try LocalDeviceAddress("192.168.2.3:\(CapabilitiesScenario.silent.rawValue)")
+        let task = Task { try await client.capabilities(at: address) }
+        try await Task.sleep(for: .milliseconds(20))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+    }
+
+    /// A dedicated session retains its delegate until invalidated, so a request
+    /// that outlives its terminal path would leak the session and its delegate.
+    @Test("LAN capabilities request is released after every terminal path",
+          arguments: TerminalPath.allCases, delegations)
+    func capabilityRequestRelease(_ path: TerminalPath, _ delegation: RequestDelegation) async throws {
+        let session = LocalNetworkSession.make(configuration: stubConfiguration())
+        defer { session.invalidateAndCancel() }
+        let reference = try await finishCapabilities(path, session: session, delegation: delegation)
+        let deadline = Date().addingTimeInterval(5)
+        while reference.value != nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(reference.value == nil)
+    }
+
+    enum TerminalPath: CaseIterable, Sendable {
+        case success, failure, cancelBeforeStart, cancelAfterStart
+    }
+
+    enum CapabilitiesScenario: Int, Sendable {
+        case valid = 8080, declaredOversize, chunkedOversize, redirectStatus, followedRedirect, unavailable, wrongComponent, silent
+
+        static let failures: [Self] = [.declaredOversize, .chunkedOversize, .redirectStatus, .followedRedirect,
+                                       .unavailable, .wrongComponent]
+
+        var expected: LocalConnectionError {
+            switch self {
+            case .declaredOversize, .chunkedOversize: .responseTooLarge
+            case .redirectStatus, .followedRedirect: .redirect
+            case .unavailable: .http(503)
+            case .valid, .wrongComponent, .silent: .invalidResponse
+            }
+        }
+    }
+
+    private func finishCapabilities(_ path: TerminalPath, session: URLSession,
+                                    delegation: RequestDelegation) async throws -> WeakRequest {
+        let scenario: CapabilitiesScenario = switch path {
+        case .success: .valid
+        case .failure: .declaredOversize
+        case .cancelBeforeStart, .cancelAfterStart: .silent
+        }
+        let address = try LocalDeviceAddress("192.168.2.3:\(scenario.rawValue)")
+        let operation = LocalCapabilitiesRequest(session: session, address: address, delegation: delegation)
+        let reference = WeakRequest(operation)
+        if path == .cancelBeforeStart { operation.cancel() }
+        let run = Task {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { operation.start($0) }
+            } onCancel: { operation.cancel() }
+        }
+        if path == .cancelAfterStart {
+            try await Task.sleep(for: .milliseconds(20))
+            run.cancel()
+        }
+        let result = await run.result
+        switch path {
+        case .success: #expect((try? result.get()) != nil)
+        case .failure: #expect(throws: LocalConnectionError.responseTooLarge) { try result.get() }
+        case .cancelBeforeStart, .cancelAfterStart: #expect(throws: CancellationError.self) { try result.get() }
+        }
+        return reference
+    }
+
+    private func stubConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CapabilitiesStub.self]
+        return configuration
+    }
+}
+
+private final class WeakRequest: @unchecked Sendable {
+    weak var value: LocalCapabilitiesRequest?
+    init(_ value: LocalCapabilitiesRequest) { self.value = value }
+}
+
+private final class CapabilitiesStub: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        let url = request.url!
+        guard let scenario = url.port.flatMap(LocalConnectionTests.CapabilitiesScenario.init(rawValue:)),
+              scenario != .silent else { return }
+        let daemon = #"{"product":"rctl","component":"daemon","daemon":{"version":"0.3.3"},"browser":{"version":"0.3.3"},"protocol":{"major":1,"minor":1},"features":["screen.webrtc"]}"#
+        let relay = #"{"product":"rctl","component":"relay","relay":{"version":"0.3.3"},"protocol":{"major":1,"minor":1},"features":["screen.webrtc"]}"#
+        var headers = ["Content-Type": "application/json"]
+        switch scenario {
+        case .followedRedirect:
+            var target = URLRequest(url: URL(string: "http://192.168.2.4:8080/v1/capabilities")!)
+            target.httpShouldHandleCookies = false
+            let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: nil,
+                headerFields: ["Location": target.url!.absoluteString])!
+            client?.urlProtocol(self, wasRedirectedTo: target, redirectResponse: response)
+            return
+        case .declaredOversize:
+            headers["Content-Length"] = String(64 * 1024 + 1)
+        default: break
+        }
+        let status = switch scenario {
+        case .redirectStatus: 302
+        case .unavailable: 503
+        default: 200
+        }
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        switch scenario {
+        case .declaredOversize:
+            // Keep the transfer unfinished: rejection must not depend on EOF.
+            client?.urlProtocol(self, didLoad: Data([0]))
+        case .chunkedOversize:
+            client?.urlProtocol(self, didLoad: Data(repeating: 0x20, count: 64 * 1024))
+            client?.urlProtocol(self, didLoad: Data([0x20]))
+        default:
+            client?.urlProtocol(self, didLoad: Data((scenario == .wrongComponent ? relay : daemon).utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
 }

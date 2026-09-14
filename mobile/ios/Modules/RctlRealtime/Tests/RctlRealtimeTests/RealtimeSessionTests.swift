@@ -22,6 +22,21 @@ struct RealtimeSessionTests {
         }
     }
 
+    @Test("Log messages keep their text and redact every value not marked public")
+    func logPrivacy() {
+        let literal: RealtimeLog.Message = "First remote video frame decoded"
+        #expect(literal.publicText == "First remote video frame decoded" && literal.privateText == nil)
+
+        let kind = "negotiation"
+        let marked: RealtimeLog.Message = "Realtime session failed: \(kind, privacy: .public)"
+        #expect(marked.publicText == "Realtime session failed: negotiation" && marked.privateText == nil)
+
+        let width: Int32 = 1920
+        let unmarked: RealtimeLog.Message = "Presented first Metal frame: \(width)x\(1080) rotation=\(90, privacy: .public)"
+        #expect(unmarked.publicText == "Presented first Metal frame: ")
+        #expect(unmarked.privateText == "1920x1080 rotation=90")
+    }
+
     private func request(_ value: String) -> URLRequest {
         URLRequest(url: URL(string: value)!)
     }

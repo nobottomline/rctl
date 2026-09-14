@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import CoreImage
 import Metal
-import OSLog
 import QuartzCore
 import UIKit
 @preconcurrency import LiveKitWebRTC
@@ -169,7 +168,7 @@ final class RctlMetalVideoView: UIView {
 }
 
 final class RctlMetalVideoRenderer: NSObject, LKRTCVideoRenderer, @unchecked Sendable {
-    static let logger = Logger(subsystem: "com.greatlove.rctl.controller", category: "video-renderer")
+    static let logger = RealtimeLog(category: "video-renderer")
 
     private let lock = NSLock()
     private weak var view: RctlMetalVideoView?

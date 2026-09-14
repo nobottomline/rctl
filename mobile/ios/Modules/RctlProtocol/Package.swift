@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "RctlProtocol",
     platforms: [
-        .iOS(.v16),
+        .iOS(.v13),
         .macOS(.v13),
     ],
     products: [

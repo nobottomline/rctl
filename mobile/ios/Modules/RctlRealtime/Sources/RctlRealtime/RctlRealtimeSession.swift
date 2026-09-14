@@ -1,6 +1,5 @@
 @preconcurrency import Foundation
 @preconcurrency import LiveKitWebRTC
-import OSLog
 import RctlProtocol
 
 public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
@@ -11,7 +10,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
     private static let maximumControlBufferedBytes: UInt64 = 64 * 1_024
     private static let connectionTimeout: TimeInterval = 15
     private static let disconnectGrace: TimeInterval = 5
-    private static let logger = Logger(subsystem: "com.greatlove.rctl.controller", category: "WebRTC")
+    private static let logger = RealtimeLog(category: "WebRTC")
 
     private let factory: RctlPeerConnectionFactory
     private let urlSession: URLSession
@@ -108,7 +107,7 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
                 }
                 view.setDeviceOrientation(orientation)
                 view.setTrack(track) { [weak self] timestamp in
-                    self?.queue.async {
+                    self?.queue.async { [weak self] in
                         self?.handleVideoFrameLocked(at: timestamp, generation: generation, trackID: trackID)
                     }
                 }
@@ -728,7 +727,7 @@ extension RctlRealtimeSession: LKRTCPeerConnectionDelegate {
         let trackID = track.trackId
         DispatchQueue.main.async {
             view?.setTrack(track) { [weak self] timestamp in
-                self?.queue.async {
+                self?.queue.async { [weak self] in
                     self?.handleVideoFrameLocked(at: timestamp, generation: generation, trackID: trackID)
                 }
             }

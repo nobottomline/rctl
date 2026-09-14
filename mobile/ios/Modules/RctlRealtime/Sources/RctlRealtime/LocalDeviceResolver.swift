@@ -9,18 +9,18 @@ public final class LocalDeviceResolver {
     public init() {}
 
     public func resolve(_ identity: LocalServiceIdentity, interfaceIndices: [UInt32], userInitiated: Bool = false) async throws -> ResolvedLocalDevice {
-        let end = ContinuousClock.now.advanced(by: .seconds(userInitiated ? 20 : 5))
+        let end = ProcessInfo.processInfo.systemUptime + (userInitiated ? 20 : 5)
         var lastError: Error = LocalDiscoveryError.unsupportedNetwork
         var seen = Set<UInt32>()
         let interfaces = interfaceIndices.prefix(8).filter { seen.insert($0).inserted }
         guard !interfaces.isEmpty else { throw lastError }
         for attempt in 0..<(userInitiated ? 4 : 1) {
-            if attempt > 0 { try await Task.sleep(for: .milliseconds(250)) }
+            if attempt > 0 { try await Task.sleep(nanoseconds: 250_000_000) }
             for index in interfaces {
                 try Task.checkCancellation()
-                let remaining = ContinuousClock.now.duration(to: end)
-                guard remaining > .zero else { throw LocalDiscoveryError.timedOut }
-                let budget = min(remaining, .seconds(interfaces.count > 1 ? 2 : 5))
+                let remaining = end - ProcessInfo.processInfo.systemUptime
+                guard remaining > 0 else { throw LocalDiscoveryError.timedOut }
+                let budget = min(remaining, interfaces.count > 1 ? 2 : 5)
                 do { return try await resolve(identity, interfaceIndex: index, timeout: budget, wakeOnResolve: userInitiated) }
                 catch is CancellationError { throw CancellationError() }
                 catch LocalDiscoveryError.malformedRecord { throw LocalDiscoveryError.malformedRecord }
@@ -31,11 +31,13 @@ public final class LocalDeviceResolver {
         throw lastError
     }
 
-    public func resolve(_ identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: Duration = .seconds(5), wakeOnResolve: Bool = false) async throws -> ResolvedLocalDevice {
+    /// `timeout` is in seconds, clamped to 0...5 (NaN counts as 0).
+    public func resolve(_ identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: TimeInterval = 5, wakeOnResolve: Bool = false) async throws -> ResolvedLocalDevice {
         try Task.checkCancellation()
         guard queries.count < 4 else { throw LocalDiscoveryError.busy }
         let id = UUID()
-        let query = LocalDNSQuery(identity: identity, interfaceIndex: interfaceIndex, timeout: min(timeout, .seconds(5)), wakeOnResolve: wakeOnResolve)
+        let bounded = timeout.isNaN ? 0 : min(max(timeout, 0), 5)
+        let query = LocalDNSQuery(identity: identity, interfaceIndex: interfaceIndex, timeout: bounded, wakeOnResolve: wakeOnResolve)
         queries[id] = query
         defer { queries[id] = nil }
         return try await withTaskCancellationHandler {
@@ -55,7 +57,7 @@ public final class LocalDeviceResolver {
 private final class LocalDNSQuery {
     let identity: LocalServiceIdentity
     let interfaceIndex: UInt32
-    let timeout: Duration
+    let timeout: TimeInterval
     let wakeOnResolve: Bool
     var resolveRef: DNSServiceRef?
     var addressRef: DNSServiceRef?
@@ -67,7 +69,7 @@ private final class LocalDNSQuery {
     var seenAddresses = 0
     var candidates: [ResolvedLocalDevice] = []
 
-    init(identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: Duration, wakeOnResolve: Bool) {
+    init(identity: LocalServiceIdentity, interfaceIndex: UInt32, timeout: TimeInterval, wakeOnResolve: Bool) {
         self.identity = identity; self.interfaceIndex = interfaceIndex; self.timeout = timeout
         self.wakeOnResolve = wakeOnResolve
     }
@@ -89,7 +91,7 @@ private final class LocalDNSQuery {
             finish(.failure(LocalDiscoveryError.unavailable)); return
         }
         deadline = Task { [weak self, timeout] in
-            do { try await Task.sleep(for: timeout) } catch { return }
+            do { try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) } catch { return }
             self?.finish(.failure(LocalDiscoveryError.timedOut))
         }
     }

@@ -3,15 +3,21 @@ import RctlProtocol
 
 public final class LocalDeviceClient: Sendable {
     private let session: URLSession
+    private let delegation: RequestDelegation
 
-    public init(configuration: URLSessionConfiguration = .ephemeral) {
+    public convenience init(configuration: URLSessionConfiguration = .ephemeral) {
+        self.init(configuration: configuration, delegation: .preferred)
+    }
+
+    init(configuration: URLSessionConfiguration, delegation: RequestDelegation) {
         session = LocalNetworkSession.make(configuration: configuration)
+        self.delegation = delegation
     }
 
     deinit { session.invalidateAndCancel() }
 
     public func capabilities(at address: LocalDeviceAddress, camera: Bool = false) async throws -> Capabilities {
-        let operation = LocalCapabilitiesRequest(session: session, address: address)
+        let operation = LocalCapabilitiesRequest(session: session, address: address, delegation: delegation)
         let data = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { operation.start($0) }
         } onCancel: {
@@ -66,19 +72,40 @@ private final class LocalNetworkDelegate: NSObject, URLSessionTaskDelegate, Send
     }
 }
 
-private final class LocalCapabilitiesRequest: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+/// Where a bounded request receives its URLSession delegate callbacks.
+enum RequestDelegation: Sendable {
+    /// Task-local delegate on the injected session (iOS 15 / macOS 12 and later).
+    case taskDelegate
+    /// Dedicated per-request session built from the injected session's
+    /// configuration. Used before iOS 15, and by tests to exercise that path.
+    case dedicatedSession
+
+    static var preferred: RequestDelegation {
+        if #available(iOS 15, macOS 12, *) { return .taskDelegate }
+        return .dedicatedSession
+    }
+}
+
+/// Before iOS 15 this request drives a dedicated session that copies the local
+/// session's isolated configuration. The request itself refuses redirects and
+/// challenges, and the session is invalidated on every terminal path because it
+/// retains its delegate until invalidation.
+final class LocalCapabilitiesRequest: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private static let limit = 64 * 1024
     private let lock = NSLock()
     private let session: URLSession
     private let address: LocalDeviceAddress
+    private let delegation: RequestDelegation
     private var task: URLSessionDataTask?
+    private var dedicatedSession: URLSession?
     private var continuation: CheckedContinuation<Data, Error>?
     private var cancelled = false
     private var data = Data()
 
-    init(session: URLSession, address: LocalDeviceAddress) {
+    init(session: URLSession, address: LocalDeviceAddress, delegation: RequestDelegation) {
         self.session = session
         self.address = address
+        self.delegation = delegation
     }
 
     func start(_ continuation: CheckedContinuation<Data, Error>) {
@@ -92,8 +119,15 @@ private final class LocalCapabilitiesRequest: NSObject, URLSessionDataDelegate, 
         var request = URLRequest(url: address.capabilitiesURL)
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let task = session.dataTask(with: request)
-        task.delegate = self
+        let task: URLSessionDataTask
+        if #available(iOS 15, macOS 12, *), delegation == .taskDelegate {
+            task = session.dataTask(with: request)
+            task.delegate = self
+        } else {
+            let dedicated = URLSession(configuration: session.configuration, delegate: self, delegateQueue: nil)
+            dedicatedSession = dedicated
+            task = dedicated.dataTask(with: request)
+        }
         self.task = task
         lock.unlock()
         task.resume()
@@ -112,9 +146,12 @@ private final class LocalCapabilitiesRequest: NSObject, URLSessionDataDelegate, 
         self.continuation = nil
         let task = task
         self.task = nil
+        let dedicatedSession = dedicatedSession
+        self.dedicatedSession = nil
         data.removeAll()
         lock.unlock()
         task?.cancel()
+        dedicatedSession?.invalidateAndCancel()
         continuation?.resume(with: result)
     }
 

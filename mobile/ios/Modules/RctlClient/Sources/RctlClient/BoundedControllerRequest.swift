@@ -1,24 +1,47 @@
 import Foundation
 
+/// Where a bounded request receives its URLSession delegate callbacks.
+enum RequestDelegation: Sendable {
+    /// Task-local delegate on the injected session (iOS 15 / macOS 12 and later).
+    case taskDelegate
+    /// Dedicated per-request session built from the injected session's
+    /// configuration. Used before iOS 15, and by tests to exercise that path.
+    case dedicatedSession
+
+    static var preferred: RequestDelegation {
+        if #available(iOS 15, macOS 12, *) { return .taskDelegate }
+        return .dedicatedSession
+    }
+}
+
 /// Task-local delegate preserves the injected session while bounding decoded
 /// response bytes and preventing signed requests from following redirects.
+/// Before iOS 15 the same delegate drives a dedicated session that reuses the
+/// injected configuration and is invalidated on every terminal path, because
+/// a session retains its delegate until invalidation.
 final class BoundedControllerRequest: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     typealias Response = (Data, HTTPURLResponse)
     private let lock = NSLock()
     private let session: URLSession
     private let request: URLRequest
     private let limit: Int
+    private let delegation: RequestDelegation
+    private let deadline: TimeInterval
     private var task: URLSessionDataTask?
+    private var dedicatedSession: URLSession?
     private var continuation: CheckedContinuation<Response, Error>?
     private var cancelled = false
     private var data = Data()
     private var response: HTTPURLResponse?
     private var timeout: DispatchWorkItem?
 
-    init(session: URLSession, request: URLRequest, limit: Int) {
+    init(session: URLSession, request: URLRequest, limit: Int,
+         delegation: RequestDelegation = .preferred, deadline: TimeInterval = 20) {
         self.session = session
         self.request = request
         self.limit = limit
+        self.delegation = delegation
+        self.deadline = deadline
     }
 
     func start(_ continuation: CheckedContinuation<Response, Error>) {
@@ -32,15 +55,22 @@ final class BoundedControllerRequest: NSObject, URLSessionDataDelegate, @uncheck
         var request = request
         request.httpShouldHandleCookies = false
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let task = session.dataTask(with: request)
-        task.delegate = self
+        let task: URLSessionDataTask
+        if #available(iOS 15, macOS 12, *), delegation == .taskDelegate {
+            task = session.dataTask(with: request)
+            task.delegate = self
+        } else {
+            let dedicated = URLSession(configuration: session.configuration, delegate: self, delegateQueue: nil)
+            dedicatedSession = dedicated
+            task = dedicated.dataTask(with: request)
+        }
         self.task = task
         let timeout = DispatchWorkItem { [weak self] in
             self?.finish(.failure(URLError(.timedOut)))
         }
         self.timeout = timeout
         lock.unlock()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 20, execute: timeout)
+        DispatchQueue.global().asyncAfter(deadline: .now() + deadline, execute: timeout)
         task.resume()
     }
 
@@ -57,11 +87,14 @@ final class BoundedControllerRequest: NSObject, URLSessionDataDelegate, @uncheck
         self.continuation = nil
         let task = task
         self.task = nil
+        let dedicatedSession = dedicatedSession
+        self.dedicatedSession = nil
         timeout?.cancel()
         timeout = nil
         data.removeAll()
         lock.unlock()
         task?.cancel()
+        dedicatedSession?.invalidateAndCancel()
         continuation?.resume(with: result)
     }
 
