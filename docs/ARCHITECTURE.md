@@ -73,6 +73,17 @@ uses `scripts/build-rootless.sh` and manual installation; see
 [`ROOTLESS.md`](ROOTLESS.md). Its code and static web client live below the
 jailbreak root, while personal data and sockets retain their existing paths.
 
+Wizard-managed relay updates have a separate host owner: the systemd
+`rctl-update-agent` runs the verified setup binary outside the relay container.
+The unprivileged relay forwards a fixed authenticated update API over a Unix
+socket; it never receives the Docker socket or arbitrary host-command access.
+The agent verifies a purpose-separated signed catalog and artifact hashes before
+running the target setup's existing backup/upgrade/recovery transaction. Jobs,
+release high-water mark, and opt-in scheduling survive relay restarts outside
+the deployment backup. Device updates remain separately confirmed and owned by
+`rctl-updater`. See [SETUP.md](SETUP.md#admin-managed-server-updates) for the trust
+boundary and [SETUP-QUALIFICATION.md](SETUP-QUALIFICATION.md) for delivery gates.
+
 ---
 
 ## 2. Data flow

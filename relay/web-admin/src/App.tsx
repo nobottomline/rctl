@@ -9,6 +9,7 @@ import { ControllersPanel } from './components/ControllersPanel'
 import { SessionsPanel } from './components/SessionsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
 import { StatusPanel } from './components/StatusPanel'
+import { UpdatesPanel } from './components/UpdatesPanel'
 import { Modal } from './components/ui/Modal'
 import { Button } from './components/ui/Button'
 import { api, ApiError } from './lib/api'
@@ -16,6 +17,7 @@ import type { AuditEntry, Controller, Device, EnrollmentSummary, RelayStatus, Se
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null) // null = checking
+  const [connecting, setConnecting] = useState(false)
   const [devices, setDevices] = useState<Device[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [enrollments, setEnrollments] = useState<EnrollmentSummary[]>([])
@@ -74,11 +76,12 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  // Initial auth probe: any failure (401 OR relay unreachable) drops to the
-  // login screen rather than spinning on the splash forever.
+  // A restart is not a logout: retain the session cookie and retry a transient
+  // outage, including when the page is reopened during a server update.
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
+    let retry: ReturnType<typeof setTimeout>
+    async function probe() {
       try {
         const [d, s, e, c, st] = await Promise.all([
           api.devices(),
@@ -94,14 +97,20 @@ export default function App() {
         setControllers(c.controllers || [])
         setStatus(st)
         setAuthed(true)
-      } catch {
-        if (!cancelled) setAuthed(false)
+        setConnecting(false)
+      } catch (err) {
+        if (!cancelled) {
+          if (err instanceof ApiError && err.status === 401) setAuthed(false)
+          else { setConnecting(true); retry = setTimeout(probe, 3000) }
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
-    })()
+    }
+    void probe()
     return () => {
       cancelled = true
+      clearTimeout(retry)
     }
   }, [])
 
@@ -236,7 +245,7 @@ export default function App() {
     setControllers([])
   }
 
-  if (authed === null) return <BootSplash />
+  if (authed === null) return <BootSplash reconnecting={connecting} />
   if (authed === false)
     return (
       <LoginScreen
@@ -300,6 +309,7 @@ export default function App() {
             onRevokeOthers={revokeOthers}
           />
           <StatusPanel status={status} />
+          <UpdatesPanel />
         </div>
       </Shell>
 
@@ -421,10 +431,13 @@ export default function App() {
   )
 }
 
-function BootSplash() {
+function BootSplash({ reconnecting }: { reconnecting: boolean }) {
   return (
     <div className="grid min-h-svh place-items-center">
-      <div className="size-9 animate-spin rounded-full border-2 border-line border-t-signal" />
+      <div className="flex flex-col items-center gap-4" role="status">
+        <div className="size-9 animate-spin rounded-full border-2 border-line border-t-signal" />
+        {reconnecting && <p className="text-sm text-muted">Relay unavailable. Reconnecting…</p>}
+      </div>
     </div>
   )
 }

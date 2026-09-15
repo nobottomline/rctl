@@ -78,6 +78,7 @@ rctl-relay_linux_amd64
 rctl-relay_linux_arm64
 rctl-update-stable.json
 rctl-update-rootless-stable.json
+rctl-host-stable.json
 install.sh
 SHA256SUMS
 ```
@@ -111,8 +112,8 @@ creates GitHub's signed release attestation. [Setup qualification](SETUP-QUALIFI
 records current evidence and [release qualification](QUALIFICATION.md) defines
 the enforced draft-to-publication procedure.
 
-The two update catalogs are signed by the independent device-update key and
-assembled with the draft. The first rootless catalog can contain only its
+The device catalogs and purpose-bound host catalog are signed by the independent
+release key and assembled with the draft. The first rootless catalog can contain only its
 target, since no earlier public rootless package exists. This does not allow a
 transactional update without a verified installed-version rollback artifact;
 see [UPDATES.md](UPDATES.md) for that requirement and separate test catalogs.
@@ -304,14 +305,15 @@ rctl-setup uninstall     explicit data-retention choice and owned-file removal
 rctl-setup recover       repair an interrupted lifecycle transaction
 rctl-setup reset-admin   rotate admin/session credentials with rollback
 rctl-setup version       build and release metadata
+rctl-setup updates enable  activate the managed host update service
 ```
 
 The admin page's **Update device** action updates the iPad package, not the
-relay server. There is currently no relay self-update HTTP endpoint or admin
-button. Server upgrades belong to the external `rctl-setup upgrade` process:
-the web service does not need root privileges, a Docker socket, or permission to
-replace its own executable. This command requires a wizard-managed installation;
-an existing unmanaged systemd relay follows the binary deployment procedure in
+relay server. **Updates > Update relay** delegates to the external host update
+service described below, which runs the verified candidate's
+`rctl-setup upgrade`. The web service has no root privileges, Docker socket, or
+permission to replace its own executable. Admin-managed server updates require a
+wizard-managed installation; an existing unmanaged systemd relay follows the binary deployment procedure in
 [`RELAY.md`](RELAY.md#binarysystemd-deployment) with an operator-managed backup
 and rollback. Do not run the fresh-host wizard over an existing shared VPS.
 
@@ -326,7 +328,74 @@ catalog. Use `--device-updates off` to disable remote package updates, or
 operator-owned signing channel. Stable URLs advance transactionally with relay
 upgrades; custom and off policies are preserved.
 
-Every mutating command has `--dry-run`. Re-running `install` reconciles an
+### Admin-managed server updates
+
+This implementation is for the next release, not retroactively present in older
+published installers. After a successful install/upgrade, the bootstrap activates
+`rctl-update-agent.service`. It is a separate copy of the setup binary, not a
+privileged relay container. Existing installations acquire this service by
+running the next verified bootstrap once; routine upgrades then use the admin UI.
+
+- Checks run on startup and every six hours, with a one-minute manual-check
+  cooldown. A network/signature/expiry failure is not reported as "up to date".
+- Installation requires confirmation by default. The owner can explicitly opt
+  into automatic **relay** installation during one selected UTC hour. Active
+  connections may disconnect; the confirmation states this. Device updates
+  remain separately confirmed and never acquire an idle-screen keepalive.
+- The same failed release is not automatically retried. A manual retry is
+  allowed after correcting the cause; unresolved recovery blocks new work.
+- Jobs, the highest verified version, policy, and the last operation result are
+  persisted under root-only `/var/lib/rctl-update`, outside rollback snapshots.
+  Closing a browser does not cancel an installation. systemd restarts the
+  supervisor after failure/reboot; interrupted transactions use the existing
+  recovery checkpoint before accepting new work.
+- Only root and relay UID 65532 may use `/run/rctl-update/agent.sock` (0660,
+  root:65532, plus Linux peer-credential verification and the relay's server-side
+  admin credential). The credential is re-read on each request, so a credential
+  rotation takes effect immediately. Compose mounts only this
+  directory read-only. The API exposes status/check/install/policy, not a shell,
+  Docker API, arbitrary URL, or arbitrary file path. Admin routes require an
+  authenticated session, same-origin JSON mutations, and rate limiting.
+- Uninstall disables the managed update service before changing deployment
+  state. Its disabled unit, binary and private history remain for diagnosis;
+  a later bootstrap can enable it again.
+
+`rctl-host-stable.json` is an ECDSA P-256 signed envelope with purpose
+`rctl.host-update.v1`, stable version, protocol, issue/expiry times (at most one
+year), and SHA-256/size for both setup binaries and both public DEBs. It uses the
+same pinned public key as device catalogs but a separate signed purpose/schema;
+a device catalog cannot authorize host execution. Discovery uses GitHub's latest
+published release; downloads use exact version URLs in the official repository.
+Redirects are restricted to GitHub and its release asset CDN. Expired feeds,
+older-than-observed catalogs, unrecognized versions/protocols, changed bytes,
+and same-version/downgrade installs fail closed. No signing key lives on the VPS.
+
+The supervisor downloads into a private bounded stage, verifies every required
+artifact before executing the candidate, and invokes `upgrade --yes` with only
+the currently enabled package lanes. The candidate supplies its pinned container
+digests. Existing setup owns backup, migration rollback, health and persistence
+verification. Only after success are the setup and supervisor binaries activated.
+Unexpected activation/storage failures remain visible; disk/OS failure can still
+require operator recovery. This does not promise recovery from a destroyed VPS.
+
+Qualification before publication uses an explicitly selected, signed immutable
+prerelease catalog in the same repository:
+
+```sh
+sudo rctl-setup updates enable --catalog-url https://github.com/nobottomline/rctl/releases/download/v<VERSION>/rctl-host-stable.json
+```
+
+This root-only override persists; return to the stable audience explicitly with
+`--catalog-url https://github.com/nobottomline/rctl/releases/latest/download/rctl-host-stable.json`.
+Never replace stable assets or relax signature verification for a test.
+The prerequisite is a downloadable signed candidate, not a private draft that
+unauthenticated clients cannot fetch. An isolated UI fixture proves only UI
+behavior. Release acceptance still requires a real systemd/Docker A-to-B upgrade,
+restart during apply, failed-target rollback, preserved admin/device identity,
+and a rootless **Update device** after the relay returns.
+
+Deployment lifecycle commands support `--dry-run`; `updates enable` explicitly
+installs and starts the host service and has no dry-run mode. Re-running `install` reconciles an
 existing installation when its ownership metadata is valid; it does not create
 new secrets or replace state merely because a file already exists.
 

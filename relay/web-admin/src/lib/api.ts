@@ -2,6 +2,7 @@
 // request is credentialed same-origin. A 401 means "not signed in".
 
 import type {
+  HostUpdateStatus,
   AuditResponse,
   CreateEnrollmentOptions,
   CreateDevicePackageOptions,
@@ -124,6 +125,11 @@ async function setLocalAccess(id: string, enabled: boolean): Promise<LocalAccess
 }
 
 export const api = {
+  hostUpdates: () => request<HostUpdateStatus>('/api/admin/updates'),
+  hostUpdateAction: (action: 'check' | 'install' | 'policy', body?: unknown) =>
+    request<HostUpdateStatus>(`/api/admin/updates/${action}`, {
+      method: 'POST', body: body === undefined ? undefined : JSON.stringify(body),
+    }),
   login: (secret: string) =>
     request<Ok>('/api/admin/login', { method: 'POST', body: JSON.stringify({ secret }) }),
   logout: () => request<Ok>('/api/admin/logout', { method: 'POST' }),

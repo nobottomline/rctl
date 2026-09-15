@@ -49,6 +49,40 @@ func run(args []string) int {
 	case "version":
 		fmt.Printf("rctl-setup %s (%s) %s/%s\n", version, commit, runtime.GOOS, runtime.GOARCH)
 		return 0
+	case "updates":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: rctl-setup updates enable|serve [--catalog-url HTTPS_URL]")
+			return 2
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		var err error
+		switch args[1] {
+		case "serve":
+			if len(args) != 2 {
+				return 2
+			}
+			err = setup.ServeHostUpdates(ctx, version)
+		case "enable":
+			flags := flag.NewFlagSet("updates enable", flag.ContinueOnError)
+			catalogURL := flags.String("catalog-url", "", "root-managed signed release catalog for qualification")
+			if flags.Parse(args[2:]) != nil || flags.NArg() != 0 {
+				return 2
+			}
+			var executable string
+			executable, err = os.Executable()
+			if err == nil {
+				err = setup.EnableHostUpdates(ctx, executable, *catalogURL)
+			}
+		default:
+			fmt.Fprintln(os.Stderr, "usage: rctl-setup updates enable|serve")
+			return 2
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "host updates:", err)
+			return 1
+		}
+		return 0
 	case "preflight":
 		return runPreflight(args[1:])
 	case "install":
@@ -794,6 +828,7 @@ Commands:
   backup       stop briefly, snapshot managed state, restart, and verify
   restore      validate, restore, verify, and automatically roll back
   upgrade      backup, apply a newer pinned release, verify, and roll back
+  updates      enable or serve managed admin-page host updates
   uninstall    backup, remove owned services/files, and retain recovery
   recover      finish recovery after an interrupted lifecycle operation
   reset-admin  rotate admin/session credentials with backup and rollback`)

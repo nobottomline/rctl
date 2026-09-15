@@ -480,6 +480,7 @@ FROM devices
 		RevokedAt          *int64   `json:"revoked_at,omitempty"`
 		DaemonVersion      string   `json:"daemon_version,omitempty"`
 		PackageVersion     string   `json:"package_version,omitempty"`
+		UpdateAvailable    bool     `json:"update_available"`
 		BrowserVersion     string   `json:"browser_version,omitempty"`
 		ProtocolMajor      *int     `json:"protocol_major,omitempty"`
 		ProtocolMinor      *int     `json:"protocol_minor,omitempty"`
@@ -529,6 +530,8 @@ FROM devices
 		if connection := s.getDevice(d.ID); connection != nil {
 			d.Online = true
 			d.PackageVersion = connection.packageVersion
+			manifest, target := s.cfg.deviceUpdateCatalog(connection.features)
+			d.UpdateAvailable = d.Status == "approved" && d.Compatible && hasFeature(connection.features, "update.transactional") && manifest != "" && (target == "" || newerDeviceRelease(connection.updateVersion(), target))
 		}
 		out = append(out, d)
 	}

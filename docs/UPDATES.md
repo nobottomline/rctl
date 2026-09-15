@@ -5,6 +5,14 @@ PreferenceBundle, prompt, or other UI on the iPad. The update path is disabled
 when the relay is configured with `device_update_channel: off`. Official wizard
 installations use a signed, version-bound stable catalog by default.
 
+Relay-server discovery and installation are a separate managed service, exposed
+in the admin **Updates** panel; see [server updates](SETUP.md#admin-managed-server-updates).
+Upgrading the relay advances its stable device catalogs and public package bases,
+but does not install packages on devices. `off` and custom channel policies are
+preserved. Device availability uses Debian version ordering, including epochs,
+revisions and prerelease tildes; a different but older version is not an update.
+Custom catalogs without a declared target still rely on device-side verification.
+
 Ordinary rootless builds advertise `update.transactional` and
 `update.transactional.rootless`. Physical Dopamine/iPadOS 15.5 acceptance covered
 the relay UI update, failed-runtime rollback, and external-watchdog recovery

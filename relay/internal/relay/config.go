@@ -14,6 +14,7 @@ import (
 var semanticVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 type config struct {
+	HostUpdateSocket            string
 	ListenAddr                  string
 	PublicURL                   string
 	DatabasePath                string
@@ -53,6 +54,7 @@ type config struct {
 
 func loadConfig() (config, error) {
 	cfg := config{
+		HostUpdateSocket:  os.Getenv("RCTL_RELAY_HOST_UPDATE_SOCKET"),
 		ListenAddr:        getenv("RCTL_RELAY_LISTEN", ":8080"),
 		PublicURL:         getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080"),
 		DatabasePath:      getenv("RCTL_RELAY_DB", "./data/rctl-relay.db"),
@@ -95,6 +97,9 @@ func loadConfig() (config, error) {
 		ControllerLimit:  loadRateLimit("RCTL_RELAY_CONTROLLER", 20, time.Minute),
 	}
 	cfg.CookieSecure = strings.HasPrefix(cfg.PublicURL, "https://")
+	if cfg.HostUpdateSocket != "" && !strings.HasPrefix(cfg.HostUpdateSocket, "/") {
+		return cfg, errors.New("RCTL_RELAY_HOST_UPDATE_SOCKET must be absolute")
+	}
 	if cfg.AdminSecret == "" {
 		return cfg, errors.New("RCTL_RELAY_ADMIN_SECRET is required")
 	}

@@ -57,7 +57,7 @@ function actionsFor(device: Device, updateConfigured: boolean, updateTargetVersi
     device.compatible &&
     device.features.includes('update.transactional') &&
     updateConfigured &&
-    (!updateTargetVersion || (device.package_version || device.daemon_version) !== updateTargetVersion)
+    (device.update_available ?? (!updateTargetVersion || (device.package_version || device.daemon_version) !== updateTargetVersion))
   )
     list.push({ key: 'update', label: 'Update device…', icon: Download, accent: true })
   list.push({ key: 'copy', label: 'Copy device ID', icon: Copy })

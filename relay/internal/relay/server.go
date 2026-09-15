@@ -141,6 +141,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/login", s.withRateLimit("login", s.cfg.LoginLimit, s.handleAdminLogin))
 	mux.HandleFunc("POST /api/admin/logout", s.withAdmin(s.handleAdminLogout))
 	mux.HandleFunc("GET /api/admin/status", s.withAdmin(s.handleStatus))
+	mux.HandleFunc("GET /api/admin/updates", s.withAdmin(s.handleHostUpdates))
+	for _, action := range []string{"check", "install", "policy"} {
+		mux.HandleFunc("POST /api/admin/updates/"+action, s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleHostUpdates)))
+	}
 	mux.HandleFunc("GET /api/admin/sessions", s.withAdmin(s.handleListSessions))
 	mux.HandleFunc("GET /api/admin/audit", s.withAdmin(s.handleListAudit))
 	mux.HandleFunc("POST /api/admin/sessions/revoke-others", s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, s.handleRevokeOtherSessions)))

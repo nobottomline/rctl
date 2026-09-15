@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	debversion "github.com/knqyf263/go-deb-version"
 )
 
 func (s *server) deviceHTTP(ctx context.Context, dc *deviceConn, method, path string, body []byte) (httpTunnelResponse, error) {
@@ -77,6 +79,10 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "device_already_current")
 		return
 	}
+	if targetVersion != "" && !newerDeviceRelease(dc.updateVersion(), targetVersion) {
+		writeErr(w, http.StatusConflict, "device_update_not_newer")
+		return
+	}
 	var compatibilityError string
 	_ = s.db.QueryRowContext(r.Context(), `SELECT COALESCE(compatibility_error, '') FROM devices WHERE id=?`, deviceID).Scan(&compatibilityError)
 	if compatibilityError != "" {
@@ -114,6 +120,15 @@ func (cfg config) deviceUpdateCatalog(features []string) (string, string) {
 		return cfg.RootlessUpdateManifestURL, cfg.RootlessUpdateTargetVersion
 	}
 	return cfg.UpdateManifestURL, cfg.UpdateTargetVersion
+}
+
+func newerDeviceRelease(current, target string) bool {
+	installed, err := debversion.NewVersion(current)
+	if err != nil {
+		return false
+	}
+	candidate, err := debversion.NewVersion(target)
+	return err == nil && candidate.GreaterThan(installed)
 }
 
 func (dc *deviceConn) updateVersion() string {

@@ -3,6 +3,14 @@
 Version headings may describe unpublished candidates. Release availability is
 determined by GitHub Releases, not by the presence of a changelog entry.
 
+## Unreleased
+
+- Added signed server-release discovery and a managed update supervisor, with
+  admin-page installation, persistent job results, and opt-in scheduled relay
+  updates. Device installation remains separately confirmed.
+- Reject device update downgrades using Debian version ordering, including
+  rootless qualification versions and package revisions.
+
 ## 0.4.1
 
 Supersedes the unpublished `0.4.0` candidate and includes its changes below.

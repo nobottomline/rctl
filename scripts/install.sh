@@ -192,3 +192,9 @@ for argument do
 done
 mv -f "$candidate" "$DESTINATION" || fail "lifecycle succeeded but the setup binary could not be activated"
 candidate=""
+if awk '$2 == "rctl-host-stable.json" { found=1 } END { exit !found }' "$work/SHA256SUMS"; then
+  progress "Enabling verified updates in the relay admin page"
+  "$DESTINATION" updates enable || fail "relay is installed, but the update service could not start; run rctl-setup updates enable to retry"
+else
+  progress "This older release does not include admin-managed server updates"
+fi

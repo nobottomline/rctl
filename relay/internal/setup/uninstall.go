@@ -82,6 +82,9 @@ func (u UninstallManager) Uninstall(ctx context.Context, options UninstallOption
 	if err != nil {
 		return result, err
 	}
+	if err = disableHostUpdates(ctx, u.Paths, u.Runner); err != nil {
+		return result, err
+	}
 	mutation, err := (BackupManager{Paths: u.Paths, Runner: u.Runner, Verifier: u.Verifier, Now: u.Now}).BeginMutation(ctx, "uninstall", expected)
 	result.Backup = mutation.Backup
 	if err != nil {

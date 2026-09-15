@@ -34,6 +34,9 @@ expected=(
   "$package"
 )
 catalog=rctl-update-stable.json
+if [[ -e "$release_dir/rctl-host-stable.json" || ${RCTL_REQUIRE_HOST_CATALOG:-0} == 1 ]]; then
+  expected+=(rctl-host-stable.json)
+fi
 if [[ -e "$release_dir/$catalog" || ${RCTL_REQUIRE_UPDATE_CATALOG:-0} == 1 ]]; then
   expected+=("$catalog")
 fi

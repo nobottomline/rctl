@@ -90,7 +90,21 @@ export interface Controller {
   telemetry_updated_at?: number
 }
 
+export interface HostUpdateStatus {
+  agent_version: string
+  job?: { target: string; phase: string; error?: string; started_at: number; completed_at?: number }
+  installed: string
+  latest?: string
+  available: boolean
+  checked_at?: number
+  phase: string
+  target?: string
+  error?: string
+  policy: { automatic: boolean; hour_utc: number }
+}
+
 export interface Device {
+  update_available?: boolean
   id: string
   name: string
   status: DeviceStatus

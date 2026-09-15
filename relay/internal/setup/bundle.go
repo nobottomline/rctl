@@ -86,6 +86,7 @@ func RenderDedicatedBundleAt(cfg Config, secrets Secrets, paths Paths) (Bundle, 
 	host := origin.Hostname()
 
 	env := map[string]string{
+		"RCTL_RELAY_HOST_UPDATE_SOCKET":   HostAgentSocket,
 		"RCTL_RELAY_LISTEN":               ":8080",
 		"RCTL_RELAY_PUBLIC_URL":           strings.TrimSuffix(cfg.PublicURL, "/"),
 		"RCTL_RELAY_DB":                   "/data/rctl-relay.db",
@@ -171,7 +172,7 @@ func renderCompose(cfg Config, paths Paths) ([]byte, error) {
 	services := map[string]any{
 		"relay": map[string]any{
 			"image": cfg.RelayImage, "restart": "unless-stopped", "env_file": []string{paths.RelayEnv},
-			"volumes": []string{paths.RelayDataDir + ":/data"}, "networks": []string{"backend"},
+			"volumes": []string{paths.RelayDataDir + ":/data", HostAgentSocketDir + ":" + HostAgentSocketDir + ":ro"}, "networks": []string{"backend"},
 			"read_only": true, "tmpfs": []string{"/tmp:size=64m,mode=1777"}, "cap_drop": []string{"ALL"},
 			"security_opt": []string{"no-new-privileges:true"}, "stop_grace_period": "20s", "logging": boundedLogs, "pids_limit": 256, "init": true,
 			"healthcheck": map[string]any{"test": []string{"CMD", "/usr/local/bin/rctl-relay", "healthcheck", "http://127.0.0.1:8080/healthz"}, "interval": "15s", "timeout": "5s", "retries": 4, "start_period": "10s"},

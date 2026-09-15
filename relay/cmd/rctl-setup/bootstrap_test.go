@@ -51,6 +51,7 @@ done
 	setupAsset := filepath.Join(assets, "rctl-setup_linux_amd64")
 	writeExecutable(t, setupAsset, `#!/bin/sh
 printf '%s\n' "$*" >> "$SETUP_LOG"
+[ "$1" != updates ] || exit 0
 [ "${EXPECT_TTY:-0}" != 1 ] || {
   [ -t 0 ] || { echo 'setup stdin is not a terminal' >&2; exit 20; }
   IFS= read -r answer
@@ -64,6 +65,8 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 		t.Fatal(err)
 	}
 	checksums := fmt.Sprintf("%x  rctl-setup_linux_amd64\n%x  %s\n", sha256.Sum256(mustRead(t, setupAsset)), sha256.Sum256(mustRead(t, packageAsset)), packageName)
+	legacyChecksums := checksums
+	checksums += fmt.Sprintf("%x  rctl-host-stable.json\n", sha256.Sum256([]byte("host catalog fixture")))
 	if err := os.WriteFile(filepath.Join(assets, "SHA256SUMS"), []byte(checksums), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +87,7 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	if string(mustRead(t, destination)) != string(mustRead(t, setupAsset)) {
 		t.Fatal("fresh install did not activate the verified setup binary")
 	}
-	assertLastLog(t, logPath, "install --yes --public-package ")
+	assertEnabledAfterLifecycle(t, logPath, "install --yes --public-package ")
 
 	if err := os.MkdirAll(filepath.Dir(ownership), 0o700); err != nil {
 		t.Fatal(err)
@@ -113,7 +116,7 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	assertLastLog(t, logPath, "upgrade --dry-run --yes --public-package ")
 
 	runBootstrapThroughPTY(t, scriptPath, assets, logPath)
-	assertLastLog(t, logPath, "tty:install")
+	assertEnabledAfterLifecycle(t, logPath, "tty:install")
 
 	beforeUnsafeLaunch := string(mustRead(t, logPath))
 	unsafe := exec.Command("sh", scriptPath)
@@ -128,6 +131,14 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	runBootstrap(t, scriptPath, assets, logPath, false, "--yes")
 	if string(mustRead(t, destination)) != string(mustRead(t, setupAsset)) {
 		t.Fatal("successful upgrade did not activate the verified setup binary")
+	}
+	if err := os.WriteFile(filepath.Join(assets, "SHA256SUMS"), []byte(legacyChecksums), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runBootstrap(t, scriptPath, assets, logPath, false, "--yes")
+	assertLastLog(t, logPath, "upgrade --yes --public-package ")
+	if err := os.WriteFile(filepath.Join(assets, "SHA256SUMS"), []byte(checksums), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	assetsLink := filepath.Join(root, "assets-link")
@@ -152,7 +163,7 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	if err := runBootstrap(t, scriptPath, assets, logPath, false, "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	assertLastLog(t, logPath, "upgrade --yes --rootless-public-package ")
+	assertEnabledAfterLifecycle(t, logPath, "upgrade --yes --rootless-public-package ")
 	if err := os.WriteFile(filepath.Join(assets, rootlessName), []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -237,5 +248,13 @@ func assertLastLog(t *testing.T, name, prefix string) {
 	lines := strings.Split(strings.TrimSpace(string(mustRead(t, name))), "\n")
 	if len(lines) == 0 || !strings.HasPrefix(lines[len(lines)-1], prefix) {
 		t.Fatalf("last bootstrap invocation=%q, expected prefix %q", lines, prefix)
+	}
+}
+
+func assertEnabledAfterLifecycle(t *testing.T, name, prefix string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(string(mustRead(t, name))), "\n")
+	if len(lines) < 2 || lines[len(lines)-1] != "updates enable" || !strings.HasPrefix(lines[len(lines)-2], prefix) {
+		t.Fatalf("unexpected lifecycle/update-service order: %q", lines)
 	}
 }

@@ -115,6 +115,12 @@ identity automatically; there is nothing to configure on iOS. For pinned
 releases, non-interactive installation, upgrades, backup, and recovery, read
 [docs/SETUP.md](docs/SETUP.md).
 
+The next wizard release adds an **Updates** section to the admin page: automatic
+release checks, confirmed relay installation, and optional scheduled automatic
+server updates. Device updates remain separately confirmed and preserve relay
+pairings. Older installations need one verified bootstrap upgrade to enable the
+host service. See [update behavior and recovery](docs/SETUP.md#admin-managed-server-updates).
+
 ## Network Modes
 
 Relay-enabled devices default to **LAN + Relay**, preserving direct local access

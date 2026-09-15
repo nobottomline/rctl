@@ -3,6 +3,36 @@
 This record distinguishes implemented behavior from release qualification. It
 contains no private hostname, address, credential, device identity, or package.
 
+## Managed host updater: unreleased implementation
+
+Local verification covers signed catalog verification and replay/expiry
+rejection; artifact hash/size checks before execution; serialized durable jobs;
+opt-in scheduling and failed-release retry suppression; and interrupted-job
+recovery. The relay boundary tests reject unauthenticated, cross-origin,
+oversized, and arbitrary-command requests. Linux tests exercise actual Unix
+peer credentials, permitting the intended UID and rejecting another UID;
+the worker independently requires the current relay credential.
+
+The full Go race suite, admin lint/build, shell syntax checks, and workflow
+lint passed. Setup upgrade/rollback and host updater tests also passed in an
+isolated Linux container without network access. A local browser fixture
+exercised update confirmation, temporary updater unavailability, final status,
+automatic-install consent, and a narrow viewport without horizontal overflow.
+Reloading during an injected API `503` showed reconnecting and restored the
+existing admin session once the API recovered, without another login.
+The fixture deliberately substitutes installation outcomes: it is not evidence
+of a real server upgrade, Docker restart, or signed release publication.
+
+Before enabling this in a public release, qualify two downloadable signed
+release sets on a disposable wizard-managed VPS: update through the admin
+button; reopen the page during restart; confirm preserved credentials, device
+bindings and data; exercise failed health verification and restart recovery;
+and verify an opted-in maintenance-window install. Test the first bootstrap
+activation on a clean host and migration of an existing wizard installation.
+Device updates require their own rootful/rootless acceptance and are not
+automatically installed by the host policy. Existing version-scoped device and
+server qualification below does not qualify this new host supervisor.
+
 ## 2026-08-21 through 2026-08-22 engineering qualification
 
 Qualification target: the immutable commit referenced by tag `v0.3.0`. Several
