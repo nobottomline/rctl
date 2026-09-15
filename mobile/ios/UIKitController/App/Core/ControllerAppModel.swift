@@ -32,6 +32,10 @@ final class ControllerAppModel: ObservableObject {
     private var refreshOperation: (id: UUID, task: Task<AccessSession, Error>)?
     private let networkPath = NetworkPathObserver()
     private var profileSyncTask: Task<Void, Never>?
+    /// Signing keys per relay, loaded once. Without this every heartbeat and
+    /// signed request read the Keychain and rebuilt the Secure Enclave key on
+    /// the main actor, even with a valid cached access token.
+    private var signingKeys: [String: ControllerSigningKey] = [:]
     private var profileSyncAttempt: (relayID: String, at: Date)?
     private var controllerSyncRevision: UInt64 = 0
 
@@ -83,7 +87,7 @@ final class ControllerAppModel: ObservableObject {
                existing.origin != pairing.origin {
                 throw ControllerProfileStoreError.duplicateIdentity
             }
-            let key = try keychain.loadOrCreateSigningKey(relayID: pairing.relayID)
+            let key = try signingKey(relayID: pairing.relayID)
             let claim = try await api.claim(
                 pairing: pairing,
                 controllerName: ControllerDeviceProfile.defaultControllerName(),
@@ -206,6 +210,7 @@ final class ControllerAppModel: ObservableObject {
         invalidateProfileRequests()
         do {
             _ = try profiles.loadAll() // Validate metadata before deleting any credential.
+            signingKeys[relayID] = nil
             try keychain.deleteProfile(relayID: relayID)
             try profiles.remove(relayID: relayID)
             savedProfiles = try profiles.loadAll()
@@ -409,7 +414,7 @@ final class ControllerAppModel: ObservableObject {
         try Task.checkCancellation()
         guard let profile else { throw ControllerClientError.corruptCredential }
         let revision = profileRevision
-        let key = try keychain.loadOrCreateSigningKey(relayID: profile.relayID)
+        let key = try signingKey(relayID: profile.relayID)
         let minimumLifetime = Int64(Date().timeIntervalSince1970) + 30
         if !forceRefresh, let accessToken, let accessExpiresAt, accessExpiresAt > minimumLifetime {
             return AccessSession(profile: profile, token: accessToken, key: key)
@@ -464,6 +469,13 @@ final class ControllerAppModel: ObservableObject {
         )
         try requireCurrentProfile(revision)
         devices = loaded
+    }
+
+    private func signingKey(relayID: String) throws -> ControllerSigningKey {
+        if let key = signingKeys[relayID] { return key }
+        let key = try keychain.loadOrCreateSigningKey(relayID: relayID)
+        signingKeys[relayID] = key
+        return key
     }
 
     private func requireCurrentProfile(_ revision: UInt64) throws {
