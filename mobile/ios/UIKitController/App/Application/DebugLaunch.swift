@@ -4,7 +4,7 @@ import UIKit
 /// Debug-only launch arguments for screenshots and review. Release builds
 /// ignore all of them.
 ///
-/// - `--rctl-route=pair|scan|local|save|replace|first-local|gallery` opens a screen.
+/// - `--rctl-route=pair|scan|local|edit|save|replace|first-local|gallery` opens a screen.
 /// - `--rctl-push=local|pair` performs a real animated push 1.5 s after launch.
 /// - `--rctl-appearance=system|warm|console` overrides the appearance setting for this launch.
 /// - `--rctl-scanner-demo` replays scripted detections in the scanner (read by the scanner).
@@ -70,6 +70,10 @@ enum DebugLaunch {
         case "pair": return [.pairRelay]
         case "scan": return [.pairRelay, .scanPairingCode]
         case "local": return [.localDevice(editing: nil)]
+        case "edit":
+            let saved = environment.localDevices.devices.first
+                ?? (try? LocalDeviceAddress("192.168.1.2:8080")).map { LocalDeviceProfile(id: UUID(), name: "Studio", address: $0) }
+            return saved.map { [.localDevice(editing: $0)] }
         case "gallery": return [.gallery]
         case "first-local":
             return environment.localDevices.devices.first.map { [.localControl($0)] }
