@@ -561,6 +561,25 @@ for existing installations. New personalized packages emit `Relays`. Add another
 server with `RELAY_2_URL` and `RELAY_2_ENROLL_TOKEN` in `relay.env` (numbered entries
 through 16 are supported), then rebuild the private package.
 
+Package installation merges relay entries by endpoint instead of replacing the
+whole configuration. Installing a personalized package from a different relay
+adds that connection; it does not move the device away from its existing relay.
+For an already paired endpoint, the installed `DeviceSecret`, per-relay enabled
+state, and display name win over a package's enrollment token. A pending entry
+can receive a renewed token. Device-wide `DeviceID`, `Enabled`, and
+`LocalAccessEnabled` remain unchanged. Endpoint comparison normalizes host case
+and the default WSS port, while keeping different paths distinct.
+
+The package scripts use the daemon's offline `--preserve-relay-config` and
+`--merge-relay-config` operations. These parse XML and binary plists, bound the
+input to 1 MiB and the merged list to 64 entries, write mode-0600 files atomically,
+and consume the transaction backup after a successful merge. Invalid files,
+duplicate endpoints, unsafe links, or a failed write stop the transaction;
+they never silently replace established credentials. The temporary backup path
+remains compatible with older package scripts during the first upgrade.
+Public packages still contain no relay configuration and preserve existing
+connections during upgrades.
+
 ### Local network policy
 
 Relay packages preserve direct LAN control by default. For an approved online

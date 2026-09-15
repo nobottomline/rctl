@@ -73,15 +73,9 @@ chmod 0644 "$PLIST" 2>/dev/null || true
 chmod 0755 "$DAEMON" 2>/dev/null || true
 chmod 0755 "$UPDATER" 2>/dev/null || true
 
-# Personalized relay packages contain an enrollment token, but an already paired
-# device has a stronger persistent DeviceSecret. Preserve that secret across
-# remove+fresh-install deploys so reinstalling the tweak does not create a new
-# pending device or reuse an expired enrollment token.
-if [ -f "$RELAY_PREF_BACKUP" ] && grep -aq "DeviceSecret" "$RELAY_PREF_BACKUP"; then
-    if [ ! -f "$RELAY_PREF" ] || ! grep -aq "DeviceSecret" "$RELAY_PREF"; then
-        cp "$RELAY_PREF_BACKUP" "$RELAY_PREF" 2>/dev/null || true
-    fi
-fi
+# Merge before launch: keep established identities/policy, add only new relays.
+# The native helper accepts XML/binary plists and fails closed on unsafe input.
+"$DAEMON" --merge-relay-config
 if [ -f "$RELAY_PREF" ]; then
     chown mobile:mobile "$RELAY_PREF" 2>/dev/null || chown mobile:501 "$RELAY_PREF" 2>/dev/null || true
     chmod 0600 "$RELAY_PREF" 2>/dev/null || true

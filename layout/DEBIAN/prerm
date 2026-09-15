@@ -28,15 +28,13 @@ request_gui_restart() {
 }
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "upgrade" ]; then
-    if [ -f "$RELAY_PREF" ] && grep -aq "DeviceSecret" "$RELAY_PREF"; then
-        cp "$RELAY_PREF" "$RELAY_PREF_BACKUP" 2>/dev/null || true
-        chmod 0600 "$RELAY_PREF_BACKUP" 2>/dev/null || true
-    fi
     if [ -n "$RCTL_PREFIX" ]; then
         launchctl bootout system/com.greatlove.rctld 2>/dev/null || true
     else
         [ -f "$PLIST" ] && launchctl unload "$PLIST" 2>/dev/null || true
     fi
+    # Quiesce the writer before snapshotting a just-approved relay identity.
+    "$RCTL_PREFIX/usr/local/bin/rctld" --preserve-relay-config
     audio_was_active=0
     [ -e "$AUDIO_ACTIVE_DYLIB" ] && audio_was_active=1
     [ -e "$AUDIO_ACTIVE_PLIST" ] && audio_was_active=1

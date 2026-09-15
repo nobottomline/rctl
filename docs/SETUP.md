@@ -604,6 +604,14 @@ device credentials are deliberately preserved.
 
 ## Device package delivery
 
+Installing a personalized package on an already paired device adds a different
+relay without deleting the old connection. Reinstalling for the same endpoint
+preserves its existing identity; it does not create another device or reset its
+credentials. This behavior is implemented by the device package's lifecycle
+scripts, so relays serving older public base artifacts must adopt a release
+containing the merge fix before their generated packages gain it. See the
+[device configuration contract](RELAY.md#device-config) for merge rules.
+
 The final normal flow lives in the authenticated admin page:
 
 1. Admin chooses **Add device**, supplies a display name, and confirms.

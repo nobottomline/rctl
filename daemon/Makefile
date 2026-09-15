@@ -35,6 +35,7 @@ LIBCPP := $(if $(wildcard $(ISYSROOT)/usr/include/c++/v1/__config),$(ISYSROOT),$
 TOOL_NAME = rctld
 rctld_FILES = main.mm \
               ../core/config/LocalAccess.mm \
+              ../core/config/RelayInstall.mm \
               ../core/protocol/Capabilities.mm \
               ../core/security/DestructiveActions.mm \
               ../core/update/UpdateLauncher.mm \

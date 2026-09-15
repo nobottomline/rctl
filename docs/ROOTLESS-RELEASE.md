@@ -1,6 +1,6 @@
 # Rootless Release Readiness
 
-## Current Checkpoint (2026-09-15)
+## Current Checkpoint (2026-09-16)
 
 The next candidate is `0.4.1`, incorporating the retained packet-sizing and
 fresh-client-build fixes. The existing `v0.4.0` tag and draft stay unchanged and
@@ -22,12 +22,13 @@ Subsequent setup changes add local domain selection, bounded IPv4 inference,
 confirmed fresh Docker provisioning, and a non-piped sudo launch. These are
 not in the `v0.4.1` tag above. Local PTY tests cover 700 choices, search, manual
 entry, Ctrl+C/EOF, and terminal restoration; setup race tests and Linux
-amd64/arm64 builds pass. APT provisioning is fixture-tested, not yet accepted
-on a fresh physical VPS. The operator's new VPS was deliberately left unchanged
-so they can exercise the real installation themselves. Do not transfer earlier
-wizard qualification or draft provenance to these new setup bytes.
+amd64/arm64 builds pass. The operator subsequently completed the preview setup,
+opened its admin UI, and generated a rootless personalized package on a fresh
+VPS. This is operator-reported installation evidence, not a new complete APT,
+firewall, TURN, or rollback qualification. Do not transfer earlier wizard
+qualification or draft provenance to these new setup bytes.
 
-The rootless device has been restored to the non-pacing baseline
+Before the re-enrollment checks below, the rootless device was restored to the non-pacing baseline
 `0.4.0~test.20260913213641.23e8bcff8aed` through an independent SSH/sudo
 installation. Package audit passed and the relay configuration was verified
 byte-identical before SpringBoard restarted. Pacing failed physical acceptance
@@ -49,6 +50,46 @@ device media has a new unresolved failure described below. The
 occurred. The
 [remaining gates](#remaining-release-gates) distinguish this
 preparation from exact-artifact acceptance; older sections below are historical.
+
+### Additional Relay Enrollment (2026-09-16)
+
+An operator-generated personalized `0.4.1` rootless package installed cleanly
+but failed to add a second relay: the old `postinst` restored the entire saved
+plist and discarded the incoming enrollment. The fix merges by endpoint,
+preserves existing credentials and LAN policy, and stops the daemon before
+snapshotting to avoid racing an approval write. It is not in the existing
+`v0.4.1` tag or the temporary relay's public base artifact.
+
+Physical Dopamine qualification used private engineering packages, not a new
+published release:
+
+- `0.4.2~test.relaymerge.1` combined the audited public candidate with the
+  operator's already-downloaded enrollment payload entirely on the device.
+  It installed over `0.4.1` without removing the old relay. The operator
+  confirmed approval in the new admin UI; the local status endpoint reported
+  two configured and two connected relays.
+- Reinstalling that personalized candidate, then installing its public variant,
+  left the full relay plist byte-identical, including both approved secrets.
+  Both package transactions ended `install ok installed` and consumed their
+  temporary preservation backup.
+- Final `0.4.2~test.relaymerge.2` adds stop-before-snapshot ordering. Its public
+  upgrade and a repeat installation both preserved the plist byte for byte.
+  Final LAN capabilities reported the matching package version and relay status
+  remained two configured/two connected. VPN and SpringBoard were not restarted.
+- Final rootful and rootless builds passed public-artifact audits. Host tests
+  cover legacy and binary plists, duplicate rejection, endpoint normalization,
+  token renewal, disabled policies, idempotence, file permissions, unsafe links,
+  malformed input, and public reinstall recovery. ASan/UBSan, local-access tests,
+  and seven staging tests passed. Rootful physical installation and updater
+  watchdog rollback with these new bytes remain untested.
+
+The `0.4.2~test.*` versions identify local qualification artifacts only; they do
+not select the next stable version. A release containing the fix must supply
+the wizard's public base packages before normal admin downloads gain it. No
+release assets, managed VPS package bases, or permanent relay services were
+replaced during this check. A root-only pre-test configuration snapshot remains
+on the test device for recovery; no credentials were copied to the workstation
+or qualification record.
 
 ### Baseline Restoration Check
 

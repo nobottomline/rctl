@@ -232,6 +232,13 @@ test-destructive-actions:
 	@/tmp/rctl-destructive-actions-test
 
 .PHONY: test-local-access
+.PHONY: test-relay-install
+test: test-relay-install
+test-relay-install:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore \
+		tests/RelayInstallTest.mm core/config/RelayInstall.mm -framework Foundation -o /tmp/rctl-relay-install-test
+	@/tmp/rctl-relay-install-test
+
 .PHONY: test-local-discovery
 test: test-local-discovery
 test-local-discovery:

@@ -62,6 +62,19 @@ class StagePackageTests(unittest.TestCase):
         stage_package(self.stage, "")
         self.assertEqual(before, {path: (self.stage / path).read_bytes() for path in paths})
 
+    def test_relay_snapshot_and_merge_order(self):
+        for rootless in (True, False):
+            self.prepare(rootless=rootless)
+            stage_package(self.stage, "rootless" if rootless else "")
+            before = (self.stage / "DEBIAN/prerm").read_text()
+            after = (self.stage / "DEBIAN/postinst").read_text()
+            self.assertLess(before.index("launchctl bootout"), before.index("--preserve-relay-config"))
+            self.assertLess(before.index("launchctl unload"), before.index("--preserve-relay-config"))
+            self.assertLess(after.index("--merge-relay-config"), after.index("launchctl bootstrap"))
+            self.assertNotIn('cp "$RELAY_PREF_BACKUP" "$RELAY_PREF"', after)
+            # Recreate templates for the next lane, without an already rewritten prefix.
+            shutil.copytree(ROOT / "layout", self.stage, dirs_exist_ok=True)
+
     def test_rootless_restart_is_requested_not_executed(self):
         self.prepare()
         stage_package(self.stage, "rootless")

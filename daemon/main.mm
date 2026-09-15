@@ -40,6 +40,7 @@
 #import "net/HttpStreamServer.h"
 #import "net/RelayClient.h"
 #import "config/LocalAccess.h"
+#import "config/RelayInstall.h"
 #import "net/LocalDiscovery.h"
 #import "ipc/Ipc.h"
 #import "input/ScriptValidation.h"
@@ -2267,6 +2268,19 @@ static void rctl_mic_record_stop(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && (!strcmp(argv[1], "--preserve-relay-config") || !strcmp(argv[1], "--merge-relay-config"))) {
+        @autoreleasepool {
+            if (geteuid() != 0) { fprintf(stderr, "rctld: relay package configuration requires root\n"); return 1; }
+            NSString *config = @"/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist";
+            NSString *backup = @"/tmp/com.greatlove.rctl.relay.plist.rctl-preserve";
+            NSError *error = nil;
+            BOOL ok = !strcmp(argv[1], "--preserve-relay-config") ?
+                rctl_relay_install_preserve(config, backup, &error) :
+                rctl_relay_install_apply(config, backup, 501, 501, &error);
+            if (!ok) fprintf(stderr, "rctld: %s\n", error.localizedDescription.UTF8String);
+            return ok ? 0 : 1;
+        }
+    }
     @autoreleasepool {
         NSArray *bins = @[RCTL_ROOT_PATH_NS(@"/usr/local/bin"), RCTL_ROOT_PATH_NS(@"/usr/bin"),
                           RCTL_ROOT_PATH_NS(@"/bin"), RCTL_ROOT_PATH_NS(@"/usr/sbin"),

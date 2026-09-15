@@ -89,6 +89,11 @@ jobs:
           swift test --package-path mobile/ios/Modules/RctlProtocol
           swift test --package-path mobile/ios/Modules/RctlClient
           swift test --package-path mobile/ios/Modules/RctlRealtime
+      - name: Test device relay configuration lifecycle
+        run: |
+          xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore \
+            tests/RelayInstallTest.mm core/config/RelayInstall.mm -framework Foundation -o /tmp/rctl-relay-install-test
+          /tmp/rctl-relay-install-test
       - name: Build RCTL Controller for iOS
         run: |
           xcodebuild -project mobile/ios/RctlMobile.xcodeproj -scheme 'RCTL Controller' \
