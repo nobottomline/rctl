@@ -7,8 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -18,6 +16,7 @@ import (
 	"time"
 
 	setup "github.com/nobottomline/rctl/relay/internal/setup"
+	"golang.org/x/term"
 )
 
 var (
@@ -574,6 +573,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	configValues := addConfigFlags(flags)
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without changing the host")
 	assumeYes := flags.Bool("yes", false, "apply the displayed plan without an interactive confirmation")
+	installDependencies := flags.Bool("install-dependencies", false, "with --yes, allow fresh Docker Engine and Compose installation; never replace an existing runtime")
 	publicPackage := flags.String("public-package", "", "verified public rctl .deb used for admin package generation")
 	rootlessPackage := flags.String("rootless-public-package", "", "verified rootless public rctl .deb used for admin package generation")
 	if err := flags.Parse(args); err != nil {
@@ -613,23 +613,15 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 	interactive := input == os.Stdin && stdinIsTerminal()
 	if configValues.configPath == "" && interactive && !*assumeYes {
 		if cfg.PublicURL == "" {
-			cfg.PublicURL, err = prompt(reader, output, "Relay domain or HTTPS URL", "")
+			cfg.PublicURL, err = chooseOrigin(reader, output)
 			if err != nil {
 				fmt.Fprintln(errorsOutput, "input:", err)
 				return 2
 			}
-			cfg.PublicURL = normalizeInteractiveOrigin(cfg.PublicURL)
 		}
 		if cfg.EnableTURN && cfg.TURNExternalIP == "" {
-			inferred := inferPublicIPv4(cfg.PublicURL)
+			inferred := inferPublicIPv4(cfg.PublicURL, output)
 			cfg.TURNExternalIP, err = prompt(reader, output, "VPS public IPv4 for TURN", inferred)
-			if err != nil {
-				fmt.Fprintln(errorsOutput, "input:", err)
-				return 2
-			}
-		}
-		if cfg.ACMEEmail == "" {
-			cfg.ACMEEmail, err = prompt(reader, output, "ACME email (optional)", "")
 			if err != nil {
 				fmt.Fprintln(errorsOutput, "input:", err)
 				return 2
@@ -655,8 +647,18 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		report := (setup.Preflight{}).Run(preflightCtx, cfg)
 		cancel()
 		report.WriteText(output)
+		if onlyDockerFailures(report) && !*dryRun && (interactive || (*installDependencies && *assumeYes)) {
+			if err := offerDockerDependencies(reader, output, interactive && !*assumeYes, *installDependencies && *assumeYes); err != nil {
+				fmt.Fprintln(errorsOutput, "dependencies:", err)
+				return 1
+			}
+			checkCtx, stop := context.WithTimeout(context.Background(), 45*time.Second)
+			report = (setup.Preflight{}).Run(checkCtx, cfg)
+			stop()
+			report.WriteText(output)
+		}
 		if report.Failed() {
-			fmt.Fprintln(errorsOutput, "preflight failed; the host was not changed")
+			fmt.Fprintln(errorsOutput, "preflight failed; relay installation has not started")
 			return 1
 		}
 	}
@@ -668,7 +670,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		}
 		answer, err := prompt(reader, output, "Type install to continue", "")
 		if err != nil || answer != "install" {
-			fmt.Fprintln(errorsOutput, "installation cancelled; the host was not changed")
+			fmt.Fprintln(errorsOutput, "relay installation cancelled; any confirmed system dependencies remain installed")
 			return 1
 		}
 	}
@@ -731,26 +733,6 @@ func lifecycleFailureSummary(err error, cancelledOperation, failedOperation stri
 	return failedOperation + " failed"
 }
 
-func inferPublicIPv4(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	if ip := net.ParseIP(parsed.Hostname()); ip != nil && ip.To4() != nil {
-		return ip.String()
-	}
-	addresses, err := net.LookupIP(parsed.Hostname())
-	if err != nil {
-		return ""
-	}
-	for _, address := range addresses {
-		if address.To4() != nil && address.IsGlobalUnicast() && !address.IsPrivate() {
-			return address.String()
-		}
-	}
-	return ""
-}
-
 func normalizeInteractiveOrigin(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw != "" && !strings.Contains(raw, "://") {
@@ -760,8 +742,7 @@ func normalizeInteractiveOrigin(raw string) string {
 }
 
 func stdinIsTerminal() bool {
-	info, err := os.Stdin.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 func printInstallPlan(w io.Writer, cfg setup.Config, owned, dryRun bool) {

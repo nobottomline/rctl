@@ -18,6 +18,15 @@ local public `0.4.1` DEBs built and passed their package audits. These local
 artifacts were not installed or published and are not substitutes for the
 GitHub-built draft bytes.
 
+Subsequent setup changes add local domain selection, bounded IPv4 inference,
+confirmed fresh Docker provisioning, and a non-piped sudo launch. These are
+not in the `v0.4.1` tag above. Local PTY tests cover 700 choices, search, manual
+entry, Ctrl+C/EOF, and terminal restoration; setup race tests and Linux
+amd64/arm64 builds pass. APT provisioning is fixture-tested, not yet accepted
+on a fresh physical VPS. The operator's new VPS was deliberately left unchanged
+so they can exercise the real installation themselves. Do not transfer earlier
+wizard qualification or draft provenance to these new setup bytes.
+
 The rootless device has been restored to the non-pacing baseline
 `0.4.0~test.20260913213641.23e8bcff8aed` through an independent SSH/sudo
 installation. Package audit passed and the relay configuration was verified

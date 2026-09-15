@@ -115,6 +115,16 @@ printf '%s\n' "$*" >> "$SETUP_LOG"
 	runBootstrapThroughPTY(t, scriptPath, assets, logPath)
 	assertLastLog(t, logPath, "tty:install")
 
+	beforeUnsafeLaunch := string(mustRead(t, logPath))
+	unsafe := exec.Command("sh", scriptPath)
+	unsafe.Env = append(os.Environ(), "SUDO_COMMAND=sh", "ASSET_DIR="+assets, "SETUP_LOG="+logPath)
+	if output, err := unsafe.CombinedOutput(); err == nil || !strings.Contains(string(output), "download the script to a file") {
+		t.Fatalf("piped sudo launch was not rejected: %v %s", err, output)
+	}
+	if string(mustRead(t, logPath)) != beforeUnsafeLaunch {
+		t.Fatal("unsafe launch reached the wizard")
+	}
+
 	runBootstrap(t, scriptPath, assets, logPath, false, "--yes")
 	if string(mustRead(t, destination)) != string(mustRead(t, setupAsset)) {
 		t.Fatal("successful upgrade did not activate the verified setup binary")

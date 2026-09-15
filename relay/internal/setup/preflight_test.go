@@ -150,8 +150,11 @@ func TestPreflightReportsAllIndependentFailures(t *testing.T) {
 	if !report.Failed() {
 		t.Fatal("expected preflight failure")
 	}
-	wanted := map[string]bool{"privileges": false, "memory": false, "disk": false, "dns": false, "docker": false, "compose": false, "http_port": false}
+	wanted := map[string]bool{"privileges": false, "memory": false, "disk": false, "dns": false, "docker": false, "http_port": false}
 	for _, check := range report.Checks {
+		if check.ID == "compose" || check.ID == "existing_containers" || check.ID == "existing_networks" {
+			t.Fatalf("dependent Docker checks should not run without a daemon: %#v", check)
+		}
 		if check.Severity == Fail {
 			if _, ok := wanted[check.ID]; ok {
 				wanted[check.ID] = true

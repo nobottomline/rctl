@@ -166,8 +166,11 @@ The bootstrap fixes a trusted system `PATH`, uses a private `/tmp` directory,
 accepts only `latest` or strict `vMAJOR.MINOR.PATCH` through `RCTL_VERSION`, and
 installs only to `/usr/local/bin/rctl-setup` before executing it.
 
-The pipeline stdin contains the script itself, so interactive bootstrap opens
-the verified Go wizard on the caller's controlling `/dev/tty`. Without a real
+The documented command downloads the script first, preserving terminal stdin
+when elevating privileges. `curl | sudo sh` can stop the wizard with SIGTTIN on
+sudo-rs; interactive piped sudo launches are rejected. Root may still pipe to
+`sh` directly. Interactive bootstrap opens the verified Go wizard on the
+caller's controlling `/dev/tty`. Without a real
 terminal it fails before deployment mutation and requires complete flags plus
 `--yes`. The bootstrap reports release-manifest, binary, package, provenance,
 and wizard-launch stages while downloads themselves remain quiet and bounded.
@@ -183,12 +186,51 @@ The interactive URL prompt accepts either `relay.example.com` or the equivalent
 `https://relay.example.com`; configuration files and flags remain strict and
 require the full HTTPS origin.
 
+### Interactive Inputs and Dependencies
+
+Upcoming installers suggest local hostnames, `/etc/hosts` aliases, public DNS
+names in Certbot certificates, and reverse-DNS names of local public addresses.
+Discovery is bounded and does not contact a DNS-provider account or scan private
+keys. It cannot enumerate every domain pointing to an IP. Suggestions are not
+proof of ownership, are sorted/deduplicated, and remain subject to the same DNS,
+port, and certificate checks as manual input. A clean VPS may have no useful
+suggestions. The selector shows eight rows, supports arrow/page navigation and
+`/` search, and always offers manual entry. Dumb terminals use the manual prompt.
+Blank or invalid domains are requested again immediately; IPv4 inference has a
+five-second deadline and falls back to explicit input.
+
+The email question is omitted. Existing `acme_email` configuration and
+`--acme-email` remain supported for compatibility; email is not required for TLS.
+
+If missing Docker is the only blocking prerequisite, interactive install offers
+to add Docker's official signed APT repository, install Engine and Compose, and
+enable the service. Confirmation defaults to no. Non-interactive use requires
+both `--yes` and `--install-dependencies`; `--yes` alone does not grant permission.
+`--dry-run` and `preflight` never install dependencies. All preflight checks are
+repeated after dependency installation. A stopped/broken existing Docker,
+existing runtime packages/data/configuration, or foreign Docker APT source
+requires manual attention, not automatic removal or replacement.
+
+Dependency installation is a separate system-level operation, not part of relay
+rollback: its APT source, key, packages, and service remain after a subsequent
+relay failure or uninstall. Cancelling waits for the current APT transaction to
+finish before stopping; the wizard does not kill dpkg or remove its locks. APT
+errors stop the sequence and require inspection before retrying. Docker's
+published ports can bypass UFW rules; provider firewall checks remain necessary.
+This path uses scoped `Signed-By` trust and never executes a downloaded shell
+installer or silently removes conflicting packages.
+
 After the repository and GHCR package are public, the normal command is:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/nobottomline/rctl/releases/latest/download/install.sh | \
-  sudo sh
+(
+  set -e
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' 0
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    https://github.com/nobottomline/rctl/releases/latest/download/install.sh -o "$installer"
+  if [ "$(id -u)" -eq 0 ]; then sh "$installer"; else sudo sh "$installer"; fi
+)
 ```
 
 Pin a specific release by setting `RCTL_VERSION=vMAJOR.MINOR.PATCH` on the
@@ -203,9 +245,14 @@ candidate and removes it on exit; the Go lifecycle does not write deployment
 files, start containers, or change the active setup binary:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/nobottomline/rctl/releases/latest/download/install.sh | \
-  sudo sh -s -- --dry-run
+(
+  set -e
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' 0
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    https://github.com/nobottomline/rctl/releases/latest/download/install.sh -o "$installer"
+  if [ "$(id -u)" -eq 0 ]; then sh "$installer" --dry-run; else sudo sh "$installer" --dry-run; fi
+)
 ```
 
 Existing listeners, insufficient DNS, missing Docker/Compose, and unsupported

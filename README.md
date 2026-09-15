@@ -83,14 +83,25 @@ Debian/Ubuntu VPS, a domain or subdomain pointing to it, and ports `80` and `443
 available. SSH to the VPS and run:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/nobottomline/rctl/releases/latest/download/install.sh | \
-  sudo sh
+(
+  set -e
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' 0
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    https://github.com/nobottomline/rctl/releases/latest/download/install.sh -o "$installer"
+  if [ "$(id -u)" -eq 0 ]; then sh "$installer"; else sudo sh "$installer"; fi
+)
 ```
 
 The verified Go wizard checks the host and DNS, installs the digest-pinned relay
 stack, obtains TLS, and verifies HTTPS and persistence. It does not require a
 repository clone or compiler.
+
+The upcoming setup wizard offers searchable local domain hints, manual domain
+entry, and confirmed Docker Engine/Compose installation on a clean host. Older
+published installers require Docker Engine and Compose v2 beforehand. The
+`latest` URL selects the published release, never a draft. Domain hints are not
+a complete list of domains pointing to the VPS; choose a domain you control.
 
 1. Open the HTTPS admin URL printed by the wizard.
 2. Sign in with the generated admin secret.

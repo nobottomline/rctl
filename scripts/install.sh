@@ -18,7 +18,7 @@ progress() {
   printf '  [bootstrap] %s\n' "$*"
 }
 
-[ "$(id -u)" -eq 0 ] || fail "run through sudo (curl ... | sudo sh)"
+[ "$(id -u)" -eq 0 ] || fail "download this script to a file, then run sudo sh <file> from an SSH terminal"
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 
 case "$(uname -s):$(uname -m)" in
@@ -58,7 +58,16 @@ cleanup() {
   rm -rf "$work"
   [ -z "$candidate" ] || rm -f "$candidate"
 }
-trap cleanup 0 HUP INT TERM
+trap cleanup 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# sudo-rs can stop a /dev/tty reader with SIGTTIN when sudo's input is a
+# pipeline. Refuse this interactive launch before downloading any artifacts.
+if [ "$assume_yes" -eq 0 ] && [ -n "${SUDO_COMMAND:-}" ] && [ ! -t 0 ]; then
+  fail "interactive curl | sudo sh is unsafe on some sudo versions; download the script to a file and run sudo sh <file> (root may run sh directly)"
+fi
 
 printf '\nrctl setup\n\n'
 
