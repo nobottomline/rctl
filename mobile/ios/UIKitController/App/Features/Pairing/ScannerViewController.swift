@@ -146,7 +146,12 @@ final class ScannerViewController: RCViewController, AppRoutable {
 
     private func installCamera() {
         let camera = QRScannerService()
-        camera.onDetection = { [weak self] detection in self?.flow.update(detection) }
+        camera.onDetection = { [weak self] detection in
+            // While a dialog or progress card covers the scanner (e.g. the error
+            // from a failed claim), a code still in view must not be claimed again.
+            guard detection == nil || RCModalQueue.shared.isIdle else { return }
+            self?.flow.update(detection)
+        }
         camera.onStateChange = { [weak self] in self?.render(animated: true) }
         stage.addSubview(camera.previewView)
         self.camera = camera
@@ -400,6 +405,12 @@ final class ScannerViewController: RCViewController, AppRoutable {
             }
             guard !Task.isCancelled, let self else { return }
             self.pendingClaim = nil
+            guard !model.isBusy else {
+                // Claiming now would be refused without an explanation.
+                self.flow.deliveryDidFinish(payload: payload, paired: false)
+                RCToast.show("Relay is still busy", message: "Try the code again in a moment.", tone: .warning, in: self.view.window)
+                return
+            }
             // The claim itself runs outside the cancellable wait: a successful
             // pairing pops this screen while the model is still loading devices.
             Task { @MainActor [weak self] in

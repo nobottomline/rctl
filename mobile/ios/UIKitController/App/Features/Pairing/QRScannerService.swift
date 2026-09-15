@@ -285,6 +285,11 @@ private final class CaptureSessionBox: @unchecked Sendable {
             return .unavailable("This device has no usable camera.")
         }
         session.beginConfiguration()
+        // Pairing codes fill much of the frame; 720p detects them reliably at a
+        // fraction of the default 1080p capture and metadata cost.
+        if session.canSetSessionPreset(.hd1280x720) {
+            session.sessionPreset = .hd1280x720
+        }
         guard session.canAddInput(input) else {
             session.commitConfiguration()
             return .unavailable("This device has no usable camera.")
