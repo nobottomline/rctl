@@ -8,7 +8,7 @@ security properties and lifecycle invariants; the UI is redesigned.
 
 | | |
 |---|---|
-| Project / scheme | `RctlUIKit.xcodeproj` / `RctlUIKit` (tests: `RctlUIKitTests`) |
+| Project / scheme | `RctlUIKit.xcodeproj` / `RctlUIKit` (tests: `RctlUIKitTests`, real-touch smoke tests: `RctlUIKitUITests`) |
 | Bundle ID | `com.greatlove.rctl.controller.uikit` (installs next to the SwiftUI app) |
 | Display name | `rctl` |
 | Deployment target | iOS 13.0, iPhone + iPad, Swift 6, strict concurrency, warnings as errors |
@@ -66,10 +66,11 @@ App/
   Features/      Devices, Pairing, LocalDevice, Remote, Gallery (DEBUG)
   Resources/     Info.plist, assets, launch screen, privacy manifest
 Tests/           XCTest target (hosted)
+UITests/         XCUITest smoke tests with real taps, long presses, typing and swipes
 ```
 
 The project uses Xcode file-system synchronized groups: every file under
-`App/` and `Tests/` is part of its target automatically. Do not add file
+`App/`, `Tests/` and `UITests/` is part of its target automatically. Do not add file
 references to `project.pbxproj`.
 
 **Models.** `Core/` holds `ObservableObject` models (`ControllerAppModel`,

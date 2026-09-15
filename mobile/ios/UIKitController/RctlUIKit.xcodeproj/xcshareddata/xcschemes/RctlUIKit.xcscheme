@@ -41,6 +41,17 @@
                ReferencedContainer = "container:RctlUIKit.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "E50000000000000000000003"
+               BuildableName = "RctlUIKitUITests.xctest"
+               BlueprintName = "RctlUIKitUITests"
+               ReferencedContainer = "container:RctlUIKit.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
