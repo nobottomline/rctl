@@ -45,6 +45,7 @@ Debug launch arguments (Release ignores them), handled in
 - `--rctl-appearance=system|warm|console`
 - `--rctl-demo` — screens that support it render synthetic fixtures (no network, no stored data)
 - `--rctl-scanner-demo` — scripted QR detections in the scanner
+- `--rctl-scanner-state=denied|unavailable`, `--rctl-pairing-action=paste|claim-invalid` — camera-less scanner states and pairing actions without network
 - `--rctl-editor-error` / `--rctl-editor-pending` — local device editor error and checking states without network
 - `--rctl-allow-insecure-loopback` / `RCTL_CONTROLLER_ALLOW_INSECURE_LOOPBACK=1` — loopback HTTP relay for tests
 
