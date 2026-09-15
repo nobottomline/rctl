@@ -69,6 +69,50 @@ final class RCRefreshControlTests: XCTestCase {
         XCTAssertEqual(scrollView.contentInset.top, 52, accuracy: 0.01)
     }
 
+    func testScrollingContentWritesNothingWhileTheIndicatorIsHidden() {
+        let scrollView = makeScrollView(.never, top: 52)
+        let control = RCRefreshControl(scrollView: scrollView) {}
+        let rest = -scrollView.adjustedContentInset.top
+        control.scrollViewDidScroll()
+        let parked = control.indicatorWriteCount
+        for offset in stride(from: rest, through: rest + 600, by: 7) {
+            scrollView.contentOffset.y = offset
+            control.scrollViewDidScroll()
+        }
+        XCTAssertEqual(control.indicatorWriteCount, parked, "scrolling content must not touch the hidden indicator")
+        XCTAssertEqual(control.alpha, 0)
+
+        // A pull shows it again and every pull step updates it.
+        scrollView.contentOffset.y = rest - 40
+        control.scrollViewDidScroll()
+        XCTAssertGreaterThan(control.alpha, 0)
+        scrollView.contentOffset.y = rest - 50
+        control.scrollViewDidScroll()
+        XCTAssertEqual(control.indicatorWriteCount, parked + 2)
+
+        // Returning to rest hides it once, then parks again.
+        scrollView.contentOffset.y = rest
+        control.scrollViewDidScroll()
+        XCTAssertEqual(control.alpha, 0)
+        let hidden = control.indicatorWriteCount
+        scrollView.contentOffset.y = rest + 100
+        control.scrollViewDidScroll()
+        XCTAssertEqual(control.indicatorWriteCount, hidden)
+    }
+
+    func testRefreshingIndicatorFollowsScrollingWhileHeld() {
+        let scrollView = makeScrollView(.never, top: 52)
+        let control = RCRefreshControl(scrollView: scrollView) {
+            try? await Task.sleep(seconds: 10)
+        }
+        control.beginRefreshing()
+        let before = control.indicatorWriteCount
+        scrollView.contentOffset.y += 30
+        control.scrollViewDidScroll()
+        XCTAssertEqual(control.indicatorWriteCount, before + 1, "the held spinner keeps tracking the content")
+        control.endRefreshing()
+    }
+
     func testLateCompletionOfAnEndedRefreshDoesNotEndTheNextOne() async {
         let scrollView = makeScrollView(.never, top: 0)
         var gate: CheckedContinuation<Void, Never>?

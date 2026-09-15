@@ -1,4 +1,5 @@
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// Ambient backdrop for front-door screens: canvas gradient, soft color
 /// blooms, paper grain (Warm) or a faint grid (Console), and a sparse field of
@@ -6,19 +7,27 @@ import UIKit
 ///
 /// Performance model:
 /// - All motion is Core Animation running on the render server: long
-///   repeating keyframe animations with seeded phases. No display link, no
-///   per-frame main-thread work, no `draw(_:)`.
+///   repeating keyframe animations with seeded phases, asking for about
+///   15 fps on iOS 15+ (the motion is a few points per second). No display
+///   link, no per-frame main-thread work, no `draw(_:)`.
 /// - Bloom, halo, grain and grid bitmaps are rendered once per appearance
 ///   (grid: per size) and shared as layer `contents`; softness comes from
-///   those bitmaps, never from blurs, filters or masks. About 40 layers at most.
-/// - Motion waits `motionStartDelay` after the view enters a window, the scene
-///   becomes active, or `isPaused` clears (a backdrop animating under a push
-///   transition stutters on device), and freezes whenever the view leaves the
-///   window or the scene deactivates. Freezing stops layer time, so resuming
-///   continues exactly where it stopped.
-/// - Reduce Motion shows the same composition, still.
-/// - Size changes regenerate the composition under a short crossfade;
-///   appearance changes swap colored contents in place.
+///   those bitmaps, never from blurs, filters, masks or group opacity. About
+///   40 layers at most.
+/// - `RCAmbientMotionPolicy` decides between running, frozen and static.
+///   Motion waits `motionStartDelay` before (re)starting (a backdrop animating
+///   under a push transition stutters on device) and freezes whenever the
+///   view leaves the window, the scene deactivates, `isPaused` is set, a
+///   blocking overlay is up (`RCOverlayActivity`) or nobody has touched the
+///   window for `idleTimeout`. Freezing stops layer time, so resuming
+///   continues exactly where it stopped, and a frozen tree costs the render
+///   server nothing.
+/// - Reduce Motion, Low Power Mode and a serious thermal state show the same
+///   composition, still (no animations attached at all).
+/// - Size changes regenerate the composition under a short crossfade. During
+///   a live resize (Stage Manager, Split View) only the first change rebuilds
+///   immediately; later ones wait until the size has been stable for
+///   `resizeSettleDelay`. Appearance changes swap colored contents in place.
 @MainActor
 final class RCAmbientBackgroundView: RCView {
     /// Stops all motion (layer time is frozen, nothing is removed).
@@ -34,14 +43,29 @@ final class RCAmbientBackgroundView: RCView {
         didSet { applyIntensity() }
     }
 
+    /// Time without a touch in the window after which motion freezes. Any
+    /// touch resumes it after `motionStartDelay`.
+    var idleTimeout: TimeInterval = RCAmbientBackgroundView.defaultIdleTimeout {
+        didSet {
+            guard idleTimeout != oldValue else { return }
+            cancelIdleCheck()
+            scheduleIdleCheck()
+        }
+    }
+
     /// Delay before motion starts after entering a window, activating, or unpausing.
     static let motionStartDelay: TimeInterval = 0.65
     static let relayoutCrossfadeDuration: CFTimeInterval = 0.2
+    static let defaultIdleTimeout: TimeInterval = 30
+    /// A live resize rebuilds once this long after the last size change.
+    static let resizeSettleDelay: TimeInterval = 0.15
 
     /// Composition currently shown (nil until the first layout with a non-empty size).
     private(set) var composition: RCAmbientComposition?
     /// True while layer time is running.
     private(set) var isMotionRunning = false
+    /// True after `idleTimeout` without a touch in the window.
+    private(set) var isIdle = false
 
     private let gradientLayer = CAGradientLayer()
     private let bloomContainer = CALayer()
@@ -55,9 +79,18 @@ final class RCAmbientBackgroundView: RCView {
 
     private var isStartScheduled = false
     private var isSceneActive = false
+    private var hasMotionAnimations = false
     private var motionEpoch: CFTimeInterval = 0
     private var appliedTone: RCAmbientArtwork.Tone?
     private var appliedGridSize: CGSize = .zero
+
+    private var interactionMonitor: RCAmbientInteractionMonitor?
+    /// Last moment that counts as activity besides touches (entering the window, activation).
+    private var idleReference: CFTimeInterval = 0
+    private var isIdleCheckScheduled = false
+
+    private var lastResizeTime: CFTimeInterval = -.infinity
+    private var isResizeSettleScheduled = false
 
     private enum Key {
         static let drift = "rc.ambient.drift"
@@ -92,14 +125,16 @@ final class RCAmbientBackgroundView: RCView {
         }
         layer.addSublayer(bloomContainer)
 
+        // The grain's faintness is baked into the tile: opacity below 1 on a
+        // layer with sublayers would composite the whole field offscreen.
         grainTileLayer.contentsGravity = .resize
         grainRowLayer.addSublayer(grainTileLayer)
         grainLayer.addSublayer(grainRowLayer)
-        grainLayer.opacity = 0.05
         grainLayer.isHidden = true
         layer.addSublayer(grainLayer)
 
         // Baked at 1 px per point: nearest filtering keeps 1 pt lines crisp.
+        // A leaf layer, so its opacity costs no offscreen pass.
         gridLayer.contentsGravity = .resize
         gridLayer.contentsScale = 1
         gridLayer.magnificationFilter = .nearest
@@ -112,7 +147,10 @@ final class RCAmbientBackgroundView: RCView {
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(sceneDidActivate(_:)), name: UIScene.didActivateNotification, object: nil)
         center.addObserver(self, selector: #selector(sceneWillDeactivate(_:)), name: UIScene.willDeactivateNotification, object: nil)
-        center.addObserver(self, selector: #selector(reduceMotionDidChange), name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
+        center.addObserver(self, selector: #selector(motionConditionsDidChange), name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
+        center.addObserver(self, selector: #selector(motionConditionsDidChange), name: RCAmbientSystemConditions.didChangeNotification, object: nil)
+        center.addObserver(self, selector: #selector(overlayActivityDidChange), name: RCOverlayActivity.didChangeNotification, object: nil)
+        RCAmbientSystemConditions.shared.startObserving()
     }
 
     // MARK: Appearance
@@ -146,7 +184,40 @@ final class RCAmbientBackgroundView: RCView {
         }
         let size = bounds.size
         guard size.width >= 1, size.height >= 1, composition?.size != size else { return }
-        rebuild(for: size, crossfade: composition != nil && window != nil)
+        guard composition != nil, window != nil else {
+            rebuild(for: size, crossfade: false)
+            return
+        }
+        let now = CACurrentMediaTime()
+        let isLiveResize = now - lastResizeTime < Self.resizeSettleDelay
+        lastResizeTime = now
+        if isLiveResize {
+            // Keep the texture covering the canvas; everything else waits.
+            withoutImplicitAnimations { layoutGrain(size: size) }
+            scheduleResizeSettle(after: Self.resizeSettleDelay)
+        } else {
+            rebuild(for: size, crossfade: true)
+        }
+    }
+
+    private func scheduleResizeSettle(after delay: TimeInterval) {
+        guard !isResizeSettleScheduled else { return }
+        isResizeSettleScheduled = true
+        perform(#selector(settleResize), with: nil, afterDelay: delay, inModes: [.common])
+    }
+
+    /// Rebuilds once the size has stopped changing. Reschedules itself instead
+    /// of being cancelled on every layout pass of a live resize.
+    @objc private func settleResize() {
+        isResizeSettleScheduled = false
+        let remaining = lastResizeTime + Self.resizeSettleDelay - CACurrentMediaTime()
+        if remaining > 0.001 {
+            scheduleResizeSettle(after: remaining)
+            return
+        }
+        let size = bounds.size
+        guard size.width >= 1, size.height >= 1, composition?.size != size else { return }
+        rebuild(for: size, crossfade: window != nil)
     }
 
     private func rebuild(for size: CGSize, crossfade: Bool) {
@@ -160,7 +231,7 @@ final class RCAmbientBackgroundView: RCView {
             applyGeometry(composition)
             applyContents(force: true)
             removeMotionAnimations()
-            if !RCMotion.reduceMotion {
+            if motionState != .still {
                 addMotionAnimations(composition, epoch: motionEpoch)
             }
         }
@@ -230,6 +301,8 @@ final class RCAmbientBackgroundView: RCView {
         if tone == .warm {
             grainTileLayer.contents = RCAmbientArtwork.grainTile()
             grainTileLayer.contentsScale = RCAmbientArtwork.grainTileScale
+        } else {
+            grainTileLayer.contents = nil
         }
         gridLayer.isHidden = tone != .console
         if tone == .console {
@@ -271,14 +344,41 @@ final class RCAmbientBackgroundView: RCView {
 
     // MARK: Motion
 
-    private var wantsMotion: Bool {
-        window != nil && !isPaused && isSceneActive && !RCMotion.reduceMotion && composition != nil
+    /// Inputs of the motion policy right now.
+    var motionInputs: RCAmbientMotionPolicy.Inputs {
+        let conditions = RCAmbientSystemConditions.shared
+        return RCAmbientMotionPolicy.Inputs(
+            isInWindow: window != nil,
+            isSceneActive: isSceneActive,
+            isPaused: isPaused,
+            isOverlayActive: RCOverlayActivity.isActive,
+            isIdle: isIdle,
+            isLowPowerMode: conditions.isLowPowerMode,
+            thermalState: conditions.thermalState,
+            reduceMotion: RCMotion.reduceMotion
+        )
     }
+
+    var motionState: RCAmbientMotionPolicy.State {
+        RCAmbientMotionPolicy.state(for: motionInputs)
+    }
+
+#if DEBUG
+    /// Local time of the mote field (frozen while motion is stopped), for tests.
+    var motionClockTime: CFTimeInterval { RCLayerClock.localTime(of: moteContainer) }
+#endif
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         isSceneActive = Self.isActive(window)
-        if window != nil { ensureMotionAnimations() }
+        attachInteractionMonitor(to: window)
+        if window != nil {
+            resetIdleClock()
+            ensureMotionAnimations()
+        } else {
+            cancelIdleCheck()
+            isIdle = false
+        }
         updateMotion()
     }
 
@@ -291,7 +391,9 @@ final class RCAmbientBackgroundView: RCView {
     }
 
     private func updateMotion() {
-        if wantsMotion {
+        let state = composition == nil ? .frozen : motionState
+        syncMotionAnimations(still: state == .still)
+        if state == .running {
             guard !isMotionRunning, !isStartScheduled else { return }
             isStartScheduled = true
             perform(#selector(startScheduledMotion), with: nil, afterDelay: Self.motionStartDelay, inModes: [.common])
@@ -306,7 +408,7 @@ final class RCAmbientBackgroundView: RCView {
 
     @objc private func startScheduledMotion() {
         isStartScheduled = false
-        guard wantsMotion, !isMotionRunning else { return }
+        guard composition != nil, motionState == .running, !isMotionRunning else { return }
         ensureMotionAnimations()
         isMotionRunning = true
         RCLayerClock.resume(bloomContainer)
@@ -319,9 +421,26 @@ final class RCAmbientBackgroundView: RCView {
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(startScheduledMotion), object: nil)
     }
 
+    /// Attaches or detaches the animations when the still (static) state
+    /// flips, under the relayout crossfade. Detaching leaves the model
+    /// values, which are the still composition.
+    private func syncMotionAnimations(still: Bool) {
+        guard let composition, still == hasMotionAnimations else { return }
+        if window != nil { addCrossfade() }
+        withoutImplicitAnimations {
+            removeMotionAnimations()
+            if !still {
+                // Layer time is frozen here, so a new epoch starts each field at its seeded phase.
+                motionEpoch = RCLayerClock.localTime(of: moteContainer)
+                addMotionAnimations(composition, epoch: motionEpoch)
+            }
+        }
+    }
+
     @objc private func sceneDidActivate(_ notification: Notification) {
         guard let scene = notification.object as? UIScene, scene === window?.windowScene else { return }
         isSceneActive = true
+        resetIdleClock()
         ensureMotionAnimations()
         updateMotion()
     }
@@ -332,23 +451,20 @@ final class RCAmbientBackgroundView: RCView {
         updateMotion()
     }
 
-    @objc private func reduceMotionDidChange() {
-        guard let composition else { return }
-        if window != nil { addCrossfade() }
-        withoutImplicitAnimations {
-            removeMotionAnimations()
-            if !RCMotion.reduceMotion {
-                motionEpoch = RCLayerClock.localTime(of: moteContainer)
-                addMotionAnimations(composition, epoch: motionEpoch)
-            }
-        }
+    @objc private func motionConditionsDidChange() {
+        updateMotion()
+    }
+
+    @objc private func overlayActivityDidChange() {
+        // Overlays are almost always dismissed by the user: count it as activity.
+        if !RCOverlayActivity.isActive, window != nil { resetIdleClock() }
         updateMotion()
     }
 
     /// Re-adds animations the system dropped (e.g. across backgrounding) with
     /// the original epoch, so the field continues from the same state.
     private func ensureMotionAnimations() {
-        guard let composition, !RCMotion.reduceMotion else { return }
+        guard let composition, hasMotionAnimations else { return }
         let missing = moteLayers.contains { $0.animation(forKey: Key.drift) == nil }
             || bloomLayers.contains { $0.animation(forKey: Key.drift) == nil }
         guard missing else { return }
@@ -359,6 +475,7 @@ final class RCAmbientBackgroundView: RCView {
     }
 
     private func removeMotionAnimations() {
+        hasMotionAnimations = false
         for sublayer in bloomLayers + moteLayers {
             sublayer.removeAnimation(forKey: Key.drift)
             sublayer.removeAnimation(forKey: Key.breathe)
@@ -367,6 +484,7 @@ final class RCAmbientBackgroundView: RCView {
     }
 
     private func addMotionAnimations(_ composition: RCAmbientComposition, epoch: CFTimeInterval) {
+        hasMotionAnimations = true
         for (bloom, bloomLayer) in zip(composition.blooms, bloomLayers) {
             let drift = CAKeyframeAnimation(keyPath: "position")
             drift.values = bloom.driftLoop().map { NSValue(cgPoint: $0) }
@@ -405,6 +523,72 @@ final class RCAmbientBackgroundView: RCView {
         animation.beginTime = epoch
         animation.timeOffset = phase * duration
         animation.isRemovedOnCompletion = false
+        if #available(iOS 15.0, *) {
+            // Blooms and motes move a few points per second: a low frame rate
+            // is indistinguishable and lets the display idle between frames.
+            animation.preferredFrameRateRange = CAFrameRateRange(minimum: 8, maximum: 20, preferred: 15)
+        }
+    }
+
+    // MARK: Idle
+
+    private func attachInteractionMonitor(to window: UIWindow?) {
+        if let monitor = interactionMonitor, monitor.view !== window || window == nil {
+            monitor.remove(self)
+            interactionMonitor = nil
+        }
+        guard let window, interactionMonitor == nil else { return }
+        let monitor = RCAmbientInteractionMonitor.monitor(for: window)
+        monitor.add(self)
+        interactionMonitor = monitor
+    }
+
+    private var lastActivity: CFTimeInterval {
+        max(idleReference, interactionMonitor?.lastInteraction ?? 0)
+    }
+
+    private func resetIdleClock() {
+        idleReference = CACurrentMediaTime()
+        setIdle(false)
+        scheduleIdleCheck()
+    }
+
+    /// Called by the window's interaction monitor for every touch that begins.
+    fileprivate func windowDidReceiveInteraction() {
+        setIdle(false)
+        scheduleIdleCheck()
+    }
+
+    private func setIdle(_ idle: Bool) {
+        guard idle != isIdle else { return }
+        isIdle = idle
+        updateMotion()
+    }
+
+    /// One pending check at a time: touches only move `lastActivity`, and the
+    /// check re-arms itself for the remainder instead of being rescheduled
+    /// on every touch.
+    private func scheduleIdleCheck() {
+        guard window != nil, !isIdle, !isIdleCheckScheduled else { return }
+        isIdleCheckScheduled = true
+        let remaining = lastActivity + idleTimeout - CACurrentMediaTime()
+        perform(#selector(idleCheck), with: nil, afterDelay: max(remaining, 0.01), inModes: [.common])
+    }
+
+    private func cancelIdleCheck() {
+        guard isIdleCheckScheduled else { return }
+        isIdleCheckScheduled = false
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(idleCheck), object: nil)
+    }
+
+    @objc private func idleCheck() {
+        isIdleCheckScheduled = false
+        guard window != nil else { return }
+        if CACurrentMediaTime() - lastActivity >= idleTimeout - 0.005 {
+            setIdle(true)
+        } else {
+            scheduleIdleCheck()
+        }
     }
 
     /// Number of layers this view owns (for budget checks).
@@ -413,6 +597,150 @@ final class RCAmbientBackgroundView: RCView {
             (layer.sublayers ?? []).reduce(1) { $0 + count($1) }
         }
         return count(layer) - 1
+    }
+}
+
+// MARK: - Motion policy
+
+/// When the ambient backdrop animates. Pure, so every combination is testable.
+enum RCAmbientMotionPolicy {
+    enum State: Equatable, Sendable {
+        /// Layer time runs.
+        case running
+        /// Animations stay attached with layer time stopped; resuming continues seamlessly.
+        case frozen
+        /// The still composition with no animations attached (static).
+        case still
+    }
+
+    struct Inputs: Equatable, Sendable {
+        var isInWindow: Bool
+        var isSceneActive: Bool
+        var isPaused: Bool
+        var isOverlayActive: Bool
+        var isIdle: Bool
+        var isLowPowerMode: Bool
+        var thermalState: ProcessInfo.ThermalState
+        var reduceMotion: Bool
+    }
+
+    static func state(for inputs: Inputs) -> State {
+        let thermallyConstrained = switch inputs.thermalState {
+        case .serious, .critical: true
+        default: false
+        }
+        if inputs.reduceMotion || inputs.isLowPowerMode || thermallyConstrained {
+            return .still
+        }
+        let visible = inputs.isInWindow && inputs.isSceneActive
+        let unobstructed = !inputs.isPaused && !inputs.isOverlayActive && !inputs.isIdle
+        return visible && unobstructed ? .running : .frozen
+    }
+}
+
+/// Process-wide Low Power Mode and thermal state, republished on the main
+/// thread (the system posts these notifications on arbitrary threads).
+@MainActor
+final class RCAmbientSystemConditions {
+    static let shared = RCAmbientSystemConditions()
+    static let didChangeNotification = Notification.Name("RCAmbientSystemConditionsDidChange")
+
+    private(set) var isLowPowerMode: Bool
+    private(set) var thermalState: ProcessInfo.ThermalState
+    private var isObserving = false
+
+    private init() {
+        let info = ProcessInfo.processInfo
+        isLowPowerMode = info.isLowPowerModeEnabled
+        thermalState = info.thermalState
+    }
+
+    /// Starts observing (idempotent). Observers live as long as the process.
+    func startObserving() {
+        guard !isObserving else { return }
+        isObserving = true
+        let center = NotificationCenter.default
+        for name in [Notification.Name.NSProcessInfoPowerStateDidChange, ProcessInfo.thermalStateDidChangeNotification] {
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { RCAmbientSystemConditions.shared.refresh() }
+            }
+        }
+        refresh()
+    }
+
+    private func refresh() {
+        let info = ProcessInfo.processInfo
+        let lowPower = info.isLowPowerModeEnabled
+        let thermal = info.thermalState
+        guard lowPower != isLowPowerMode || thermal != thermalState else { return }
+        isLowPowerMode = lowPower
+        thermalState = thermal
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+    }
+}
+
+/// Passive touch observer installed on a window while ambient backdrops are
+/// in it (one per window, shared). It never recognizes, never delays or
+/// cancels touches, recognizes simultaneously with everything and cannot
+/// prevent or be prevented: it only notes that a touch began, then fails.
+@MainActor
+final class RCAmbientInteractionMonitor: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private(set) var lastInteraction: CFTimeInterval
+    private let clients = NSHashTable<RCAmbientBackgroundView>.weakObjects()
+
+    private init() {
+        lastInteraction = CACurrentMediaTime()
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        requiresExclusiveTouchType = false
+        delegate = self
+        name = "rc.ambient.interaction"
+    }
+
+    /// The window's shared monitor, installed on first use.
+    static func monitor(for window: UIWindow) -> RCAmbientInteractionMonitor {
+        if let existing = installed(on: window) { return existing }
+        let monitor = RCAmbientInteractionMonitor()
+        window.addGestureRecognizer(monitor)
+        return monitor
+    }
+
+    static func installed(on window: UIWindow) -> RCAmbientInteractionMonitor? {
+        window.gestureRecognizers?.lazy.compactMap { $0 as? RCAmbientInteractionMonitor }.first
+    }
+
+    func add(_ client: RCAmbientBackgroundView) {
+        clients.add(client)
+    }
+
+    /// Removes the client; the last one takes the monitor off its window.
+    func remove(_ client: RCAmbientBackgroundView) {
+        clients.remove(client)
+        if clients.allObjects.isEmpty {
+            view?.removeGestureRecognizer(self)
+        }
+    }
+
+    /// Marks activity now and wakes idle backdrops.
+    func recordInteraction() {
+        lastInteraction = CACurrentMediaTime()
+        for client in clients.allObjects {
+            client.windowDidReceiveInteraction()
+        }
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        recordInteraction()
+        state = .failed
+    }
+
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
     }
 }
 
@@ -673,10 +1001,13 @@ struct RCSplitMix64: Sendable {
     }
 }
 
+
 // MARK: - Artwork
 
 /// Bitmaps behind the ambient backdrop, rendered once and cached. Colors are
-/// resolved from `RCColor` for the tone, never hard-coded.
+/// resolved from `RCColor` for the tone, never hard-coded. The cache is
+/// bounded (grids, the only size-dependent bitmaps, keep the two most recent
+/// sizes) and purged on memory warnings; layers keep what they display.
 @MainActor
 enum RCAmbientArtwork {
     enum Tone: Hashable, Sendable {
@@ -699,7 +1030,11 @@ enum RCAmbientArtwork {
 
     static let grainTilePointSize: CGFloat = 128
     static let grainTileScale: CGFloat = 2
+    /// Strength of the Warm paper grain, baked into the tile's alpha.
+    static let grainOpacity: Double = 0.05
     static let gridSpacing: CGFloat = 46
+    /// Grid bitmaps kept (full canvas width at 1 px per point).
+    static let gridCacheLimit = 2
 
     private struct BloomKey: Hashable {
         let role: RCAmbientComposition.BloomRole
@@ -724,8 +1059,32 @@ enum RCAmbientArtwork {
 
     private static var blooms: [BloomKey: CGImage] = [:]
     private static var halos: [HaloKey: CGImage] = [:]
-    private static var grids: [GridKey: CGImage] = [:]
+    /// Most recently used last.
+    private static var grids: [(key: GridKey, image: CGImage)] = []
     private static var grain: CGImage?
+    private static var memoryWarningObserver: NSObjectProtocol?
+
+    /// Number of cached bitmaps (for tests).
+    static var cachedImageCount: Int {
+        blooms.count + halos.count + grids.count + (grain == nil ? 0 : 1)
+    }
+
+    /// Drops every cached bitmap. Layers keep the images they display.
+    static func purgeCaches() {
+        blooms.removeAll()
+        halos.removeAll()
+        grids.removeAll()
+        grain = nil
+    }
+
+    private static func observeMemoryWarnings() {
+        guard memoryWarningObserver == nil else { return }
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { RCAmbientArtwork.purgeCaches() }
+        }
+    }
 
     /// Bloom color and peak opacity (web `body::before`); nil when the tone has no such bloom.
     static func bloomTint(_ role: RCAmbientComposition.BloomRole, tone: Tone) -> (color: UIColor, alpha: CGFloat)? {
@@ -764,6 +1123,7 @@ enum RCAmbientArtwork {
         let key = BloomKey(role: role, tone: tone)
         if let cached = blooms[key] { return cached }
         guard let tint = bloomTint(role, tone: tone) else { return nil }
+        observeMemoryWarnings()
         let side = 256
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
         tint.color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
@@ -800,6 +1160,7 @@ enum RCAmbientArtwork {
     static func haloImage(tone: Tone, scale: CGFloat) -> CGImage? {
         let key = HaloKey(tone: tone, scale: scale)
         if let cached = halos[key] { return cached }
+        observeMemoryWarnings()
         let side: CGFloat = 24
         let traits = tone.traits
         let color = tone == .warm
@@ -827,9 +1188,14 @@ enum RCAmbientArtwork {
         return image
     }
 
-    /// Ink-tinted monochrome noise tile (fixed seed) for the Warm paper grain.
+    /// Ink-tinted monochrome noise tile (fixed seed) for the Warm paper grain,
+    /// with `grainOpacity` baked in. Alpha this faint is quantized with
+    /// stochastic rounding (from bits the speck roll does not use), so the
+    /// field keeps the exact average strength of a 5% layer and the same
+    /// speck pattern.
     static func grainTile() -> CGImage? {
         if let grain { return grain }
+        observeMemoryWarnings()
         let side = Int(grainTilePointSize * grainTileScale)
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
         RCColor.text.resolvedColor(with: Tone.warm.traits).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
@@ -837,9 +1203,13 @@ enum RCAmbientArtwork {
         var bytes = [UInt8](repeating: 0, count: side * side * 4)
         bytes.withUnsafeMutableBufferPointer { buffer in
             for pixel in 0..<(side * side) {
-                let roll = Int(random.next() >> 56)
+                let value = random.next()
+                let roll = Int(value >> 56)
                 // Skewed toward faint specks with occasional darker fibers.
-                let a = Double((roll * roll) >> 8)
+                let strength = Double((roll * roll) >> 8) * grainOpacity
+                let threshold = Double((value >> 24) & 0xFFFF) / 65_536
+                let a = min(floor(strength) + (strength - floor(strength) > threshold ? 1 : 0), 255)
+                guard a > 0 else { continue }
                 let index = pixel * 4
                 buffer[index] = UInt8(Double(red) * a + 0.5)
                 buffer[index + 1] = UInt8(Double(green) * a + 0.5)
@@ -854,9 +1224,18 @@ enum RCAmbientArtwork {
     /// The web console grid (`body::after`): 1 pt `line` rules every 46 pt,
     /// radially faded from above the top center. Rendered at 1 px per point
     /// and only as tall as the fade reaches.
+    ///
+    /// Not tiled from a small pattern: the fade is radial (not separable per
+    /// line), and applying it over a tiled pattern would need a mask or group
+    /// compositing, i.e. an offscreen pass every frame instead of one bitmap
+    /// per size. Live resizes regenerate it only once the size settles.
     static func gridImage(size: CGSize, tone: Tone) -> CGImage? {
         let key = GridKey(size: size, tone: tone)
-        if let cached = grids[key] { return cached }
+        if let index = grids.firstIndex(where: { $0.key == key }) {
+            let entry = grids.remove(at: index)
+            grids.append(entry)
+            return entry.image
+        }
         let fadeCenter = CGPoint(x: size.width / 2, y: -size.height * 0.1)
         let radiusX = max(size.width * 0.95, 460)
         let radiusY = min(max(size.height * 0.7, 440), 700)
@@ -866,6 +1245,7 @@ enum RCAmbientArtwork {
               let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return nil }
+        observeMemoryWarnings()
         // Top-left origin.
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
@@ -887,9 +1267,9 @@ enum RCAmbientArtwork {
         if let gradient = CGGradient(colorsSpace: space, colors: colors, locations: [0, 1]) {
             context.drawRadialGradient(gradient, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: radiusX, options: [.drawsAfterEndLocation])
         }
-        let image = context.makeImage()
-        if grids.count >= 4 { grids.removeAll() }
-        grids[key] = image
+        guard let image = context.makeImage() else { return nil }
+        grids.append((key, image))
+        if grids.count > gridCacheLimit { grids.removeFirst(grids.count - gridCacheLimit) }
         return image
     }
 

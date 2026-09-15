@@ -8,10 +8,15 @@ extension GalleryCatalog {
     /// - `--rctl-gallery-open=ambient` pushes a full-screen ambient backdrop with a large title.
     /// - `--rctl-ambient-paused` starts that screen paused.
     /// - `--rctl-ambient-resize` makes that screen alternate the backdrop between
-    ///   full width and a split-view-like width every 3 s (relayout crossfade check).
+    ///   full width and a split-view-like width every 3 s (relayout crossfade check);
+    ///   `--rctl-ambient-live-resize` drags the width frame by frame instead, like a
+    ///   Stage Manager resize (one rebuild when it starts, one when it settles).
+    /// - `--rctl-ambient-idle=<seconds>` shortens that screen's idle freeze.
+    /// - `--rctl-ambient-overlay` holds an overlay activity token on that screen
+    ///   from 2 s after launch, as a dialog would (overlay freeze check).
     /// - `--rctl-chrome-demo=pull|refreshing` poses the refresh panel for screenshots;
     ///   `--rctl-chrome-demo=pulse` pulses the brand marks every 2 s.
-    /// - `--rctl-chrome-scroll=topbar|refresh` scrolls the gallery to that specimen.
+    /// - `--rctl-chrome-scroll=ambient|topbar|refresh` scrolls the gallery to that specimen.
     static func chrome() -> [GallerySection] {
         GalleryChromeLaunch.openRequestedSpecimen()
         return [
@@ -19,7 +24,9 @@ extension GalleryCatalog {
                 GalleryItem("Brand mark · 24 32 44 64", height: 96) { _ in GalleryBrandMarkRow() },
                 GalleryItem("Ambient · Warm", height: 240) { _ in GalleryChromeSpecimens.ambient(style: .light, title: "Warm") },
                 GalleryItem("Ambient · Console", height: 240) { _ in GalleryChromeSpecimens.ambient(style: .dark, title: "Console") },
-                GalleryItem("Ambient · Pause and intensity", height: 200) { _ in GalleryChromeSpecimens.ambientControls() },
+                GalleryItem("Ambient · Pause, intensity and overlay", height: 200) { host in
+                    GalleryChromeLaunch.revealed(GalleryChromeSpecimens.ambientControls(), key: "ambient", in: host)
+                },
                 GalleryItem("Top bar · At rest", height: 150) { host in
                     GalleryChromeLaunch.revealed(GalleryChromeSpecimens.topBar(scrolled: false), key: "topbar", in: host)
                 },
@@ -82,6 +89,11 @@ final class GalleryAmbientViewController: RCViewController {
     private let ambient = RCAmbientBackgroundView()
     private let largeTitle = RCLargeTitleView(title: "Devices", subtitle: "Your iPhone and iPad, within reach.")
     private var isNarrow = false
+    /// 1 = full width; driven per frame by the live resize demo.
+    private var widthFraction: CGFloat = 1
+    private var liveResize: CADisplayLink?
+    private var liveResizeStart: CFTimeInterval = 0
+    private var overlayToken: RCOverlayToken?
 
     init() {
         super.init(chrome: .adaptive)
@@ -90,9 +102,52 @@ final class GalleryAmbientViewController: RCViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         ambient.isPaused = DebugLaunch.flag("rctl-ambient-paused")
+        if let idle = DebugLaunch.argument("rctl-ambient-idle").flatMap(Double.init) {
+            ambient.idleTimeout = idle
+        }
         view.addSubview(ambient)
         view.addSubview(largeTitle)
         if DebugLaunch.flag("rctl-ambient-resize") { scheduleResize() }
+        if DebugLaunch.flag("rctl-ambient-live-resize") { scheduleLiveResize() }
+        if DebugLaunch.flag("rctl-ambient-overlay") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                MainActor.assumeIsolated { self?.overlayToken = RCOverlayActivity.begin() }
+            }
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        overlayToken?.end()
+        overlayToken = nil
+        liveResize?.invalidate()
+        liveResize = nil
+    }
+
+    private func scheduleLiveResize() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.view.window != nil else { return }
+                self.liveResizeStart = CACurrentMediaTime()
+                let link = CADisplayLink(target: GalleryDisplayLinkTarget { [weak self] in self?.stepLiveResize() }, selector: #selector(GalleryDisplayLinkTarget.step))
+                link.add(to: .main, forMode: .common)
+                self.liveResize = link
+            }
+        }
+    }
+
+    /// 0.9 s drag between full and 60% width, then a pause, repeated.
+    private func stepLiveResize() {
+        let t = min((CACurrentMediaTime() - liveResizeStart) / 0.9, 1)
+        let eased = CGFloat(t * t * (3 - 2 * t))
+        widthFraction = isNarrow ? 0.6 + 0.4 * eased : 1 - 0.4 * eased
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        guard t >= 1 else { return }
+        isNarrow.toggle()
+        liveResize?.invalidate()
+        liveResize = nil
+        scheduleLiveResize()
     }
 
     private func scheduleResize() {
@@ -108,7 +163,8 @@ final class GalleryAmbientViewController: RCViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        ambient.frame = isNarrow ? CGRect(x: 0, y: 0, width: (view.bounds.width * 0.6).rounded(), height: view.bounds.height) : view.bounds
+        let fraction = DebugLaunch.flag("rctl-ambient-live-resize") ? widthFraction : (isNarrow ? 0.6 : 1)
+        ambient.frame = CGRect(x: 0, y: 0, width: (view.bounds.width * fraction).rounded(), height: view.bounds.height)
         let safe = view.safeAreaInsets
         let inset = RCLayout.columnInset(width: view.bounds.width, safeArea: safe)
         let width = view.bounds.width - inset.left - inset.right
@@ -117,10 +173,25 @@ final class GalleryAmbientViewController: RCViewController {
     }
 }
 
+/// Breaks the display link's strong reference to its owner.
+@MainActor
+private final class GalleryDisplayLinkTarget: NSObject {
+    private let action: () -> Void
+
+    init(_ action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    @objc func step() {
+        action()
+    }
+}
+
 /// Container whose layout is a closure; clips like a card.
 @MainActor
 private final class GalleryChromePanel: UIView {
     var onLayout: ((GalleryChromePanel) -> Void)?
+    var onWindowChange: ((UIWindow?) -> Void)?
 
     init(clips: Bool = true) {
         super.init(frame: .zero)
@@ -150,6 +221,7 @@ private final class GalleryChromePanel: UIView {
         super.didMoveToWindow()
         layer.borderColor = RCColor.line.cgColor(for: self)
         backgroundColor = RCColor.background
+        onWindowChange?(window)
     }
 }
 
@@ -176,8 +248,21 @@ private enum GalleryChromeSpecimens {
         let ambient = RCAmbientBackgroundView()
         let pause = RCButton(title: "Pause", variant: .secondary, size: .small)
         let intensity = RCButton(title: "Intensity 100%", variant: .secondary, size: .small)
+        let overlay = RCButton(title: "Overlay", variant: .secondary, size: .small)
+        overlay.accessibilityHint = "Simulates a dialog over the backdrop, which freezes its motion"
         let levels: [CGFloat] = [1, 0.6, 0.3]
         var level = 0
+        var overlayToken: RCOverlayToken?
+        overlay.onTap = { [weak overlay] in
+            if let token = overlayToken {
+                token.end()
+                overlayToken = nil
+            } else {
+                overlayToken = RCOverlayActivity.begin()
+            }
+            overlay?.title = overlayToken == nil ? "Overlay" : "End overlay"
+            relayoutContainer(overlay)
+        }
         pause.onTap = { [weak ambient, weak pause] in
             guard let ambient else { return }
             ambient.isPaused.toggle()
@@ -190,14 +275,29 @@ private enum GalleryChromeSpecimens {
             intensity?.title = "Intensity \(Int(levels[level] * 100))%"
             relayoutContainer(intensity)
         }
-        [ambient, pause, intensity].forEach(panel.addSubview)
+        // A simulated overlay never outlives the specimen on screen.
+        panel.onWindowChange = { [weak overlay] window in
+            guard window == nil, let token = overlayToken else { return }
+            token.end()
+            overlayToken = nil
+            overlay?.title = "Overlay"
+        }
+        [ambient, pause, intensity, overlay].forEach(panel.addSubview)
         panel.onLayout = { panel in
             ambient.frame = panel.bounds
             let pauseSize = pause.sizeThatFits(.zero)
             let intensitySize = intensity.sizeThatFits(.zero)
+            let overlaySize = overlay.sizeThatFits(.zero)
             let y = panel.bounds.height - RCSpace.lg - pauseSize.height
             pause.frame = CGRect(x: RCSpace.lg, y: y, width: max(pauseSize.width, 84), height: pauseSize.height)
             intensity.frame = CGRect(x: pause.frame.maxX + RCSpace.sm, y: y, width: intensitySize.width, height: intensitySize.height)
+            // Wraps above the first row when the panel is narrow or text is large.
+            let overlayWidth = max(overlaySize.width, 112)
+            if intensity.frame.maxX + RCSpace.sm + overlayWidth <= panel.bounds.width - RCSpace.lg {
+                overlay.frame = CGRect(x: intensity.frame.maxX + RCSpace.sm, y: y, width: overlayWidth, height: overlaySize.height)
+            } else {
+                overlay.frame = CGRect(x: RCSpace.lg, y: y - RCSpace.sm - overlaySize.height, width: overlayWidth, height: overlaySize.height)
+            }
         }
         return panel
     }

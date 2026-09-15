@@ -183,6 +183,13 @@ final class RCRefreshControl: RCView {
     /// The indicator is fading out after a refresh; scroll updates leave its
     /// opacity and scale alone until the fade completes.
     private var isFadingOut = false
+    /// The indicator was last applied fully hidden at rest; scroll callbacks
+    /// while content is not pulled skip all view and layer writes.
+    private var isIndicatorParked = false
+#if DEBUG
+    /// Number of scroll-driven indicator updates that wrote view or layer state (tests).
+    private(set) var indicatorWriteCount = 0
+#endif
 
     private static let diameter: CGFloat = 22
     private static let lineWidth: CGFloat = 2
@@ -290,6 +297,7 @@ final class RCRefreshControl: RCView {
     // MARK: Effects
 
     private func apply(_ effects: [RCRefreshStateMachine.Effect]) {
+        guard !effects.isEmpty else { return }
         for effect in effects {
             switch effect {
             case .thresholdHaptic:
@@ -408,6 +416,14 @@ final class RCRefreshControl: RCView {
     }
 
     private func updateIndicator(in scrollView: UIScrollView, pull: CGFloat) {
+        // Scrolled into content (or resting) with nothing showing: the hidden
+        // indicator's position, ring and transform are irrelevant until a pull.
+        let isHiddenAtRest = !machine.holdsInset && !isFadingOut && visibility(forPull: pull) == 0
+        if isHiddenAtRest, isIndicatorParked { return }
+        isIndicatorParked = isHiddenAtRest
+#if DEBUG
+        indicatorWriteCount += 1
+#endif
         let resting = restingTopInset(scrollView)
         let gapTop = topOffset ?? resting
         let hold = refreshingHeight
@@ -428,8 +444,7 @@ final class RCRefreshControl: RCView {
         }
         guard !machine.holdsInset, !isFadingOut else { return }
         let progress = machine.progress
-        let visibility = min(max((pull - 8) / (threshold * 0.45), 0), 1)
-        alpha = visibility
+        alpha = visibility(forPull: pull)
         withoutImplicitAnimations {
             arc.strokeEnd = progress
             if RCMotion.reduceMotion {
@@ -439,5 +454,9 @@ final class RCRefreshControl: RCView {
                 indicator.transform = CGAffineTransform(scaleX: scale, y: scale).rotated(by: progress * .pi * 0.5)
             }
         }
+    }
+
+    private func visibility(forPull pull: CGFloat) -> CGFloat {
+        min(max((pull - 8) / (threshold * 0.45), 0), 1)
     }
 }

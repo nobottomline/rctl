@@ -81,8 +81,8 @@ final class RCAmbientBackgroundViewTests: XCTestCase {
     }
 
     func testAnimationsExistUnlessReduceMotion() throws {
-        try XCTSkipIf(UIAccessibility.isReduceMotionEnabled)
         let view = RCAmbientBackgroundView(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        try XCTSkipIf(view.motionState == .still, "Reduce Motion, Low Power Mode or thermal pressure")
         view.layoutIfNeeded()
         let animated = view.layer.sublayers?.flatMap { $0.sublayers ?? [] }.filter { !($0.animationKeys() ?? []).isEmpty } ?? []
         XCTAssertGreaterThanOrEqual(animated.count, RCAmbientComposition.moteCount(for: CGSize(width: 402, height: 874)))
@@ -106,6 +106,184 @@ final class RCAmbientBackgroundViewTests: XCTestCase {
         view.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
         view.layoutIfNeeded()
         XCTAssertEqual(view.composition?.size, CGSize(width: 874, height: 402))
+    }
+}
+
+/// Motion lifecycle in a real window: idle freeze, overlay freeze, live resize.
+@MainActor
+final class RCAmbientBackgroundMotionTests: XCTestCase {
+    private var host: PrimitiveTestHost!
+
+    override func setUp() async throws {
+        host = PrimitiveTestHost()
+    }
+
+    override func tearDown() async throws {
+        host.tearDown()
+        host = nil
+    }
+
+    private func makeRunningBackground(idleTimeout: TimeInterval) async throws -> RCAmbientBackgroundView {
+        let view = RCAmbientBackgroundView()
+        view.idleTimeout = idleTimeout
+        host.add(view, frame: host.container.bounds)
+        try XCTSkipIf(view.motionState == .still, "Reduce Motion, Low Power Mode or thermal pressure")
+        try XCTSkipIf(RCOverlayActivity.isActive, "an overlay from another test is still up")
+        XCTAssertFalse(view.isMotionRunning, "motion waits for the warm-up delay")
+        let running = await pollUntil(timeout: RCAmbientBackgroundView.motionStartDelay + 2) { view.isMotionRunning }
+        try XCTSkipUnless(running || view.motionState != .frozen, "host scene is not active")
+        XCTAssertTrue(running)
+        return view
+    }
+
+    private func assertClockFrozen(_ view: RCAmbientBackgroundView, file: StaticString = #filePath, line: UInt = #line) async -> CFTimeInterval {
+        let frozen = view.motionClockTime
+        try? await Task.sleep(seconds: 0.12)
+        XCTAssertEqual(view.motionClockTime, frozen, accuracy: 0.0001, "layer time must not advance while frozen", file: file, line: line)
+        return frozen
+    }
+
+    func testIdleTimeoutFreezesAndATouchResumesWithoutAJump() async throws {
+        let view = try await makeRunningBackground(idleTimeout: 1.5)
+        let idle = await pollUntil(timeout: 4) { view.isIdle }
+        XCTAssertTrue(idle)
+        XCTAssertFalse(view.isMotionRunning)
+        XCTAssertEqual(view.motionState, .frozen)
+        let frozen = await assertClockFrozen(view)
+
+        let monitor = try XCTUnwrap(RCAmbientInteractionMonitor.installed(on: host.window))
+        monitor.recordInteraction()
+        XCTAssertFalse(view.isIdle)
+        XCTAssertEqual(view.motionState, .running)
+        XCTAssertFalse(view.isMotionRunning, "resumes after the warm-up delay, not instantly")
+        let resumed = await pollUntil(timeout: 3) { view.isMotionRunning }
+        XCTAssertTrue(resumed)
+        XCTAssertEqual(view.motionClockTime, frozen, accuracy: 0.1, "continues where it stopped")
+        try? await Task.sleep(seconds: 0.1)
+        XCTAssertGreaterThan(view.motionClockTime, frozen + 0.05, "time runs again")
+    }
+
+    func testOverlayActivityFreezesImmediatelyAndResumesAfterIt() async throws {
+        let view = try await makeRunningBackground(idleTimeout: 600)
+        let token = RCOverlayActivity.begin()
+        XCTAssertFalse(view.isMotionRunning, "a dialog or menu freezes the backdrop at once")
+        XCTAssertEqual(view.motionState, .frozen)
+        let frozen = await assertClockFrozen(view)
+
+        token.end()
+        XCTAssertEqual(view.motionState, .running)
+        let resumed = await pollUntil(timeout: 3) { view.isMotionRunning }
+        XCTAssertTrue(resumed)
+        XCTAssertEqual(view.motionClockTime, frozen, accuracy: 0.1)
+    }
+
+    func testOneSharedPassiveMonitorPerWindow() throws {
+        let first = RCAmbientBackgroundView()
+        let second = RCAmbientBackgroundView()
+        host.add(first, frame: host.container.bounds)
+        host.add(second, frame: host.container.bounds)
+        let monitors = host.window.gestureRecognizers?.compactMap { $0 as? RCAmbientInteractionMonitor } ?? []
+        XCTAssertEqual(monitors.count, 1)
+        let monitor = try XCTUnwrap(monitors.first)
+        XCTAssertFalse(monitor.cancelsTouchesInView)
+        XCTAssertFalse(monitor.delaysTouchesBegan)
+        XCTAssertFalse(monitor.delaysTouchesEnded)
+        let other = UIPanGestureRecognizer()
+        XCTAssertFalse(monitor.canPrevent(other))
+        XCTAssertFalse(monitor.canBePrevented(by: other))
+        XCTAssertEqual(monitor.delegate?.gestureRecognizer?(monitor, shouldRecognizeSimultaneouslyWith: other), true)
+
+        first.removeFromSuperview()
+        XCTAssertNotNil(RCAmbientInteractionMonitor.installed(on: host.window), "still used by the second backdrop")
+        second.removeFromSuperview()
+        XCTAssertNil(RCAmbientInteractionMonitor.installed(on: host.window), "removed with the last backdrop")
+    }
+
+    func testLiveResizeRebuildsOnceTheSizeSettles() async throws {
+        let view = RCAmbientBackgroundView()
+        host.add(view, frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        XCTAssertEqual(view.composition?.size, CGSize(width: 390, height: 844))
+        try? await Task.sleep(seconds: RCAmbientBackgroundView.resizeSettleDelay + 0.1)
+
+        // A single change (rotation) rebuilds immediately.
+        view.frame = CGRect(x: 0, y: 0, width: 320, height: 844)
+        view.layoutIfNeeded()
+        XCTAssertEqual(view.composition?.size.width, 320)
+
+        // Changes following it within the settle delay wait for the last one.
+        for width: CGFloat in [300, 280, 260, 240] {
+            view.frame = CGRect(x: 0, y: 0, width: width, height: 844)
+            view.layoutIfNeeded()
+            XCTAssertEqual(view.composition?.size.width, 320, "no rebuild per frame of a live resize")
+        }
+        let settled = await pollUntil(timeout: 2) { view.composition?.size.width == 240 }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(view.composition?.motes.count, RCAmbientComposition.moteCount(for: CGSize(width: 240, height: 844)))
+    }
+
+    func testNoLayerWithSublayersUsesGroupOpacity() {
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let view = RCAmbientBackgroundView()
+            view.overrideUserInterfaceStyle = style
+            host.add(view, frame: host.container.bounds)
+            view.intensity = 0.6
+            func visit(_ layer: CALayer) {
+                if !(layer.sublayers ?? []).isEmpty, !layer.isHidden {
+                    XCTAssertTrue(layer.opacity == 1 || !layer.allowsGroupOpacity, "\(layer) would composite offscreen (\(style.rawValue))")
+                }
+                layer.sublayers?.forEach(visit)
+            }
+            visit(view.layer)
+            view.removeFromSuperview()
+        }
+    }
+
+    func testMotionAsksForALowFrameRate() throws {
+        guard #available(iOS 15.0, *) else { throw XCTSkip("frame rate ranges need iOS 15") }
+        let view = RCAmbientBackgroundView()
+        host.add(view, frame: host.container.bounds)
+        try XCTSkipIf(view.motionState == .still)
+        let animations = (view.layer.sublayers ?? []).flatMap { $0.sublayers ?? [] }
+            .flatMap { layer in (layer.animationKeys() ?? []).compactMap { layer.animation(forKey: $0) } }
+        XCTAssertFalse(animations.isEmpty)
+        for animation in animations {
+            XCTAssertEqual(animation.preferredFrameRateRange, CAFrameRateRange(minimum: 8, maximum: 20, preferred: 15))
+        }
+    }
+}
+
+@MainActor
+final class RCAmbientArtworkTests: XCTestCase {
+    func testGrainTileCarriesTheFaintnessInItsAlpha() throws {
+        RCAmbientArtwork.purgeCaches()
+        let tile = TestPixels.of(try XCTUnwrap(RCAmbientArtwork.grainTile()))
+        var alphaSum = 0
+        var maxAlpha = 0
+        for pixel in 0..<(tile.width * tile.height) {
+            let alpha = Int(tile.bytes[pixel * 4 + 3])
+            alphaSum += alpha
+            maxAlpha = max(maxAlpha, alpha)
+        }
+        // A 5% layer over the original speck distribution (roll² / 256 for a uniform byte).
+        let original = (0..<256).reduce(0.0) { $0 + Double(($1 * $1) >> 8) } / 256
+        let mean = Double(alphaSum) / Double(tile.width * tile.height)
+        XCTAssertEqual(mean, original * RCAmbientArtwork.grainOpacity, accuracy: original * RCAmbientArtwork.grainOpacity * 0.03)
+        XCTAssertLessThanOrEqual(maxAlpha, Int((255 * RCAmbientArtwork.grainOpacity).rounded(.up)))
+    }
+
+    func testCachesAreBoundedAndPurgedOnMemoryWarning() async {
+        RCAmbientArtwork.purgeCaches()
+        for width in [320, 390, 744, 1024] {
+            _ = RCAmbientArtwork.gridImage(size: CGSize(width: width, height: 800), tone: .console)
+        }
+        XCTAssertEqual(RCAmbientArtwork.cachedImageCount, RCAmbientArtwork.gridCacheLimit)
+        _ = RCAmbientArtwork.bloomImage(.signal, tone: .warm)
+        _ = RCAmbientArtwork.grainTile()
+        XCTAssertGreaterThan(RCAmbientArtwork.cachedImageCount, RCAmbientArtwork.gridCacheLimit)
+
+        NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: UIApplication.shared)
+        let purged = await pollUntil(timeout: 1) { RCAmbientArtwork.cachedImageCount == 0 }
+        XCTAssertTrue(purged)
     }
 }
 
