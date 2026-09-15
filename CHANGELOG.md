@@ -3,6 +3,20 @@
 Version headings may describe unpublished candidates. Release availability is
 determined by GitHub Releases, not by the presence of a changelog entry.
 
+## 0.4.1
+
+Supersedes the unpublished `0.4.0` candidate and includes its changes below.
+The earlier draft and tag are retained unchanged.
+
+- Reduced screen and camera RTP fragment sizes to reserve space for IPv6,
+  SRTP, and TURN overhead instead of relying on IP fragmentation.
+- Always rebuild the device control client during packaging, so version or
+  configuration changes cannot leave stale HTML in either package variant.
+  A failed web build stops packaging rather than reusing an older client.
+- Added release-build checks for video packet sizing, authorization ownership,
+  and Talk playback recovery. Experimental video pacing was withdrawn and is
+  not included in this candidate.
+
 ## 0.4.0
 
 Changes since the last published release, `0.3.2`, including the unpublished

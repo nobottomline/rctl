@@ -2,6 +2,11 @@
 
 ## Current Checkpoint (2026-09-15)
 
+The next candidate is `0.4.1`, incorporating the retained packet-sizing and
+fresh-client-build fixes. The existing `v0.4.0` tag and draft stay unchanged and
+unpublished. The checks below identify their own artifact sets; none is
+automatically a qualification report for `0.4.1`.
+
 The rootless device has been restored to the non-pacing baseline
 `0.4.0~test.20260913213641.23e8bcff8aed` through an independent SSH/sudo
 installation. Package audit passed and the relay configuration was verified
@@ -693,7 +698,8 @@ schema-4 report for different final artifacts or qualify the NAT-host profile.
 
 ### Local 0.4.0 Preparation
 
-`control` now uses `0.4.0`; the changelog entry does not imply publication.
+At this historical checkpoint, `control` used `0.4.0`; the changelog entry did
+not imply publication.
 `scripts/build-packages.sh --version 0.4.0` built both `iphoneos-arm` and
 `iphoneos-arm64` public packages and audited each successfully. Build
 orchestration tests and setup/personalization race tests passed. These local
@@ -701,6 +707,10 @@ packages were not installed or published, and their checksums are not a
 replacement for the tag-bound draft's artifact provenance.
 
 ## Remaining Release Gates
+
+These historical results guide the next acceptance pass; a `0.4.1` publication
+report must bind to its new draft hashes, image, and source. Build and verify
+that draft before installing another candidate or running host lifecycle tests.
 
 1. Finish exact-candidate wizard/device acceptance. Fresh staged bootstrap,
    idempotence, trusted HTTPS/admin, package-generation UI, and browser TURN
@@ -724,12 +734,12 @@ replacement for the tag-bound draft's artifact provenance.
 
 ## Version Decision
 
-The `v0.4.0` tag now identifies the draft candidate, not a published release. Rootless
-support and the accumulated features justify a minor increase over `0.3.x`;
-they do not by themselves establish the support guarantees of `1.0.0`. Keep the
-wire protocol major unchanged unless an actual incompatible contract requires
-a migration. Do not replace or retag existing release artifacts.
+`control` now uses `0.4.1`. This is the replacement candidate for the unpublished
+`v0.4.0` draft: use a new tag and artifact set rather than replacing or retagging
+existing artifacts. Rootless support and the accumulated features belong to
+the `0.4.x` release line; they do not by themselves establish the support
+guarantees of `1.0.0`. The wire protocol major is unchanged.
 
-Local qualification DEBs use `0.4.0~rc.N` with exact package identity. The
+Local qualification DEBs use prerelease versions with exact package identity. The
 GitHub draft workflow accepts `vMAJOR.MINOR.PATCH`
-tags only; do not assume it already supports `v0.4.0-rc.N` tags.
+tags only; do not assume it already supports prerelease tags.
