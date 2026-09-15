@@ -7,6 +7,9 @@ generations, remote tracks, DataChannels, timeouts, and deterministic cleanup.
 `RctlRemoteVideoView` keeps transport and hardware decode in WebRTC, then
 presents its decoded `CVPixelBuffer` through a bounded Core Image/Metal surface.
 The rctl-owned UIKit boundary owns only presentation and renderer lifecycle.
+Presentation runs on a private render queue that keeps only the newest frame;
+the main thread lays out the surface and maps touches through the geometry of
+the frame on screen, so a late GPU never delays input.
 
 The exact `LiveKitWebRTC` dependency contains a symbol-prefixed build of
 upstream WebRTC, not the LiveKit client SDK. SwiftPM verifies the binary
