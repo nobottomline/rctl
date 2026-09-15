@@ -44,7 +44,7 @@ Debug launch arguments (Release ignores them), handled in
 - `--rctl-push=local|pair` — animated push 1.5 s after launch with a black marker (latency measurement)
 - `--rctl-appearance=system|warm|console`
 - `--rctl-demo` — screens that support it render synthetic fixtures (no network, no stored data)
-- `--rctl-scanner-demo` — scripted QR detections in the scanner
+- `--rctl-scanner-demo` — scripted QR detections in the scanner (`--rctl-scanner-demo-script=idle` keeps it searching)
 - `--rctl-scanner-state=denied|unavailable`, `--rctl-pairing-action=paste|claim-invalid` — camera-less scanner states and pairing actions without network
 - `--rctl-editor-error` / `--rctl-editor-pending` — local device editor error and checking states without network
 - `--rctl-remote-demo=connecting|live|control|camera|failed|reconnecting|stalled|ended|keyboard|tools|lock|source-menu|missing|cycle` with `--rctl-route=remote` (`--rctl-remote-demo-path=relay`, `--rctl-remote-demo-orientation=landscape`) — remote session states without a connection

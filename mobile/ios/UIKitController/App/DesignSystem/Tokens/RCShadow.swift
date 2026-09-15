@@ -20,7 +20,8 @@ struct RCShadow: Sendable {
     static let popover = RCShadow(opacityLight: 0.16, opacityDark: 0.60, radius: 28, offset: CGSize(width: 0, height: 14))
     /// Sheets and dialogs.
     static let modal = RCShadow(opacityLight: 0.18, opacityDark: 0.65, radius: 36, offset: CGSize(width: 0, height: 18))
-    /// Floating chrome over video (remote dock / header).
+    /// Floating surfaces over the stage that do not border the video area
+    /// (chrome adjacent to video stays opaque and shadowless).
     static let floating = RCShadow(opacityLight: 0.30, opacityDark: 0.55, radius: 22, offset: CGSize(width: 0, height: 10))
 
     @MainActor
