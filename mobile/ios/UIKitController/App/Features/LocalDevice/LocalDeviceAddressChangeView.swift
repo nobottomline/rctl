@@ -2,7 +2,8 @@ import UIKit
 
 /// Shows exactly what "Replace address and connect" changes: the saved
 /// device, its current address (struck through) and the discovered address
-/// that replaces it, joined by a change badge on the divider.
+/// that replaces it. A quiet inline arrow on the divider reads the change
+/// from top to bottom; it is decoration, not a control.
 @MainActor
 final class LocalDeviceAddressChangeView: RCSurfaceView {
     private let change: LocalDeviceEditorContent.AddressChange
@@ -13,17 +14,18 @@ final class LocalDeviceAddressChangeView: RCSurfaceView {
     private let divider = CALayer()
     private let currentCaption = RCLabel("Current", style: .caption, color: RCColor.textTertiary, lines: 0)
     private let currentValue = UILabel()
-    private let foundCaption = RCLabel(style: .caption, color: RCColor.accent, lines: 0)
+    private let foundCaption = RCLabel(style: .caption, color: RCColor.accentText, lines: 0)
     private let foundValue = UILabel()
-    private let badge = UIView()
-    private let badgeIcon = RCIconView(.arrowDown, pointSize: 14, strokeWidth: 2.25)
+    private static let arrowSide: CGFloat = 14
+    private let arrow = RCIconView(.arrowDown, pointSize: LocalDeviceAddressChangeView.arrowSide, strokeWidth: 2)
     private let footnote = RCLabel(LocalDeviceEditorContent.addressChangeFootnote, style: .footnote, color: RCColor.textTertiary, lines: 0)
 
     private static let padding: CGFloat = RCSpace.lg
     private static let wellPadding = UIEdgeInsets(top: RCSpace.md, left: 14, bottom: RCSpace.md, right: 14)
-    private static let badgeSide: CGFloat = 28
-    /// Space above and below the divider; clears the badge so rows keep the full width.
-    private static let dividerGap: CGFloat = RCSpace.lg
+    /// Space above and below the divider; clears the arrow centered on it.
+    private var dividerGap: CGFloat { max(RCSpace.md, (arrow.pointSize / 2).rounded(.up) + RCSpace.xs) }
+    /// Between the arrow and the start of the divider line.
+    private static let arrowGap: CGFloat = RCSpace.sm
 
     init(change: LocalDeviceEditorContent.AddressChange) {
         self.change = change
@@ -49,10 +51,9 @@ final class LocalDeviceAddressChangeView: RCSurfaceView {
         currentValue.numberOfLines = 0
         foundValue.numberOfLines = 0
         [currentCaption, currentValue, foundCaption, foundValue].forEach(well.addSubview)
-        badge.isUserInteractionEnabled = false
-        badge.layer.cornerRadius = Self.badgeSide / 2
-        badge.addSubview(badgeIcon)
-        well.addSubview(badge)
+        arrow.isUserInteractionEnabled = false
+        arrow.isAccessibilityElement = false
+        well.addSubview(arrow)
         [tile, titleLabel, well, footnote].forEach(contentView.addSubview)
     }
 
@@ -61,16 +62,15 @@ final class LocalDeviceAddressChangeView: RCSurfaceView {
         withoutImplicitAnimations {
             well.layer.backgroundColor = RCColor.surfaceSunken.cgColor(for: self)
             divider.backgroundColor = RCColor.line.cgColor(for: self)
-            badge.layer.backgroundColor = RCColor.elevated.cgColor(for: self)
-            badge.layer.borderColor = RCColor.lineStrong.cgColor(for: self)
-            badge.layer.borderWidth = RCLayout.hairline
         }
-        badgeIcon.tintColor = RCColor.accent
+        arrow.tintColor = RCColor.textTertiary
         rebuildAddresses()
     }
 
     override func updateTypography() {
         super.updateTypography()
+        // The arrow reads with the captions around it, so it scales with them.
+        arrow.pointSize = min(22, (Self.arrowSide * RCTypography.scale(for: .caption, compatibleWith: traitCollection)).rounded())
         rebuildAddresses()
         setNeedsLayout()
     }
@@ -83,7 +83,7 @@ final class LocalDeviceAddressChangeView: RCSurfaceView {
         current[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         current[.strikethroughColor] = RCColor.textTertiary
         currentValue.attributedText = NSAttributedString(string: change.currentAddress, attributes: current)
-        var found = RCTypography.attributes(.mono, color: RCColor.accent, lineBreakMode: .byCharWrapping, compatibleWith: traits)
+        var found = RCTypography.attributes(.mono, color: RCColor.accentText, lineBreakMode: .byCharWrapping, compatibleWith: traits)
         // Same scaled size as the `.mono` token, emphasized.
         let size = RCTypography.font(.mono, compatibleWith: traits).pointSize
         found[.font] = UIFont.monospacedSystemFont(ofSize: size, weight: .semibold)
@@ -113,7 +113,7 @@ final class LocalDeviceAddressChangeView: RCSurfaceView {
         var y = headerHeight + RCSpace.md + 2
 
         let insets = Self.wellPadding
-        let side = Self.badgeSide
+        let side = arrow.pointSize
         let textWidth = max(0, width - insets.left - insets.right)
         func place(_ view: UIView, at wellY: inout CGFloat, gap: CGFloat) {
             let height = ceil(view.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude)).height)
@@ -122,18 +122,19 @@ final class LocalDeviceAddressChangeView: RCSurfaceView {
         }
         var wellY = insets.top
         place(currentCaption, at: &wellY, gap: RCSpace.xxs)
-        place(currentValue, at: &wellY, gap: Self.dividerGap)
+        place(currentValue, at: &wellY, gap: dividerGap)
         let dividerY = RCLayout.pixelAligned(wellY)
-        wellY += Self.dividerGap
+        wellY += dividerGap
         place(foundCaption, at: &wellY, gap: RCSpace.xxs)
         place(foundValue, at: &wellY, gap: insets.bottom)
         if apply {
             well.frame = CGRect(x: 0, y: y, width: width, height: wellY)
+            // "↓ ────": the arrow sits at the text column's leading edge, the line follows it.
+            let lineX = insets.left + side + Self.arrowGap
             withoutImplicitAnimations {
-                divider.frame = CGRect(x: 0, y: dividerY, width: width, height: RCLayout.hairline)
+                divider.frame = CGRect(x: lineX, y: dividerY, width: max(0, width - lineX), height: RCLayout.hairline)
             }
-            badge.frame = RCLayout.pixelAligned(CGRect(x: width - insets.right - side, y: dividerY - side / 2, width: side, height: side))
-            badgeIcon.frame = badge.bounds
+            arrow.frame = RCLayout.pixelAligned(CGRect(x: insets.left, y: dividerY - side / 2, width: side, height: side))
         }
         y += wellY + RCSpace.md
 

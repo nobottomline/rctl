@@ -16,7 +16,7 @@ final class LocalDeviceEditorContentTests: XCTestCase {
     func testAddMode() {
         let content = LocalDeviceEditorContent(editing: nil, suggested: nil)
         XCTAssertEqual(content.mode, .add)
-        XCTAssertEqual(content.title, "Local device")
+        XCTAssertEqual(content.title, "Add device", "Matches the entry points (Add by address, Add local device) and its siblings")
         XCTAssertEqual(content.intro, "Connect directly over the network you are on. The device needs the rctl package with LAN control enabled.")
         XCTAssertEqual(content.actionTitle, "Connect")
         XCTAssertEqual(content.initialAddress, "")
@@ -71,6 +71,12 @@ final class LocalDeviceEditorContentTests: XCTestCase {
             currentAddress: "192.168.1.2:8080",
             newAddress: "192.168.1.30:8080"
         ))
+    }
+
+    func testAddressChangeFootnoteNamesTheOnlyActionThatSaves() throws {
+        let content = LocalDeviceEditorContent(editing: try saved(), suggested: try discovered())
+        XCTAssertEqual(LocalDeviceEditorContent.addressChangeFootnote, "Nothing is saved until you tap Replace address and connect.")
+        XCTAssertTrue(LocalDeviceEditorContent.addressChangeFootnote.contains(content.actionTitle), "The footnote names the button exactly")
     }
 
     func testSubmitRequiresAnAddressAndNoPendingCheck() {

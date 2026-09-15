@@ -93,7 +93,7 @@ final class DevicesViewStateTests: XCTestCase {
             (.unknown, DevicesStatus(text: "Saved", tone: .neutral)),
             (.checking, DevicesStatus(text: "Checking", tone: .neutral, busy: true)),
             (.reachable(daemonVersion: "0.3.0"), DevicesStatus(text: "Online", tone: .success)),
-            (.unreachable, DevicesStatus(text: "Offline", tone: .attention)),
+            (.unreachable, DevicesStatus(text: "Offline", tone: .neutral)),
         ]
         for (reachability, expected) in cases {
             snapshot.reachability = reachability.map { [living.id: $0] } ?? [:]
@@ -104,16 +104,22 @@ final class DevicesViewStateTests: XCTestCase {
         }
     }
 
-    func testLocalDetailShowsVersionOnlyWhenReachableWithVersion() {
+    func testLocalDetailIsTheAddressWithVersionAsAccessory() {
         var snapshot = DevicesSnapshot()
         snapshot.localDevices = [living]
         snapshot.reachability = [living.id: .reachable(daemonVersion: "0.3.0-180")]
-        XCTAssertEqual(DevicesViewState(snapshot).local.rows[0].detail, "192.168.1.20:8080 · rctld 0.3.0-180")
+        var row = DevicesViewState(snapshot).local.rows[0]
+        XCTAssertEqual(row.detail, "192.168.1.20:8080", "The address is the detail; metadata never shares its truncation")
+        XCTAssertEqual(row.detailAccessory, "rctld 0.3.0-180")
         snapshot.reachability = [living.id: .reachable(daemonVersion: nil)]
-        XCTAssertEqual(DevicesViewState(snapshot).local.rows[0].detail, "192.168.1.20:8080")
+        row = DevicesViewState(snapshot).local.rows[0]
+        XCTAssertEqual(row.detail, "192.168.1.20:8080")
+        XCTAssertNil(row.detailAccessory)
         snapshot.reachability = [living.id: .unreachable]
-        XCTAssertEqual(DevicesViewState(snapshot).local.rows[0].detail, "192.168.1.20:8080")
-        XCTAssertTrue(DevicesViewState(snapshot).local.rows[0].detailIsMonospaced)
+        row = DevicesViewState(snapshot).local.rows[0]
+        XCTAssertEqual(row.detail, "192.168.1.20:8080")
+        XCTAssertNil(row.detailAccessory)
+        XCTAssertTrue(row.detailIsMonospaced)
     }
 
     func testAdvertisedHintRequiresDiscoveryAndExactEndpoint() {
@@ -127,7 +133,8 @@ final class DevicesViewStateTests: XCTestCase {
         snapshot.discoveryEnabled = true
         let row = DevicesViewState(snapshot).local.rows[0]
         XCTAssertEqual(row.status, DevicesStatus(text: "Discovered", tone: .neutral))
-        XCTAssertEqual(row.detail, "192.168.1.20:8080 · advertised")
+        XCTAssertEqual(row.detail, "192.168.1.20:8080")
+        XCTAssertEqual(row.detailAccessory, "advertised")
 
         snapshot.nearby = [.init(id: Self.service("Living"), endpointAddress: Self.address("192.168.1.20:8081"))]
         XCTAssertEqual(DevicesViewState(snapshot).local.rows[0].status.text, "Offline", "A different port is a different endpoint")
@@ -141,7 +148,8 @@ final class DevicesViewStateTests: XCTestCase {
         snapshot.nearby = [.init(id: Self.service("Living"), endpointAddress: living.address)]
         let row = DevicesViewState(snapshot).local.rows[0]
         XCTAssertEqual(row.status.text, "Discovered")
-        XCTAssertEqual(row.detail, "192.168.1.20:8080 · rctld 1.0")
+        XCTAssertEqual(row.detail, "192.168.1.20:8080")
+        XCTAssertEqual(row.detailAccessory, "rctld 1.0")
     }
 
     func testLocalSubtitleAndRowIdentity() {
@@ -151,6 +159,90 @@ final class DevicesViewStateTests: XCTestCase {
         XCTAssertEqual(local.subtitle, "2 saved")
         XCTAssertEqual(local.rows.map(\.id), ["local:\(living.id.uuidString)", "local:\(studio.id.uuidString)"])
         XCTAssertEqual(local.rows.map(\.title), ["Living room", "Studio"])
+    }
+
+    // MARK: - Status map
+
+    func testOneStatusMapForEverySection() {
+        let expected: [DevicesStatusKind: DevicesStatus] = [
+            .online: DevicesStatus(text: "Online", tone: .success),
+            .checking: DevicesStatus(text: "Checking", tone: .neutral, busy: true),
+            .resolving: DevicesStatus(text: "Resolving", tone: .neutral, busy: true),
+            .saved: DevicesStatus(text: "Saved", tone: .neutral),
+            .discovered: DevicesStatus(text: "Discovered", tone: .neutral),
+            .offline: DevicesStatus(text: "Offline", tone: .neutral),
+            .unavailable: DevicesStatus(text: "Unavailable", tone: .attention),
+            .unsupported: DevicesStatus(text: "Unsupported", tone: .attention),
+            .needsUpdate: DevicesStatus(text: "Needs update", tone: .attention),
+            .incompatible: DevicesStatus(text: "Incompatible", tone: .danger),
+        ]
+        XCTAssertEqual(Set(expected.keys), Set(DevicesStatusKind.allCases))
+        for kind in DevicesStatusKind.allCases {
+            XCTAssertEqual(DevicesStatus(kind), expected[kind], "\(kind)")
+        }
+        let texts = DevicesStatusKind.allCases.map { DevicesStatus($0).text }
+        XCTAssertEqual(Set(texts).count, texts.count, "Each status has its own words; state is never color alone")
+    }
+
+    func testSameStatusLooksTheSameInLocalNearbyAndRelayRows() {
+        var snapshot = DevicesSnapshot()
+        snapshot.localDevices = [living]
+        snapshot.reachability = [living.id: .unreachable]
+        snapshot.discoveryEnabled = true
+        snapshot.nearby = [.init(id: Self.service("Old"), error: .unsupportedVersion)]
+        snapshot.relay = relay([
+            .init(id: "offline", name: "Travel", online: false),
+            .init(id: "old", name: "Legacy", online: true, compatible: false),
+        ])
+        let state = DevicesViewState(snapshot)
+        guard case let .paired(paired) = state.relay else { return XCTFail("Expected a paired relay") }
+        XCTAssertEqual(state.local.rows[0].status, paired.rows[0].status, "Offline reads the same for local and relay devices")
+        XCTAssertEqual(nearbyRow(state, "Old")?.status, paired.rows[1].status, "Incompatible reads the same for nearby and relay devices")
+    }
+
+    // MARK: - Switches
+
+    func testSwitchesDetectReplacedStatesOnly() {
+        var base = DevicesSnapshot()
+        base.localDevices = [living]
+        let populated = DevicesViewState(base)
+        XCTAssertEqual(DevicesViewState.switches(from: populated, to: populated), [])
+        XCTAssertEqual(DevicesViewState.switches(from: DevicesViewState(DevicesSnapshot()), to: populated), [.layout])
+
+        // Discovery on: the invitation row gives way to the searching notice.
+        var searching = base
+        searching.discoveryEnabled = true
+        searching.discoveryState = .searching
+        let searchingState = DevicesViewState(searching)
+        XCTAssertEqual(DevicesViewState.switches(from: populated, to: searchingState), [.nearby])
+        var settled = searching
+        settled.discoverySearchSettled = true
+        XCTAssertEqual(DevicesViewState.switches(from: searchingState, to: DevicesViewState(settled)), [.nearby], "Notice changes")
+        var found = searching
+        found.nearby = [.init(id: Self.service("A"), endpointAddress: Self.address("192.168.1.5:8080"))]
+        let foundState = DevicesViewState(found)
+        XCTAssertEqual(DevicesViewState.switches(from: searchingState, to: foundState), [.nearby], "The notice leaves for the first row")
+        var more = found
+        more.nearby.append(.init(id: Self.service("B")))
+        XCTAssertEqual(DevicesViewState.switches(from: foundState, to: DevicesViewState(more)), [], "Further rows insert as rows")
+
+        // Relay: pairing, loading skeleton, rows and the empty notice replace each other.
+        var paired = base
+        paired.relay = relay()
+        paired.isBusy = true
+        let loading = DevicesViewState(paired)
+        XCTAssertEqual(DevicesViewState.switches(from: populated, to: loading), [.relay])
+        var loaded = paired
+        loaded.isBusy = false
+        loaded.relay?.devices = [.init(id: "a", name: "A", online: true)]
+        let loadedState = DevicesViewState(loaded)
+        XCTAssertEqual(DevicesViewState.switches(from: loading, to: loadedState), [.relay])
+        var refreshed = loaded
+        refreshed.relay?.devices[0].online = false
+        XCTAssertEqual(DevicesViewState.switches(from: loadedState, to: DevicesViewState(refreshed)), [], "Row updates are not switches")
+        var empty = paired
+        empty.isBusy = false
+        XCTAssertEqual(DevicesViewState.switches(from: loadedState, to: DevicesViewState(empty)), [.relay])
     }
 
     // MARK: - Nearby header
@@ -258,24 +350,25 @@ final class DevicesViewStateTests: XCTestCase {
             .init(id: Self.service("Fresh"), endpointAddress: Self.address("192.168.1.77:8080")),
         ]
         let state = DevicesViewState(snapshot)
-        let expected: [(String, DevicesStatus, String)] = [
-            ("Gone", DevicesStatus(text: "Unavailable", tone: .attention), "No longer advertised on this network"),
-            ("Old", DevicesStatus(text: "Incompatible", tone: .danger), "Protocol mismatch"),
-            ("Guest", DevicesStatus(text: "Unsupported", tone: .attention), "No private IPv4"),
-            ("Broken", DevicesStatus(text: "Unavailable", tone: .attention), "Invalid record"),
-            ("Slow", DevicesStatus(text: "Unavailable", tone: .attention), "No answer"),
-            ("Busy", DevicesStatus(text: "Unavailable", tone: .attention), "Not resolved"),
-            ("Lost", DevicesStatus(text: "Unavailable", tone: .attention), "Not resolved"),
-            ("Pending", DevicesStatus(text: "Resolving", tone: .neutral, busy: true), "Resolving address…"),
-            ("Studio", DevicesStatus(text: "Saved", tone: .neutral), "192.168.1.42:9000"),
-            ("Studio 2", DevicesStatus(text: "Saved", tone: .neutral), "192.168.1.42:9000 · saved as Studio"),
-            ("Fresh", DevicesStatus(text: "Discovered", tone: .neutral), "192.168.1.77:8080"),
+        let expected: [(String, DevicesStatus, String, String?)] = [
+            ("Gone", DevicesStatus(text: "Unavailable", tone: .attention), "No longer advertised on this network", nil),
+            ("Old", DevicesStatus(text: "Incompatible", tone: .danger), "Protocol mismatch", nil),
+            ("Guest", DevicesStatus(text: "Unsupported", tone: .attention), "No private IPv4", nil),
+            ("Broken", DevicesStatus(text: "Unavailable", tone: .attention), "Invalid record", nil),
+            ("Slow", DevicesStatus(text: "Unavailable", tone: .attention), "No answer", nil),
+            ("Busy", DevicesStatus(text: "Unavailable", tone: .attention), "Not resolved", nil),
+            ("Lost", DevicesStatus(text: "Unavailable", tone: .attention), "Not resolved", nil),
+            ("Pending", DevicesStatus(text: "Resolving", tone: .neutral, busy: true), "Resolving address…", nil),
+            ("Studio", DevicesStatus(text: "Saved", tone: .neutral), "192.168.1.42:9000", nil),
+            ("Studio 2", DevicesStatus(text: "Saved", tone: .neutral), "192.168.1.42:9000", "saved as Studio"),
+            ("Fresh", DevicesStatus(text: "Discovered", tone: .neutral), "192.168.1.77:8080", nil),
         ]
         XCTAssertEqual(state.nearby.rows.count, expected.count)
-        for (name, status, detail) in expected {
+        for (name, status, detail, accessory) in expected {
             let row = nearbyRow(state, name)
             XCTAssertEqual(row?.status, status, name)
             XCTAssertEqual(row?.detail, detail, name)
+            XCTAssertEqual(row?.detailAccessory, accessory, name)
         }
         XCTAssertEqual(nearbyRow(state, "Fresh")?.detailIsMonospaced, true)
         XCTAssertEqual(nearbyRow(state, "Pending")?.detailIsMonospaced, false)

@@ -52,14 +52,14 @@ struct LocalDeviceEditorContent: Equatable, Sendable {
     static let addressPlaceholder = "192.168.1.20:8080"
     static let nameLabel = "Name"
     static let namePlaceholder = "Optional, for example Living room"
-    static let addressChangeFootnote = "Only Replace address and connect changes the saved entry. The name and history stay."
+    static let addressChangeFootnote = "Nothing is saved until you tap Replace address and connect."
 
     init(editing: LocalDeviceProfile?, suggested: LocalDeviceProfile?) {
         let mode = LocalDeviceEditorMode(editing: editing, suggested: suggested)
         self.mode = mode
         switch mode {
         case .add:
-            title = "Local device"
+            title = "Add device"
             actionTitle = "Connect"
         case .saveDiscovered:
             title = "Save device"

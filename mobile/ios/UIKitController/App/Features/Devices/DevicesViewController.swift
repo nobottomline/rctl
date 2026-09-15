@@ -9,7 +9,9 @@ import UIKit
 /// is coalesced by `RenderScheduler` and diffs into long-lived views: rows are
 /// keyed by device ID or service identity, sections persist across the
 /// first-run and populated layouts, and every change after the first frame
-/// animates with `RCMotion.standard`.
+/// animates with `RCMotion.standard`. A state *switch* (first run ↔ populated,
+/// skeleton ↔ rows, notices) fades the old state out before the new one fades
+/// in (`DevicesViewState.switches`), so two states never overlap.
 ///
 /// Lifecycle mirrors the SwiftUI screen: discovery and reachability probes run
 /// only while this screen is visible and the scene is active; a push pauses
@@ -45,11 +47,11 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
     private let nearbySection = DevicesSectionView(title: "Nearby")
     private let connectSection = DevicesSectionView(title: "Connect")
     private let relaySection = DevicesSectionView(title: "Relay")
-    private let footerLabel = RCLabel(style: .caption, color: RCColor.textQuaternary, lines: 0, alignment: .center)
+    private let footerLabel = RCLabel(style: .caption, color: RCColor.textTertiary, lines: 0, alignment: .center)
 
     private let nearbyAccessory = DevicesAccessoryStack()
-    private let nearbySpinner = RCSpinner(diameter: 14, lineWidth: 1.75)
     private let searchAgainButton = RCIconButton(icon: .refreshCw, variant: .ghost, diameter: 32, iconSize: 16, accessibilityLabel: "Search again")
+    private lazy var searchSlot = DevicesSearchSlot(button: searchAgainButton)
     private let stopSearchButton = RCIconButton(icon: .x, variant: .ghost, diameter: 32, iconSize: 16, accessibilityLabel: "Stop searching")
     private let relayOptionsButton = RCIconButton(icon: .ellipsis, variant: .plain, diameter: 32, iconSize: 16, accessibilityLabel: "Relay options")
 
@@ -73,8 +75,15 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         title: "Pair with relay", detail: "Scan a one-time code from relay admin", glyph: .qrCode,
         tone: .dashed, trailing: .plus, identifier: "pair-relay"
     ) { [weak self] in self?.push(.pairRelay) }
-    private let nearbyNoticeRow = DevicesStatusRowView()
-    private let relayPlaceholderRow = DevicesStatusRowView()
+    /// One row per notice, so a notice change is a row replacement (the old
+    /// notice fades out with its own text) rather than new text in the old row.
+    private var nearbyNoticeRows: [DevicesViewState.NearbyNotice: DevicesStatusRowView] = [:]
+    private lazy var relayPlaceholderRow: DevicesStatusRowView = {
+        let row = DevicesStatusRowView()
+        row.configure(glyph: .server, busy: false, title: "No approved devices",
+                      message: "Approve devices for this controller in relay admin, then refresh.")
+        return row
+    }()
 
     /// Device rows by `DevicesRowState.id`, reused across renders.
     private var deviceRows: [String: RCListRow] = [:]
@@ -91,6 +100,12 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
     private var homeVisible = false
     private var appliedForeground: Bool?
     private var shownBlocks: [ObjectIdentifier] = []
+    /// Set while a first run ↔ populated switch fades the old sections out;
+    /// renders wait for it and then show the latest state.
+    private var layoutSwitchToken: Int?
+    private var layoutSwitchCounter = 0
+    private var largeTitleHeights = DevicesMeasureCache<CGFloat>()
+    private var footerHeights = DevicesMeasureCache<CGFloat>()
     private var checkingNearby: LocalServiceIdentity?
     private var nearbyTask: (id: UUID, task: Task<Void, Never>)?
     private var probeTask: Task<Void, Never>?
@@ -103,6 +118,9 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
 #endif
 
     private static let sectionSpacing: CGFloat = 26
+    /// Scroll progress past which the brand drops its wordmark, and below which it returns.
+    private static let brandCollapseProgress: CGFloat = 0.3
+    private static let brandExpandProgress: CGFloat = 0.1
     private static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
     private static let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
 
@@ -223,6 +241,8 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         [localSection, nearbySection, connectSection, relaySection].forEach { $0.alpha = 0 }
 
         topBar.title = "Devices"
+        // Bar items line up with the readable column on iPad, like the sections below.
+        topBar.contentColumnWidth = RCLayout.maxContentWidth
         topBar.leadingViews = [brand]
         refreshButton.onTap = { [weak self] in
             guard let self else { return }
@@ -233,13 +253,12 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         RCMenu.attach(to: moreButton, alignment: .trailing) { [weak self] in self?.moreMenu() ?? [] }
         view.addSubview(topBar)
 
-        nearbySpinner.hidesWhenStopped = true
-        nearbySpinner.isAccessibilityElement = true
-        nearbySpinner.accessibilityLabel = "Searching"
         searchAgainButton.onTap = { [weak self] in self?.restartDiscovery() }
         stopSearchButton.accessibilityIdentifier = "stop-discovery"
         stopSearchButton.onTap = { [weak self] in self?.disableDiscovery() }
-        nearbyAccessory.arrangedViews = [nearbySpinner, searchAgainButton, stopSearchButton]
+        // The spinner takes the Search again slot while searching; the spacing
+        // keeps the two 44 pt hit areas apart.
+        nearbyAccessory.arrangedViews = [searchSlot, stopSearchButton]
         RCMenu.attach(to: relayOptionsButton, alignment: .trailing) { [weak self] in self?.relayMenu() ?? [] }
 
         for section in [localSection, nearbySection, connectSection, relaySection] {
@@ -247,8 +266,8 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
             section.group.onHeightChange = { [weak self] _ in self?.groupHeightChanged() }
         }
         connectSection.footnote.style = .footnote
-        connectSection.footnote.color = RCColor.textQuaternary
-        relaySection.footnote.color = RCColor.textQuaternary
+        connectSection.footnote.color = RCColor.textTertiary
+        relaySection.footnote.color = RCColor.textTertiary
         relaySection.footnote.truncatesMiddle = true
     }
 
@@ -272,6 +291,7 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         let content = RCListRow.Content(
             title: rowState.title,
             detail: rowState.detail,
+            detailAccessory: rowState.detailAccessory,
             detailIsMonospaced: rowState.detailIsMonospaced,
             glyph: .tabletSmartphone,
             tileTone: status.tone == .success ? .accent : .neutral,
@@ -353,21 +373,68 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
     private func render() {
         let snapshot = makeSnapshot()
         self.snapshot = snapshot
+        // The latest state is shown once the running layout switch has faded out.
+        guard layoutSwitchToken == nil else { return }
         let next = DevicesViewState(snapshot)
         guard next != state else { return }
         // No animation for the first frame or while off-screen (e.g. rendering
         // pending changes as a pop begins).
         let animated = state != nil && homeVisible && view.window != nil
+        let switches = state.map { DevicesViewState.switches(from: $0, to: next) } ?? []
+        if animated, switches.contains(.layout), let current = state {
+            beginLayoutSwitch(from: current)
+            return
+        }
         state = next
-        apply(next, animated: animated)
+        apply(next, animated: animated, switches: switches)
     }
 
-    private func apply(_ state: DevicesViewState, animated: Bool) {
+    /// First run ↔ populated: the visible sections fade out, the page is
+    /// rebuilt for the latest state while nothing shows, then the new sections
+    /// fade in. The persisting Nearby section fades too instead of sliding
+    /// across sections that are appearing.
+    private func beginLayoutSwitch(from current: DevicesViewState) {
+        layoutSwitchCounter += 1
+        let token = layoutSwitchCounter
+        layoutSwitchToken = token
+        let leaving: [UIView] = sections(for: current.layout) + [footerLabel]
+        for view in leaving {
+            view.isUserInteractionEnabled = false
+            DevicesSwitchMotion.fade(view, to: 0, duration: DevicesSwitchMotion.fadeOut, curve: RCMotion.easeIn)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + DevicesSwitchMotion.fadeOut) { [weak self] in
+            MainActor.assumeIsolated { self?.finishLayoutSwitch(token: token) }
+        }
+        // The summary fades its own text out and in on the same beat.
+        let next = DevicesViewState(snapshot)
+        summaryView.configure(text: next.summary.text, showsDot: next.summary.showsOnlineIndicator, animated: true)
+    }
+
+    private func finishLayoutSwitch(token: Int) {
+        guard layoutSwitchToken == token else { return }
+        layoutSwitchToken = nil
+        let snapshot = makeSnapshot()
+        self.snapshot = snapshot
+        let next = DevicesViewState(snapshot)
+        state = next
+        // Everything below the summary is invisible: rebuild without motion.
+        apply(next, animated: false, switches: [])
+        footerLabel.alpha = 1
+        guard homeVisible, view.window != nil else { return }
+        let entering: [UIView] = sections(for: next.layout) + [footerLabel]
+        for view in entering {
+            view.layer.removeAnimation(forKey: "rc.switchFade")
+            UIView.performWithoutAnimation { view.alpha = 0 }
+            DevicesSwitchMotion.fade(view, to: 1, duration: DevicesSwitchMotion.fadeIn)
+        }
+    }
+
+    private func apply(_ state: DevicesViewState, animated: Bool, switches: DevicesViewState.Switches) {
         applyTopBar(state)
         summaryView.configure(text: state.summary.text, showsDot: state.summary.showsOnlineIndicator, animated: animated)
         applyLocal(state.local, animated: animated)
-        applyNearby(state.nearby, animated: animated)
-        applyRelay(state.relay, animated: animated)
+        applyNearby(state.nearby, transition: Self.transition(animated: animated, switching: switches.contains(.nearby)))
+        applyRelay(state.relay, transition: Self.transition(animated: animated, switching: switches.contains(.relay)))
         if connectSection.group.items.isEmpty {
             connectSection.setRows([.init(id: "connect-pair", view: connectPairRow), .init(id: "connect-address", view: connectAddressRow)], animated: false)
             connectSection.setFootnote("Local network works without an account. Relay needs a one-time pairing from relay admin.", animated: false)
@@ -382,6 +449,11 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         }
     }
 
+    private static func transition(animated: Bool, switching: Bool) -> RCListGroupView.Transition {
+        guard animated else { return .none }
+        return switching ? .replace : .rows
+    }
+
     private func applyTopBar(_ state: DevicesViewState) {
         let trailing: [UIView] = state.showsRefresh ? [refreshButton, addButton, moreButton] : [addButton, moreButton]
         if !topBar.trailingViews.elementsEqual(trailing, by: ===) {
@@ -393,110 +465,97 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
     }
 
     private func applyLocal(_ local: DevicesViewState.LocalSection, animated: Bool) {
-        localSection.header.subtitle = local.subtitle
+        localSection.setHeader(subtitle: local.subtitle, accessory: nil)
         let rows = local.rows.map { RCListGroupView.Item(id: $0.id, view: deviceRow(for: $0, animated: animated)) }
         localSection.setRows(rows + [.init(id: "add-local", view: addLocalRow)], animated: animated)
     }
 
-    private func applyNearby(_ nearby: DevicesViewState.NearbySection, animated: Bool) {
-        let header = nearbySection.header
-        header.subtitle = nearby.subtitle
-        let accessory: UIView? = nearby.isEnabled ? nearbyAccessory : nil
-        if header.accessoryView !== accessory { header.accessoryView = accessory }
-        if nearby.showsSpinner { nearbySpinner.startAnimating() } else { nearbySpinner.stopAnimating() }
+    private func applyNearby(_ nearby: DevicesViewState.NearbySection, transition: RCListGroupView.Transition) {
+        let animated = transition != .none
+        nearbySection.setHeader(subtitle: nearby.subtitle, accessory: nearby.isEnabled ? nearbyAccessory : nil)
+        // A settled search swaps the spinner back to Search again in the same slot.
+        searchSlot.setSearching(nearby.showsSpinner, animated: animated)
         searchAgainButton.isEnabled = nearby.canSearchAgain
-        nearbyAccessory.setNeedsLayout()
-        header.setNeedsLayout()
 
         guard nearby.isEnabled else {
-            nearbySection.setRows([.init(id: "find-nearby", view: findNearbyRow)], animated: animated)
+            nearbySection.setRows([.init(id: "find-nearby", view: findNearbyRow)], transition: transition)
             nearbySection.setFootnote(nil, animated: animated)
             return
         }
         var items = nearby.rows.map { RCListGroupView.Item(id: $0.id, view: deviceRow(for: $0, animated: animated)) }
         if let notice = nearby.notice {
-            configureNearbyNotice(notice, animated: animated && nearbySection.group.items.contains { $0.id == "nearby-notice" })
-            items.append(.init(id: "nearby-notice", view: nearbyNoticeRow))
+            items.append(.init(id: "nearby-notice-\(notice)", view: nearbyNoticeRow(notice)))
         }
-        nearbySection.setRows(items, animated: animated)
+        nearbySection.setRows(items, transition: transition)
         nearbySection.setFootnote("Found devices are not verified. Use LAN control only on a network you trust.", glyph: .shieldAlert, animated: animated)
     }
 
-    private func configureNearbyNotice(_ notice: DevicesViewState.NearbyNotice, animated: Bool) {
-        let configure = { [weak self] in
-            guard let self else { return }
-            switch notice {
-            case .permissionDenied:
-                nearbyNoticeRow.configure(
-                    glyph: .shieldAlert, busy: false,
-                    title: "Local Network access is off",
-                    message: "Allow it in Settings to find devices. Adding by address needs the same permission.",
-                    actions: [
-                        .init("Open Settings", prominent: true) { [weak self] in self?.openSettings() },
-                        .init("Add by address") { [weak self] in self?.push(.localDevice(editing: nil)) },
-                    ]
-                )
-            case .unavailable:
-                nearbyNoticeRow.configure(
-                    glyph: .wifiOff, busy: false,
-                    title: "Discovery is unavailable",
-                    message: "Bonjour is not working on this network right now. Try again, or add the device by address.",
-                    actions: [
-                        .init("Try again", prominent: true) { [weak self] in self?.restartDiscovery() },
-                        .init("Add by address") { [weak self] in self?.push(.localDevice(editing: nil)) },
-                    ]
-                )
-            case .searching:
-                nearbyNoticeRow.configure(
-                    glyph: nil, busy: true,
-                    title: "Looking for rctl devices",
-                    message: "On the network this phone is connected to"
-                )
-            case .empty:
-                nearbyNoticeRow.configure(
-                    glyph: .search, busy: false,
-                    title: "No devices found",
-                    message: "Make sure the device is on this network with LAN control on. Devices set to Relay only do not advertise.",
-                    actions: [.init("Add by address", prominent: true) { [weak self] in self?.push(.localDevice(editing: nil)) }]
-                )
-            }
+    private func nearbyNoticeRow(_ notice: DevicesViewState.NearbyNotice) -> DevicesStatusRowView {
+        if let row = nearbyNoticeRows[notice] { return row }
+        let row = DevicesStatusRowView()
+        nearbyNoticeRows[notice] = row
+        switch notice {
+        case .permissionDenied:
+            row.configure(
+                glyph: .shieldAlert, busy: false,
+                title: "Local Network access is off",
+                message: "Allow it in Settings to find devices. Adding by address needs the same permission.",
+                actions: [
+                    .init("Open Settings", prominent: true) { [weak self] in self?.openSettings() },
+                    .init("Add by address") { [weak self] in self?.push(.localDevice(editing: nil)) },
+                ]
+            )
+        case .unavailable:
+            row.configure(
+                glyph: .wifiOff, busy: false,
+                title: "Discovery is unavailable",
+                message: "Bonjour is not working on this network right now. Try again, or add the device by address.",
+                actions: [
+                    .init("Try again", prominent: true) { [weak self] in self?.restartDiscovery() },
+                    .init("Add by address") { [weak self] in self?.push(.localDevice(editing: nil)) },
+                ]
+            )
+        case .searching:
+            row.configure(
+                glyph: nil, busy: true,
+                title: "Looking for rctl devices",
+                message: "On the network this phone is connected to"
+            )
+        case .empty:
+            row.configure(
+                glyph: .search, busy: false,
+                title: "No devices found",
+                message: "Make sure the device is on this network with LAN control on. Devices set to Relay only do not advertise.",
+                actions: [.init("Add by address", prominent: true) { [weak self] in self?.push(.localDevice(editing: nil)) }]
+            )
         }
-        if animated {
-            UIView.transition(with: nearbyNoticeRow, duration: RCMotion.quickDuration, options: [.transitionCrossDissolve, .allowUserInteraction], animations: configure)
-        } else {
-            configure()
-        }
+        return row
     }
 
-    private func applyRelay(_ relay: DevicesViewState.RelaySection, animated: Bool) {
-        let header = relaySection.header
+    private func applyRelay(_ relay: DevicesViewState.RelaySection, transition: RCListGroupView.Transition) {
+        let animated = transition != .none
         switch relay {
         case .unpaired:
-            header.subtitle = nil
-            if header.accessoryView != nil { header.accessoryView = nil }
-            relaySection.setRows([.init(id: "relay-pair", view: relayPairRow)], animated: animated)
+            relaySection.setHeader(subtitle: nil, accessory: nil)
+            relaySection.setRows([.init(id: "relay-pair", view: relayPairRow)], transition: transition)
             relaySection.setFootnote(nil, animated: animated)
         case let .paired(paired):
-            header.subtitle = paired.subtitle
-            if header.accessoryView !== relayOptionsButton { header.accessoryView = relayOptionsButton }
+            relaySection.setHeader(subtitle: paired.subtitle, accessory: relayOptionsButton)
             if paired.placeholder == .loading {
-                // Skeleton rows shaped like device rows; real rows crossfade in.
-                if !relaySection.group.isShowingPlaceholder {
-                    relaySection.group.showPlaceholder(rows: 2, animated: animated)
+                // Skeleton rows shaped like device rows; real rows replace them.
+                if !relaySection.group.isTargetPlaceholder {
+                    relaySection.group.showPlaceholder(rows: 2, transition: transition)
                 }
                 relaySection.group.accessibilityLabel = "Loading devices. Talking to the relay."
             } else {
                 var items = paired.rows.map { RCListGroupView.Item(id: $0.id, view: deviceRow(for: $0, animated: animated)) }
                 if paired.placeholder == .empty {
-                    relayPlaceholderRow.configure(glyph: .server, busy: false, title: "No approved devices",
-                                                  message: "Approve devices for this controller in relay admin, then refresh.")
                     items.append(.init(id: "relay-placeholder", view: relayPlaceholderRow))
                 }
-                relaySection.setRows(items, animated: animated)
+                relaySection.setRows(items, transition: transition)
             }
             relaySection.setFootnote(paired.footer, glyph: .keyRound, animated: animated)
         }
-        header.setNeedsLayout()
     }
 
     private func relayRowIDs(_ relay: DevicesViewState.RelaySection) -> [String] {
@@ -561,7 +620,8 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         let fit = CGSize(width: width, height: .greatestFiniteMagnitude)
 
         var y = topBar.preferredHeight(safeAreaTop: safe.top) + RCSpace.xs
-        let titleHeight = largeTitle.sizeThatFits(fit).height
+        let category = traitCollection.preferredContentSizeCategory
+        let titleHeight = largeTitleHeights.value(width: width, category: category, content: largeTitle.title) { largeTitle.sizeThatFits(fit).height }
         largeTitle.frame = CGRect(x: inset.left, y: y, width: width, height: titleHeight)
         y = largeTitle.frame.maxY + RCLargeTitleView.subtitleSpacing
         let summaryHeight = summaryView.sizeThatFits(fit).height
@@ -572,6 +632,7 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         let previouslyShown = shownBlocks
         for block in blocks {
             let frame = CGRect(x: inset.left, y: y, width: width, height: block.sizeThatFits(fit).height)
+            // Placement below reuses this measurement (`DevicesSectionView.layoutSubviews`).
             if previouslyShown.contains(ObjectIdentifier(block)) {
                 block.frame = frame
                 block.layoutIfNeeded()
@@ -588,7 +649,7 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         shownBlocks = blocks.map(ObjectIdentifier.init)
 
         y += RCSpace.xs
-        let footerHeight = footerLabel.sizeThatFits(fit).height
+        let footerHeight = footerHeights.value(width: width, category: category, content: footerLabel.text ?? "") { ceil(footerLabel.sizeThatFits(fit).height) }
         footerLabel.frame = CGRect(x: inset.left, y: y, width: width, height: footerHeight)
         y = footerLabel.frame.maxY
 
@@ -610,9 +671,16 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
         pullToRefresh.scrollViewWillEndDragging()
     }
 
-    /// The small title and solid bar arrive as the large title slides under the bar.
+    /// The small title and solid bar arrive as the large title slides under the
+    /// bar. Before the small title shows, the brand drops its wordmark so the
+    /// title has room; the bar re-lays out once per change, not per scroll step.
     private func updateTopBarProgress() {
-        topBar.setScrollProgress(largeTitle.collapseProgress(in: scrollView, topBarHeight: topBar.bounds.height))
+        let progress = largeTitle.collapseProgress(in: scrollView, topBarHeight: topBar.bounds.height)
+        topBar.setScrollProgress(progress)
+        let collapsed = brand.isCollapsed ? progress > Self.brandExpandProgress : progress >= Self.brandCollapseProgress
+        if brand.setCollapsed(collapsed, animated: view.window != nil) {
+            topBar.setNeedsLayout()
+        }
     }
 
     // MARK: - Actions

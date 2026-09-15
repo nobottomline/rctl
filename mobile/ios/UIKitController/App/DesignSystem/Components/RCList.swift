@@ -17,6 +17,10 @@ import UIKit
 /// **Large text.** At accessibility sizes, or whenever the title or detail
 /// would be truncated to make room for the badge, the badge moves under the
 /// detail instead (`Layout.isStacked`).
+///
+/// **Detail accessory.** Secondary metadata after the detail
+/// ("192.168.1.20:8080 · rctld 0.3.0") gives way first: it truncates, then
+/// disappears, before the detail itself is shortened (`Layout.detailSplit`).
 @MainActor
 final class RCListRow: RCControl {
     enum Trailing: Equatable {
@@ -31,6 +35,9 @@ final class RCListRow: RCControl {
     struct Content: Equatable {
         var title: String
         var detail: String?
+        /// Metadata rendered after the detail as " · accessory" in the detail's
+        /// style. Truncated, then dropped, before the detail is shortened.
+        var detailAccessory: String?
         /// Render the detail in SF Mono (addresses, endpoints); truncates in the middle.
         var detailIsMonospaced = false
         var glyph: RCIconGlyph?
@@ -39,9 +46,10 @@ final class RCListRow: RCControl {
         /// Dimmed look for unavailable items; the row still sends taps.
         var appearsEnabled = true
 
-        init(title: String, detail: String? = nil, detailIsMonospaced: Bool = false, glyph: RCIconGlyph? = nil, tileTone: RCIconTile.Tone = .accent, trailing: Trailing = .chevron, appearsEnabled: Bool = true) {
+        init(title: String, detail: String? = nil, detailAccessory: String? = nil, detailIsMonospaced: Bool = false, glyph: RCIconGlyph? = nil, tileTone: RCIconTile.Tone = .accent, trailing: Trailing = .chevron, appearsEnabled: Bool = true) {
             self.title = title
             self.detail = detail
+            self.detailAccessory = detailAccessory
             self.detailIsMonospaced = detailIsMonospaced
             self.glyph = glyph
             self.tileTone = tileTone
@@ -60,6 +68,8 @@ final class RCListRow: RCControl {
         var tileFrame: CGRect
         var titleFrame: CGRect
         var detailFrame: CGRect
+        /// `.zero` when the row has no accessory or it does not fit.
+        var detailAccessoryFrame: CGRect = .zero
         var badgeFrame: CGRect
         var trailingViewFrame: CGRect
         var accessoryFrame: CGRect
@@ -89,6 +99,8 @@ final class RCListRow: RCControl {
     }
 
     static let tileSide: CGFloat = 40
+    /// Joins the detail and its accessory.
+    static let detailAccessorySeparator = " · "
     static let insets = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 14)
     /// Narrowest text column allowed beside a badge before it stacks.
     static let minimumInlineTextWidth: CGFloat = 96
@@ -102,6 +114,7 @@ final class RCListRow: RCControl {
     private let tile: RCIconTile
     private let titleLabel = RCLabel(style: .bodyStrong, lines: 2)
     private let detailLabel = RCLabel(style: .footnote, color: RCColor.textTertiary)
+    private let detailAccessoryLabel = RCLabel(style: .footnote, color: RCColor.textTertiary)
     private let badge = RCStatusBadge()
     private let accessoryIcon = RCIconView(pointSize: 16)
     private let highlightLayer = CALayer()
@@ -135,7 +148,8 @@ final class RCListRow: RCControl {
         layer.addSublayer(highlightLayer)
         highlightLayer.opacity = 0
         titleLabel.lineBreakMode = .byTruncatingTail
-        for view in [titleLabel, detailLabel, badge, accessoryIcon] as [UIView] {
+        detailAccessoryLabel.isHidden = true
+        for view in [titleLabel, detailLabel, detailAccessoryLabel, badge, accessoryIcon] as [UIView] {
             view.isUserInteractionEnabled = false
             addSubview(view)
         }
@@ -158,6 +172,7 @@ final class RCListRow: RCControl {
         if animate {
             if old.title != content.title || old.appearsEnabled != content.appearsEnabled { crossfade(titleLabel) }
             if old.detail != content.detail || old.detailIsMonospaced != content.detailIsMonospaced { crossfade(detailLabel) }
+            if old.detailAccessory != content.detailAccessory || old.detailIsMonospaced != content.detailIsMonospaced { crossfade(detailAccessoryLabel) }
             if old.glyph != content.glyph || Self.effectiveTone(old) != Self.effectiveTone(content) { crossfade(tile) }
         }
 
@@ -166,6 +181,9 @@ final class RCListRow: RCControl {
         detailLabel.text = content.detail
         detailLabel.style = content.detailIsMonospaced ? .monoSmall : .footnote
         detailLabel.lineBreakMode = content.detailIsMonospaced ? .byTruncatingMiddle : .byTruncatingTail
+        detailAccessoryLabel.text = content.detailAccessory.map { Self.detailAccessorySeparator + $0 }
+        detailAccessoryLabel.style = detailLabel.style
+        detailAccessoryLabel.lineBreakMode = .byTruncatingTail
         if let glyph = content.glyph { tile.glyph = glyph }
         tile.tone = Self.effectiveTone(content)
         var appearing: [UIView] = []
@@ -269,7 +287,9 @@ final class RCListRow: RCControl {
     private func updateAccessibility() {
         accessibilityLabel = content.title
         let status = content.trailing.badgeValue?.text
-        let value = [content.detail, status].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
+        // The accessory is spoken even when it does not fit on screen.
+        let accessory = content.detail?.isEmpty == false ? content.detailAccessory : nil
+        let value = [content.detail, accessory, status].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
         accessibilityValue = value.isEmpty ? nil : value
         accessibilityTraits = content.trailing == .check ? [.button, .selected] : .button
     }
@@ -452,10 +472,29 @@ final class RCListRow: RCControl {
         let hasAccessory = content.trailing.accessoryGlyph != nil
         let hasTrailingView = trailingViewSize.width > 0
         let detail = content.detail.flatMap { $0.isEmpty ? nil : $0 }
+        let accessory = detail == nil ? nil : content.detailAccessory.flatMap { $0.isEmpty ? nil : $0 }
         let titleLineHeight = RCTypography.lineHeight(.bodyStrong, compatibleWith: traits)
         // One line box for both detail fonts so switching to/from an address never changes the height.
         let detailLineHeight = max(RCTypography.lineHeight(.footnote, compatibleWith: traits), RCTypography.lineHeight(.monoSmall, compatibleWith: traits))
         let detailStyle: RCTextStyle = content.detailIsMonospaced ? .monoSmall : .footnote
+        // Natural widths of the detail and " · accessory"; measured only when an accessory needs a split.
+        var detailWidths: (detail: CGFloat, accessory: CGFloat, minimumAccessory: CGFloat)?
+        func measuredDetailWidths() -> (detail: CGFloat, accessory: CGFloat, minimumAccessory: CGFloat) {
+            if let detailWidths { return detailWidths }
+            let measured: (detail: CGFloat, accessory: CGFloat, minimumAccessory: CGFloat)
+            if let detail, let accessory {
+                let full = detailAccessorySeparator + accessory
+                let minimum = accessory.count > minimumAccessoryCharacters
+                    ? ListTextMetrics.naturalWidth(detailAccessorySeparator + String(accessory.prefix(minimumAccessoryCharacters)) + "…", style: detailStyle, traits: traits)
+                    : nil
+                let accessoryWidth = ListTextMetrics.naturalWidth(full, style: detailStyle, traits: traits)
+                measured = (ListTextMetrics.naturalWidth(detail, style: detailStyle, traits: traits), accessoryWidth, minimum ?? accessoryWidth)
+            } else {
+                measured = (detail.map { ListTextMetrics.naturalWidth($0, style: detailStyle, traits: traits) } ?? 0, 0, 0)
+            }
+            detailWidths = measured
+            return measured
+        }
 
         let textX = insets.left + (hasTile ? tileSide + RCSpace.md : 0)
         var cursor = width - insets.right
@@ -480,8 +519,10 @@ final class RCListRow: RCControl {
                 isStacked = true
             } else if ListTextMetrics.lineCount(content.title, style: .bodyStrong, width: inlineTextWidth, traits: traits) > 2 {
                 isStacked = true
-            } else if let detail, ListTextMetrics.naturalWidth(detail, style: detailStyle, traits: traits) > inlineTextWidth {
-                isStacked = true
+            } else if detail != nil {
+                let widths = measuredDetailWidths()
+                // The whole line counts: stacking beside a badge keeps the metadata visible too.
+                if widths.detail + widths.accessory > inlineTextWidth { isStacked = true }
             }
         }
 
@@ -496,6 +537,7 @@ final class RCListRow: RCControl {
         var tileFrame = CGRect.zero
         var titleFrame: CGRect
         var detailFrame = CGRect.zero
+        var detailAccessoryFrame = CGRect.zero
         var badgeFrame = CGRect.zero
         if isStacked {
             let top = insets.top
@@ -518,6 +560,14 @@ final class RCListRow: RCControl {
                 badgeFrame = CGRect(x: cursor - badgeSize.width, y: ((height - badgeSize.height) / 2).rounded(), width: badgeSize.width, height: badgeSize.height)
             }
         }
+        if detail != nil, accessory != nil {
+            let widths = measuredDetailWidths()
+            let split = detailSplit(detailWidth: widths.detail, accessoryWidth: widths.accessory, minimumAccessoryWidth: widths.minimumAccessory, available: textWidth)
+            detailFrame.size.width = split.detail
+            if split.accessory > 0 {
+                detailAccessoryFrame = CGRect(x: detailFrame.maxX, y: detailFrame.minY, width: split.accessory, height: detailFrame.height)
+            }
+        }
         let trailingViewFrame = hasTrailingView
             ? CGRect(x: trailingViewX, y: ((height - trailingViewSize.height) / 2).rounded(), width: trailingViewSize.width, height: trailingViewSize.height)
             : .zero
@@ -532,6 +582,7 @@ final class RCListRow: RCControl {
             tileFrame: tileFrame,
             titleFrame: titleFrame,
             detailFrame: detailFrame,
+            detailAccessoryFrame: detailAccessoryFrame,
             badgeFrame: badgeFrame,
             trailingViewFrame: trailingViewFrame,
             accessoryFrame: accessoryFrame
@@ -543,11 +594,30 @@ final class RCListRow: RCControl {
             result.tileFrame = mirror(result.tileFrame)
             result.titleFrame = mirror(result.titleFrame)
             result.detailFrame = mirror(result.detailFrame)
+            result.detailAccessoryFrame = mirror(result.detailAccessoryFrame)
             result.badgeFrame = mirror(result.badgeFrame)
             result.trailingViewFrame = mirror(result.trailingViewFrame)
             result.accessoryFrame = mirror(result.accessoryFrame)
         }
         return result
+    }
+
+    /// Fewest accessory characters worth showing before an ellipsis; below that it is dropped.
+    static let minimumAccessoryCharacters = 5
+
+    /// Widths of the detail and its accessory in a text column of `available`
+    /// points. The accessory (including its separator) fits whole, truncates
+    /// while at least `minimumAccessoryWidth` remains, or is dropped (0); the
+    /// detail keeps its natural width and is shortened only when it alone
+    /// does not fit. Without an accessory the detail spans the column.
+    nonisolated static func detailSplit(detailWidth: CGFloat, accessoryWidth: CGFloat, minimumAccessoryWidth: CGFloat, available: CGFloat) -> (detail: CGFloat, accessory: CGFloat) {
+        let available = max(0, available)
+        guard accessoryWidth > 0 else { return (available, 0) }
+        if detailWidth + accessoryWidth <= available { return (detailWidth, accessoryWidth) }
+        guard detailWidth < available else { return (available, 0) }
+        let remaining = available - detailWidth
+        guard remaining >= min(minimumAccessoryWidth, accessoryWidth) else { return (available, 0) }
+        return (detailWidth, remaining)
     }
 
     override var intrinsicContentSize: CGSize {
@@ -570,6 +640,8 @@ final class RCListRow: RCControl {
         if content.glyph != nil { tile.frame = resolved.tileFrame }
         titleLabel.frame = resolved.titleFrame
         if content.detail != nil { detailLabel.frame = resolved.detailFrame }
+        detailAccessoryLabel.isHidden = resolved.detailAccessoryFrame.width <= 0
+        if !detailAccessoryLabel.isHidden { detailAccessoryLabel.frame = resolved.detailAccessoryFrame }
         if content.trailing.badgeValue != nil { badge.frame = resolved.badgeFrame }
         trailingView?.frame = resolved.trailingViewFrame
         if content.trailing.accessoryGlyph != nil { accessoryIcon.frame = resolved.accessoryFrame }
@@ -621,6 +693,13 @@ private enum ListTextMetrics {
 /// Card that stacks row views with inset hairline separators and animates
 /// insertions, removals, moves and its own height.
 ///
+/// **Transitions.** `.rows` animates each inserted, removed and moved row.
+/// `.replace` is for one state replacing another (loading skeleton → rows,
+/// notice → rows): leaving rows fade out first, then the card reflows and
+/// arriving rows fade in, so the two states never show at once. During the
+/// fade-out the group still lays out (and reports the height of) the rows on
+/// screen; `targetItemIDs` already names the rows it is moving to.
+///
 /// **Height changes.** The group never resizes itself; its host owns the
 /// frame. Whenever `setItems` (or a row's `configure(_:animated:)`) changes
 /// the fitted height, `onHeightChange` is called with the new height —
@@ -657,11 +736,40 @@ final class RCListGroupView: RCSurfaceView {
     /// True while skeleton rows from `showPlaceholder(rows:animated:)` are displayed.
     private(set) var isShowingPlaceholder = false
 
+    enum Transition: Equatable, Sendable {
+        /// Immediate.
+        case none
+        /// Rows insert, remove and move individually while the card springs.
+        case rows
+        /// Leaving rows fade out, then the card reflows and arriving rows fade in.
+        case replace
+    }
+
+    /// Rows on screen, or the rows a running `.replace` is moving to.
+    var targetItemIDs: [String] { (pendingReplacement?.items ?? items).map(\.id) }
+    /// Whether the rows on screen, or those a running `.replace` is moving to, are skeletons.
+    var isTargetPlaceholder: Bool { pendingReplacement?.isPlaceholder ?? isShowingPlaceholder }
+
+    nonisolated static let replaceFadeOutDuration: TimeInterval = 0.09
+    nonisolated static let replaceFadeInDuration: TimeInterval = 0.16
+
+    private struct PendingReplacement {
+        var items: [Item]
+        var isPlaceholder: Bool
+        let token: Int
+        /// Rows fading out; any that are part of the final rows fade back in.
+        var fading: [UIView]
+    }
+
+    private var pendingReplacement: PendingReplacement?
+    private var replacementToken = 0
+
     private static let separatorTrailingInset: CGFloat = 14
     private static let placeholderPrefix = "rc.placeholder."
     /// Inserted rows start fading in once neighbors have mostly cleared their slot.
     private static let insertionFadeDelay: TimeInterval = 0.1
     private static let fadeInKey = "rc.fadeIn"
+    private static let fadeOutKey = "rc.fadeOut"
 
     private var separators: [String: RCSeparator] = [:]
     private var departing: [ObjectIdentifier: Int] = [:]
@@ -685,15 +793,18 @@ final class RCListGroupView: RCSurfaceView {
     /// Replaces the content with `rows` skeleton rows sized like device rows.
     /// A later `setItems(_:animated:)` crossfades them into real rows.
     func showPlaceholder(rows: Int, animated: Bool) {
+        showPlaceholder(rows: rows, transition: animated ? .rows : .none)
+    }
+
+    func showPlaceholder(rows: Int, transition: Transition) {
         let count = max(1, rows)
+        let known = (pendingReplacement?.items ?? []) + items
         let placeholders = (0..<count).map { index -> Item in
             let id = Self.placeholderPrefix + String(index)
-            let view = items.first(where: { $0.id == id })?.view ?? ListSkeletonRow(index: index)
+            let view = known.first(where: { $0.id == id })?.view ?? ListSkeletonRow(index: index)
             return Item(id: id, view: view)
         }
-        apply(placeholders, animated: animated)
-        isShowingPlaceholder = true
-        updateGroupAccessibility()
+        performTransition(to: placeholders, placeholder: true, transition: transition)
     }
 
     /// Replaces the rows. Views are matched by identity: reused views move to
@@ -701,9 +812,113 @@ final class RCListGroupView: RCSurfaceView {
     /// Ids must be unique (later duplicates are ignored). See the type docs
     /// for how the height change is animated.
     func setItems(_ newItems: [Item], animated: Bool) {
-        apply(newItems, animated: animated)
-        isShowingPlaceholder = false
+        setItems(newItems, transition: animated ? .rows : .none)
+    }
+
+    func setItems(_ newItems: [Item], transition: Transition) {
+        performTransition(to: newItems, placeholder: false, transition: transition)
+    }
+
+    private func performTransition(to newItems: [Item], placeholder: Bool, transition: Transition) {
+        let canAnimate = window != nil && bounds.width > 0
+        if var pending = pendingReplacement {
+            guard transition != .none, canAnimate else {
+                cancelPendingReplacement()
+                finish(newItems, placeholder: placeholder, animated: false, style: .rows)
+                return
+            }
+            // The running fade-out covers this change: retarget it.
+            pending.items = newItems
+            pending.isPlaceholder = placeholder
+            let leaving = leavingViews(for: newItems).filter { view in !pending.fading.contains { $0 === view } }
+            pending.fading += leaving
+            pendingReplacement = pending
+            fadeOut(leaving)
+            return
+        }
+        guard transition == .replace, canAnimate else {
+            finish(newItems, placeholder: placeholder, animated: transition == .rows && canAnimate, style: .rows)
+            return
+        }
+        let leaving = leavingViews(for: newItems)
+        guard !leaving.isEmpty else {
+            finish(newItems, placeholder: placeholder, animated: true, style: .replace)
+            return
+        }
+        replacementToken += 1
+        let token = replacementToken
+        pendingReplacement = PendingReplacement(items: newItems, isPlaceholder: placeholder, token: token, fading: leaving)
+        fadeOut(leaving)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.replaceFadeOutDuration) { [weak self] in
+            MainActor.assumeIsolated { self?.completeReplacement(token: token) }
+        }
+    }
+
+    private func finish(_ newItems: [Item], placeholder: Bool, animated: Bool, style: Transition) {
+        apply(newItems, animated: animated, style: style)
+        isShowingPlaceholder = placeholder
         updateGroupAccessibility()
+    }
+
+    /// Displayed rows (and their separators) that are not part of `newItems`.
+    private func leavingViews(for newItems: [Item]) -> [UIView] {
+        let staying = Set(newItems.map { ObjectIdentifier($0.view) })
+        return items.map(\.view).filter { !staying.contains(ObjectIdentifier($0)) }
+    }
+
+    private func fadeOut(_ views: [UIView]) {
+        guard !views.isEmpty else { return }
+        let ids = Set(items.filter { item in views.contains { $0 === item.view } }.map(\.id))
+        let separatorViews = ids.compactMap { separators[$0] }
+        for view in views {
+            view.accessibilityElementsHidden = true
+            view.isUserInteractionEnabled = false
+        }
+        // Render-server fades: a replacement touches several rows at once.
+        for view in views + separatorViews {
+            let from = view.layer.presentation()?.opacity ?? view.layer.opacity
+            view.layer.removeAnimation(forKey: Self.fadeInKey)
+            UIView.performWithoutAnimation { view.alpha = 0 }
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = from
+            fade.toValue = 0
+            fade.duration = Self.replaceFadeOutDuration
+            fade.timingFunction = RCMotion.easeIn
+            view.layer.add(fade, forKey: Self.fadeOutKey)
+        }
+    }
+
+    private func completeReplacement(token: Int) {
+        guard let pending = pendingReplacement, pending.token == token else { return }
+        pendingReplacement = nil
+        let animated = window != nil && bounds.width > 0
+        finish(pending.items, placeholder: pending.isPlaceholder, animated: animated, style: .replace)
+        // Rows that faded out but belong to the final state come back with the arrivals.
+        let final = Set(pending.items.map { ObjectIdentifier($0.view) })
+        for view in pending.fading {
+            view.isUserInteractionEnabled = true
+            guard final.contains(ObjectIdentifier(view)) else { continue }
+            view.accessibilityElementsHidden = false
+            view.layer.removeAnimation(forKey: Self.fadeOutKey)
+            view.alpha = 1
+            if animated { Self.fadeIn(view, duration: Self.replaceFadeInDuration, delay: 0) }
+        }
+    }
+
+    /// Stops a running `.replace` before its rows change; faded rows are restored.
+    private func cancelPendingReplacement() {
+        guard let pending = pendingReplacement else { return }
+        pendingReplacement = nil
+        for view in pending.fading {
+            view.accessibilityElementsHidden = false
+            view.isUserInteractionEnabled = true
+            view.layer.removeAnimation(forKey: Self.fadeOutKey)
+            view.alpha = 1
+        }
+        for separator in separators.values {
+            separator.layer.removeAnimation(forKey: Self.fadeOutKey)
+            separator.alpha = 1
+        }
     }
 
     static func diff(from old: [String], to new: [String]) -> Diff {
@@ -721,7 +936,7 @@ final class RCListGroupView: RCSurfaceView {
         return diff
     }
 
-    private func apply(_ requested: [Item], animated requestedAnimation: Bool) {
+    private func apply(_ requested: [Item], animated requestedAnimation: Bool, style: Transition) {
         var seen = Set<String>()
         let newItems = requested.filter { seen.insert($0.id).inserted }
         let animated = requestedAnimation && window != nil && bounds.width > 0
@@ -756,7 +971,8 @@ final class RCListGroupView: RCSurfaceView {
 
         for item in oldItems where !newViews.contains(ObjectIdentifier(item.view)) {
             detachHooks(from: item.view)
-            depart(item.view, animated: animated)
+            // A replacement already faded its leaving rows out.
+            depart(item.view, animated: animated && style != .replace)
         }
 
         let width = bounds.width - contentInsets.left - contentInsets.right
@@ -770,7 +986,7 @@ final class RCListGroupView: RCSurfaceView {
                 item.view.alpha = 1
             }
         }
-        updateSeparators(frames: frames, animated: animated)
+        updateSeparators(frames: frames, animated: animated, style: style)
 
         let newHeight = fittedHeight(width: bounds.width)
         let heightChanged = abs(newHeight - bounds.height) > 0.5
@@ -789,7 +1005,11 @@ final class RCListGroupView: RCSurfaceView {
         }, completion: { [weak self] _ in
             self?.endMove()
         })
-        arriving.forEach { Self.fadeIn($0, duration: RCMotion.releaseDuration) }
+        if style == .replace {
+            arriving.forEach { Self.fadeIn($0, duration: Self.replaceFadeInDuration, delay: 0) }
+        } else {
+            arriving.forEach { Self.fadeIn($0, duration: RCMotion.releaseDuration, delay: RCMotion.reduceMotion ? 0 : Self.insertionFadeDelay) }
+        }
     }
 
     /// A reordered row travels above its neighbors on the card color, so
@@ -822,13 +1042,13 @@ final class RCListGroupView: RCSurfaceView {
 
     /// Render-server fade that holds the start value through the delay
     /// (`UIViewPropertyAnimator` with a delay would show the final alpha first).
-    private static func fadeIn(_ view: UIView, duration: TimeInterval) {
+    private static func fadeIn(_ view: UIView, duration: TimeInterval, delay: TimeInterval) {
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
         fade.toValue = view.layer.opacity
         fade.duration = duration
         fade.timingFunction = RCMotion.easeOut
-        fade.beginTime = view.layer.convertTime(CACurrentMediaTime(), from: nil) + (RCMotion.reduceMotion ? 0 : insertionFadeDelay)
+        fade.beginTime = view.layer.convertTime(CACurrentMediaTime(), from: nil) + delay
         fade.fillMode = .backwards
         view.layer.add(fade, forKey: fadeInKey)
     }
@@ -919,7 +1139,7 @@ final class RCListGroupView: RCSurfaceView {
 
     // MARK: Separators
 
-    private func updateSeparators(frames: [CGRect], animated: Bool) {
+    private func updateSeparators(frames: [CGRect], animated: Bool, style: Transition = .rows) {
         let needed = items.dropLast().map(\.id)
         let neededSet = Set(needed)
         for (id, separator) in separators where !neededSet.contains(id) {
@@ -948,7 +1168,11 @@ final class RCListGroupView: RCSurfaceView {
             for (separator, alpha) in targets where createdSet.contains(ObjectIdentifier(separator)) { separator.alpha = alpha }
         }
         if animated {
-            created.forEach { Self.fadeIn($0, duration: RCMotion.quickDuration) }
+            if style == .replace {
+                created.forEach { Self.fadeIn($0, duration: Self.replaceFadeInDuration, delay: 0) }
+            } else {
+                created.forEach { Self.fadeIn($0, duration: RCMotion.quickDuration, delay: RCMotion.reduceMotion ? 0 : Self.insertionFadeDelay) }
+            }
             RCMotion.animate(duration: RCMotion.quickDuration) {
                 for (separator, alpha) in targets where !createdSet.contains(ObjectIdentifier(separator)) { separator.alpha = alpha }
             }

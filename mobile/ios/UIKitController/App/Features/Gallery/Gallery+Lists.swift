@@ -48,8 +48,21 @@ extension GalleryCatalog {
                 GalleryItem("Animated insert, remove, move, update") { host in
                     ListsAnimatedGroupDemo(host: host)
                 },
-                GalleryItem("Loading placeholder") { host in
+                GalleryItem("Loading placeholder (replace transition)") { host in
                     ListsPlaceholderDemo(host: host)
+                },
+                GalleryItem("Address with metadata · narrow column") { _ in
+                    // A 240 pt column: the metadata truncates, then disappears, before the address shortens.
+                    do {
+                        let group = RCListGroupView()
+                        let rows = [
+                            RCListRow(content: .init(title: "Living room iPad", detail: "192.168.1.20:8080", detailAccessory: "rctld 0.3.0-180", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .chevron)),
+                            RCListRow(content: .init(title: "Kitchen iPad", detail: "192.168.1.30:8080", detailAccessory: "advertised", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .chevron)),
+                            RCListRow(content: .init(title: "Bedroom iPad", detail: "192.168.100.200:65535", detailAccessory: "saved as Guest room", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .chevron)),
+                        ]
+                        group.setItems(rows.enumerated().map { .init(id: "narrow-\($0.offset)", view: $0.element) }, animated: false)
+                        return ListsNarrow(group, width: 240)
+                    }
                 },
                 GalleryItem("Selection and long content") { _ in
                     let group = RCListGroupView()
@@ -57,7 +70,7 @@ extension GalleryCatalog {
                     let rows = [
                         RCListRow(content: .init(title: "Match system", trailing: .check)),
                         RCListRow(content: .init(title: "Warm", trailing: .none)),
-                        RCListRow(content: .init(title: "Living room iPad Pro 12.9-inch (6th generation) on the bookshelf", detail: "192.168.100.200:8080 · saved as Living room", detailIsMonospaced: true, glyph: .tablet, trailing: .badgeAndChevron(text: "Discovered", tone: .neutral, busy: false))),
+                        RCListRow(content: .init(title: "Living room iPad Pro 12.9-inch (6th generation) on the bookshelf", detail: "192.168.100.200:8080", detailAccessory: "saved as Living room", detailIsMonospaced: true, glyph: .tablet, trailing: .badgeAndChevron(text: "Discovered", tone: .neutral, busy: false))),
                     ]
                     group.setItems(rows.enumerated().map { .init(id: "select-\($0.offset)", view: $0.element) }, animated: false)
                     return group
@@ -146,10 +159,10 @@ extension GalleryCatalog {
 @MainActor
 private enum ListsFixtures {
     static let localRows: [RCListRow.Content] = [
-        .init(title: "Studio iPad Pro", detail: "192.168.1.20:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Online", tone: .success, busy: false)),
-        .init(title: "Kitchen iPad", detail: "10.0.0.7:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Offline", tone: .attention, busy: false)),
+        .init(title: "Studio iPad Pro", detail: "192.168.1.20:8080", detailAccessory: "rctld 0.3.0-180", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Online", tone: .success, busy: false)),
+        .init(title: "Kitchen iPad", detail: "10.0.0.7:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Offline", tone: .neutral, busy: false)),
         .init(title: "Living room", detail: "192.168.1.31:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Checking", tone: .neutral, busy: true)),
-        .init(title: "Guest iPad", detail: "192.168.1.44:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Discovered", tone: .neutral, busy: false)),
+        .init(title: "Guest iPad", detail: "192.168.1.44:8080", detailAccessory: "advertised", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Discovered", tone: .neutral, busy: false)),
         .init(title: "Bedroom iPad mini", detail: "192.168.1.52:8080", detailIsMonospaced: true, glyph: .tablet, trailing: .badgeAndChevron(text: "Saved", tone: .neutral, busy: false)),
         .init(title: "Old iPad", detail: "Protocol mismatch", glyph: .tablet, trailing: .badgeAndChevron(text: "Incompatible", tone: .danger, busy: false), appearsEnabled: false),
         .init(title: "Add local device", detail: "Private IP address, optional port", glyph: .wifi, tileTone: .dashed, trailing: .plus),
@@ -233,6 +246,32 @@ private final class ListsInline: UIView {
     }
 }
 
+/// Centers content in a fixed-width column (narrow-layout specimens).
+@MainActor
+private final class ListsNarrow: UIView {
+    private let content: UIView
+    private let width: CGFloat
+
+    init(_ content: UIView, width: CGFloat) {
+        self.content = content
+        self.width = width
+        super.init(frame: .zero)
+        addSubview(content)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width, height: content.sizeThatFits(CGSize(width: min(width, size.width), height: size.height)).height)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        content.frame = CGRect(x: 0, y: 0, width: min(width, bounds.width), height: bounds.height)
+    }
+}
+
 /// Buttons above a group that insert, remove, move and update rows.
 @MainActor
 private final class ListsAnimatedGroupDemo: UIView {
@@ -243,7 +282,7 @@ private final class ListsAnimatedGroupDemo: UIView {
     private var order: [String] = ["studio", "kitchen", "living"]
     private let pool: [String: RCListRow.Content] = [
         "studio": .init(title: "Studio iPad Pro", detail: "192.168.1.20:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Online", tone: .success, busy: false)),
-        "kitchen": .init(title: "Kitchen iPad", detail: "10.0.0.7:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Offline", tone: .attention, busy: false)),
+        "kitchen": .init(title: "Kitchen iPad", detail: "10.0.0.7:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Offline", tone: .neutral, busy: false)),
         "living": .init(title: "Living room", detail: "Resolving address…", glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Checking", tone: .neutral, busy: true)),
         "guest": .init(title: "Guest iPad", detail: "192.168.1.44:8080", detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: .badgeAndChevron(text: "Discovered", tone: .neutral, busy: false)),
         "office": .init(title: "Office iPad", detail: "192.168.1.60:8080", detailIsMonospaced: true, glyph: .tablet, trailing: .badgeAndChevron(text: "Saved", tone: .neutral, busy: false)),
@@ -381,11 +420,11 @@ private final class ListsPlaceholderDemo: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     private func toggle() {
-        if group.isShowingPlaceholder {
-            group.setItems(loadedRows, animated: true)
+        if group.isTargetPlaceholder {
+            group.setItems(loadedRows, transition: .replace)
             button.title = "Reload"
         } else {
-            group.showPlaceholder(rows: 3, animated: true)
+            group.showPlaceholder(rows: 3, transition: .replace)
             button.title = "Load"
         }
         setNeedsLayout()

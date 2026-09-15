@@ -136,6 +136,123 @@ final class RCListRowLayoutTests: XCTestCase {
         XCTAssertNil(row.accessibilityValue)
     }
 
+    // MARK: Detail accessory
+
+    private func addressRow(accessory: String? = "rctld 0.3.0-180", trailing: RCListRow.Trailing = .chevron) -> RCListRow.Content {
+        .init(title: "Living room iPad", detail: "192.168.1.20:8080", detailAccessory: accessory, detailIsMonospaced: true, glyph: .tabletSmartphone, trailing: trailing)
+    }
+
+    /// Row width whose text column is `textWidth` for `content` (no badge, so no stacking decision).
+    private func rowWidth(textWidth: CGFloat, for content: RCListRow.Content) -> CGFloat {
+        let wide = RCListRow.layout(for: content, width: 1000, traits: standard)
+        return textWidth + (1000 - wide.titleFrame.width)
+    }
+
+    func testDetailSplitGivesWayAccessoryFirst() {
+        typealias Split = (detail: CGFloat, accessory: CGFloat)
+        func split(_ available: CGFloat) -> Split {
+            RCListRow.detailSplit(detailWidth: 120, accessoryWidth: 130, minimumAccessoryWidth: 60, available: available)
+        }
+        XCTAssertTrue(split(300) == (120, 130), "Both fit whole")
+        XCTAssertTrue(split(250) == (120, 130), "Exactly fits")
+        XCTAssertTrue(split(200) == (120, 80), "The accessory truncates; the address keeps its width")
+        XCTAssertTrue(split(179) == (179, 0), "Too little left for a readable accessory: it is dropped")
+        XCTAssertTrue(split(120) == (120, 0), "The address alone fills the column")
+        XCTAssertTrue(split(90) == (90, 0), "Only now is the address shortened")
+        XCTAssertTrue(RCListRow.detailSplit(detailWidth: 120, accessoryWidth: 0, minimumAccessoryWidth: 0, available: 200) == (200, 0), "Without an accessory the detail spans the column")
+        XCTAssertTrue(RCListRow.detailSplit(detailWidth: 120, accessoryWidth: 40, minimumAccessoryWidth: 60, available: 165) == (120, 40))
+        XCTAssertTrue(RCListRow.detailSplit(detailWidth: 120, accessoryWidth: 40, minimumAccessoryWidth: 60, available: 159) == (159, 0), "A short accessory shows whole or not at all")
+    }
+
+    func testAccessoryFollowsTheAddressWhenBothFit() {
+        let content = addressRow()
+        let layout = RCListRow.layout(for: content, width: 1000, traits: standard)
+        let addressOnly = RCListRow.layout(for: addressRow(accessory: nil), width: 1000, traits: standard)
+        XCTAssertGreaterThan(layout.detailAccessoryFrame.width, 0)
+        XCTAssertEqual(layout.detailAccessoryFrame.minX, layout.detailFrame.maxX)
+        XCTAssertEqual(layout.detailAccessoryFrame.minY, layout.detailFrame.minY)
+        XCTAssertEqual(layout.size.height, addressOnly.size.height, "The accessory shares the detail line")
+        XCTAssertLessThan(layout.detailFrame.width, addressOnly.detailFrame.width, "With an accessory the address takes its natural width")
+    }
+
+    func testAccessoryTruncatesThenDisappearsBeforeTheAddressShortens() {
+        let content = addressRow()
+        let natural = RCListRow.layout(for: content, width: 1000, traits: standard)
+        let address = natural.detailFrame.width
+        let accessory = natural.detailAccessoryFrame.width
+
+        let truncated = RCListRow.layout(for: content, width: rowWidth(textWidth: address + accessory - 30, for: content), traits: standard)
+        XCTAssertEqual(truncated.detailFrame.width, address, "The port stays visible")
+        XCTAssertEqual(truncated.detailAccessoryFrame.width, accessory - 30, accuracy: 0.5)
+        XCTAssertEqual(truncated.detailAccessoryFrame.maxX, truncated.titleFrame.maxX, accuracy: 0.5)
+
+        let dropped = RCListRow.layout(for: content, width: rowWidth(textWidth: address + 12, for: content), traits: standard)
+        XCTAssertEqual(dropped.detailAccessoryFrame, .zero, "A sliver of metadata is noise: dropped")
+        XCTAssertGreaterThanOrEqual(dropped.detailFrame.width, address)
+
+        let tight = RCListRow.layout(for: content, width: rowWidth(textWidth: address - 20, for: content), traits: standard)
+        XCTAssertEqual(tight.detailAccessoryFrame, .zero)
+        XCTAssertEqual(tight.detailFrame.width, address - 20, accuracy: 0.5, "Only an address wider than the column is shortened")
+    }
+
+    func testSmallPhoneAtLargestTextKeepsTheAddressWhole() {
+        let traits = UITraitCollection(traitsFrom: [standard, UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)])
+        let content = addressRow(trailing: .badgeAndChevron(text: "Online", tone: .success, busy: false))
+        let wide = RCListRow.layout(for: content, width: 2000, traits: traits, badgeSize: badgeSize("Online"))
+        // 320 pt phone: 280 pt column.
+        let layout = RCListRow.layout(for: content, width: smallPhoneWidth, traits: traits, badgeSize: badgeSize("Online"))
+        XCTAssertTrue(layout.isStacked)
+        if wide.detailFrame.width <= layout.titleFrame.width {
+            XCTAssertEqual(layout.detailFrame.width, wide.detailFrame.width, "The address fits the column, so it is not truncated")
+        } else {
+            XCTAssertEqual(layout.detailAccessoryFrame, .zero, "An address wider than the column drops the metadata first")
+            XCTAssertEqual(layout.detailFrame.width, layout.titleFrame.width)
+        }
+    }
+
+    func testAccessoryCountsTowardStackingBesideABadge() {
+        let badge = badgeSize("Online")
+        let trailing = RCListRow.Trailing.badgeAndChevron(text: "Online", tone: .success, busy: false)
+        let plain = RCListRow.layout(for: addressRow(accessory: nil, trailing: trailing), width: phoneWidth, traits: standard, badgeSize: badge)
+        let withAccessory = RCListRow.layout(for: addressRow(trailing: trailing), width: phoneWidth, traits: standard, badgeSize: badge)
+        XCTAssertFalse(plain.isStacked)
+        XCTAssertTrue(withAccessory.isStacked, "Metadata that would not fit beside the badge moves the badge down instead of hiding the metadata")
+        XCTAssertGreaterThan(withAccessory.detailAccessoryFrame.width, 0)
+    }
+
+    func testAccessoryMirrorsAfterTheAddressRightToLeft() {
+        let rtl = UITraitCollection(traitsFrom: [standard, UITraitCollection(layoutDirection: .rightToLeft)])
+        let layout = RCListRow.layout(for: addressRow(), width: 1000, traits: rtl)
+        XCTAssertEqual(layout.detailAccessoryFrame.maxX, layout.detailFrame.minX, accuracy: 0.001, "The accessory reads after the detail")
+    }
+
+    func testRowShowsAndSpeaksTheAccessory() {
+        let row = host.host(RCListRow(content: addressRow(trailing: .badgeAndChevron(text: "Online", tone: .success, busy: false))))
+        row.frame = CGRect(x: 0, y: 0, width: 1000, height: 80)
+        row.layoutIfNeeded()
+        let labels = row.subviews.compactMap { $0 as? RCLabel }
+        let accessory = labels.first { $0.text == " · rctld 0.3.0-180" }
+        XCTAssertNotNil(accessory)
+        XCTAssertEqual(accessory?.isHidden, false)
+        XCTAssertEqual(row.accessibilityValue, "192.168.1.20:8080, rctld 0.3.0-180, Online")
+
+        row.frame.size.width = rowWidth(textWidth: 60, for: addressRow())
+        row.layoutIfNeeded()
+        XCTAssertEqual(accessory?.isHidden, true, "Dropped on screen")
+        XCTAssertEqual(row.accessibilityValue, "192.168.1.20:8080, rctld 0.3.0-180, Online", "Still spoken")
+    }
+
+    func testStackedRowCentersTheChevronOnTheRow() {
+        let traits = UITraitCollection(traitsFrom: [standard, UITraitCollection(preferredContentSizeCategory: .accessibilityMedium)])
+        for layout in [
+            RCListRow.layout(for: device("Online"), width: phoneWidth, traits: standard, badgeSize: badgeSize("Online"), forcesStacking: true),
+            RCListRow.layout(for: device("Online"), width: phoneWidth, traits: traits, badgeSize: badgeSize("Online")),
+        ] {
+            XCTAssertTrue(layout.isStacked)
+            XCTAssertEqual(layout.accessoryFrame.midY, layout.size.height / 2, accuracy: 0.5, "The chevron belongs to the whole row, badge line included")
+        }
+    }
+
     func testDisabledAppearanceStillSendsTaps() {
         var taps = 0
         let row = RCListRow(content: .init(title: "Workshop iPad", glyph: .tablet, trailing: .badge(text: "Offline", tone: .neutral, busy: false), appearsEnabled: false))

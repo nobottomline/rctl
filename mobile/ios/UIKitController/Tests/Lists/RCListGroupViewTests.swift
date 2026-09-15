@@ -151,4 +151,86 @@ final class RCListGroupViewTests: XCTestCase {
         XCTAssertNotNil(group.layer.animation(forKey: "rc.shadowPath"), "Shadow path must follow the animated bounds")
         XCTAssertNotNil(rows[1].layer.animation(forKey: "rc.fadeIn"), "Inserted rows fade in")
     }
+
+    /// Spins the main run loop until `condition` holds (dispatches and animation completions run).
+    private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { return false }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+        }
+        return true
+    }
+
+    func testReplaceFadesTheOldStateOutBeforeTheNewStateArrives() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let group = RCListGroupView()
+        window.addSubview(group)
+        var heights: [CGFloat] = []
+        group.onHeightChange = { height in
+            heights.append(height)
+            group.frame.size.height = height
+            group.layoutIfNeeded()
+        }
+        group.frame = CGRect(x: 20, y: 20, width: width, height: 0)
+        group.showPlaceholder(rows: 1, animated: false)
+        heights.removeAll()
+        group.layoutIfNeeded()
+        let skeletons = group.items.map(\.view)
+        let studio = row("Studio"), kitchen = row("Kitchen"), living = row("Living room")
+
+        group.setItems([.init(id: "s", view: studio), .init(id: "k", view: kitchen), .init(id: "l", view: living)], transition: .replace)
+        XCTAssertTrue(group.isShowingPlaceholder, "The skeleton stays on screen while it fades out")
+        XCTAssertFalse(group.isTargetPlaceholder)
+        XCTAssertEqual(group.targetItemIDs, ["s", "k", "l"])
+        XCTAssertNil(studio.superview, "New rows are not shown on top of the old state")
+        XCTAssertTrue(heights.isEmpty, "The card does not reflow until the old state is gone")
+        XCTAssertTrue(skeletons.allSatisfy { $0.alpha == 0 && !$0.isUserInteractionEnabled })
+
+        // A change during the fade-out retargets it instead of overlapping two transitions.
+        group.setItems([.init(id: "s", view: studio), .init(id: "k", view: kitchen)], transition: .rows)
+        XCTAssertEqual(group.targetItemIDs, ["s", "k"])
+
+        XCTAssertTrue(waitUntil { group.items.map(\.id) == ["s", "k"] })
+        XCTAssertFalse(group.isShowingPlaceholder)
+        XCTAssertTrue(skeletons.allSatisfy { $0.superview == nil }, "Faded rows leave without a second fade")
+        XCTAssertEqual(heights.count, 1, "One reflow, after the fade-out")
+        XCTAssertTrue(studio.superview === group.contentView)
+        XCTAssertNil(living.superview)
+        if !RCMotion.reduceMotion {
+            XCTAssertEqual(studio.layer.animation(forKey: "rc.fadeIn")?.duration, RCListGroupView.replaceFadeInDuration)
+            XCTAssertEqual(studio.layer.animation(forKey: "rc.fadeIn")?.beginTime ?? 0, studio.layer.convertTime(CACurrentMediaTime(), from: nil), accuracy: 0.1, "Arrivals start fading in right away")
+        }
+    }
+
+    func testReplaceBackToTheShownRowsRestoresThem() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let group = RCListGroupView()
+        window.addSubview(group)
+        group.frame = CGRect(x: 20, y: 20, width: width, height: 200)
+        let notice = row("Looking for devices"), found = row("Kitchen iPad")
+        group.setItems([.init(id: "notice", view: notice)], animated: false)
+
+        group.setItems([.init(id: "found", view: found)], transition: .replace)
+        group.setItems([.init(id: "notice", view: notice)], transition: .replace)
+        XCTAssertTrue(waitUntil { group.targetItemIDs == group.items.map(\.id) && notice.isUserInteractionEnabled })
+        XCTAssertEqual(group.items.map(\.id), ["notice"])
+        XCTAssertEqual(notice.alpha, 1)
+        XCTAssertFalse(notice.accessibilityElementsHidden)
+        XCTAssertNil(found.superview)
+
+        // An immediate change cancels a running replacement outright.
+        group.setItems([.init(id: "found", view: found)], transition: .replace)
+        group.setItems([.init(id: "notice", view: notice)], transition: .none)
+        XCTAssertEqual(notice.alpha, 1)
+        XCTAssertTrue(notice.isUserInteractionEnabled)
+        XCTAssertEqual(group.targetItemIDs, ["notice"])
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(group.items.map(\.id), ["notice"], "The cancelled replacement never completes")
+        XCTAssertNil(found.superview)
+    }
 }

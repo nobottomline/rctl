@@ -22,7 +22,8 @@ final class NearbyDeviceSheetController: UIViewController, RCSheetScrollable {
     private let scrollView = UIScrollView()
     private let tile = RCIconTile(glyph: .tabletSmartphone, tone: .accent, side: 48)
     private let nameLabel = RCLabel(style: .title2, lines: 2)
-    private let addressLabel = RCLabel(style: .mono, color: RCColor.textTertiary)
+    /// Wraps by character at large text sizes: the port must stay readable.
+    private let addressLabel = RCLabel(style: .mono, color: RCColor.textTertiary, lines: 0)
     private let badge = RCStatusBadge(text: "Answered just now", tone: .success)
     private let closeButton = RCIconButton(icon: .x, variant: .plain, diameter: 32, iconSize: 16, accessibilityLabel: "Close")
     private let callout = RCCallout(
@@ -61,6 +62,7 @@ final class NearbyDeviceSheetController: UIViewController, RCSheetScrollable {
 
         nameLabel.text = profile.name
         nameLabel.accessibilityTraits = .header
+        addressLabel.lineBreakMode = .byCharWrapping
         addressLabel.text = profile.address.displayAddress
         addressLabel.accessibilityLabel = "Address \(profile.address.displayAddress)"
         closeButton.onTap = { [weak self] in
@@ -141,13 +143,17 @@ final class NearbyDeviceSheetController: UIViewController, RCSheetScrollable {
         callout.frame = CGRect(x: left, y: y, width: column, height: calloutHeight)
         y = callout.frame.maxY + RCSpace.xl
 
-        openButton.frame = CGRect(x: left, y: y, width: column, height: RCButton.Size.large.height)
+        // Button titles wrap at accessibility sizes; the frames follow their fitted height.
+        func buttonHeight(_ button: RCButton, minimum: CGFloat) -> CGFloat {
+            max(minimum, ceil(button.sizeThatFits(CGSize(width: column, height: .greatestFiniteMagnitude)).height))
+        }
+        openButton.frame = CGRect(x: left, y: y, width: column, height: buttonHeight(openButton, minimum: RCButton.Size.large.height))
         y = openButton.frame.maxY + RCSpace.sm + 2
-        saveButton.frame = CGRect(x: left, y: y, width: column, height: RCButton.Size.large.height)
+        saveButton.frame = CGRect(x: left, y: y, width: column, height: buttonHeight(saveButton, minimum: RCButton.Size.large.height))
         y = saveButton.frame.maxY
         if !replaceButton.isHidden {
             y += RCSpace.xs
-            replaceButton.frame = CGRect(x: left, y: y, width: column, height: RCButton.Size.medium.height)
+            replaceButton.frame = CGRect(x: left, y: y, width: column, height: buttonHeight(replaceButton, minimum: RCButton.Size.medium.height))
             y = replaceButton.frame.maxY
         }
         return ceil(y + RCSpace.xxl)

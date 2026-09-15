@@ -91,10 +91,47 @@ enum DevicesTone: Equatable, Sendable {
     case neutral, success, attention, danger
 }
 
+/// Every status a device row can show, whatever its source (saved, nearby or
+/// relay). `DevicesStatus(_:)` is the single map from meaning to look.
+enum DevicesStatusKind: Equatable, CaseIterable, Sendable {
+    case online
+    case checking
+    case resolving
+    case saved
+    case discovered
+    case offline
+    case unavailable
+    case unsupported
+    case needsUpdate
+    case incompatible
+}
+
 struct DevicesStatus: Equatable {
     var text: String
     var tone: DevicesTone
     var busy = false
+}
+
+extension DevicesStatus {
+    /// One look per meaning, used by every section: only a working device is
+    /// success; in-progress states are neutral and busy; known-but-idle states
+    /// (saved, discovered, offline) are neutral, because an offline device is a
+    /// normal condition, not a fault; states that need the user's action are
+    /// attention; only a protocol mismatch is danger.
+    init(_ kind: DevicesStatusKind) {
+        switch kind {
+        case .online: self.init(text: "Online", tone: .success)
+        case .checking: self.init(text: "Checking", tone: .neutral, busy: true)
+        case .resolving: self.init(text: "Resolving", tone: .neutral, busy: true)
+        case .saved: self.init(text: "Saved", tone: .neutral)
+        case .discovered: self.init(text: "Discovered", tone: .neutral)
+        case .offline: self.init(text: "Offline", tone: .neutral)
+        case .unavailable: self.init(text: "Unavailable", tone: .attention)
+        case .unsupported: self.init(text: "Unsupported", tone: .attention)
+        case .needsUpdate: self.init(text: "Needs update", tone: .attention)
+        case .incompatible: self.init(text: "Incompatible", tone: .danger)
+        }
+    }
 }
 
 /// One device row. `isEnabled` only changes the look and the VoiceOver hint:
@@ -109,6 +146,9 @@ struct DevicesRowState: Equatable {
     let kind: Kind
     var title: String
     var detail: String
+    /// Secondary metadata shown after the detail ("rctld 0.3.0", "saved as …").
+    /// Rendered as " · accessory"; it is truncated or dropped before the detail.
+    var detailAccessory: String? = nil
     var detailIsMonospaced: Bool
     var status: DevicesStatus
     var isEnabled: Bool
@@ -148,7 +188,7 @@ struct DevicesViewState: Equatable {
     }
 
     /// Trailing state row inside the Nearby group.
-    enum NearbyNotice: Equatable {
+    enum NearbyNotice: Hashable, CaseIterable {
         case permissionDenied
         case unavailable
         case searching
@@ -190,6 +230,19 @@ struct DevicesViewState: Equatable {
         case paired(PairedRelay)
     }
 
+    /// Parts of the screen whose content is replaced by a different state
+    /// (not updated row by row) between two renders. The screen fades the old
+    /// state out before the new one fades in, so the two never show at once.
+    struct Switches: OptionSet, Hashable {
+        let rawValue: Int
+        /// First run ↔ populated composition.
+        static let layout = Switches(rawValue: 1 << 0)
+        /// Discovery turned on/off, or the Nearby notice appears, changes or goes.
+        static let nearby = Switches(rawValue: 1 << 1)
+        /// Pairing invitation, loading skeleton, empty notice and device rows replace each other.
+        static let relay = Switches(rawValue: 1 << 2)
+    }
+
     var layout: Layout
     var summary: Summary
     /// The top bar refresh button exists only when a relay profile does.
@@ -210,6 +263,22 @@ struct DevicesViewState: Equatable {
         )
         nearby = Self.nearbySection(snapshot)
         relay = snapshot.relay.map { .paired(Self.pairedRelay($0, isBusy: snapshot.isBusy)) } ?? .unpaired
+    }
+
+    // MARK: - Switches
+
+    static func switches(from old: DevicesViewState, to new: DevicesViewState) -> Switches {
+        var switches: Switches = []
+        if old.layout != new.layout { switches.insert(.layout) }
+        if old.nearby.isEnabled != new.nearby.isEnabled || old.nearby.notice != new.nearby.notice {
+            switches.insert(.nearby)
+        }
+        switch (old.relay, new.relay) {
+        case (.unpaired, .unpaired): break
+        case let (.paired(before), .paired(after)) where before.placeholder == after.placeholder: break
+        default: switches.insert(.relay)
+        }
+        return switches
     }
 
     // MARK: - Summary
@@ -239,31 +308,31 @@ struct DevicesViewState: Equatable {
         DevicesRowState(
             kind: .local(device.id),
             title: device.name,
-            detail: localDetail(for: device, in: snapshot),
+            detail: device.address.displayAddress,
+            detailAccessory: localDetailAccessory(for: device, in: snapshot),
             detailIsMonospaced: true,
-            status: localStatus(for: device, in: snapshot),
+            status: DevicesStatus(localStatus(for: device, in: snapshot)),
             isEnabled: true
         )
     }
 
-    static func localStatus(for device: LocalDeviceProfile, in snapshot: DevicesSnapshot) -> DevicesStatus {
-        if isAdvertisedNearby(device, in: snapshot) { return DevicesStatus(text: "Discovered", tone: .neutral) }
+    static func localStatus(for device: LocalDeviceProfile, in snapshot: DevicesSnapshot) -> DevicesStatusKind {
+        if isAdvertisedNearby(device, in: snapshot) { return .discovered }
         switch snapshot.reachability[device.id] ?? .unknown {
-        case .unknown: return DevicesStatus(text: "Saved", tone: .neutral)
-        case .checking: return DevicesStatus(text: "Checking", tone: .neutral, busy: true)
-        case .reachable: return DevicesStatus(text: "Online", tone: .success)
-        case .unreachable: return DevicesStatus(text: "Offline", tone: .attention)
+        case .unknown: return .saved
+        case .checking: return .checking
+        case .reachable: return .online
+        case .unreachable: return .offline
         }
     }
 
-    static func localDetail(for device: LocalDeviceProfile, in snapshot: DevicesSnapshot) -> String {
-        let address = device.address.displayAddress
+    /// Metadata after the address; the row drops it before shortening the address.
+    static func localDetailAccessory(for device: LocalDeviceProfile, in snapshot: DevicesSnapshot) -> String? {
         if case let .reachable(version) = snapshot.reachability[device.id] ?? .unknown, let version {
-            return "\(address) · rctld \(version)"
+            return "rctld \(version)"
         }
-        // Short enough to keep the address whole on narrow phones; the status reads "Discovered".
-        if isAdvertisedNearby(device, in: snapshot) { return "\(address) · advertised" }
-        return address
+        if isAdvertisedNearby(device, in: snapshot) { return "advertised" }
+        return nil
     }
 
     // MARK: - Nearby
@@ -316,32 +385,31 @@ struct DevicesViewState: Equatable {
         return DevicesRowState(
             kind: .nearby(device.id),
             title: device.id.name,
-            detail: nearbyDetail(for: device, saved: saved),
+            detail: nearbyDetail(for: device),
+            detailAccessory: nearbyDetailAccessory(for: device, saved: saved),
             detailIsMonospaced: device.isPresent && device.error == nil && device.endpointAddress != nil,
-            status: nearbyStatus(for: device, saved: saved, in: snapshot),
+            status: DevicesStatus(nearbyStatus(for: device, saved: saved, in: snapshot)),
             isEnabled: device.canResolve && !snapshot.selectingNearby,
             offersAddressReplacement: device.isPresent && device.endpointAddress != nil && !snapshot.localDevices.isEmpty
         )
     }
 
-    static func nearbyStatus(for device: DevicesSnapshot.NearbyDevice, saved: LocalDeviceProfile?, in snapshot: DevicesSnapshot) -> DevicesStatus {
-        if snapshot.checkingNearby == device.id, snapshot.selectingNearby {
-            return DevicesStatus(text: "Checking", tone: .neutral, busy: true)
-        }
-        if !device.isPresent { return DevicesStatus(text: "Unavailable", tone: .attention) }
+    static func nearbyStatus(for device: DevicesSnapshot.NearbyDevice, saved: LocalDeviceProfile?, in snapshot: DevicesSnapshot) -> DevicesStatusKind {
+        if snapshot.checkingNearby == device.id, snapshot.selectingNearby { return .checking }
+        if !device.isPresent { return .unavailable }
         if let error = device.error {
             switch error {
-            case .unsupportedVersion: return DevicesStatus(text: "Incompatible", tone: .danger)
-            case .unsupportedNetwork: return DevicesStatus(text: "Unsupported", tone: .attention)
-            case .malformedRecord, .timedOut, .busy, .unavailable: return DevicesStatus(text: "Unavailable", tone: .attention)
+            case .unsupportedVersion: return .incompatible
+            case .unsupportedNetwork: return .unsupported
+            case .malformedRecord, .timedOut, .busy, .unavailable: return .unavailable
             }
         }
-        if device.endpointAddress == nil { return DevicesStatus(text: "Resolving", tone: .neutral, busy: true) }
-        if saved != nil { return DevicesStatus(text: "Saved", tone: .neutral) }
-        return DevicesStatus(text: "Discovered", tone: .neutral)
+        if device.endpointAddress == nil { return .resolving }
+        if saved != nil { return .saved }
+        return .discovered
     }
 
-    static func nearbyDetail(for device: DevicesSnapshot.NearbyDevice, saved: LocalDeviceProfile?) -> String {
+    static func nearbyDetail(for device: DevicesSnapshot.NearbyDevice) -> String {
         if !device.isPresent { return "No longer advertised on this network" }
         if let error = device.error {
             switch error {
@@ -352,9 +420,14 @@ struct DevicesViewState: Equatable {
             case .busy, .unavailable: return "Not resolved"
             }
         }
-        guard let address = device.endpointAddress?.displayAddress else { return "Resolving address…" }
-        if let saved, saved.name != device.id.name { return "\(address) · saved as \(saved.name)" }
-        return address
+        return device.endpointAddress?.displayAddress ?? "Resolving address…"
+    }
+
+    /// Names the saved entry at the same address when it is saved under another name.
+    static func nearbyDetailAccessory(for device: DevicesSnapshot.NearbyDevice, saved: LocalDeviceProfile?) -> String? {
+        guard device.isPresent, device.error == nil, device.endpointAddress != nil,
+              let saved, saved.name != device.id.name else { return nil }
+        return "saved as \(saved.name)"
     }
 
     // MARK: - Relay
@@ -379,7 +452,7 @@ struct DevicesViewState: Equatable {
             title: device.name,
             detail: relayDetail(for: device),
             detailIsMonospaced: false,
-            status: relayStatus(for: device),
+            status: DevicesStatus(relayStatus(for: device)),
             isEnabled: isRelayDeviceAvailable(device)
         )
     }
@@ -388,11 +461,11 @@ struct DevicesViewState: Equatable {
         device.online && device.compatible && device.supportsNativeControllerSessions
     }
 
-    static func relayStatus(for device: DevicesSnapshot.RelayDevice) -> DevicesStatus {
-        if !device.compatible { return DevicesStatus(text: "Incompatible", tone: .danger) }
-        if !device.online { return DevicesStatus(text: "Offline", tone: .neutral) }
-        if !device.supportsNativeControllerSessions { return DevicesStatus(text: "Needs update", tone: .attention) }
-        return DevicesStatus(text: "Online", tone: .success)
+    static func relayStatus(for device: DevicesSnapshot.RelayDevice) -> DevicesStatusKind {
+        if !device.compatible { return .incompatible }
+        if !device.online { return .offline }
+        if !device.supportsNativeControllerSessions { return .needsUpdate }
+        return .online
     }
 
     static func relayDetail(for device: DevicesSnapshot.RelayDevice) -> String {
