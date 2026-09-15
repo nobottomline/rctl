@@ -98,4 +98,77 @@ final class RctlUIKitSmokeUITests: XCTestCase {
         done.tap()
         XCTAssertTrue(tools.waitForExistence(timeout: 5))
     }
+
+    @MainActor
+    func testRemoveFromContextMenuConfirmsThenRemovesDevice() {
+        let app = launch(seedDevice: true)
+        let row = app.buttons["Studio iPad"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.press(forDuration: 1.0)
+        let remove = app.buttons["Remove"].firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.tap()
+        let confirm = app.buttons["Remove"].firstMatch
+        XCTAssertTrue(app.staticTexts["Remove saved local device?"].waitForExistence(timeout: 5) || confirm.waitForExistence(timeout: 1))
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "The removal must ask for confirmation")
+        cancel.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "Cancel must keep the device")
+
+        row.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Remove"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Remove"].firstMatch.tap()
+        let destructive = app.buttons["Remove"].firstMatch
+        XCTAssertTrue(destructive.waitForExistence(timeout: 5))
+        destructive.tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: row)
+        waitForExpectations(timeout: 5)
+    }
+
+    @MainActor
+    func testNearbySheetDismissesWithDownwardSwipe() {
+        let app = launch(["--rctl-demo", "--rctl-demo-sheet"])
+        let open = app.buttons["nearby-open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        let title = app.staticTexts["Bedroom iPad"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        let start = title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 700)))
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: open)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.buttons["add-device-menu"].exists)
+    }
+
+    @MainActor
+    func testMenuPressAndDragSelectsItem() {
+        let app = launch()
+        let add = app.buttons["add-device-menu"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        // Learn where the item sits (placement is deterministic), then close the menu.
+        add.tap()
+        let item = app.buttons["Add local device"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        let itemCenter = CGPoint(x: item.frame.midX, y: item.frame.midY)
+        let addCenter = CGPoint(x: add.frame.midX, y: add.frame.midY)
+        add.tap()
+        let closed = NSPredicate(format: "exists == false")
+        expectation(for: closed, evaluatedWith: item)
+        waitForExpectations(timeout: 5)
+        // Hold the control until the menu opens under the finger, slide onto the item, release.
+        let start = add.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.6, thenDragTo: start.withOffset(CGVector(dx: itemCenter.x - addCenter.x, dy: itemCenter.y - addCenter.y)))
+        XCTAssertTrue(app.textFields["local-address"].waitForExistence(timeout: 5),
+                      "Releasing over a menu item after press-and-drag must select it")
+    }
+
+    @MainActor
+    func testCameraDeniedStateBackReturnsToPairing() {
+        let app = launch(["--rctl-route=scan", "--rctl-scanner-state=denied"])
+        let back = app.buttons["Back"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        back.tap()
+        XCTAssertTrue(app.buttons["scan-pairing-code"].waitForExistence(timeout: 5))
+    }
 }
