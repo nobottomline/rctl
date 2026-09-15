@@ -16,6 +16,13 @@ credentials and explicit server selection. Existing single-profile installs
 migrate without losing pairing. Saved relay count has no fixed product limit;
 network work is limited to the selected relay and bounded local discovery.
 
+`UIKitController/` holds a UIKit rewrite of the controller for iOS 13 and
+later, with a custom design system, the same packages and the ported
+lifecycle tests plus real-touch UI tests. It installs next to this app under
+its own bundle identifier; see [its README](UIKitController/README.md). Build
+and test it with `make mobile-ios-uikit-build` and `make mobile-ios-uikit-test`.
+The packages support iOS 13 for it; this SwiftUI app still targets iOS 16.
+
 The checked-in modules are:
 
 - `Modules/RctlProtocol`: bounded native models for the shared wire contracts;

@@ -7,7 +7,8 @@ Controller product slice are implemented; public mobile distribution remains
 release-gated and Android is still planned.
 
 - `ios/`: Swift/SwiftUI application, UIKit-hosted realtime media surfaces, and
-  local Swift packages.
+  local Swift packages. `ios/UIKitController/` is a UIKit rewrite of the same
+  controller (iOS 13+, custom design system) built on the same packages.
 - `android/`: Kotlin/Compose application with Android View-hosted realtime media.
 
 Read `docs/MOBILE.md` for architecture and `docs/MOBILE-PLAN.md` for delivery
