@@ -11,6 +11,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         self.environment = environment
         environment.appearance.attach(to: window)
         window.tintColor = RCColor.accent
+        // Match the launch screen so there is no black frame before the first commit.
+        window.backgroundColor = RCColor.background
         window.rootViewController = environment.router.makeRootNavigationController()
         self.window = window
         window.makeKeyAndVisible()
