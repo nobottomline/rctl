@@ -8,7 +8,7 @@ final class ListsTraitHost {
     private let child = UIViewController()
 
     init(category: UIContentSizeCategory = .large) {
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window = makeSceneWindow()
         let root = UIViewController()
         window.rootViewController = root
         root.addChild(child)
@@ -34,4 +34,19 @@ final class ListsTraitHost {
         window.isHidden = true
         window.rootViewController = nil
     }
+}
+
+/// A window attached to the test host's scene. A bare `UIWindow(frame:)` is
+/// never rendered on older iOS versions, so Core Animation completes its
+/// animations immediately and layout passes differ from real screens.
+@MainActor
+func makeSceneWindow(frame: CGRect = CGRect(x: 0, y: 0, width: 402, height: 874)) -> UIWindow {
+    let window: UIWindow
+    if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+        window = UIWindow(windowScene: scene)
+    } else {
+        window = UIWindow()
+    }
+    window.frame = frame
+    return window
 }

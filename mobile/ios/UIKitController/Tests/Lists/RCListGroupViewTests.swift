@@ -131,7 +131,7 @@ final class RCListGroupViewTests: XCTestCase {
     }
 
     func testAnimatedChangeMovesShadowWithTheCard() {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let window = makeSceneWindow()
         let host = UIView(frame: window.bounds)
         window.addSubview(host)
         window.isHidden = false
@@ -163,7 +163,7 @@ final class RCListGroupViewTests: XCTestCase {
     }
 
     func testReplaceFadesTheOldStateOutBeforeTheNewStateArrives() {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let window = makeSceneWindow()
         window.isHidden = false
         defer { window.isHidden = true }
         let group = RCListGroupView()
@@ -206,7 +206,7 @@ final class RCListGroupViewTests: XCTestCase {
     }
 
     func testReplaceBackToTheShownRowsRestoresThem() {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let window = makeSceneWindow()
         window.isHidden = false
         defer { window.isHidden = true }
         let group = RCListGroupView()
