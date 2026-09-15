@@ -182,7 +182,7 @@ test-rootless-paths:
 		-framework Foundation -o /tmp/rctl-update-policy-test
 	@/tmp/rctl-update-policy-test
 
-.PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-app-test mobile-ios-build mobile-test
+.PHONY: protocol-generate protocol-check mobile-ios-test mobile-ios-app-test mobile-ios-build mobile-ios-uikit-build mobile-ios-uikit-test mobile-test
 protocol-generate:
 	@node protocol/generate.mjs
 
@@ -203,7 +203,15 @@ mobile-ios-build:
 mobile-ios-app-test:
 	@bash scripts/test-mobile-ios.sh
 
-mobile-test: mobile-ios-test mobile-ios-build mobile-ios-app-test
+mobile-ios-uikit-build:
+	@xcodebuild -project mobile/ios/UIKitController/RctlUIKit.xcodeproj -scheme RctlUIKit \
+		-configuration Debug -destination 'generic/platform=iOS Simulator' \
+		-derivedDataPath mobile/ios/UIKitController/.derivedData CODE_SIGNING_ALLOWED=NO build
+
+mobile-ios-uikit-test:
+	@bash scripts/test-mobile-ios-uikit.sh
+
+mobile-test: mobile-ios-test mobile-ios-build mobile-ios-app-test mobile-ios-uikit-build mobile-ios-uikit-test
 
 .PHONY: test-update-signing-key
 test-update-signing-key:

@@ -37,6 +37,7 @@ or package for the change, then run the relevant row before delivery.
 | Package staging | `python3 scripts/test_stage_package.py`; audit the built artifact as described below. |
 | Native iOS packages | `swift test --package-path mobile/ios/Modules/RctlRealtime` (or the affected sibling module). |
 | iOS controller lifecycle/UI | `bash scripts/test-mobile-ios.sh`; creates and removes its own isolated simulator. |
+| UIKit iOS controller | `make mobile-ios-uikit-build` and `bash scripts/test-mobile-ios-uikit.sh` (set `RCTL_IOS_TEST_RUNTIME=15.5` for the oldest installed runtime); the script creates and removes its own simulator. |
 | Relay integration | `./scripts/smoke_relay.sh`; inspect its prerequisites and use disposable state. |
 
 After changing contract inputs, run `node protocol/generate.mjs` and commit the
