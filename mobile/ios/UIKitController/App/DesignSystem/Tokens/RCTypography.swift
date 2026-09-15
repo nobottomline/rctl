@@ -97,24 +97,29 @@ enum RCTypography {
 
     private struct CacheKey: Hashable {
         let style: RCTextStyle
-        let category: String
+        let category: UIContentSizeCategory
+        let boldText: Bool
         let monospacedDigits: Bool
     }
 
     /// Scaled font for a style and content size category. Cached; cheap to call
-    /// from `layoutSubviews` or `sizeThatFits`.
+    /// from `layoutSubviews` or `sizeThatFits`. Honors the Bold Text setting
+    /// (`legibilityWeight`), which system fonts with an explicit weight do not
+    /// pick up on their own.
     static func font(
         _ style: RCTextStyle,
         compatibleWith traits: UITraitCollection? = nil,
         monospacedDigits: Bool = false
     ) -> UIFont {
-        let traits = traits ?? UIScreen.main.traitCollection
-        let key = CacheKey(style: style, category: traits.preferredContentSizeCategory.rawValue, monospacedDigits: monospacedDigits)
+        let category = resolvedCategory(traits)
+        let boldText = (traits ?? UIScreen.main.traitCollection).legibilityWeight == .bold
+        let key = CacheKey(style: style, category: category, boldText: boldText, monospacedDigits: monospacedDigits)
         if let cached = cache[key] { return cached }
         let spec = style.spec
+        let weight = boldText ? bolder(spec.weight) : spec.weight
         var base = spec.monospaced
-            ? UIFont.monospacedSystemFont(ofSize: spec.size, weight: spec.weight)
-            : UIFont.systemFont(ofSize: spec.size, weight: spec.weight)
+            ? UIFont.monospacedSystemFont(ofSize: spec.size, weight: weight)
+            : UIFont.systemFont(ofSize: spec.size, weight: weight)
         if monospacedDigits, !spec.monospaced {
             let setting: [UIFontDescriptor.FeatureKey: Int]
             if #available(iOS 15.0, *) {
@@ -127,7 +132,7 @@ enum RCTypography {
             base = UIFont(descriptor: descriptor, size: spec.size)
         }
         let scaled = UIFontMetrics(forTextStyle: spec.textStyle)
-            .scaledFont(for: base, maximumPointSize: spec.maximumSize, compatibleWith: traits)
+            .scaledFont(for: base, maximumPointSize: spec.maximumSize, compatibleWith: UITraitCollection(preferredContentSizeCategory: category))
         cache[key] = scaled
         return scaled
     }
@@ -139,7 +144,7 @@ enum RCTypography {
 
     /// Attributes applying font, color, tracking and line height. Line height
     /// uses min/max line height with a baseline correction so single-line
-    /// labels stay optically centered.
+    /// labels stay optically centered (see `baselineOffset(lineHeight:font:)`).
     static func attributes(
         _ style: RCTextStyle,
         color: UIColor,
@@ -162,8 +167,30 @@ enum RCTypography {
             .foregroundColor: color,
             .kern: spec.tracking * scale,
             .paragraphStyle: paragraph,
-            .baselineOffset: (lineHeight - font.lineHeight) / 4,
+            .baselineOffset: baselineOffset(lineHeight: lineHeight, font: font),
         ]
+    }
+
+    /// Styled string for `text`: uppercases overline styles and drops the
+    /// tracking after the last character, so centered and trailing-aligned
+    /// text is not pushed off-center by trailing letter spacing and measured
+    /// widths match the ink.
+    static func attributedString(
+        _ text: String,
+        style: RCTextStyle,
+        color: UIColor,
+        alignment: NSTextAlignment = .natural,
+        lineBreakMode: NSLineBreakMode = .byTruncatingTail,
+        compatibleWith traits: UITraitCollection? = nil,
+        monospacedDigits: Bool = false
+    ) -> NSAttributedString {
+        let value = style.spec.uppercase ? text.uppercased() : text
+        let attributes = attributes(style, color: color, alignment: alignment, lineBreakMode: lineBreakMode, compatibleWith: traits, monospacedDigits: monospacedDigits)
+        let string = NSMutableAttributedString(string: value, attributes: attributes)
+        if style.spec.tracking != 0, let last = value.indices.last {
+            string.removeAttribute(.kern, range: NSRange(last..<value.endIndex, in: value))
+        }
+        return string
     }
 
     /// Line height in points for a style at the given traits.
@@ -171,7 +198,60 @@ enum RCTypography {
         (style.spec.lineHeight * scale(for: style, compatibleWith: traits)).rounded()
     }
 
+    /// Distance from the top of a line box to the baseline for text laid out
+    /// with `attributes(_:)`. Use it to baseline-align labels of different styles.
+    static func firstBaseline(_ style: RCTextStyle, compatibleWith traits: UITraitCollection? = nil) -> CGFloat {
+        let font = font(style, compatibleWith: traits)
+        let lineHeight = lineHeight(style, compatibleWith: traits)
+        return lineHeight + font.descender - centeringLift(lineHeight: lineHeight, font: font)
+    }
+
+    /// Baseline lift that centers glyphs in a line box of `lineHeight`.
+    ///
+    /// With a fixed line height, text layout puts all extra space above the
+    /// glyphs, so the baseline has to rise by half of it to match where a plain
+    /// `UILabel` of the font's natural height would draw. The renderer floors
+    /// the offset to device pixels, so it is rounded to the nearest pixel here.
+    /// Before iOS 16.4 the renderer applied `baselineOffset` twice (with its own
+    /// rounding), so a quarter of the extra space is passed there. Measured
+    /// against a plain `UILabel` at 3x: within one pixel on iOS 18.6 and 26.1,
+    /// within 1.3 px on iOS 15.5. A line box shorter than the font (display)
+    /// needs no lift.
+    static func baselineOffset(lineHeight: CGFloat, font: UIFont) -> CGFloat {
+        if #available(iOS 16.4, *) {
+            return centeringLift(lineHeight: lineHeight, font: font)
+        }
+        return max(0, lineHeight - font.lineHeight) / 4
+    }
+
+    private static func centeringLift(lineHeight: CGFloat, font: UIFont) -> CGFloat {
+        let scale = UIScreen.main.scale
+        return (max(0, lineHeight - font.lineHeight) / 2 * scale).rounded() / scale
+    }
+
     static func invalidateCache() {
         cache.removeAll()
+    }
+
+    /// A view outside a window can report `.unspecified`; fall back to the
+    /// screen so the cache never stores a font for a stale category.
+    private static func resolvedCategory(_ traits: UITraitCollection?) -> UIContentSizeCategory {
+        let category = traits?.preferredContentSizeCategory ?? .unspecified
+        if category != .unspecified { return category }
+        let screen = UIScreen.main.traitCollection.preferredContentSizeCategory
+        return screen == .unspecified ? .large : screen
+    }
+
+    /// The weight step Bold Text applies to system text styles.
+    private static func bolder(_ weight: UIFont.Weight) -> UIFont.Weight {
+        switch weight {
+        case .ultraLight: .light
+        case .thin: .regular
+        case .light: .medium
+        case .regular: .semibold
+        case .medium, .semibold: .bold
+        case .bold: .heavy
+        default: .black
+        }
     }
 }

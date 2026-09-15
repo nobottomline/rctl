@@ -1,8 +1,15 @@
 import UIKit
 
 /// Label bound to a type style. Applies tracking, line height and Dynamic Type
-/// through attributed text, rebuilt only when text, style, color, or content
-/// size category actually change (UILabel re-lays out on every assignment).
+/// through attributed text, rebuilt only when text, style, color, alignment,
+/// line breaking, content size category or Bold Text actually change (UILabel
+/// re-lays out on every assignment).
+///
+/// Metrics: a single line is exactly `RCTypography.lineHeight(style)` tall
+/// with glyphs where a plain `UILabel` of the font's natural height would put
+/// them, so labels of different styles center and baseline-align predictably.
+/// Multi-line labels (`lines: 0`) wrap; a fixed line count (`lines: 2`)
+/// truncates the last line with an ellipsis.
 @MainActor
 final class RCLabel: UILabel {
     var style: RCTextStyle {
@@ -19,14 +26,28 @@ final class RCLabel: UILabel {
     }
 
     private var storedText: String?
+    /// Set while assigning `super.attributedText`, which can echo paragraph
+    /// attributes back through the overridden setters below.
+    private var isApplying = false
+    /// Font the current attributed string was built with (fonts are cached by
+    /// `RCTypography`, so identity tells whether traits changed anything).
+    private var builtFont: UIFont?
+    private var customAccessibilityLabel: String?
+
+#if DEBUG
+    /// Number of attributed-string builds; lets tests prove updates are not redundant.
+    private(set) var rebuildCount = 0
+#endif
 
     init(_ text: String? = nil, style: RCTextStyle = .body, color: UIColor = RCColor.text, lines: Int = 1, alignment: NSTextAlignment = .natural) {
         self.style = style
         self.color = color
         super.init(frame: .zero)
+        isApplying = true
         numberOfLines = lines
         textAlignment = alignment
-        lineBreakMode = lines == 1 ? .byTruncatingTail : .byWordWrapping
+        lineBreakMode = lines == 0 ? .byWordWrapping : .byTruncatingTail
+        isApplying = false
         storedText = text
         rebuild()
     }
@@ -45,38 +66,55 @@ final class RCLabel: UILabel {
         }
     }
 
+    /// The source text, not the uppercased rendering, so VoiceOver reads
+    /// overlines as words rather than spelling them out.
+    override var accessibilityLabel: String? {
+        get { customAccessibilityLabel ?? storedText }
+        set { customAccessibilityLabel = newValue }
+    }
+
     override var textAlignment: NSTextAlignment {
-        didSet { if textAlignment != oldValue { rebuild() } }
+        didSet { if textAlignment != oldValue, !isApplying { rebuild() } }
     }
 
     override var lineBreakMode: NSLineBreakMode {
-        didSet { if lineBreakMode != oldValue { rebuild() } }
+        didSet { if lineBreakMode != oldValue, !isApplying { rebuild() } }
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        if traitCollection.preferredContentSizeCategory != previousTraitCollection?.preferredContentSizeCategory {
+        guard storedText?.isEmpty == false else { return }
+        if RCTypography.font(style, compatibleWith: traitCollection, monospacedDigits: usesMonospacedDigits) !== builtFont {
             rebuild()
         }
     }
 
     private func rebuild() {
         guard let storedText, !storedText.isEmpty else {
-            super.attributedText = nil
+            if super.attributedText != nil {
+                applyAttributedText(nil)
+            }
             return
         }
-        let value = style.spec.uppercase ? storedText.uppercased() : storedText
-        super.attributedText = NSAttributedString(
-            string: value,
-            attributes: RCTypography.attributes(
-                style,
-                color: color,
-                alignment: textAlignment,
-                lineBreakMode: lineBreakMode,
-                compatibleWith: traitCollection,
-                monospacedDigits: usesMonospacedDigits
-            )
-        )
+#if DEBUG
+        rebuildCount += 1
+#endif
+        builtFont = RCTypography.font(style, compatibleWith: traitCollection, monospacedDigits: usesMonospacedDigits)
+        applyAttributedText(RCTypography.attributedString(
+            storedText,
+            style: style,
+            color: color,
+            alignment: textAlignment,
+            lineBreakMode: lineBreakMode,
+            compatibleWith: traitCollection,
+            monospacedDigits: usesMonospacedDigits
+        ))
+    }
+
+    private func applyAttributedText(_ value: NSAttributedString?) {
+        isApplying = true
+        super.attributedText = value
+        isApplying = false
         invalidateIntrinsicContentSize()
     }
 }

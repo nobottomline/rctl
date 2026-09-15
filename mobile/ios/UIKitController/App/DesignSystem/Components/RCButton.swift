@@ -1,7 +1,13 @@
 import UIKit
 
 /// Text button (shadcn `Button`). Variants map to semantic tokens; sizes to
-/// fixed heights. Frame-based layout; `sizeThatFits` returns the natural size.
+/// minimum heights that grow with Dynamic Type. Frame-based layout;
+/// `sizeThatFits` returns the exact natural size on the pixel grid.
+///
+/// Press feedback runs on a dedicated body view (the control's own frame and
+/// transform stay untouched for layout): a spring to 0.97, an opaque on-color
+/// overlay that moves the fill toward the canvas, and a lowered shadow. All of
+/// it is interruptible; under Reduce Motion only the overlay fades.
 @MainActor
 final class RCButton: RCControl {
     enum Variant: Sendable {
@@ -27,6 +33,7 @@ final class RCButton: RCControl {
         /// 52 pt, body label.
         case large
 
+        /// Minimum height; Dynamic Type can make the button taller.
         var height: CGFloat {
             switch self {
             case .small: 36
@@ -38,22 +45,63 @@ final class RCButton: RCControl {
 
     enum IconPlacement: Sendable { case leading, trailing }
 
-    var title: String? { didSet { titleLabel.text = title; invalidateIntrinsicContentSize(); setNeedsLayout() } }
-    var icon: RCIconGlyph? { didSet { iconView.glyph = icon; iconView.isHidden = icon == nil || isLoading; invalidateIntrinsicContentSize(); setNeedsLayout() } }
-    var iconPlacement: IconPlacement = .leading { didSet { setNeedsLayout() } }
-    var variant: Variant { didSet { updateAppearance() } }
-    var size: Size { didSet { updateTypography(); invalidateIntrinsicContentSize(); setNeedsLayout() } }
-    /// Replaces the icon with a spinner and blocks interaction; width is kept.
-    var isLoading = false { didSet { updateLoading() } }
-    /// Called on `.primaryActionTriggered` (touch up inside).
+    var title: String? {
+        didSet {
+            guard title != oldValue else { return }
+            titleLabel.text = title
+            contentDidChange()
+        }
+    }
+
+    var icon: RCIconGlyph? {
+        didSet {
+            guard icon != oldValue else { return }
+            iconView.glyph = icon
+            applyLoadingState(animated: false)
+            contentDidChange()
+        }
+    }
+
+    /// Leading/trailing follow the layout direction (mirrored in RTL).
+    var iconPlacement: IconPlacement = .leading { didSet { if iconPlacement != oldValue { contentDidChange() } } }
+    var variant: Variant {
+        didSet {
+            guard variant != oldValue else { return }
+            updateAppearance()
+        }
+    }
+
+    var size: Size {
+        didSet {
+            guard size != oldValue else { return }
+            updateTypography()
+            contentDidChange()
+        }
+    }
+
+    /// Replaces the icon with a spinner (or the title, for text-only buttons)
+    /// and blocks interaction; the width is kept. Animated while on screen.
+    var isLoading = false {
+        didSet {
+            guard isLoading != oldValue else { return }
+            applyLoadingState(animated: window != nil && !suppressesLoadingAnimation)
+        }
+    }
+
+    /// Called on tap (touch up inside, or the control's primary action).
     var onTap: (() -> Void)?
-    /// Haptic played on tap; nil for none.
+    /// Haptic prepared on touch-down and played on tap; nil for none.
     var haptic: RCHaptics.Kind? = .light
 
+    private let body = UIView()
+    private let pressOverlay = UIView()
     private let titleLabel = RCLabel(style: .bodyStrong)
     private let iconView = RCIconView(pointSize: 18)
-    private let spinner = RCSpinner(diameter: 18, lineWidth: 2)
-    private let backgroundLayer = CALayer()
+    private let spinner = RCSpinner(diameter: 16, lineWidth: 2)
+    private var shadowSize: CGSize = .zero
+    private var shadowRadius: CGFloat = 0
+    private var lastActionTimestamp: TimeInterval = -1
+    private var suppressesLoadingAnimation = false
 
     init(title: String? = nil, icon: RCIconGlyph? = nil, variant: Variant = .primary, size: Size = .large) {
         self.variant = variant
@@ -63,126 +111,387 @@ final class RCButton: RCControl {
         self.icon = icon
         titleLabel.text = title
         iconView.glyph = icon
-        iconView.isHidden = icon == nil
         updateTypography()
         updateAppearance()
+        applyLoadingState(animated: false)
     }
 
     override func setUp() {
         isAccessibilityElement = true
         accessibilityTraits = .button
-        layer.addSublayer(backgroundLayer)
-        titleLabel.isUserInteractionEnabled = false
-        addSubview(titleLabel)
-        addSubview(iconView)
-        spinner.isHidden = true
-        addSubview(spinner)
-        addTarget(self, action: #selector(handleTap), for: .primaryActionTriggered)
+        body.isUserInteractionEnabled = false
+        pressOverlay.isUserInteractionEnabled = false
+        pressOverlay.alpha = 0
+        body.addSubview(pressOverlay)
+        titleLabel.isAccessibilityElement = false
+        body.addSubview(titleLabel)
+        body.addSubview(iconView)
+        spinner.hidesWhenStopped = true
+        spinner.alpha = 0
+        body.addSubview(spinner)
+        addSubview(body)
+        addTarget(self, action: #selector(handleAction(_:event:)), for: [.touchUpInside, .primaryActionTriggered])
+        if #available(iOS 13.4, *) {
+            addInteraction(UIPointerInteraction(delegate: self))
+        }
     }
+
+    private func contentDidChange() {
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    // MARK: Accessibility
 
     override var accessibilityLabel: String? {
         get { super.accessibilityLabel ?? title }
         set { super.accessibilityLabel = newValue }
     }
 
+    override var accessibilityValue: String? {
+        get { isLoading ? "In progress" : super.accessibilityValue }
+        set { super.accessibilityValue = newValue }
+    }
+
+    override var accessibilityTraits: UIAccessibilityTraits {
+        get {
+            var traits = super.accessibilityTraits.union(.button)
+            if !isEnabled || isLoading { traits.insert(.notEnabled) }
+            return traits
+        }
+        set { super.accessibilityTraits = newValue }
+    }
+
+    override var accessibilityUserInputLabels: [String]! {
+        get { super.accessibilityUserInputLabels ?? title.map { [$0] } }
+        set { super.accessibilityUserInputLabels = newValue }
+    }
+
+    // MARK: State
+
     override var isHighlighted: Bool {
-        didSet { guard isHighlighted != oldValue else { return }; animatePress() }
+        didSet {
+            guard isHighlighted != oldValue else { return }
+            applyPressed(isHighlighted && isEnabled && !isLoading)
+        }
     }
 
     override var isEnabled: Bool {
-        didSet { alpha = isEnabled ? 1 : 0.45 }
+        didSet {
+            guard isEnabled != oldValue else { return }
+            let alpha: CGFloat = isEnabled ? 1 : 0.45
+            if window != nil {
+                RCMotion.animate(duration: RCMotion.quickDuration) { self.body.alpha = alpha }
+            } else {
+                body.alpha = alpha
+            }
+            updateRasterization()
+        }
+    }
+
+    override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        if let haptic, !isLoading { RCHaptics.prepare(haptic) }
+        return super.beginTracking(touch, with: event)
+    }
+
+    @objc private func handleAction(_ sender: Any?, event: UIEvent?) {
+        // Touch up and the primary action can both fire for one tap.
+        if let event {
+            guard event.timestamp != lastActionTimestamp else { return }
+            lastActionTimestamp = event.timestamp
+        }
+        guard isEnabled, !isLoading else { return }
+        if let haptic { RCHaptics.play(haptic) }
+        onTap?()
+    }
+
+    /// Sets `isLoading`, choosing whether the swap animates.
+    func setLoading(_ loading: Bool, animated: Bool) {
+        suppressesLoadingAnimation = !animated
+        isLoading = loading
+        suppressesLoadingAnimation = false
+    }
+
+    // MARK: Appearance
+
+    private struct Palette {
+        let fill: UIColor?
+        let border: UIColor?
+        let foreground: UIColor
+        /// Opaque press overlay (already carries its alpha).
+        let press: UIColor
+        let hasShadow: Bool
+    }
+
+    private var palette: Palette {
+        switch variant {
+        case .primary:
+            Palette(fill: RCColor.text, border: nil, foreground: RCColor.onPrimary, press: Self.overlay(RCColor.onPrimary), hasShadow: true)
+        case .accent:
+            Palette(fill: RCColor.accent, border: nil, foreground: RCColor.onAccent, press: Self.overlay(RCColor.onAccent), hasShadow: true)
+        case .secondary:
+            Palette(fill: RCColor.elevated, border: RCColor.lineStrong, foreground: RCColor.text, press: RCColor.pressWash, hasShadow: false)
+        case .ghost:
+            Palette(fill: nil, border: nil, foreground: RCColor.text, press: RCColor.pressWash, hasShadow: false)
+        case .destructive:
+            Palette(fill: RCColor.danger, border: nil, foreground: RCColor.onDanger, press: Self.overlay(RCColor.onDanger), hasShadow: false)
+        case .destructiveSoft:
+            Palette(fill: RCColor.dangerSoft, border: nil, foreground: RCColor.danger, press: Self.overlay(RCColor.danger, alpha: 0.1), hasShadow: false)
+        }
+    }
+
+    /// On-color state layer: moves a filled control toward the canvas.
+    private static func overlay(_ color: UIColor, alpha: CGFloat = 0.14) -> UIColor {
+        UIColor { color.resolvedColor(with: $0).withAlphaComponent(alpha) }
     }
 
     override func updateTypography() {
-        switch size {
-        case .small: titleLabel.style = .subheadlineStrong; iconView.pointSize = 16
-        case .medium: titleLabel.style = .calloutStrong; iconView.pointSize = 18
-        case .large: titleLabel.style = .bodyStrong; iconView.pointSize = 18
-        }
+        let metrics = metrics
+        titleLabel.style = metrics.textStyle
+        iconView.pointSize = metrics.iconSize
+        iconView.strokeWidth = metrics.iconSize < 18 ? 2.25 : 2
+        spinner.diameter = (metrics.iconSize * 0.86).rounded()
+        spinner.lineWidth = metrics.iconSize < 18 ? 1.75 : 2
+        shadowSize = .zero
     }
 
     override func updateAppearance() {
-        let (fill, border, foreground) = colors
+        let palette = palette
         withoutImplicitAnimations {
-            backgroundLayer.backgroundColor = fill?.cgColor(for: self)
-            backgroundLayer.borderColor = border?.cgColor(for: self)
-            backgroundLayer.borderWidth = border == nil ? 0 : 1
+            body.layer.backgroundColor = palette.fill?.cgColor(for: self)
+            body.layer.borderColor = palette.border?.cgColor(for: self)
+            body.layer.borderWidth = palette.border == nil ? 0 : 1
+            pressOverlay.layer.backgroundColor = palette.press.cgColor(for: self)
+            if palette.hasShadow {
+                body.layer.shadowColor = RCColor.shadow.cgColor(for: self)
+                body.layer.shadowOpacity = restingShadowOpacity
+                body.layer.shadowRadius = RCShadow.button.radius
+                body.layer.shadowOffset = RCShadow.button.offset
+            } else {
+                RCShadow.clear(body.layer)
+            }
         }
-        titleLabel.color = foreground
-        iconView.tintColor = foreground
-        spinner.tintColor = foreground
+        shadowSize = .zero
+        titleLabel.color = palette.foreground
+        iconView.tintColor = palette.foreground
+        spinner.tintColor = palette.foreground
+        setNeedsLayout()
+        updateRasterization()
     }
 
-    private var colors: (UIColor?, UIColor?, UIColor) {
-        switch variant {
-        case .primary: (RCColor.text, nil, RCColor.onPrimary)
-        case .accent: (RCColor.accent, nil, RCColor.onAccent)
-        case .secondary: (RCColor.elevated, RCColor.lineStrong, RCColor.text)
-        case .ghost: (nil, nil, RCColor.text)
-        case .destructive: (RCColor.danger, nil, RCColor.onDanger)
-        case .destructiveSoft: (RCColor.dangerSoft, nil, RCColor.danger)
+    private var restingShadowOpacity: Float {
+        traitCollection.userInterfaceStyle == .dark ? RCShadow.button.opacityDark : RCShadow.button.opacityLight
+    }
+
+    // MARK: Press
+
+    private func applyPressed(_ pressed: Bool) {
+        let reduceMotion = RCMotion.reduceMotion
+        RCMotion.animate(pressed ? RCMotion.snappy : RCMotion.bouncy) {
+            self.body.transform = pressed && !reduceMotion ? CGAffineTransform(scaleX: 0.97, y: 0.97) : .identity
         }
+        let duration = pressed ? RCMotion.pressDuration : RCMotion.releaseDuration
+        RCMotion.animate(duration: duration) { self.pressOverlay.alpha = pressed ? 1 : 0 }
+        guard palette.hasShadow else { return }
+        let resting = restingShadowOpacity
+        RCLayerAnimation.set(body.layer, "shadowOpacity", to: pressed ? resting * 0.55 : resting, duration: duration)
+        RCLayerAnimation.set(body.layer, "shadowRadius", to: pressed ? RCShadow.button.radius * 0.6 : RCShadow.button.radius, duration: duration)
+        let offset = RCShadow.button.offset
+        RCLayerAnimation.set(body.layer, "shadowOffset", to: NSValue(cgSize: pressed ? CGSize(width: 0, height: offset.height / 2) : offset), duration: duration)
+    }
+
+    // MARK: Loading
+
+    private func applyLoadingState(animated: Bool) {
+        let loading = isLoading
+        let hasIcon = icon != nil
+        let hasTitle = title?.isEmpty == false
+        if loading { spinner.startAnimating() }
+        let animate = animated && window != nil
+        let reduceMotion = RCMotion.reduceMotion
+        let shrunk = CGAffineTransform(scaleX: 0.6, y: 0.6)
+        let changes: @MainActor () -> Void = {
+            self.iconView.alpha = hasIcon && !loading ? 1 : 0
+            self.spinner.alpha = loading ? 1 : 0
+            self.titleLabel.alpha = loading && !hasIcon && hasTitle ? 0 : 1
+            guard !reduceMotion || !animate else { return }
+            self.iconView.transform = loading ? shrunk : .identity
+            self.spinner.transform = loading ? .identity : shrunk
+        }
+        let finish: @MainActor (Bool) -> Void = { _ in
+            if !self.isLoading { self.spinner.stopAnimating() }
+        }
+        if animate {
+            if loading, !reduceMotion { spinner.transform = shrunk }
+            RCMotion.animate(RCMotion.snappy, animations: changes, completion: finish)
+        } else {
+            UIView.performWithoutAnimation { changes() }
+            finish(true)
+        }
+        if loading, isHighlighted { applyPressed(false) }
+        setNeedsLayout()
+        updateRasterization()
+    }
+
+    /// A disabled button is static: flatten it once instead of compositing the
+    /// 45% group opacity offscreen on every frame it moves (e.g. scrolling).
+    private func updateRasterization() {
+        let rasterize = !isEnabled && !isLoading
+        body.layer.shouldRasterize = rasterize
+        if rasterize { body.layer.rasterizationScale = window?.screen.scale ?? UIScreen.main.scale }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateRasterization()
+    }
+
+    // MARK: Layout
+
+    private struct Metrics {
+        let textStyle: RCTextStyle
+        let minimumHeight: CGFloat
+        let verticalPadding: CGFloat
+        let horizontalPadding: CGFloat
+        let iconSize: CGFloat
+        let gap: CGFloat
+        let cornerRadius: CGFloat
+        let lineHeight: CGFloat
+    }
+
+    private var metrics: Metrics {
+        let style: RCTextStyle
+        let base: (vertical: CGFloat, horizontal: CGFloat, icon: CGFloat, gap: CGFloat, radius: CGFloat)
+        switch size {
+        case .small:
+            style = .subheadlineStrong
+            base = (8, 14, 16, 6, RCRadius.sm + 2)
+        case .medium:
+            style = .calloutStrong
+            base = (10, 18, 18, 8, RCRadius.md)
+        case .large:
+            style = .bodyStrong
+            base = (12, 22, 20, 8, RCRadius.md)
+        }
+        let scale = min(RCTypography.scale(for: style, compatibleWith: traitCollection), 1.5)
+        return Metrics(
+            textStyle: style,
+            minimumHeight: size.height,
+            verticalPadding: base.vertical,
+            horizontalPadding: base.horizontal,
+            iconSize: (base.icon * scale).rounded(),
+            gap: (base.gap * min(scale, 1.25)).rounded(),
+            cornerRadius: base.radius,
+            lineHeight: RCTypography.lineHeight(style, compatibleWith: traitCollection)
+        )
+    }
+
+    private var hasTitle: Bool { title?.isEmpty == false }
+
+    /// Horizontal padding on the icon side is 2 pt tighter: a glyph's ink sits
+    /// inside its box, so equal padding reads as lopsided.
+    private func paddings(_ metrics: Metrics, height: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
+        guard hasTitle else {
+            let side = max(metrics.horizontalPadding / 2, (height - metrics.iconSize) / 2)
+            return (side, side)
+        }
+        guard icon != nil else { return (metrics.horizontalPadding, metrics.horizontalPadding) }
+        let tight = metrics.horizontalPadding - 2
+        return iconPlacement == .leading ? (tight, metrics.horizontalPadding) : (metrics.horizontalPadding, tight)
     }
 
     override var intrinsicContentSize: CGSize {
-        sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: size.height))
+        sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
-        let labelWidth = titleLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: self.size.height)).width
-        let iconWidth = icon == nil && !isLoading ? 0 : iconView.pointSize + (title == nil ? 0 : RCSpace.sm)
-        let horizontalPadding: CGFloat = self.size == .small ? 14 : 20
-        return CGSize(width: ceil(labelWidth + iconWidth + horizontalPadding * 2), height: self.size.height)
+        let metrics = metrics
+        let height = RCPixelSnap.ceil(max(metrics.minimumHeight, metrics.lineHeight + metrics.verticalPadding * 2))
+        let pads = paddings(metrics, height: height)
+        let titleWidth = hasTitle ? titleLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: metrics.lineHeight)).width : 0
+        let glyph: CGFloat = icon != nil || !hasTitle ? metrics.iconSize : 0
+        let gap: CGFloat = icon != nil && hasTitle ? metrics.gap : 0
+        let width = RCPixelSnap.ceil(pads.leading + glyph + gap + titleWidth + pads.trailing)
+        return CGSize(width: max(width, hasTitle ? 0 : height), height: height)
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        let metrics = metrics
+        // bounds + center keep the body's press transform out of the geometry.
+        body.bounds = CGRect(origin: .zero, size: bounds.size)
+        body.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let radius = min(metrics.cornerRadius, bounds.height / 2)
         withoutImplicitAnimations {
-            backgroundLayer.frame = bounds
-            backgroundLayer.cornerRadius = size == .small ? RCRadius.sm + 2 : RCRadius.md
-            backgroundLayer.cornerCurve = .continuous
+            body.layer.cornerRadius = radius
+            body.layer.cornerCurve = .continuous
+            pressOverlay.layer.cornerRadius = radius
+            pressOverlay.layer.cornerCurve = .continuous
         }
-        let showsGlyph = icon != nil || isLoading
-        let glyphSide = iconView.pointSize
-        let labelSize = titleLabel.sizeThatFits(CGSize(width: bounds.width, height: bounds.height))
-        let spacing = showsGlyph && title != nil ? RCSpace.sm : 0
-        let contentWidth = min(bounds.width - 16, labelSize.width + (showsGlyph ? glyphSide + spacing : 0))
-        var x = (bounds.width - contentWidth) / 2
-        let glyphFrame: CGRect
-        if iconPlacement == .leading {
-            glyphFrame = CGRect(x: x, y: (bounds.height - glyphSide) / 2, width: showsGlyph ? glyphSide : 0, height: glyphSide)
-            x += showsGlyph ? glyphSide + spacing : 0
-            titleLabel.frame = CGRect(x: x, y: (bounds.height - labelSize.height) / 2, width: contentWidth - (showsGlyph ? glyphSide + spacing : 0), height: labelSize.height)
+        pressOverlay.frame = body.bounds
+        updateShadowPath(radius: radius)
+
+        let size = bounds.size
+        let pads = paddings(metrics, height: size.height)
+        let showsGlyphSlot = icon != nil
+        let glyph = showsGlyphSlot ? metrics.iconSize : 0
+        let gap = showsGlyphSlot && hasTitle ? metrics.gap : 0
+        let available = max(0, size.width - pads.leading - pads.trailing)
+        let naturalTitle = hasTitle ? titleLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: metrics.lineHeight)).width : 0
+        let titleWidth = max(0, min(naturalTitle, available - glyph - gap))
+        let contentWidth = glyph + gap + titleWidth
+        // Center the content in the padded box so tuned paddings shift it optically.
+        let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let glyphFirst = (iconPlacement == .leading) != rtl
+        let x = (rtl ? pads.trailing : pads.leading) + (available - contentWidth) / 2
+
+        let midY = size.height / 2
+        var glyphFrame = CGRect(x: 0, y: midY - metrics.iconSize / 2, width: metrics.iconSize, height: metrics.iconSize)
+        var titleFrame = CGRect(x: 0, y: midY - metrics.lineHeight / 2, width: titleWidth, height: metrics.lineHeight)
+        if glyphFirst {
+            glyphFrame.origin.x = x
+            titleFrame.origin.x = x + glyph + gap
         } else {
-            let labelWidth = contentWidth - (showsGlyph ? glyphSide + spacing : 0)
-            titleLabel.frame = CGRect(x: x, y: (bounds.height - labelSize.height) / 2, width: labelWidth, height: labelSize.height)
-            glyphFrame = CGRect(x: x + labelWidth + spacing, y: (bounds.height - glyphSide) / 2, width: showsGlyph ? glyphSide : 0, height: glyphSide)
+            titleFrame.origin.x = x
+            glyphFrame.origin.x = x + titleWidth + gap
         }
-        iconView.frame = RCLayout.pixelAligned(glyphFrame)
-        spinner.frame = RCLayout.pixelAligned(glyphFrame)
-    }
-
-    private func updateLoading() {
-        isUserInteractionEnabled = !isLoading
-        iconView.isHidden = icon == nil || isLoading
-        spinner.isHidden = !isLoading
-        if isLoading { spinner.startAnimating() } else { spinner.stopAnimating() }
-        accessibilityTraits = isLoading ? [.button, .notEnabled] : .button
-        invalidateIntrinsicContentSize()
-        setNeedsLayout()
-    }
-
-    private func animatePress() {
-        let highlighted = isHighlighted
-        if highlighted, let haptic { RCHaptics.prepare(haptic) }
-        RCMotion.animate(duration: highlighted ? RCMotion.pressDuration : RCMotion.releaseDuration) {
-            self.transform = highlighted && !RCMotion.reduceMotion ? CGAffineTransform(scaleX: 0.97, y: 0.97) : .identity
-            self.backgroundLayer.opacity = highlighted ? 0.86 : 1
+        titleLabel.frame = RCLayout.pixelAligned(titleFrame)
+        if showsGlyphSlot {
+            // bounds + center: the icon carries a scale transform while loading.
+            let aligned = RCLayout.pixelAligned(glyphFrame)
+            iconView.bounds = CGRect(origin: .zero, size: aligned.size)
+            iconView.center = CGPoint(x: aligned.midX, y: aligned.midY)
         }
+        let spinnerCenter = showsGlyphSlot
+            ? CGPoint(x: glyphFrame.midX, y: glyphFrame.midY)
+            : CGPoint(x: size.width / 2, y: midY)
+        let spinnerSide = spinner.diameter
+        spinner.bounds = CGRect(x: 0, y: 0, width: spinnerSide, height: spinnerSide)
+        spinner.center = CGPoint(x: RCLayout.pixelAligned(spinnerCenter.x), y: RCLayout.pixelAligned(spinnerCenter.y))
     }
 
-    @objc private func handleTap() {
-        if let haptic { RCHaptics.play(haptic) }
-        onTap?()
+    private func updateShadowPath(radius: CGFloat) {
+        guard palette.hasShadow else { return }
+        let size = body.bounds.size
+        guard size != shadowSize || radius != shadowRadius, size.width > 0 else { return }
+        let oldPath = body.layer.shadowPath
+        let path = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius).cgPath
+        withoutImplicitAnimations { body.layer.shadowPath = path }
+        if shadowSize != .zero, let oldPath {
+            RCLayerAnimation.follow(boundsAnimationOf: body.layer, on: body.layer, keyPath: "shadowPath", from: oldPath, to: path)
+        }
+        shadowSize = size
+        shadowRadius = radius
+    }
+}
+
+@available(iOS 13.4, *)
+extension RCButton: UIPointerInteractionDelegate {
+    func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
+        guard isEnabled, !isLoading else { return nil }
+        let parameters = UIPreviewParameters()
+        parameters.visiblePath = UIBezierPath(roundedRect: body.bounds, cornerRadius: body.layer.cornerRadius)
+        let preview = UITargetedPreview(view: body, parameters: parameters)
+        return UIPointerStyle(effect: .highlight(preview))
     }
 }
