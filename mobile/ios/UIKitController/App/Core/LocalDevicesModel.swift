@@ -185,6 +185,11 @@ final class LocalDevicesModel: ObservableObject {
     func cancelReachabilityProbe() {
         probe?.cancel()
         probe = nil
+        // A cancelled probe never reports; rows must not keep a spinner
+        // (for example when discovery takes over, which refuses to probe).
+        for (id, state) in reachability where state == .checking {
+            reachability[id] = .unknown
+        }
     }
 
     private func persist(_ updated: [LocalDeviceProfile]) throws {

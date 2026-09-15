@@ -83,6 +83,32 @@ final class LocalDeviceTests: XCTestCase {
         XCTAssertNil(CoreRequestStub.requests.take("/v1/capabilities"))
     }
 
+    /// Turning discovery on cancels a running reachability probe; the saved
+    /// rows it had marked as checking must return to an unknown state instead
+    /// of spinning until discovery is turned off again.
+    func testEnablingDiscoveryResetsCheckingReachability() async throws {
+        let suite = "rctl.local.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let saved = try (1...2).map { index in
+            LocalDeviceProfile(id: UUID(), name: "Synthetic \(index)", address: try LocalDeviceAddress("192.168.1.\(index)"))
+        }
+        defaults.set(try JSONEncoder().encode(saved), forKey: "rctl.controller.local-devices.v1")
+        let model = LocalDevicesModel(defaults: defaults, client: client())
+        model.setForeground(true)
+        let probe = Task { await model.probeReachability() }
+        var requests: [CoreRequestStub] = []
+        for _ in 0..<2 { requests.append(try await pendingRequest()) }
+        XCTAssertEqual(saved.map { model.reachability(of: $0) }, [.checking, .checking])
+        model.setDiscoveryEnabled(true)
+        XCTAssertEqual(saved.map { model.reachability(of: $0) }, [.unknown, .unknown])
+        for request in requests { request.respond(capabilities) }
+        await probe.value
+        XCTAssertEqual(saved.map { model.reachability(of: $0) }, [.unknown, .unknown])
+        model.setDiscoveryEnabled(false)
+        model.setForeground(false)
+    }
+
     /// The original hosted the SwiftUI local screens (device list without a
     /// relay, add/save-discovered/replace-address editors, nearby sheet and
     /// opt-in section) and attached screenshots. UIKit screens belong to their
