@@ -40,13 +40,14 @@ clone (`cp -cR`) instead of downloading it again.
 Debug launch arguments (Release ignores them), handled in
 `App/Application/DebugLaunch.swift`:
 
-- `--rctl-route=pair|scan|local|edit|save|replace|first-local|gallery`
+- `--rctl-route=pair|scan|local|edit|save|replace|first-local|remote|gallery`
 - `--rctl-push=local|pair` — animated push 1.5 s after launch with a black marker (latency measurement)
 - `--rctl-appearance=system|warm|console`
 - `--rctl-demo` — screens that support it render synthetic fixtures (no network, no stored data)
 - `--rctl-scanner-demo` — scripted QR detections in the scanner
 - `--rctl-scanner-state=denied|unavailable`, `--rctl-pairing-action=paste|claim-invalid` — camera-less scanner states and pairing actions without network
 - `--rctl-editor-error` / `--rctl-editor-pending` — local device editor error and checking states without network
+- `--rctl-remote-demo=connecting|live|control|camera|failed|reconnecting|stalled|ended|keyboard|tools|lock|source-menu|missing|cycle` with `--rctl-route=remote` (`--rctl-remote-demo-path=relay`, `--rctl-remote-demo-orientation=landscape`) — remote session states without a connection
 - `--rctl-allow-insecure-loopback` / `RCTL_CONTROLLER_ALLOW_INSECURE_LOOPBACK=1` — loopback HTTP relay for tests
 
 ## Architecture
