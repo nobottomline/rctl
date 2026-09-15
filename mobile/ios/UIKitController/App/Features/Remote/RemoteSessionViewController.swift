@@ -422,7 +422,14 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
         if visible {
             view.setNeedsLayout()
             view.layoutIfNeeded()
-            panel.focus()
+            // Becoming first responder loads the keyboard (hundreds of ms the
+            // first time); commit the transition first so it never waits on it.
+            DispatchQueue.main.async { [weak self, weak panel] in
+                MainActor.assumeIsolated {
+                    guard let self, let panel, self.keyboardVisible else { return }
+                    panel.focus()
+                }
+            }
         } else {
             panel.resignFocus()
             view.setNeedsLayout()
@@ -457,11 +464,11 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
     @objc private func keyboardWillChangeFrame(_ notification: Notification) {
         guard let info = notification.userInfo,
               let endFrame = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-        let screenSpace: UICoordinateSpace = view.window?.screen.coordinateSpace ?? UIScreen.main.coordinateSpace
-        let frame = view.convert(endFrame, from: screenSpace)
+        // Only a keyboard docked to the bottom edge overlaps the chrome; floating
+        // and split iPad keyboards report frames that must not lift the panel.
         let overlap = notification.name == UIResponder.keyboardWillHideNotification
             ? 0
-            : max(0, view.bounds.maxY - frame.minY)
+            : RCKeyboardObserver.overlap(of: endFrame, in: view)
         guard abs(overlap - keyboardOverlap) > 0.5 else { return }
         keyboardOverlap = overlap
         guard keyboardVisible else { return }

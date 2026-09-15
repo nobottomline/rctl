@@ -151,8 +151,11 @@ final class RemoteStatusDot: RCView {
             group.animations = [scale, fade]
             group.duration = 1.8
             group.timingFunction = RCMotion.easeOut
-            group.repeatCount = .infinity
-            group.isRemovedOnCompletion = false
+            // Announce "live" with a few pulses, then settle on a static dot: an
+            // endless ring would force full-frame composites over the video for
+            // the whole session.
+            group.repeatCount = 3
+            group.isRemovedOnCompletion = true
             ring.add(group, forKey: Self.pulseKey)
         } else {
             ring.removeAnimation(forKey: Self.pulseKey)
