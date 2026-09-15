@@ -273,7 +273,10 @@ struct DevicesViewState: Equatable {
         return NearbySection(
             isEnabled: enabled,
             subtitle: nearbySubtitle(snapshot),
-            showsSpinner: enabled && snapshot.discoveryState == .searching && !snapshot.selectingNearby,
+            // The browser stays `.searching` for as long as discovery is on; spin
+            // only during the initial search window (it restarts on Search again).
+            showsSpinner: enabled && snapshot.discoveryState == .searching && !snapshot.selectingNearby
+                && !snapshot.discoverySearchSettled,
             canSearchAgain: enabled && !snapshot.selectingNearby && snapshot.discoveryState != .permissionDenied,
             rows: enabled ? snapshot.nearby.map { nearbyRow($0, in: snapshot) } : [],
             notice: enabled ? nearbyNotice(snapshot) : nil

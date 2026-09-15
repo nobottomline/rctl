@@ -200,6 +200,11 @@ final class DevicesViewStateTests: XCTestCase {
         XCTAssertTrue(nearby.showsSpinner)
         XCTAssertTrue(nearby.canSearchAgain)
 
+        snapshot.discoverySearchSettled = true
+        XCTAssertFalse(DevicesViewState(snapshot).nearby.showsSpinner, "The spinner stops once the search window settles")
+        XCTAssertTrue(DevicesViewState(snapshot).nearby.canSearchAgain)
+        snapshot.discoverySearchSettled = false
+
         snapshot.selectingNearby = true
         nearby = DevicesViewState(snapshot).nearby
         XCTAssertFalse(nearby.showsSpinner, "No spinner while a selection is being prepared")
