@@ -87,6 +87,25 @@ Do not force an architecture mismatch, rename a rootful package's architecture,
 or use the rootful `scripts/deploy.sh`/`scripts/audio.sh` helpers on this device.
 No relay configuration is required for this first LAN test.
 
+### Operator-Assisted SSH Installation
+
+Filza is not mandatory for an already configured test device. An independent
+operator SSH connection with working `sudo` can install the audited rootless
+DEB, wait for dpkg to exit, verify package state and identity preservation, then
+run `sbreload`. Rootless utilities may live in `/var/jb/usr/bin`; discover their
+paths instead of assuming rootful locations or that optional tools such as
+`pgrep` are installed. Enter credentials through the hidden sudo prompt, never
+source files, command arguments or logs.
+
+Do not run the transaction in rctl's own web terminal: replacing the daemon can
+disconnect that terminal during installation. Keep independent SSH and physical
+recovery access, verify architecture and the transferred package's SHA-256,
+and abort on an active update or failed package/identity check. A GUI restart
+must follow successful installation, never interrupt it. This operator workflow
+does not bypass the rootful-only guard in `scripts/deploy.sh` or establish a
+general-purpose rootless deployment helper. The user may still need to unlock
+the device after SpringBoard restarts.
+
 ### Missing ElleKit After Unpacking
 
 `depends on ellekit; however: Package ellekit is not installed` means dpkg

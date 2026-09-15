@@ -1,11 +1,12 @@
 # Rootless Release Readiness
 
-## Current Checkpoint (2026-09-14)
+## Current Checkpoint (2026-09-15)
 
-The rootless device currently has pacing test prerelease
-`0.4.0~test.20260913222939.63e8b112a091`; restoring the non-pacing baseline is
-pending. Pacing failed physical acceptance and has been withdrawn from the
-source. The exact draft `0.4.0` previously passed
+The rootless device has been restored to the non-pacing baseline
+`0.4.0~test.20260913213641.23e8bcff8aed` through an independent SSH/sudo
+installation. Package audit passed and the relay configuration was verified
+byte-identical before SpringBoard restarted. Pacing failed physical acceptance
+and has been withdrawn from the source. The exact draft `0.4.0` previously passed
 the UI update and external-watchdog rollback tests described below; those
 results do not qualify the new prerelease.
 The rootful device remains on `0.3.4-24+debug`. No always-on display or keepalive
@@ -23,6 +24,32 @@ device media has a new unresolved failure described below. The
 occurred. The
 [remaining gates](#remaining-release-gates) distinguish this
 preparation from exact-artifact acceptance; older sections below are historical.
+
+### Baseline Restoration Check
+
+The restored package passed the public-package audit and its SHA-256 was
+verified before installation. Independent SSH/sudo installed it, checked the
+exact version and a clean dpkg audit, and compared the relay configuration
+byte for byte before restarting SpringBoard. A subsequent audit passed; the
+retained private qualification snapshot was then removed. Neither VPN nor the
+permanent relay configuration was changed.
+
+- The LAN browser smoke check decoded 170 additional frames over three seconds.
+- The ordinary permanent-relay browser path decoded 272 additional frames over
+  ten seconds, loaded the 2732x2048 Console screenshot preview, and opened Files.
+  The selected ICE pair was peer-reflexive/host, not a forced TURN route. The
+  published client was used without transport or playout overrides.
+- The relay smoke check is not sustained-performance acceptance: later samples
+  included dropped frames and increased freeze/PLI counters. It establishes
+  restored access, not smooth playback on every network or resolution of the
+  separate forced-TURN finding.
+
+GitHub still reports `v0.4.0` as an unpublished draft with ten assets. Its source
+predates the retained packet-sizing and fresh-client-build fixes; restoring this
+test package does not qualify or replace those draft bytes. Further delivery
+must identify one final source/artifact set and check that set, rather than
+silently transferring results between packages. The withdrawn pacing experiment
+is not part of that next acceptance pass.
 
 ### Exact Draft Verification
 
