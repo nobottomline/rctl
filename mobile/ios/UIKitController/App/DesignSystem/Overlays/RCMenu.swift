@@ -52,35 +52,24 @@ struct RCMenuSection {
 /// a scale+fade spring, supports sections, checkmarks, destructive items,
 /// submenus, press-and-drag selection, and dismisses on outside tap. It is
 /// presented in the window's overlay layer and never blocks the main thread.
+///
+/// Implementation: `RCMenuPresentation` (overlay, motion, dismissal rules),
+/// `RCMenuPanelView` (frame-laid-out rows), `RCMenuLayout` (pure placement).
 @MainActor
 enum RCMenu {
     enum Direction: Sendable { case automatic, down, up }
     enum Alignment: Sendable { case automatic, leading, trailing, center }
 
-    /// Presents a menu anchored to `anchor` (any view in a window).
+    /// Presents a menu anchored to `anchor` (any view in a window). Any menu
+    /// already visible is dismissed first. Item actions run after the menu
+    /// has finished dismissing.
     static func present(
         _ sections: [RCMenuSection],
         from anchor: UIView,
         direction: Direction = .automatic,
         alignment: Alignment = .automatic
     ) {
-        guard let presenter = anchor.owningViewController?.topmostPresented else { return }
-        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        for section in sections {
-            for item in section.items {
-                let action = UIAlertAction(title: item.title, style: item.role == .destructive ? .destructive : .default) { _ in
-                    MainActor.assumeIsolated {
-                        if item.children.isEmpty { item.action?() } else { present(item.children, from: anchor) }
-                    }
-                }
-                action.isEnabled = item.isEnabled
-                sheet.addAction(action)
-            }
-        }
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = anchor
-        sheet.popoverPresentationController?.sourceRect = anchor.bounds
-        presenter.present(sheet, animated: true)
+        RCMenuPresentation.present(sections, anchor: anchor, style: .dropdown(direction: direction, alignment: alignment))
     }
 
     /// Makes `control` open a menu on tap, and also on touch-down + drag
@@ -92,21 +81,45 @@ enum RCMenu {
         alignment: Alignment = .automatic,
         provider: @escaping @MainActor () -> [RCMenuSection]
     ) {
+        RCKeyboardFrameTracker.shared.start()
+        (objc_getAssociatedObject(control, &RCMenuAttachment.key) as? RCMenuAttachment)?.detach()
         let handler = RCMenuAttachment(control: control, direction: direction, alignment: alignment, provider: provider)
         objc_setAssociatedObject(control, &RCMenuAttachment.key, handler, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
-    /// Dismisses any visible menu.
-    static func dismissAll(animated: Bool = true) {}
+    /// Dismisses any visible menu. A selection that is already dismissing
+    /// still runs its action once the menu is gone.
+    static func dismissAll(animated: Bool = true) {
+        RCMenuPresentation.current?.dismiss(animated: animated)
+    }
+
+    /// True while a dropdown or context menu is on screen (including its exit animation).
+    static var isPresented: Bool { RCMenuPresentation.current != nil }
 }
 
+/// Target/action bridge for `RCMenu.attach`. Opening rules:
+/// - tap (touch up inside) opens the menu; releasing later changes nothing;
+/// - holding the control opens it under the finger;
+/// - dragging away from the control opens it (outside scrollable containers,
+///   where a drag must stay a scroll);
+/// - once opened by the in-flight touch, dragging highlights items and
+///   releasing over one selects it; releasing away from both the control
+///   and the panel closes the menu.
 @MainActor
 private final class RCMenuAttachment: NSObject {
     nonisolated(unsafe) static var key: UInt8 = 0
+    private static let holdDelay: TimeInterval = 0.28
+    private static let dragThreshold: CGFloat = 10
+
     weak var control: UIControl?
     let direction: RCMenu.Direction
     let alignment: RCMenu.Alignment
     let provider: @MainActor () -> [RCMenuSection]
+
+    private var touchStart: CGPoint?
+    private var travelled = false
+    private var holdWork: DispatchWorkItem?
+    private weak var trackingPresentation: RCMenuPresentation?
 
     init(control: UIControl, direction: RCMenu.Direction, alignment: RCMenu.Alignment, provider: @escaping @MainActor () -> [RCMenuSection]) {
         self.control = control
@@ -114,47 +127,119 @@ private final class RCMenuAttachment: NSObject {
         self.alignment = alignment
         self.provider = provider
         super.init()
-        control.addTarget(self, action: #selector(open), for: .primaryActionTriggered)
+        control.addTarget(self, action: #selector(touchDown(_:event:)), for: .touchDown)
+        control.addTarget(self, action: #selector(touchDragged(_:event:)), for: [.touchDragInside, .touchDragOutside])
+        control.addTarget(self, action: #selector(touchUpInside(_:event:)), for: .touchUpInside)
+        control.addTarget(self, action: #selector(touchUpOutside(_:event:)), for: .touchUpOutside)
+        control.addTarget(self, action: #selector(touchCancelled), for: .touchCancel)
+        control.addTarget(self, action: #selector(primaryAction), for: .primaryActionTriggered)
     }
 
-    @objc private func open() {
-        guard let control else { return }
-        RCMenu.present(provider(), from: control, direction: direction, alignment: alignment)
+    func detach() {
+        cancelHold()
+        control?.removeTarget(self, action: nil, for: .allEvents)
+    }
+
+    @objc private func touchDown(_ sender: UIControl, event: UIEvent?) {
+        cancelHold()
+        trackingPresentation = nil
+        travelled = false
+        touchStart = location(of: event, in: sender)
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.holdElapsed() }
+        }
+        holdWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdDelay, execute: work)
+    }
+
+    @objc private func touchDragged(_ sender: UIControl, event: UIEvent?) {
+        guard let point = location(of: event, in: sender), let start = touchStart else { return }
+        if hypot(point.x - start.x, point.y - start.y) > Self.dragThreshold { travelled = true }
+        if let presentation = trackingPresentation {
+            presentation.externalTouch(.moved, atWindowPoint: point)
+        } else if travelled, !RCMenuPresentation.isInsideScrollableContainer(sender) {
+            openForTrackedTouch()
+            trackingPresentation?.externalTouch(.moved, atWindowPoint: point)
+        }
+    }
+
+    @objc private func touchUpInside(_ sender: UIControl, event: UIEvent?) {
+        if trackingPresentation != nil {
+            finishTrackedTouch(sender, event: event)
+        } else {
+            resetTouch()
+            open()
+        }
+    }
+
+    @objc private func touchUpOutside(_ sender: UIControl, event: UIEvent?) {
+        finishTrackedTouch(sender, event: event)
+    }
+
+    @objc private func touchCancelled() {
+        trackingPresentation?.externalTouch(.cancelled, atWindowPoint: .zero)
+        resetTouch()
+    }
+
+    /// Keyboard / assistive activation without a touch sequence.
+    @objc private func primaryAction() {
+        guard touchStart == nil, !isPresentedForControl else { return }
+        open()
+    }
+
+    private func finishTrackedTouch(_ sender: UIControl, event: UIEvent?) {
+        defer { resetTouch() }
+        guard let presentation = trackingPresentation, let point = location(of: event, in: sender) else { return }
+        // Coming back to the control counts as not having left it.
+        let home = sender.convert(sender.bounds, to: nil).insetBy(dx: -Self.dragThreshold, dy: -Self.dragThreshold)
+        presentation.externalTouch(.ended, atWindowPoint: point, travelled: travelled && !home.contains(point))
+    }
+
+    private func holdElapsed() {
+        guard let control, control.isTracking, trackingPresentation == nil, !isPresentedForControl else { return }
+        openForTrackedTouch()
+    }
+
+    private func openForTrackedTouch() {
+        cancelHold()
+        guard let control, let presentation = open() else { return }
+        trackingPresentation = presentation
+        // Scroll views must not pick up the finger that now drives the menu.
+        RCMenuPresentation.resetScrollGestures(around: control)
+        RCHaptics.play(.light)
+    }
+
+    @discardableResult
+    private func open() -> RCMenuPresentation? {
+        guard let control, control.window != nil else { return nil }
+        return RCMenuPresentation.present(provider(), anchor: control, style: .dropdown(direction: direction, alignment: alignment))
+    }
+
+    private var isPresentedForControl: Bool {
+        guard let current = RCMenuPresentation.current else { return false }
+        return current.anchor === control && current.isOpen
+    }
+
+    private func resetTouch() {
+        cancelHold()
+        touchStart = nil
+        travelled = false
+        trackingPresentation = nil
+    }
+
+    private func cancelHold() {
+        holdWork?.cancel()
+        holdWork = nil
+    }
+
+    private func location(of event: UIEvent?, in control: UIControl) -> CGPoint? {
+        let touch = event?.touches(for: control)?.first ?? event?.allTouches?.first
+        return touch?.location(in: nil)
     }
 }
 
-/// Long-press context menu with a lifted preview of the pressed view
-/// (dimmed backdrop, preview scales up, menu attaches below or above).
-@MainActor
-final class RCContextMenuInteraction: NSObject {
-    /// Return nil to not show a menu for the current state.
-    let provider: @MainActor () -> [RCMenuSection]?
-    /// Corner radius of the lifted preview snapshot.
-    var previewCornerRadius: CGFloat = RCRadius.lg
-    /// Called when the menu lifts (e.g. to cancel a pending tap highlight).
-    var onWillPresent: (() -> Void)?
-    private weak var view: UIView?
-
-    init(provider: @escaping @MainActor () -> [RCMenuSection]?) {
-        self.provider = provider
-        super.init()
-    }
-
-    func attach(to view: UIView) {
-        self.view = view
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
-        press.minimumPressDuration = 0.4
-        view.addGestureRecognizer(press)
-    }
-
-    @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, let view, let sections = provider() else { return }
-        (view as? UIControl)?.cancelTracking(with: nil)
-        onWillPresent?()
-        RCHaptics.play(.medium)
-        RCMenu.present(sections, from: view)
-    }
-}
+// `RCContextMenuInteraction` (long-press menu with a lifted preview) lives in
+// `RCContextMenuInteraction.swift` and shares the presentation and panel.
 
 extension UIViewController {
     /// The top of this controller's presentation chain.
