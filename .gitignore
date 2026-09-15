@@ -23,6 +23,7 @@ protocol/node_modules/
 *.png
 # App icon artwork is source, not captured media.
 !mobile/ios/Controller/Resources/Assets.xcassets/**/*.png
+!mobile/ios/UIKitController/App/Resources/Assets.xcassets/**/*.png
 *.h264
 *.bin
 .playwright-mcp/
