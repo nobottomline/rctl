@@ -475,7 +475,7 @@ private final class RemoteToolActionTile: RCControl {
     override func setUp() {
         isAccessibilityElement = true
         accessibilityTraits = .button
-        addTarget(self, action: #selector(handleTap), for: .primaryActionTriggered)
+        addTapAction { [weak self] in self?.handleTap() }
     }
 
     override var isEnabled: Bool {

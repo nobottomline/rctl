@@ -140,7 +140,7 @@ final class RCListRow: RCControl {
             addSubview(view)
         }
         badge.isAccessibilityElement = false
-        addTarget(self, action: #selector(handleTap), for: .primaryActionTriggered)
+        addTapAction { [weak self] in self?.handleTap() }
     }
 
     // MARK: Content

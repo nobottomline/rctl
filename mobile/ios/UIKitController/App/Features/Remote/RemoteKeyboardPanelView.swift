@@ -267,7 +267,7 @@ private final class RemoteKeycapButton: RCControl {
         accessibilityTraits = [.button, .keyboardKey]
         addSubview(label)
         addSubview(iconView)
-        addTarget(self, action: #selector(handleTap), for: .primaryActionTriggered)
+        addTapAction { [weak self] in self?.handleTap() }
     }
 
     override func updateAppearance() {

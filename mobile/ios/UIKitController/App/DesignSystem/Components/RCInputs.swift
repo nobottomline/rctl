@@ -131,7 +131,7 @@ final class RCTextField: RCView, UITextFieldDelegate, UIGestureRecognizerDelegat
         clearButton.alpha = 0
         clearButton.isUserInteractionEnabled = false
         clearButton.accessibilityElementsHidden = true
-        clearButton.addTarget(self, action: #selector(clearText), for: .primaryActionTriggered)
+        clearButton.addTapAction { [weak self] in self?.clearText() }
         addSubview(clearButton)
         messageLabel.isAccessibilityElement = false
         messageIcon.isHidden = true

@@ -79,6 +79,29 @@ class RCControl: UIControl {
         }
     }
 
+    private var tapActions: [@MainActor () -> Void] = []
+    private var lastTapEventTimestamp: TimeInterval = -1
+
+    /// Runs `action` once per completed tap. Touches deliver `.touchUpInside`
+    /// to a custom `UIControl` (UIKit adds `.primaryActionTriggered` only for
+    /// system controls such as `UIButton`), while keyboard, assistive or
+    /// programmatic activation may send `.primaryActionTriggered`; both are
+    /// registered and a second delivery for the same event is ignored.
+    func addTapAction(_ action: @escaping @MainActor () -> Void) {
+        if tapActions.isEmpty {
+            addTarget(self, action: #selector(performTapActions(_:event:)), for: [.touchUpInside, .primaryActionTriggered])
+        }
+        tapActions.append(action)
+    }
+
+    @objc private func performTapActions(_ sender: Any?, event: UIEvent?) {
+        if let event {
+            guard event.timestamp != lastTapEventTimestamp else { return }
+            lastTapEventTimestamp = event.timestamp
+        }
+        for action in tapActions { action() }
+    }
+
     /// Hit area of at least 44×44 pt regardless of the visual size.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         let dx = max(0, (RCLayout.minimumHitTarget - bounds.width) / 2)
