@@ -36,17 +36,8 @@ func newCLIProgress(output io.Writer) *cliProgress {
 		output:      output,
 		now:         time.Now,
 		interactive: interactive,
-		color:       interactive && os.Getenv("NO_COLOR") == "",
+		color:       colorEnabled(output),
 	}
-}
-
-func writerIsTerminal(output io.Writer) bool {
-	file, ok := output.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func (p *cliProgress) Step(message string) {
@@ -59,7 +50,7 @@ func (p *cliProgress) Step(message string) {
 		p.finishStep("OK", ansiGreen, now)
 	}
 	if !p.heading {
-		fmt.Fprintln(p.output, "\nProgress")
+		printHeading(p.output, "Progress")
 		p.heading = true
 	}
 	p.step++

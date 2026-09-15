@@ -23,6 +23,17 @@ catalog; custom deployments may set `--rootless-update-manifest-url`. Updates
 set to `off` keep both update feeds disabled. Device updater qualification is
 independent of wizard lifecycle tests; see `ROOTLESS-RELEASE.md`.
 
+Interactive lifecycle confirmations require the displayed operation name
+(`install`, `upgrade`, or the full removal phrase). Unknown input, including
+`yes` at the `install` prompt, repeats the question without changing the host.
+Enter `cancel` or `no` to exit; EOF also cancels. Docker provisioning is a
+separate explicit `yes` confirmation and defaults to `no`.
+
+The bootstrap and wizard use terminal-aware colors for status, prompts, plans,
+and errors. Set `NO_COLOR=1` or `TERM=dumb` for uncolored output; redirected
+output and JSON reports are always uncolored. Domain selection can still use
+cursor control with `NO_COLOR`; `TERM=dumb` uses a plain domain prompt.
+
 The normal user journey is:
 
 1. Create a Linux VPS and point one domain or subdomain at it.

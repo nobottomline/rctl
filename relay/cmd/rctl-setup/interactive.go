@@ -21,7 +21,7 @@ type promptOutput struct{ io.Writer }
 func (promptOutput) Close() error { return nil }
 
 func chooseOrigin(reader *bufio.Reader, output io.Writer) (string, error) {
-	fmt.Fprintln(output, "Looking for local domain hints (not a complete DNS inventory)...")
+	fmt.Fprintln(output, styled(output, "Looking for local domain hints (not a complete DNS inventory)...", ansiCyan))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	hints := setup.DomainSuggestions(ctx)
 	cancel()
@@ -54,6 +54,12 @@ func selectDomain(hints []string, input io.ReadCloser, output io.Writer) (value 
 			return index == 0 || strings.Contains(strings.ToLower(items[index]), strings.ToLower(query))
 		},
 	}
+	if !colorEnabled(output) {
+		selector.Templates = &promptui.SelectTemplates{
+			Label: "{{ . }}", Active: "> {{ . }}", Inactive: "  {{ . }}",
+			Selected: "{{ . }}", Help: "Arrows: navigate; /: search; Enter: select",
+		}
+	}
 	index, value, err := selector.Run()
 	if err != nil || index == 0 {
 		return "", err
@@ -70,7 +76,7 @@ func promptOrigin(reader *bufio.Reader, output io.Writer) (string, error) {
 		value = normalizeInteractiveOrigin(value)
 		origin, err := setup.ParsePublicOrigin(value)
 		if err != nil || net.ParseIP(origin.Hostname()) != nil {
-			fmt.Fprintln(output, "Enter a DNS domain you control, such as relay.example.com. This field is required.")
+			fmt.Fprintln(output, styled(output, "Enter a DNS domain you control, such as relay.example.com. This field is required.", ansiYellow))
 			continue
 		}
 		return value, nil
@@ -78,14 +84,33 @@ func promptOrigin(reader *bufio.Reader, output io.Writer) (string, error) {
 }
 
 func inferPublicIPv4(rawURL string, output io.Writer) string {
-	fmt.Fprintln(output, "Checking domain IPv4 (up to 5 seconds)...")
+	fmt.Fprintln(output, styled(output, "Checking domain IPv4 (up to 5 seconds)...", ansiCyan))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	address := lookupPublicIPv4(ctx, rawURL, net.DefaultResolver.LookupIP)
 	if address == "" {
-		fmt.Fprintln(output, "No public IPv4 could be suggested. Enter the VPS public IPv4 below.")
+		fmt.Fprintln(output, styled(output, "No public IPv4 could be suggested. Enter the VPS public IPv4 below.", ansiYellow))
 	}
 	return address
+}
+
+// Unknown input is not consent and not cancellation: let the operator correct it.
+// EOF (including an unterminated answer) must never authorize a mutation.
+func confirmAction(reader *bufio.Reader, output io.Writer, action, defaultValue string) (bool, error) {
+	for {
+		answer, err := prompt(reader, output, "Type "+action+" to continue, or cancel", defaultValue)
+		if err != nil {
+			return false, err
+		}
+		if answer == action {
+			return true, nil
+		}
+		switch strings.ToLower(answer) {
+		case "cancel", "no", "n":
+			return false, nil
+		}
+		fmt.Fprintln(output, styled(output, "Not confirmed. Enter exactly '"+action+"', or 'cancel' to exit.", ansiYellow))
+	}
 }
 
 func lookupPublicIPv4(ctx context.Context, rawURL string, lookup func(context.Context, string, string) ([]net.IP, error)) string {

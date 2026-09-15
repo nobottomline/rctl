@@ -35,16 +35,16 @@ func offerDockerDependencies(reader *bufio.Reader, output io.Writer, interactive
 		return err
 	}
 	fmt.Fprintf(output, "\nDocker Engine and Compose are missing. Setup can add Docker's official signed APT repository for %s/%s, install the packages, and enable the Docker service.\n", plan.Distro, plan.Suite)
-	fmt.Fprintln(output, "These system dependencies remain installed if relay setup fails or is removed. Existing runtimes are never replaced. Docker-published ports may bypass UFW rules; check the provider firewall.")
+	fmt.Fprintln(output, styled(output, "These system dependencies remain installed if relay setup fails or is removed. Existing runtimes are never replaced. Docker-published ports may bypass UFW rules; check the provider firewall.", ansiYellow))
 	if !approved {
 		if !interactive {
 			return fmt.Errorf("rerun with --yes --install-dependencies to explicitly authorize Docker installation")
 		}
-		answer, err := prompt(reader, output, "Install Docker and Compose? Type yes to continue", "no")
+		confirmed, err := confirmAction(reader, output, "yes", "no")
 		if err != nil {
 			return err
 		}
-		if answer != "yes" {
+		if !confirmed {
 			return fmt.Errorf("Docker installation declined; the host was not changed")
 		}
 	}

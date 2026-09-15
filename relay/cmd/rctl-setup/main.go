@@ -71,13 +71,14 @@ func run(args []string) int {
 		usage()
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n", args[0])
+		fmt.Fprintf(diagnosticOutput(os.Stderr), "unknown command %q\n", args[0])
 		usage()
 		return 2
 	}
 }
 
 func runAdminReset(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("reset-admin", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	dryRun := flags.Bool("dry-run", false, "validate and print the reset plan without changing credentials")
@@ -94,7 +95,7 @@ func runAdminReset(args []string, input io.Reader, output, errorsOutput io.Write
 		fmt.Fprintln(errorsOutput, "reset-admin plan:", err)
 		return 1
 	}
-	fmt.Fprintln(output, "\nPlan: rotate the admin login and session signing secrets")
+	printHeading(output, "Plan: rotate the admin login and session signing secrets")
 	fmt.Fprintln(output, "All existing browser sessions will be invalidated. Device identities and TURN credentials will be preserved.")
 	fmt.Fprintln(output, "A verified backup and automatic rollback are mandatory.")
 	if *dryRun {
@@ -106,8 +107,8 @@ func runAdminReset(args []string, input io.Reader, output, errorsOutput io.Write
 			fmt.Fprintln(errorsOutput, "reset-admin requires an interactive terminal or --yes")
 			return 2
 		}
-		answer, promptErr := prompt(bufio.NewReader(input), output, "Type reset-admin to continue", "")
-		if promptErr != nil || answer != "reset-admin" {
+		confirmed, promptErr := confirmAction(bufio.NewReader(input), output, "reset-admin", "")
+		if promptErr != nil || !confirmed {
 			fmt.Fprintln(errorsOutput, "admin credential reset cancelled; the deployment was not changed")
 			return 1
 		}
@@ -127,6 +128,7 @@ func runAdminReset(args []string, input io.Reader, output, errorsOutput io.Write
 }
 
 func runRecover(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("recover", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	dryRun := flags.Bool("dry-run", false, "validate and print the pending recovery without changing the host")
@@ -157,8 +159,8 @@ func runRecover(args []string, input io.Reader, output, errorsOutput io.Writer) 
 			fmt.Fprintln(errorsOutput, "recover requires an interactive terminal or --yes")
 			return 2
 		}
-		answer, promptErr := prompt(bufio.NewReader(input), output, "Type recover to restore a verified state", "")
-		if promptErr != nil || answer != "recover" {
+		confirmed, promptErr := confirmAction(bufio.NewReader(input), output, "recover", "")
+		if promptErr != nil || !confirmed {
 			fmt.Fprintln(errorsOutput, "recovery cancelled; the host was not changed")
 			return 1
 		}
@@ -175,6 +177,7 @@ func runRecover(args []string, input io.Reader, output, errorsOutput io.Writer) 
 }
 
 func runUninstall(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	dryRun := flags.Bool("dry-run", false, "validate and print the removal plan without changing the host")
@@ -195,7 +198,7 @@ func runUninstall(args []string, input io.Reader, output, errorsOutput io.Writer
 		fmt.Fprintln(errorsOutput, "uninstall plan:", err)
 		return 1
 	}
-	fmt.Fprintln(output, "\nRemoval plan:")
+	printHeading(output, "Removal plan:")
 	for _, path := range plan.Removed {
 		fmt.Fprintln(output, " remove", path)
 	}
@@ -216,8 +219,8 @@ func runUninstall(args []string, input io.Reader, output, errorsOutput io.Writer
 		if *deleteData {
 			confirmation = "uninstall delete-data"
 		}
-		answer, promptErr := prompt(bufio.NewReader(input), output, "Type "+confirmation+" to continue", "")
-		if promptErr != nil || answer != confirmation {
+		confirmed, promptErr := confirmAction(bufio.NewReader(input), output, confirmation, "")
+		if promptErr != nil || !confirmed {
 			fmt.Fprintln(errorsOutput, "uninstall cancelled; the host was not changed")
 			return 1
 		}
@@ -238,6 +241,7 @@ func runUninstall(args []string, input io.Reader, output, errorsOutput io.Writer
 }
 
 func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	configValues := addConfigFlags(flags)
@@ -289,9 +293,11 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		return 1
 	}
 	if plan.AlreadyCurrent {
-		fmt.Fprintf(output, "\nPlan\n  Action: verify the existing deployment\n  Release: %s (already installed)\n  Managed files: %d\n  Changes: none\n", plan.ToVersion, len(plan.Files))
+		printHeading(output, "Plan")
+		fmt.Fprintf(output, "  Action: verify the existing deployment\n  Release: %s (already installed)\n  Managed files: %d\n  Changes: none\n", plan.ToVersion, len(plan.Files))
 	} else {
-		fmt.Fprintf(output, "\nPlan\n  Action: upgrade %s to %s\n  Managed files: %d\n  Recovery: verified backup with automatic rollback\n", plan.FromVersion, plan.ToVersion, len(plan.Files))
+		printHeading(output, "Plan")
+		fmt.Fprintf(output, "  Action: upgrade %s to %s\n  Managed files: %d\n  Recovery: verified backup with automatic rollback\n", plan.FromVersion, plan.ToVersion, len(plan.Files))
 	}
 	if *dryRun {
 		fmt.Fprintln(output, "Upgrade dry run complete. No images, services, or files were changed.")
@@ -306,8 +312,8 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		if plan.AlreadyCurrent {
 			confirmation = "verify"
 		}
-		answer, promptErr := prompt(bufio.NewReader(input), output, "Type "+confirmation+" to continue", "")
-		if promptErr != nil || answer != confirmation {
+		confirmed, promptErr := confirmAction(bufio.NewReader(input), output, confirmation, "")
+		if promptErr != nil || !confirmed {
 			fmt.Fprintln(errorsOutput, "upgrade cancelled; the host was not changed")
 			return 1
 		}
@@ -333,6 +339,7 @@ func runUpgrade(args []string, input io.Reader, output, errorsOutput io.Writer) 
 }
 
 func runRestore(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("restore", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	source := flags.String("from", "", "managed backup-* directory to restore")
@@ -361,8 +368,8 @@ func runRestore(args []string, input io.Reader, output, errorsOutput io.Writer) 
 			fmt.Fprintln(errorsOutput, "restore requires an interactive terminal or --yes")
 			return 2
 		}
-		answer, promptErr := prompt(bufio.NewReader(input), output, "Type restore to replace the installed state", "")
-		if promptErr != nil || answer != "restore" {
+		confirmed, promptErr := confirmAction(bufio.NewReader(input), output, "restore", "")
+		if promptErr != nil || !confirmed {
 			fmt.Fprintln(errorsOutput, "restore cancelled; the host was not changed")
 			return 1
 		}
@@ -386,6 +393,7 @@ func runRestore(args []string, input io.Reader, output, errorsOutput io.Writer) 
 }
 
 func runBackup(args []string, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("backup", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	dryRun := flags.Bool("dry-run", false, "validate and print snapshot sources without stopping services")
@@ -421,6 +429,7 @@ func runBackup(args []string, output, errorsOutput io.Writer) int {
 }
 
 func runDoctor(args []string, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	jsonOutput := flags.Bool("json", false, "write structured JSON")
@@ -440,7 +449,7 @@ func runDoctor(args []string, output, errorsOutput io.Writer) int {
 			return 1
 		}
 	} else {
-		report.WriteText(output)
+		printReport(output, report)
 	}
 	if report.Failed() {
 		return 1
@@ -534,20 +543,21 @@ func (v *configFlags) observe(flags *flag.FlagSet) {
 }
 
 func runPreflight(args []string) int {
+	errorsOutput := diagnosticOutput(os.Stderr)
 	flags := flag.NewFlagSet("preflight", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
+	flags.SetOutput(errorsOutput)
 	configValues := addConfigFlags(flags)
 	jsonOutput := flags.Bool("json", false, "write structured JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "preflight does not accept positional arguments")
+		fmt.Fprintln(errorsOutput, "preflight does not accept positional arguments")
 		return 2
 	}
 	cfg, err := configValues.load(flags)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "config:", err)
+		fmt.Fprintln(errorsOutput, "config:", err)
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -555,11 +565,11 @@ func runPreflight(args []string) int {
 	report := (setup.Preflight{}).Run(ctx, cfg)
 	if *jsonOutput {
 		if err := report.WriteJSON(os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(errorsOutput, err)
 			return 1
 		}
 	} else {
-		report.WriteText(os.Stdout)
+		printReport(os.Stdout, report)
 	}
 	if report.Failed() {
 		return 1
@@ -568,6 +578,7 @@ func runPreflight(args []string) int {
 }
 
 func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) int {
+	errorsOutput = diagnosticOutput(errorsOutput)
 	flags := flag.NewFlagSet("install", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	configValues := addConfigFlags(flags)
@@ -646,7 +657,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 		preflightCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		report := (setup.Preflight{}).Run(preflightCtx, cfg)
 		cancel()
-		report.WriteText(output)
+		printReport(output, report)
 		if onlyDockerFailures(report) && !*dryRun && (interactive || (*installDependencies && *assumeYes)) {
 			if err := offerDockerDependencies(reader, output, interactive && !*assumeYes, *installDependencies && *assumeYes); err != nil {
 				fmt.Fprintln(errorsOutput, "dependencies:", err)
@@ -655,7 +666,7 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 			checkCtx, stop := context.WithTimeout(context.Background(), 45*time.Second)
 			report = (setup.Preflight{}).Run(checkCtx, cfg)
 			stop()
-			report.WriteText(output)
+			printReport(output, report)
 		}
 		if report.Failed() {
 			fmt.Fprintln(errorsOutput, "preflight failed; relay installation has not started")
@@ -668,8 +679,8 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 			fmt.Fprintln(errorsOutput, "install requires an interactive terminal or --yes")
 			return 2
 		}
-		answer, err := prompt(reader, output, "Type install to continue", "")
-		if err != nil || answer != "install" {
+		confirmed, err := confirmAction(reader, output, "install", "")
+		if err != nil || !confirmed {
 			fmt.Fprintln(errorsOutput, "relay installation cancelled; any confirmed system dependencies remain installed")
 			return 1
 		}
@@ -699,12 +710,12 @@ func runInstall(args []string, input io.Reader, output, errorsOutput io.Writer) 
 
 func prompt(reader *bufio.Reader, output io.Writer, label, defaultValue string) (string, error) {
 	if defaultValue == "" {
-		fmt.Fprintf(output, "%s: ", label)
+		fmt.Fprint(output, styled(output, label+":", ansiCyan), " ")
 	} else {
-		fmt.Fprintf(output, "%s [%s]: ", label, defaultValue)
+		fmt.Fprint(output, styled(output, fmt.Sprintf("%s [%s]:", label, defaultValue), ansiCyan), " ")
 	}
 	line, err := reader.ReadString('\n')
-	if err != nil && len(line) == 0 {
+	if err != nil {
 		return "", err
 	}
 	line = strings.TrimSpace(line)
@@ -753,7 +764,15 @@ func printInstallPlan(w io.Writer, cfg setup.Config, owned, dryRun bool) {
 	if dryRun {
 		action += " (dry run)"
 	}
-	fmt.Fprintf(w, "\nPlan\n  Action: %s\n  Origin: %s\n  Profile: %s\n  TURN: %t\n  Device packages: %t\n  Device updates: %s\n  Relay image: %s\n", action, cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.DevicePackages, cfg.DeviceUpdateChannel, displayPinnedImage(cfg.RelayImage))
+	printHeading(w, "Plan")
+	updates := cfg.DeviceUpdateChannel
+	if updates == setup.UpdateChannelOff {
+		updates = styled(w, updates, ansiYellow)
+	}
+	fmt.Fprintf(w, "  Action: %s\n  Origin: %s\n  Profile: %s\n  TURN: %t\n  Device packages: %t\n  Device updates: %s\n  Relay image: %s\n", styled(w, action, ansiCyan), cfg.PublicURL, cfg.Profile, cfg.EnableTURN, cfg.DevicePackages, updates, displayPinnedImage(cfg.RelayImage))
+	if cfg.DeviceUpdateChannel == setup.UpdateChannelOff {
+		fmt.Fprintln(w, styled(w, "  Device update feeds are disabled by configuration; enrollment and remote control remain available.", ansiYellow))
+	}
 }
 
 func displayPinnedImage(image string) string {

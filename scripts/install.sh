@@ -9,13 +9,30 @@ DESTINATION="/usr/local/bin/rctl-setup"
 VERSION="${RCTL_VERSION:-latest}"
 ASSETS_DIR="${RCTL_ASSETS_DIR:-}"
 
+color_out=""
+color_err=""
+bold=""
+reset_out=""
+reset_err=""
+if [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+  if [ -t 1 ]; then
+    color_out="$(printf '\033[36m')"
+    bold="$(printf '\033[1m')"
+    reset_out="$(printf '\033[0m')"
+  fi
+  if [ -t 2 ]; then
+    color_err="$(printf '\033[31m')"
+    reset_err="$(printf '\033[0m')"
+  fi
+fi
+
 fail() {
-  printf 'rctl bootstrap: %s\n' "$*" >&2
+  printf '%srctl bootstrap: %s%s\n' "$color_err" "$*" "$reset_err" >&2
   exit 1
 }
 
 progress() {
-  printf '  [bootstrap] %s\n' "$*"
+  printf '  %s[bootstrap]%s %s\n' "$color_out" "$reset_out" "$*"
 }
 
 [ "$(id -u)" -eq 0 ] || fail "download this script to a file, then run sudo sh <file> from an SSH terminal"
@@ -69,7 +86,7 @@ if [ "$assume_yes" -eq 0 ] && [ -n "${SUDO_COMMAND:-}" ] && [ ! -t 0 ]; then
   fail "interactive curl | sudo sh is unsafe on some sudo versions; download the script to a file and run sudo sh <file> (root may run sh directly)"
 fi
 
-printf '\nrctl setup\n\n'
+printf '\n%srctl setup%s\n\n' "$bold" "$reset_out"
 
 download() {
   curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
