@@ -34,13 +34,13 @@ final class ScannerViewController: RCViewController, AppRoutable {
     private var restingRect: CGRect = .zero
     private var laidOutRestingRect: CGRect = .zero
     private var cancellables: Set<AnyCancellable> = []
+    /// A claim waiting for the model to become idle; cancelled when the scanner is popped.
+    private var pendingClaim: Task<Void, Never>?
 
 #if DEBUG
     private var demo: ScannerDemo?
     private var demoPreview: ScannerDemoPreviewView?
     private var forcedAvailability: QRScannerService.Availability?
-    /// A claim waiting for the model to become idle; cancelled when the scanner is popped.
-    private var pendingClaim: Task<Void, Never>?
 #endif
 
     init(environment: AppEnvironment) {
