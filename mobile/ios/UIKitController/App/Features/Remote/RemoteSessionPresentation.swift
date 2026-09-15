@@ -234,7 +234,22 @@ struct RemoteDiagnosticsPresentation: Equatable {
         route = Metric(title: "Media route", value: diagnostics.route.rawValue)
     }
 
+    /// Diagnostics render every second while the sheet is open; formatters
+    /// are expensive to create, so reuse one per locale and precision.
+    private static let formatterLock = NSLock()
+    nonisolated(unsafe) private static var formatters: [String: NumberFormatter] = [:]
+
     private static func formatter(fractionDigits: Int, locale: Locale) -> NumberFormatter {
+        let key = "\(locale.identifier)|\(fractionDigits)"
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        if let cached = formatters[key] { return cached }
+        let formatter = makeFormatter(fractionDigits: fractionDigits, locale: locale)
+        formatters[key] = formatter
+        return formatter
+    }
+
+    private static func makeFormatter(fractionDigits: Int, locale: Locale) -> NumberFormatter {
         let formatter = NumberFormatter()
         formatter.locale = locale
         formatter.numberStyle = .decimal
