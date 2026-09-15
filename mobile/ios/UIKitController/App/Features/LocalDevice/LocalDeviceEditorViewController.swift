@@ -257,6 +257,9 @@ final class LocalDeviceEditorViewController: RCViewController, AppRoutable, UISc
     // MARK: Fields
 
     private func configureFields() {
+        // The danger callout carries the failure text; fields only show the error ring.
+        addressField.displaysErrorMessage = false
+        nameField.displaysErrorMessage = false
         let address = addressField.textField
         address.text = content.initialAddress
         addressField.isMonospaced = true
