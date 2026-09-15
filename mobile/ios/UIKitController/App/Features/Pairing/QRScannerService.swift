@@ -95,6 +95,9 @@ final class QRScannerService {
         expiry?.cancel()
         expiry = nil
         publish(nil)
+        // Invalidate any torch change still pending on the capture queue so its
+        // completion cannot turn the button back on after the camera stopped.
+        torchRequest += 1
         if isTorchOn {
             isTorchOn = false
             onStateChange?()
@@ -158,6 +161,7 @@ final class QRScannerService {
         expiry?.cancel()
         expiry = nil
         publish(nil)
+        torchRequest += 1
         if isTorchOn {
             isTorchOn = false
         }
