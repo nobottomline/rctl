@@ -207,6 +207,9 @@ mobile-ios-uikit-build:
 	@xcodebuild -project mobile/ios/UIKitController/RctlUIKit.xcodeproj -scheme RctlUIKit \
 		-configuration Debug -destination 'generic/platform=iOS Simulator' \
 		-derivedDataPath mobile/ios/UIKitController/.derivedData CODE_SIGNING_ALLOWED=NO build
+	@xcodebuild -project mobile/ios/UIKitController/RctlUIKit.xcodeproj -scheme RctlUIKit \
+		-configuration Release -destination 'generic/platform=iOS' \
+		-derivedDataPath mobile/ios/UIKitController/.derivedData CODE_SIGNING_ALLOWED=NO build
 
 mobile-ios-uikit-test:
 	@bash scripts/test-mobile-ios-uikit.sh
