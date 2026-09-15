@@ -2,9 +2,14 @@ import UIKit
 
 /// Menu surface shared by dropdowns and context menus: elevated fill, hairline
 /// border, continuous `xl` corners and a popover shadow from a cached path.
-/// The shadow lives on this view's layer and clipping on `clipView`, so the
-/// two never share a layer. Content is a stack of `RCMenuPageView`s (root list
-/// and submenus); only the top page is visible outside transitions.
+/// The shadow lives on this view's layer and the rounded fill on `clipView`.
+/// Content is a stack of `RCMenuPageView`s (root list and submenus); only the
+/// top page is visible outside transitions.
+///
+/// No mask at rest: rows sit inside the panel padding, so the rounded fill
+/// alone shapes the panel. `clipView` masks to its rounded bounds only while
+/// pages slide during a submenu transition, and for a page taller than the
+/// panel (rows scroll past the rounded corners), which is rare.
 /// Frame layout only; rows are built once per page and reused for the life
 /// of the presentation.
 @MainActor
@@ -34,7 +39,6 @@ final class RCMenuPanelView: RCView {
         accessibilityViewIsModal = true
         clipView.layer.cornerRadius = Self.cornerRadius
         clipView.layer.cornerCurve = .continuous
-        clipView.layer.masksToBounds = true
         addSubview(clipView)
     }
 
@@ -44,6 +48,26 @@ final class RCMenuPanelView: RCView {
         clipView.layer.borderWidth = RCLayout.hairline
         shadowSize = .zero
         updateShadow()
+    }
+
+    /// Masks pages to the rounded panel only while they can cross its edges:
+    /// sliding during a submenu transition, or scrolling.
+    func updatePageClipping() {
+        let scrolls = currentPage.map { $0.contentHeight(for: bounds.width) > bounds.height + 0.5 } ?? false
+        let clips = isTransitioning || scrolls
+        guard clipView.layer.masksToBounds != clips else { return }
+        clipView.layer.masksToBounds = clips
+    }
+
+    var clipsPages: Bool { clipView.layer.masksToBounds }
+
+    /// Flattens the panel (with its shadow) into one cached bitmap while it
+    /// fades and scales in or out, so the group opacity is not recomposited
+    /// offscreen on every frame. Off at rest: rows highlight and scroll.
+    func setRasterizedForFade(_ rasterized: Bool) {
+        guard layer.shouldRasterize != rasterized else { return }
+        layer.shouldRasterize = rasterized
+        if rasterized { layer.rasterizationScale = window?.screen.scale ?? UIScreen.main.scale }
     }
 
     /// Adds a page to the stack (not yet laid out or animated).
@@ -79,6 +103,7 @@ final class RCMenuPanelView: RCView {
         if !isTransitioning, let page = currentPage {
             page.frame = clipView.bounds
         }
+        updatePageClipping()
         if bounds.size != shadowSize {
             withoutImplicitAnimations { updateShadow() }
         }
@@ -434,8 +459,9 @@ final class RCMenuRowView: RCView {
         guard highlightLayer.superlayer != nil else { return }
         highlightLayer.backgroundColor = RCColor.pressWash.cgColor(for: self)
         let destructive = item?.role == .destructive
-        titleLabel.color = destructive ? RCColor.danger : RCColor.text
-        iconView.tintColor = destructive ? RCColor.danger : RCColor.textTertiary
+        // AA text token: the web danger color is under 4.5:1 once the row is highlighted in Warm.
+        titleLabel.color = destructive ? RCColor.dangerText : RCColor.text
+        iconView.tintColor = destructive ? RCColor.dangerText : RCColor.textTertiary
         trailingView.tintColor = hasChildren ? RCColor.textTertiary : RCColor.accent
     }
 

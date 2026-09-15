@@ -27,6 +27,28 @@ extension UIApplication {
     }
 }
 
+// MARK: - Overlay activity
+
+/// Holds one `RCOverlayActivity` token while an overlay's root view is in a
+/// window. Driving it from `didMoveToWindow` covers every way an overlay
+/// leaves the screen — dismissal, cancelled presentation, teardown together
+/// with its presenter — with exactly one `end()`.
+@MainActor
+final class RCOverlayVisibility {
+    private var token: RCOverlayToken?
+
+    var isVisible: Bool { token != nil }
+
+    func update(inWindow: Bool) {
+        if inWindow {
+            if token == nil { token = RCOverlayActivity.begin() }
+        } else {
+            token?.end()
+            token = nil
+        }
+    }
+}
+
 // MARK: - Clock
 
 /// Time source for modal timing rules (progress minimum display time).

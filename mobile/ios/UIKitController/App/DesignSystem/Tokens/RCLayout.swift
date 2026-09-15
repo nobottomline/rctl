@@ -33,9 +33,12 @@ enum RCRadius {
 enum RCLayout {
     /// Horizontal page margin on phones.
     static let gutter: CGFloat = 20
-    /// Readable column on iPad and landscape.
+    /// Readable column on iPad and landscape for lists and overviews (Devices).
+    /// Pass the same width to `columnInset(width:safeArea:maxWidth:)` and to
+    /// `RCTopBar.contentColumnWidth` so bar items align with the page.
     static let maxContentWidth: CGFloat = 620
-    /// Narrow column for forms and sheets.
+    /// Narrow column for forms, editors and sheet content (Pairing, Local
+    /// device, sheets). Screens use one of the two widths, not ad-hoc values.
     static let maxFormWidth: CGFloat = 520
     /// Minimum hit target on every interactive element.
     static let minimumHitTarget: CGFloat = 44

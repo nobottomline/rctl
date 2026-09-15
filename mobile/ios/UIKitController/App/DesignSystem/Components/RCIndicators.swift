@@ -98,6 +98,10 @@ final class RCSpinner: RCView {
 #if DEBUG
     /// Whether render-server animations are currently installed (tests).
     var hasRunningAnimations: Bool { rotor.animation(forKey: Self.rotationKey) != nil }
+    /// Seconds per turn of the running rotation, and whether the arc breathes (tests).
+    var motionForTesting: (turnDuration: CFTimeInterval?, breathes: Bool) {
+        (rotor.animation(forKey: Self.rotationKey)?.duration, arc.animation(forKey: Self.breathKey) != nil)
+    }
 #endif
 
     @objc private func reduceMotionChanged() {
@@ -266,11 +270,13 @@ final class RCStatusBadge: RCView {
         updatePulse()
     }
 
+    /// Tone text and dot use the AA `…Text` tokens: the web tone colors are
+    /// under 4.5:1 on their own soft washes in Warm.
     private var palette: (foreground: UIColor, background: UIColor, dot: UIColor) {
         switch tone {
-        case .success: (RCColor.success, RCColor.successSoft, RCColor.success)
-        case .attention, .accent: (RCColor.accent, RCColor.accentSoft, RCColor.accent)
-        case .danger: (RCColor.danger, RCColor.dangerSoft, RCColor.danger)
+        case .success: (RCColor.successText, RCColor.successSoft, RCColor.successText)
+        case .attention, .accent: (RCColor.accentText, RCColor.accentSoft, RCColor.accentText)
+        case .danger: (RCColor.dangerText, RCColor.dangerSoft, RCColor.dangerText)
         case .neutral: (RCColor.textSecondary, RCColor.surfaceSunken, RCColor.textTertiary)
         }
     }
@@ -281,7 +287,7 @@ final class RCStatusBadge: RCView {
         RCLayerAnimation.set(layer, "backgroundColor", to: palette.background.cgColor(for: self), duration: duration)
         RCLayerAnimation.set(dot, "backgroundColor", to: palette.dot.cgColor(for: self), duration: duration)
         withoutImplicitAnimations { ring.borderColor = palette.dot.cgColor(for: self) }
-        // Tone text on the soft wash is below 4.5:1 in Warm; Increase Contrast gets ink.
+        // Increase Contrast goes further than AA: ink text on the wash.
         label.color = traitCollection.accessibilityContrast == .high ? RCColor.text : palette.foreground
         spinner.tintColor = palette.dot
     }
@@ -311,6 +317,8 @@ final class RCStatusBadge: RCView {
 
 #if DEBUG
     var hasPulseAnimation: Bool { ring.animation(forKey: Self.pulseKey) != nil }
+    /// Resolved text color, background and dot for the current tone (tests).
+    var colorsForTesting: (text: UIColor, background: UIColor, dot: UIColor) { (label.color, palette.background, palette.dot) }
 #endif
 
     @objc private func reduceMotionChanged() {

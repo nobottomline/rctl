@@ -31,7 +31,19 @@ enum RCMotion {
     /// Playful confirmations (checkmarks, lock-on).
     static let bouncy = Spring(response: 0.38, damping: 0.68)
 
-    static var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
+    static var reduceMotion: Bool {
+#if DEBUG
+        if let reduceMotionOverride { return reduceMotionOverride }
+#endif
+        return UIAccessibility.isReduceMotionEnabled
+    }
+
+#if DEBUG
+    /// Test hook: forces the Reduce Motion answer (nil follows the system).
+    /// Post `UIAccessibility.reduceMotionStatusDidChangeNotification` after
+    /// changing it so running continuous animations rebuild.
+    static var reduceMotionOverride: Bool?
+#endif
 
     /// Ease-out curve matching the web client's `--ease-out` (cubic-bezier(0.16, 1, 0.3, 1)).
     static let easeOut = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)

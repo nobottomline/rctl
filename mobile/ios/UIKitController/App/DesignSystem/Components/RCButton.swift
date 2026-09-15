@@ -2,7 +2,14 @@ import UIKit
 
 /// Text button (shadcn `Button`). Variants map to semantic tokens; sizes to
 /// minimum heights that grow with Dynamic Type. Frame-based layout;
-/// `sizeThatFits` returns the exact natural size on the pixel grid.
+/// `sizeThatFits` returns the exact natural size on the pixel grid. At
+/// accessibility text sizes a title wraps to up to three lines when the
+/// proposed width is too narrow (the height grows); otherwise it stays on one
+/// line and truncates.
+///
+/// Disabled filled variants (primary, accent, destructive) switch to a quiet
+/// sunken fill with a tertiary label that stays readable (≥ 4.5:1); other
+/// variants fade to 45 %.
 ///
 /// Press feedback runs on a dedicated body view (the control's own frame and
 /// transform stay untouched for layout): a spring to 0.97, an opaque on-color
@@ -23,7 +30,18 @@ final class RCButton: RCControl {
         case destructive
         /// Danger text on a soft danger wash.
         case destructiveSoft
+
+        /// Variants whose label sits on a saturated fill.
+        var isFilled: Bool {
+            switch self {
+            case .primary, .accent, .destructive: true
+            case .secondary, .ghost, .destructiveSoft: false
+            }
+        }
     }
+
+    /// Most lines a title wraps to at accessibility text sizes.
+    static let maximumTitleLines = 3
 
     enum Size: Sendable {
         /// 36 pt, subheadline label.
@@ -67,7 +85,7 @@ final class RCButton: RCControl {
     var variant: Variant {
         didSet {
             guard variant != oldValue else { return }
-            updateAppearance()
+            applyEnabledState(animated: false)
         }
     }
 
@@ -124,6 +142,7 @@ final class RCButton: RCControl {
         pressOverlay.alpha = 0
         body.addSubview(pressOverlay)
         titleLabel.isAccessibilityElement = false
+        titleLabel.textAlignment = .center
         body.addSubview(titleLabel)
         body.addSubview(iconView)
         spinner.hidesWhenStopped = true
@@ -179,14 +198,43 @@ final class RCButton: RCControl {
     override var isEnabled: Bool {
         didSet {
             guard isEnabled != oldValue else { return }
-            let alpha: CGFloat = isEnabled ? 1 : 0.45
-            if window != nil {
-                RCMotion.animate(duration: RCMotion.quickDuration) { self.body.alpha = alpha }
-            } else {
-                body.alpha = alpha
-            }
-            updateRasterization()
+            applyEnabledState(animated: window != nil)
         }
+    }
+
+    /// Swaps to (or from) the disabled palette. Filled variants crossfade to a
+    /// readable sunken look at full opacity; the others fade to 45 %.
+    private func applyEnabledState(animated: Bool) {
+        let alpha: CGFloat = isEnabled || variant.isFilled ? 1 : 0.45
+        guard animated else {
+            updateAppearance()
+            body.alpha = alpha
+            updateRasterization()
+            return
+        }
+        let layer = body.layer
+        let current = layer.presentation() ?? layer
+        let from: [(String, Any?)] = [
+            ("backgroundColor", current.backgroundColor),
+            ("borderColor", current.borderColor),
+            ("shadowOpacity", current.shadowOpacity),
+        ]
+        let fade = CATransition()
+        fade.type = .fade
+        fade.duration = RCMotion.quickDuration
+        titleLabel.layer.add(fade, forKey: "rc.crossfade")
+        iconView.layer.add(fade, forKey: "rc.crossfade")
+        updateAppearance()
+        for (keyPath, value) in from {
+            let animation = CABasicAnimation(keyPath: keyPath)
+            animation.fromValue = value
+            animation.toValue = layer.value(forKeyPath: keyPath)
+            animation.duration = RCMotion.quickDuration
+            animation.timingFunction = RCMotion.easeOut
+            layer.add(animation, forKey: "rc.enabled.\(keyPath)")
+        }
+        RCMotion.animate(duration: RCMotion.quickDuration) { self.body.alpha = alpha }
+        updateRasterization()
     }
 
     override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
@@ -224,19 +272,23 @@ final class RCButton: RCControl {
     }
 
     private var palette: Palette {
+        if !isEnabled, variant.isFilled {
+            // A faded saturated fill reads as an empty bar with an unreadable label.
+            return Palette(fill: RCColor.surfaceSunken, border: RCColor.line, foreground: RCColor.textTertiary, press: RCColor.pressWash, hasShadow: false)
+        }
         switch variant {
         case .primary:
-            Palette(fill: RCColor.text, border: nil, foreground: RCColor.onPrimary, press: Self.overlay(RCColor.onPrimary), hasShadow: true)
+            return Palette(fill: RCColor.text, border: nil, foreground: RCColor.onPrimary, press: Self.overlay(RCColor.onPrimary), hasShadow: true)
         case .accent:
-            Palette(fill: RCColor.accent, border: nil, foreground: RCColor.onAccent, press: Self.overlay(RCColor.onAccent), hasShadow: true)
+            return Palette(fill: RCColor.accent, border: nil, foreground: RCColor.onAccent, press: Self.overlay(RCColor.onAccent), hasShadow: true)
         case .secondary:
-            Palette(fill: RCColor.elevated, border: RCColor.lineStrong, foreground: RCColor.text, press: RCColor.pressWash, hasShadow: false)
+            return Palette(fill: RCColor.elevated, border: RCColor.lineStrong, foreground: RCColor.text, press: RCColor.pressWash, hasShadow: false)
         case .ghost:
-            Palette(fill: nil, border: nil, foreground: RCColor.text, press: RCColor.pressWash, hasShadow: false)
+            return Palette(fill: nil, border: nil, foreground: RCColor.text, press: RCColor.pressWash, hasShadow: false)
         case .destructive:
-            Palette(fill: RCColor.danger, border: nil, foreground: RCColor.onDanger, press: Self.overlay(RCColor.onDanger), hasShadow: false)
+            return Palette(fill: RCColor.danger, border: nil, foreground: RCColor.onDanger, press: Self.overlay(RCColor.onDanger), hasShadow: false)
         case .destructiveSoft:
-            Palette(fill: RCColor.dangerSoft, border: nil, foreground: RCColor.danger, press: Self.overlay(RCColor.danger, alpha: 0.1), hasShadow: false)
+            return Palette(fill: RCColor.dangerSoft, border: nil, foreground: RCColor.dangerText, press: Self.overlay(RCColor.danger, alpha: 0.1), hasShadow: false)
         }
     }
 
@@ -248,6 +300,7 @@ final class RCButton: RCControl {
     override func updateTypography() {
         let metrics = metrics
         titleLabel.style = metrics.textStyle
+        titleLabel.numberOfLines = metrics.wrapsTitle ? Self.maximumTitleLines : 1
         iconView.pointSize = metrics.iconSize
         iconView.strokeWidth = metrics.iconSize < 18 ? 2.25 : 2
         spinner.diameter = (metrics.iconSize * 0.86).rounded()
@@ -333,10 +386,11 @@ final class RCButton: RCControl {
         updateRasterization()
     }
 
-    /// A disabled button is static: flatten it once instead of compositing the
-    /// 45% group opacity offscreen on every frame it moves (e.g. scrolling).
+    /// A faded disabled button is static: flatten it once instead of compositing
+    /// the 45% group opacity offscreen on every frame it moves (e.g. scrolling).
+    /// Disabled filled variants stay opaque and need no flattening.
     private func updateRasterization() {
-        let rasterize = !isEnabled && !isLoading
+        let rasterize = !isEnabled && !isLoading && !variant.isFilled
         body.layer.shouldRasterize = rasterize
         if rasterize { body.layer.rasterizationScale = window?.screen.scale ?? UIScreen.main.scale }
     }
@@ -345,6 +399,13 @@ final class RCButton: RCControl {
         super.didMoveToWindow()
         updateRasterization()
     }
+
+#if DEBUG
+    /// Resolved fill, label color and body opacity (tests).
+    var appearanceForTesting: (fill: UIColor?, label: UIColor, bodyAlpha: CGFloat, titleLines: Int) {
+        (palette.fill?.resolved(for: self), palette.foreground.resolved(for: self), body.alpha, titleLabel.numberOfLines)
+    }
+#endif
 
     // MARK: Layout
 
@@ -357,6 +418,8 @@ final class RCButton: RCControl {
         let gap: CGFloat
         let cornerRadius: CGFloat
         let lineHeight: CGFloat
+        /// Accessibility text sizes: titles may wrap instead of truncating.
+        let wrapsTitle: Bool
     }
 
     private var metrics: Metrics {
@@ -382,7 +445,8 @@ final class RCButton: RCControl {
             iconSize: (base.icon * scale).rounded(),
             gap: (base.gap * min(scale, 1.25)).rounded(),
             cornerRadius: base.radius,
-            lineHeight: RCTypography.lineHeight(style, compatibleWith: traitCollection)
+            lineHeight: RCTypography.lineHeight(style, compatibleWith: traitCollection),
+            wrapsTitle: traitCollection.preferredContentSizeCategory.isAccessibilityCategory
         )
     }
 
@@ -406,13 +470,29 @@ final class RCButton: RCControl {
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
         let metrics = metrics
-        let height = RCPixelSnap.ceil(max(metrics.minimumHeight, metrics.lineHeight + metrics.verticalPadding * 2))
-        let pads = paddings(metrics, height: height)
-        let titleWidth = hasTitle ? titleLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: metrics.lineHeight)).width : 0
+        let singleLineHeight = RCPixelSnap.ceil(max(metrics.minimumHeight, metrics.lineHeight + metrics.verticalPadding * 2))
+        let pads = paddings(metrics, height: singleLineHeight)
         let glyph: CGFloat = icon != nil || !hasTitle ? metrics.iconSize : 0
         let gap: CGFloat = icon != nil && hasTitle ? metrics.gap : 0
+        let naturalTitle = hasTitle ? singleLineTitleWidth(metrics) : 0
+        let wrapped = wrappedTitle(metrics, naturalWidth: naturalTitle, available: size.width - pads.leading - pads.trailing - glyph - gap)
+        let titleWidth = wrapped?.width ?? naturalTitle
+        let height = wrapped.map { RCPixelSnap.ceil(max(metrics.minimumHeight, $0.height + metrics.verticalPadding * 2)) } ?? singleLineHeight
         let width = RCPixelSnap.ceil(pads.leading + glyph + gap + titleWidth + pads.trailing)
         return CGSize(width: max(width, hasTitle ? 0 : height), height: height)
+    }
+
+    private func singleLineTitleWidth(_ metrics: Metrics) -> CGFloat {
+        titleLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: metrics.lineHeight)).width
+    }
+
+    /// Wrapped title size when the title may wrap and does not fit `available`
+    /// on one line; nil keeps the single-line layout.
+    private func wrappedTitle(_ metrics: Metrics, naturalWidth: CGFloat, available: CGFloat) -> CGSize? {
+        guard metrics.wrapsTitle, hasTitle, available > 0, available < .greatestFiniteMagnitude / 2, naturalWidth > available else { return nil }
+        let fitted = titleLabel.sizeThatFits(CGSize(width: available, height: CGFloat.greatestFiniteMagnitude))
+        let lines = CGFloat(Self.maximumTitleLines)
+        return CGSize(width: min(available, RCPixelSnap.ceil(fitted.width)), height: min(RCPixelSnap.ceil(fitted.height), metrics.lineHeight * lines))
     }
 
     override func layoutSubviews() {
@@ -437,8 +517,11 @@ final class RCButton: RCControl {
         let glyph = showsGlyphSlot ? metrics.iconSize : 0
         let gap = showsGlyphSlot && hasTitle ? metrics.gap : 0
         let available = max(0, size.width - pads.leading - pads.trailing)
-        let naturalTitle = hasTitle ? titleLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: metrics.lineHeight)).width : 0
-        let titleWidth = max(0, min(naturalTitle, available - glyph - gap))
+        let naturalTitle = hasTitle ? singleLineTitleWidth(metrics) : 0
+        let wrapped = wrappedTitle(metrics, naturalWidth: naturalTitle, available: available - glyph - gap)
+        let titleWidth = wrapped?.width ?? max(0, min(naturalTitle, available - glyph - gap))
+        // A frame shorter than the wrapped text keeps the lines that fit (the last one truncates).
+        let titleHeight = min(wrapped?.height ?? metrics.lineHeight, max(metrics.lineHeight, size.height))
         let contentWidth = glyph + gap + titleWidth
         // Center the content in the padded box so tuned paddings shift it optically.
         let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
@@ -447,7 +530,7 @@ final class RCButton: RCControl {
 
         let midY = size.height / 2
         var glyphFrame = CGRect(x: 0, y: midY - metrics.iconSize / 2, width: metrics.iconSize, height: metrics.iconSize)
-        var titleFrame = CGRect(x: 0, y: midY - metrics.lineHeight / 2, width: titleWidth, height: metrics.lineHeight)
+        var titleFrame = CGRect(x: 0, y: midY - titleHeight / 2, width: titleWidth, height: titleHeight)
         if glyphFirst {
             glyphFrame.origin.x = x
             titleFrame.origin.x = x + glyph + gap

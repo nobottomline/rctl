@@ -67,9 +67,11 @@ class RCCardViewController: UIViewController {
 }
 
 /// Elevated rounded card with a hairline border and a modal shadow from an explicit path.
+/// Counts as an `RCOverlayActivity` while it is in a window.
 @MainActor
 final class RCCardView: RCView {
     var onEscape: (() -> Bool)?
+    private let overlayVisibility = RCOverlayVisibility()
 
     override func setUp() {
         accessibilityViewIsModal = true
@@ -96,6 +98,24 @@ final class RCCardView: RCView {
     override func accessibilityPerformEscape() -> Bool {
         onEscape?() ?? false
     }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        overlayVisibility.update(inWindow: window != nil)
+    }
+
+    /// Flattens the card into one cached bitmap while it fades and scales, so
+    /// the group opacity is not recomposited offscreen on every frame; off
+    /// again once it rests (its content may change).
+    func setRasterizedForMotion(_ rasterized: Bool) {
+        guard layer.shouldRasterize != rasterized else { return }
+        layer.shouldRasterize = rasterized
+        if rasterized { layer.rasterizationScale = window?.screen.scale ?? UIScreen.main.scale }
+    }
+
+#if DEBUG
+    var isOverlayActiveForTesting: Bool { overlayVisibility.isVisible }
+#endif
 }
 
 @MainActor
@@ -210,6 +230,7 @@ final class RCCardPresentationController: UIPresentationController {
         if animatesEntrance {
             view.alpha = 0
             if !RCMotion.reduceMotion { view.transform = CGAffineTransform(scaleX: 0.94, y: 0.94) }
+            (view as? RCCardView)?.setRasterizedForMotion(true)
         }
     }
 
@@ -231,6 +252,13 @@ final class RCCardPresentationController: UIPresentationController {
             // Opacity settles faster than scale so the card reads immediately.
             animator.addAnimations({ view.alpha = 1 }, delayFactor: 0)
         }
+        (view as? RCCardView)?.setRasterizedForMotion(true)
+        animator.addCompletion { [weak self, weak view] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isExiting else { return }
+                (view as? RCCardView)?.setRasterizedForMotion(false)
+            }
+        }
         entrance = animator
         animator.startAnimation()
         announce()
@@ -244,6 +272,7 @@ final class RCCardPresentationController: UIPresentationController {
         } else if !animatesEntrance {
             dimmingView.alpha = 1
             presentedView?.alpha = 1
+            (presentedView as? RCCardView)?.setRasterizedForMotion(false)
             announce()
         }
     }
@@ -268,6 +297,7 @@ final class RCCardPresentationController: UIPresentationController {
         }
         entrance = nil
         let reduce = RCMotion.reduceMotion
+        (view as? RCCardView)?.setRasterizedForMotion(true)
         let animator = UIViewPropertyAnimator(duration: RCCardTransitionAnimator.exitDuration, curve: .easeIn) {
             view.alpha = 0
             if !reduce { view.transform = CGAffineTransform(scaleX: 0.97, y: 0.97) }
@@ -291,6 +321,7 @@ final class RCCardPresentationController: UIPresentationController {
             isExiting = false
             presentedView?.alpha = 1
             presentedView?.transform = .identity
+            (presentedView as? RCCardView)?.setRasterizedForMotion(false)
             dimmingView.alpha = 1
         }
     }
@@ -344,7 +375,6 @@ final class RCDialogViewController: RCCardViewController {
     static let maximumWidth: CGFloat = 340
     private static let padding = UIEdgeInsets(top: 24, left: 24, bottom: 20, right: 24)
     private static let iconSide: CGFloat = 44
-    private static let buttonHeight: CGFloat = 44
     private static let buttonSpacing: CGFloat = 10
 
     let content: RCDialogContent
@@ -416,7 +446,7 @@ final class RCDialogViewController: RCCardViewController {
     private func sideBySideFits(innerWidth: CGFloat) -> Bool {
         guard buttons.count == 2 else { return false }
         let half = (innerWidth - Self.buttonSpacing) / 2
-        return buttons.allSatisfy { $0.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: Self.buttonHeight)).width <= half }
+        return buttons.allSatisfy { $0.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)).width <= half }
     }
 
     private func arrangement(innerWidth: CGFloat) -> RCDialogActionLayout.Arrangement {
@@ -433,10 +463,25 @@ final class RCDialogViewController: RCCardViewController {
         return ceil(height)
     }
 
-    private func buttonsHeight(for arrangement: RCDialogActionLayout.Arrangement) -> CGFloat {
+    /// Button heights in arrangement order. Buttons grow with Dynamic Type and
+    /// wrap long titles at accessibility sizes; side-by-side buttons share the
+    /// taller height.
+    private func buttonHeights(for arrangement: RCDialogActionLayout.Arrangement, innerWidth: CGFloat) -> [CGFloat] {
+        switch arrangement.axis {
+        case .horizontal:
+            let width = (innerWidth - Self.buttonSpacing) / 2
+            let height = arrangement.order.map { buttons[$0].sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height }.max() ?? 0
+            return arrangement.order.map { _ in height }
+        case .vertical:
+            return arrangement.order.map { buttons[$0].sizeThatFits(CGSize(width: innerWidth, height: .greatestFiniteMagnitude)).height }
+        }
+    }
+
+    private func buttonsHeight(for arrangement: RCDialogActionLayout.Arrangement, innerWidth: CGFloat) -> CGFloat {
         guard !buttons.isEmpty else { return 0 }
-        if arrangement.axis == .horizontal { return Self.buttonHeight }
-        return CGFloat(buttons.count) * Self.buttonHeight + CGFloat(buttons.count - 1) * Self.buttonSpacing
+        let heights = buttonHeights(for: arrangement, innerWidth: innerWidth)
+        if arrangement.axis == .horizontal { return heights.max() ?? 0 }
+        return heights.reduce(0, +) + CGFloat(buttons.count - 1) * Self.buttonSpacing
     }
 
     private var gapAboveButtons: CGFloat { buttons.isEmpty ? 0 : RCSpace.xxl }
@@ -445,7 +490,7 @@ final class RCDialogViewController: RCCardViewController {
         loadViewIfNeeded()
         let width = min(Self.maximumWidth, available.width)
         let inner = width - Self.padding.left - Self.padding.right
-        let chrome = Self.padding.top + gapAboveButtons + buttonsHeight(for: arrangement(innerWidth: inner)) + Self.padding.bottom
+        let chrome = Self.padding.top + gapAboveButtons + buttonsHeight(for: arrangement(innerWidth: inner), innerWidth: inner) + Self.padding.bottom
         let natural = chrome + textHeight(innerWidth: inner)
         return CGSize(width: width, height: min(natural, available.height))
     }
@@ -456,7 +501,7 @@ final class RCDialogViewController: RCCardViewController {
         let inner = currentInnerWidth
         guard inner > 0 else { return }
         let layout = arrangement(innerWidth: inner)
-        let buttonsBlock = buttonsHeight(for: layout)
+        let buttonsBlock = buttonsHeight(for: layout, innerWidth: inner)
         let buttonsTop = bounds.height - Self.padding.bottom - buttonsBlock
         let textTotal = textHeight(innerWidth: inner)
         let scrollTop = Self.padding.top
@@ -484,15 +529,18 @@ final class RCDialogViewController: RCCardViewController {
             messageLabel.frame = CGRect(x: x, y: y, width: inner, height: messageHeight)
         }
 
+        let heights = buttonHeights(for: layout, innerWidth: inner)
         switch layout.axis {
         case .horizontal:
             let width = (inner - Self.buttonSpacing) / 2
             for (slot, index) in layout.order.enumerated() {
-                buttons[index].frame = CGRect(x: x + CGFloat(slot) * (width + Self.buttonSpacing), y: buttonsTop, width: width, height: Self.buttonHeight)
+                buttons[index].frame = CGRect(x: x + CGFloat(slot) * (width + Self.buttonSpacing), y: buttonsTop, width: width, height: heights[slot])
             }
         case .vertical:
+            var buttonY = buttonsTop
             for (slot, index) in layout.order.enumerated() {
-                buttons[index].frame = CGRect(x: x, y: buttonsTop + CGFloat(slot) * (Self.buttonHeight + Self.buttonSpacing), width: inner, height: Self.buttonHeight)
+                buttons[index].frame = CGRect(x: x, y: buttonY, width: inner, height: heights[slot])
+                buttonY += heights[slot] + Self.buttonSpacing
             }
         }
         // VoiceOver reads text first, then actions in visual order.

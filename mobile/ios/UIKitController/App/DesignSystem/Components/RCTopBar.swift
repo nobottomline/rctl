@@ -48,6 +48,17 @@ final class RCTopBar: RCView {
         }
     }
 
+    /// Width of the page's readable column (`RCLayout.maxContentWidth` or
+    /// `maxFormWidth`). When set, leading and trailing items are inset with
+    /// `RCLayout.columnInset` so they line up with the column on wide screens
+    /// (iPad) instead of hugging the screen edges; nil keeps edge alignment.
+    var contentColumnWidth: CGFloat? {
+        didSet {
+            guard contentColumnWidth != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
+
     /// Keeps the small title visible at rest instead of fading it in with
     /// scroll progress (e.g. the media stage, which has no large title).
     var showsTitleAtRest = false {
@@ -134,6 +145,11 @@ final class RCTopBar: RCView {
         titleLabel.transform = rise == 0 ? .identity : CGAffineTransform(translationX: 0, y: rise)
     }
 
+#if DEBUG
+    /// The solid background layer that fades in with scroll progress (tests).
+    var backgroundLayerForTesting: CALayer { backgroundLayer }
+#endif
+
     private static func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
         let t = min(max((x - edge0) / (edge1 - edge0), 0), 1)
         return t * t * (3 - 2 * t)
@@ -143,7 +159,8 @@ final class RCTopBar: RCView {
 
     override func updateAppearance() {
         withoutImplicitAnimations {
-            backgroundLayer.backgroundColor = RCColor.background.resolved(for: self).withAlphaComponent(0.97).cgColor
+            // Fully opaque once solid: any translucency lets scrolled text ghost through.
+            backgroundLayer.backgroundColor = RCColor.background.cgColor(for: self)
             hairlineLayer.backgroundColor = RCColor.line.cgColor(for: self)
         }
         titleLabel.color = isOverlayStyle ? RCColor.onStage : RCColor.text
@@ -187,8 +204,7 @@ final class RCTopBar: RCView {
         let width = bounds.width
         let barHeight = min(RCLayout.topBarHeight, bounds.height)
         let centerY = bounds.height - barHeight / 2
-        let safeLeading = isRightToLeft ? safeAreaInsets.right : safeAreaInsets.left
-        let safeTrailing = isRightToLeft ? safeAreaInsets.left : safeAreaInsets.right
+        let edges = Self.itemEdges(width: width, safeArea: safeAreaInsets, contentColumnWidth: contentColumnWidth, isRightToLeft: isRightToLeft)
         let maxItemSize = CGSize(width: width / 2, height: barHeight)
 
         // Lay out in a leading-to-trailing coordinate space, then mirror for RTL.
@@ -200,7 +216,7 @@ final class RCTopBar: RCView {
             view.frame = RCLayout.pixelAligned(physical)
         }
 
-        var leadingEdge = safeLeading + Self.edgeInset
+        var leadingEdge = edges.leading
         if showsBackButton {
             let side = Self.backButtonDiameter
             place(backButton, x: leadingEdge, size: CGSize(width: side, height: side))
@@ -213,7 +229,7 @@ final class RCTopBar: RCView {
         }
         let leadingItemsEnd = leadingEdge - ((showsBackButton || !leadingViews.isEmpty) ? Self.itemSpacing : 0)
 
-        var trailingEdge = width - safeTrailing - Self.edgeInset
+        var trailingEdge = width - edges.trailing
         for view in trailingViews.reversed() {
             let size = Self.fittedSize(of: view, in: maxItemSize)
             trailingEdge -= size.width
@@ -238,6 +254,22 @@ final class RCTopBar: RCView {
             ? CGRect(x: width - logicalTitle.maxX, y: logicalTitle.minY, width: logicalTitle.width, height: logicalTitle.height)
             : logicalTitle)
         titleLabel.transform = transform
+    }
+
+    /// Distances from the leading and trailing screen edges to the outer edge of
+    /// the first and last item. Items sit `gutter - edgeInset` outside the
+    /// content column so circular buttons' glyphs align with the column below;
+    /// with a column width that column is `RCLayout.columnInset`.
+    static func itemEdges(width: CGFloat, safeArea: UIEdgeInsets, contentColumnWidth: CGFloat?, isRightToLeft: Bool) -> (leading: CGFloat, trailing: CGFloat) {
+        let outset = RCLayout.gutter - edgeInset
+        var left = safeArea.left + RCLayout.gutter
+        var right = safeArea.right + RCLayout.gutter
+        if let contentColumnWidth {
+            (left, right) = RCLayout.columnInset(width: width, safeArea: safeArea, maxWidth: contentColumnWidth)
+        }
+        let leading = (isRightToLeft ? right : left) - outset
+        let trailing = (isRightToLeft ? left : right) - outset
+        return (leading, trailing)
     }
 
     /// Horizontal title span in leading-to-trailing coordinates. The title is

@@ -44,6 +44,7 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
     private var isInstalling = false
     private(set) var isExiting = false
     private var animatesEntrance = false
+    private weak var entranceAnimator: UIViewPropertyAnimator?
 
     init(presentedViewController: UIViewController, presenting: UIViewController?, session: RCSheetSession) {
         self.session = session
@@ -70,6 +71,12 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
 
     override var presentedView: UIView? { chromeView }
 
+#if DEBUG
+    /// Test hook: forces the card or bottom-sheet style regardless of idiom.
+    static var styleOverrideForTesting: RCSheetGeometry.Style?
+    var dimmingViewForTesting: UIView { dimmingView }
+#endif
+
     override var frameOfPresentedViewInContainerView: CGRect {
         guard let geometry else { return chromeView.frame }
         return RCSheetLayout.frame(height: restHeight, in: geometry)
@@ -92,6 +99,7 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
         super.presentationTransitionDidEnd(completed)
         if !completed {
             dimmingView.removeFromSuperview()
+            chromeView.restoreContentCorners()
             session?.finish()
             return
         }
@@ -172,6 +180,7 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
             }
         }
         motion = animator
+        entranceAnimator = animator
         animator.startAnimation()
     }
 
@@ -222,6 +231,7 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
         if completed {
             unpinScrollView()
             dimmingView.removeFromSuperview()
+            chromeView.restoreContentCorners()
             // UIKit unlinks the presentation right after this callback; run
             // onDismiss on the next turn so it can present again immediately.
             let session = session
@@ -256,7 +266,10 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
     private func makeGeometry() -> RCSheetGeometry? {
         guard let containerView, containerView.bounds.width > 0 else { return nil }
         let traits = containerView.traitCollection
-        let style: RCSheetGeometry.Style = traits.userInterfaceIdiom == .pad && traits.horizontalSizeClass == .regular ? .card : .bottomSheet
+        var style: RCSheetGeometry.Style = traits.userInterfaceIdiom == .pad && traits.horizontalSizeClass == .regular ? .card : .bottomSheet
+#if DEBUG
+        if let override = Self.styleOverrideForTesting { style = override }
+#endif
         let preferred = presentedViewController.preferredContentSize.height
         return RCSheetGeometry(
             style: style,
@@ -323,12 +336,22 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
         dimmingView.frame = containerView.bounds
         guard drag == nil, !isExiting else { return }
         guard resolveLayout() else { return }
+        // Snap to the resting state. Stopping an animator without finishing
+        // leaves every property it animated at its on-screen value, so the
+        // scrim must be restored too: a geometry change right after the
+        // entrance starts (an iPad card re-measuring its content does this
+        // within a frame) would otherwise freeze it at ~0 and never dim.
+        let interruptedEntrance = motion != nil && motion === entranceAnimator
         motion?.stopAnimation(true)
         motion = nil
         chromeView.transform = .identity
         chromeView.alpha = 1
+        dimmingView.alpha = 1
         applyRestFrame()
         chromeView.layoutIfNeeded()
+        if interruptedEntrance {
+            UIAccessibility.post(notification: .screenChanged, argument: presentedViewController.view)
+        }
     }
 
     override func preferredContentSizeDidChange(forChildContentContainer container: UIContentContainer) {
@@ -654,15 +677,28 @@ final class RCSheetPresentationController: UIPresentationController, UIGestureRe
 
 // MARK: - Chrome
 
-/// Sheet surface: shadow (explicit path) on the outer view, clipping rounded
-/// surface inside, content, and the grabber.
+/// Sheet surface without any mask. Back to front: the shadow (explicit path)
+/// on this view's layer; `surfaceView`, a rounded fill that never clips;
+/// `contentClipView`, a rectangular clip (a scissor rect, no offscreen pass)
+/// holding the content; a border-only rounded layer; and the grabber.
+///
+/// Rounding the fill instead of masking the content keeps a moving sheet —
+/// including the session tools sheet over live video — free of per-frame
+/// offscreen passes. The content's own root view background is rounded with
+/// the same corners (`cornerRadius` without `masksToBounds` shapes a layer's
+/// background for free), so opaque content backgrounds never show square
+/// corners. Nested full-width backgrounds must stay clear of the top
+/// 26 × 26 pt corners.
 @MainActor
 final class RCSheetChromeView: RCView {
     /// Surface continues below the bottom edge so springs and stretches never
     /// reveal a gap under a bottom sheet.
     static let bottomOverflow: CGFloat = 160
 
+    /// Rounded sheet fill (never clips).
     let surfaceView = UIView()
+    /// Rectangular clip around the content.
+    let contentClipView = UIView()
     let grabber = RCSheetGrabberView()
     var style: RCSheetGeometry.Style = .bottomSheet {
         didSet {
@@ -675,27 +711,50 @@ final class RCSheetChromeView: RCView {
     var onEscape: (() -> Bool)?
     var onWindowChange: ((UIWindow?) -> Void)?
     private weak var contentView: UIView?
+    private let borderView = UIView()
+    private let overlayVisibility = RCOverlayVisibility()
+    /// The content root layer's corner settings before the sheet rounded them.
+    private var originalContentCorners: (radius: CGFloat, curve: CALayerCornerCurve, masked: CACornerMask)?
 
     override func setUp() {
         accessibilityViewIsModal = true
-        surfaceView.clipsToBounds = true
-        surfaceView.layer.cornerCurve = .continuous
-        surfaceView.layer.cornerRadius = RCRadius.xxl
+        for view in [surfaceView, borderView] {
+            view.isUserInteractionEnabled = false
+            view.isAccessibilityElement = false
+            view.layer.cornerCurve = .continuous
+            view.layer.cornerRadius = RCRadius.xxl
+        }
+        contentClipView.clipsToBounds = true
         addSubview(surfaceView)
-        surfaceView.addSubview(grabber)
+        addSubview(contentClipView)
+        addSubview(borderView)
+        addSubview(grabber)
     }
 
     func setContent(_ view: UIView) {
+        restoreContentCorners()
         contentView = view
         view.autoresizingMask = []
-        surfaceView.insertSubview(view, belowSubview: grabber)
+        originalContentCorners = (view.layer.cornerRadius, view.layer.cornerCurve, view.layer.maskedCorners)
+        contentClipView.addSubview(view)
         setNeedsLayout()
+    }
+
+    /// Gives the content root view back its own corner settings (the sheet is gone).
+    func restoreContentCorners() {
+        guard let original = originalContentCorners, let contentView else { return }
+        originalContentCorners = nil
+        withoutImplicitAnimations {
+            contentView.layer.cornerRadius = original.radius
+            contentView.layer.cornerCurve = original.curve
+            contentView.layer.maskedCorners = original.masked
+        }
     }
 
     override func updateAppearance() {
         surfaceView.backgroundColor = RCColor.surface
-        surfaceView.layer.borderColor = RCColor.line.cgColor(for: self)
-        surfaceView.layer.borderWidth = traitCollection.userInterfaceStyle == .dark ? RCLayout.hairline : 0
+        borderView.layer.borderColor = RCColor.line.cgColor(for: self)
+        borderView.layer.borderWidth = traitCollection.userInterfaceStyle == .dark ? RCLayout.hairline : 0
         let shadow = RCShadow.modal
         layer.shadowColor = RCColor.shadow.cgColor(for: self)
         layer.shadowOpacity = traitCollection.userInterfaceStyle == .dark ? shadow.opacityDark : shadow.opacityLight
@@ -712,10 +771,21 @@ final class RCSheetChromeView: RCView {
         super.layoutSubviews()
         let overflow = style == .bottomSheet ? Self.bottomOverflow : 0
         let surface = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height + overflow)
-        surfaceView.frame = surface
-        surfaceView.layer.maskedCorners = style == .bottomSheet
+        let corners: CACornerMask = style == .bottomSheet
             ? [.layerMinXMinYCorner, .layerMaxXMinYCorner]
             : [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        surfaceView.frame = surface
+        borderView.frame = surface
+        contentClipView.frame = surface
+        withoutImplicitAnimations {
+            surfaceView.layer.maskedCorners = corners
+            borderView.layer.maskedCorners = corners
+            if let contentView, originalContentCorners != nil {
+                contentView.layer.cornerRadius = RCRadius.xxl
+                contentView.layer.cornerCurve = .continuous
+                contentView.layer.maskedCorners = corners
+            }
+        }
         contentView?.frame = bounds
         grabber.frame = CGRect(x: (bounds.width - 36) / 2, y: 8, width: 36, height: 5)
         let path: UIBezierPath = style == .bottomSheet
@@ -730,8 +800,13 @@ final class RCSheetChromeView: RCView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        overlayVisibility.update(inWindow: window != nil)
         onWindowChange?(window)
     }
+
+#if DEBUG
+    var isOverlayActiveForTesting: Bool { overlayVisibility.isVisible }
+#endif
 }
 
 /// 36×5 drag indicator. For VoiceOver it is a button that cycles detents or

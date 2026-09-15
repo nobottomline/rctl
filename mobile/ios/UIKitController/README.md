@@ -102,11 +102,18 @@ change) and presents `presentedError` / local-device errors as dialogs.
 that explains cause and effect. Built like shadcn/ui on iOS: small set of
 composable primitives, semantic tokens, no decoration without a job.
 
-- **Palette.** Exactly the web client's two token sets (`web/src/index.css`):
+- **Palette.** The web client's two token sets (`web/src/index.css`):
   *Warm* (parchment, ink, terracotta signal, sage online) and *Console*
   (charcoal, amber signal, green online). Front-door screens follow the
   Appearance setting (System / Warm / Console); the remote stage and camera
-  scanner are always Console on black. Use `RCColor` tokens only.
+  scanner are always Console on black. Use `RCColor` tokens only. Grounds
+  and fills match the web exactly; text is native-only WCAG AA: a slightly
+  deeper `textTertiary`, and `successText` / `accentText` / `dangerText` for
+  tone text and glyphs on soft washes (badges, callouts, destructive rows).
+  `textQuaternary` is for placeholders, disabled items and decoration only.
+  `Tests/Tokens/RCColorContrastTests` enforces the ratios and documents the
+  one exception (labels on the Warm terracotta fill, raised under Increase
+  Contrast).
 - **Type.** San Francisco with tightened tracking on large sizes; SF Mono for
   addresses and metrics; tabular digits for live numbers. `RCTextStyle`
   covers everything; all styles support Dynamic Type with sane caps.

@@ -136,6 +136,9 @@ final class RCSheetLifecycleTests: XCTestCase {
     }
 
     func testScrollHandoffBetweenSheetAndScrollView() async throws {
+        // Resizing between detents is bottom-sheet behavior; an iPad card only translates.
+        RCSheetPresentationController.styleOverrideForTesting = .bottomSheet
+        defer { RCSheetPresentationController.styleOverrideForTesting = nil }
         let content = ScrollableContent()
         RCSheet.present(content, from: host.root, detents: [.medium, .large])
         let installed = await waitUntil { !(RCSheetSession.session(for: content)?.presentationController?.detentHeights.isEmpty ?? true) }

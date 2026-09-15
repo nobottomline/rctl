@@ -27,7 +27,10 @@ protocol RCSheetScrollable: AnyObject {
 /// Content contract:
 /// - The grabber floats over the top 20 pt of the content; start content at
 ///   `RCSpace.xl` or lower. The sheet's surface is `RCColor.surface`; content
-///   may draw its own background.
+///   may draw its own background on its root view, which takes the sheet's
+///   corners. The sheet does not mask its content (no offscreen passes while
+///   it moves), so nested full-width backgrounds must stay clear of the
+///   rounded corners.
 /// - `.fitting` and `.height(_:)` describe the content height; the sheet adds
 ///   the bottom safe area when it rests on the bottom edge. Lay out bottom
 ///   content against `view.safeAreaInsets.bottom`.

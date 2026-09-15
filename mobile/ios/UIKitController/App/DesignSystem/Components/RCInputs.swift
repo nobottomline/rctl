@@ -269,8 +269,9 @@ final class RCTextField: RCView, UITextFieldDelegate, UIGestureRecognizerDelegat
             fade.timingFunction = RCMotion.easeOut
             iconView.layer.add(fade, forKey: "rc.tint")
         }
-        messageLabel.color = hasError && displaysErrorMessage ? RCColor.danger : RCColor.textTertiary
-        messageIcon.tintColor = RCColor.danger
+        // Error text sits on the page ground: the AA text token, not the border color.
+        messageLabel.color = hasError && displaysErrorMessage ? RCColor.dangerText : RCColor.textTertiary
+        messageIcon.tintColor = RCColor.dangerText
     }
 
     /// Ring scaled down onto the field border, the start of the focus animation.
@@ -313,7 +314,7 @@ final class RCTextField: RCView, UITextFieldDelegate, UIGestureRecognizerDelegat
         }
         let oldHeight = bounds.height
         messageLabel.text = message?.text
-        messageLabel.color = message?.isError == true ? RCColor.danger : RCColor.textTertiary
+        messageLabel.color = message?.isError == true ? RCColor.dangerText : RCColor.textTertiary
         messageIcon.isHidden = message?.isError != true
         invalidateIntrinsicContentSize()
         setNeedsLayout()

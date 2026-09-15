@@ -167,7 +167,9 @@ extension GalleryCatalog {
 
     fileprivate static func deviceContextSections(name: String, log: GalleryMenuLog) -> [RCMenuSection] {
         [
-            RCMenuSection(items: [
+            // The title names the device, as dropdowns do; a context menu hides
+            // it because the lifted preview already shows the device.
+            RCMenuSection(title: name, items: [
                 RCMenuItem("Open in View mode", icon: .eye) { log.record("Open “\(name)” in View mode") },
                 RCMenuItem("Edit", icon: .pencil) { log.record("Edit “\(name)”") },
                 RCMenuItem("Use address for a saved device", icon: .arrowLeftRight, children: savedDeviceChoices(log: log)),
@@ -448,7 +450,7 @@ private final class GalleryDeviceCard: RCSurfaceView {
     private let titleLabel = RCLabel("Living room iPad", style: .headline)
     private let detailLabel = RCLabel("Relay · last seen just now", style: .footnote, color: RCColor.textTertiary)
     private let badge = RCStatusBadge(text: "Online", tone: .success)
-    private let hint = RCLabel("Long press for actions", style: .caption, color: RCColor.textQuaternary)
+    private let hint = RCLabel("Long press for actions", style: .caption, color: RCColor.textTertiary)
 
     init() {
         super.init(style: .card, cornerRadius: RCRadius.lg)

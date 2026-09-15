@@ -56,7 +56,12 @@ final class RCMenuPresentation: NSObject {
     @discardableResult
     static func present(_ sections: [RCMenuSection], anchor: UIView, style: Style) -> RCMenuPresentation? {
         RCKeyboardFrameTracker.shared.start()
-        let visible = sections.filter { !$0.items.isEmpty }
+        var visible = sections.filter { !$0.items.isEmpty }
+        if case .context = style, !visible.isEmpty {
+            // The lifted preview already names what the menu acts on; a first
+            // section title (usually the same name) would repeat it.
+            visible[0].title = nil
+        }
         guard !visible.isEmpty, anchor.window != nil else { return nil }
         // Finishing may run a committed action, which may present again.
         while let previous = current { previous.finishImmediately() }
@@ -165,15 +170,20 @@ final class RCMenuPresentation: NSObject {
             let lift: CGFloat = placement.edge == .below ? -6 : 6
             panel.transform = CGAffineTransform(translationX: 0, y: lift).scaledBy(x: 0.92, y: 0.92)
         }
+        panel.setRasterizedForFade(true)
         let spring = RCMotion.animate(RCMotion.snappy, delay: delay, animations: { [panel] in
             panel.transform = .identity
         }, completion: { [weak self] _ in
             guard let self, self.phase == .opening else { return }
             self.phase = .open
         })
-        let fade = RCMotion.animate(duration: 0.12, curve: RCMotion.easeOut, delay: delay) { [panel] in
+        let fade = RCMotion.animate(duration: 0.12, curve: RCMotion.easeOut, delay: delay, animations: { [panel] in
             panel.alpha = 1
-        }
+        }, completion: { [weak self, panel] _ in
+            // Live again once opaque (the scale spring may still be settling).
+            guard let self, self.isOpen else { return }
+            panel.setRasterizedForFade(false)
+        })
         animators += [spring, fade]
     }
 
@@ -205,6 +215,7 @@ final class RCMenuPresentation: NSObject {
             if pending == 0 { self?.finish() }
         }
         let edge = placement?.edge ?? .below
+        if !panel.isTransitioning { panel.setRasterizedForFade(true) }
         let exit = RCMotion.animate(duration: Self.dismissDuration, curve: RCMotion.easeIn, animations: { [panel] in
             panel.alpha = 0
             if !reduceMotion {
@@ -311,6 +322,8 @@ final class RCMenuPresentation: NSObject {
         let incomingStart = reduceMotion ? 0 : (forward ? direction * width : direction * width * 0.3)
         let outgoingEnd = reduceMotion ? 0 : (forward ? -direction * width * 0.3 : -direction * width)
         panel.isTransitioning = true
+        panel.setRasterizedForFade(false)
+        panel.updatePageClipping()
         withoutImplicitAnimations {
             page.isHidden = false
             page.frame = CGRect(x: incomingStart, y: 0, width: width, height: height)
@@ -341,6 +354,7 @@ final class RCMenuPresentation: NSObject {
             }
             page.isHidden = false
             panel.isTransitioning = false
+            panel.updatePageClipping()
             panel.setNeedsLayout()
             guard let self, self.isOpen else { return }
             if UIAccessibility.isVoiceOverRunning, let first = page.firstAccessibleRow {
@@ -527,6 +541,7 @@ extension RCMenuPanelView {
 /// Full-window container of a presentation. Touches that miss the panel land
 /// here (outside tap → dismiss); a tracking recognizer routes every touch,
 /// including ones over panel rows, to the presentation for press-and-drag.
+/// Counts as an `RCOverlayActivity` while it is in a window.
 @MainActor
 final class RCMenuOverlayView: UIView, UIGestureRecognizerDelegate {
     weak var presentation: RCMenuPresentation?
@@ -535,6 +550,7 @@ final class RCMenuOverlayView: UIView, UIGestureRecognizerDelegate {
     var onContainerChange: (() -> Void)?
 
     private let tracker = RCMenuTouchTracker()
+    private let overlayVisibility = RCOverlayVisibility()
     private lazy var dismissElement: RCMenuDismissElement = {
         let element = RCMenuDismissElement(accessibilityContainer: self)
         element.accessibilityLabel = "Dismiss menu"
@@ -568,6 +584,15 @@ final class RCMenuOverlayView: UIView, UIGestureRecognizerDelegate {
             onContainerChange?()
         }
     }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        overlayVisibility.update(inWindow: window != nil)
+    }
+
+#if DEBUG
+    var isOverlayActiveForTesting: Bool { overlayVisibility.isVisible }
+#endif
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)

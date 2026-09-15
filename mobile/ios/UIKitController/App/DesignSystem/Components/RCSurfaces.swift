@@ -219,17 +219,18 @@ final class RCCallout: RCView {
     override func updateAppearance() {
         let foreground: UIColor
         let background: UIColor
+        let toneColor: UIColor
         switch tone {
-        case .neutral: foreground = RCColor.textTertiary; background = RCColor.elevated
-        case .accent: foreground = RCColor.accent; background = RCColor.accentSoft
-        case .success: foreground = RCColor.success; background = RCColor.successSoft
-        case .danger: foreground = RCColor.danger; background = RCColor.dangerSoft
+        case .neutral: foreground = RCColor.textTertiary; background = RCColor.elevated; toneColor = RCColor.textTertiary
+        case .accent: foreground = RCColor.accentText; background = RCColor.accentSoft; toneColor = RCColor.accent
+        case .success: foreground = RCColor.successText; background = RCColor.successSoft; toneColor = RCColor.success
+        case .danger: foreground = RCColor.dangerText; background = RCColor.dangerSoft; toneColor = RCColor.danger
         }
-        // Tone text on its soft wash is under 4.5:1 in Warm; body copy stays ink
-        // and the icon, wash and border carry the tone.
+        // Body copy stays ink; the icon (AA tone text token), wash and border
+        // (the web tone color) carry the tone.
         label.color = tone == .neutral ? RCColor.textSecondary : RCColor.text
         iconView.tintColor = foreground
-        let border = tone == .neutral ? RCColor.line.resolved(for: self) : foreground.resolved(for: self).withAlphaComponent(0.22)
+        let border = tone == .neutral ? RCColor.line.resolved(for: self) : toneColor.resolved(for: self).withAlphaComponent(0.22)
         withoutImplicitAnimations {
             layer.backgroundColor = background.cgColor(for: self)
             layer.borderColor = border.cgColor
@@ -241,6 +242,11 @@ final class RCCallout: RCView {
         let scale = min(RCTypography.scale(for: .footnote, compatibleWith: traitCollection), 1.5)
         iconView.pointSize = (16 * scale).rounded()
     }
+
+#if DEBUG
+    /// Icon tint and text color for the current tone (tests).
+    var colorsForTesting: (icon: UIColor?, text: UIColor) { (iconView.tintColor, label.color) }
+#endif
 
     /// Horizontal shake to draw attention to a new error. Plays the warning
     /// haptic unless `playsHaptic` is false (e.g. the caller already played
@@ -483,7 +489,8 @@ final class RCIconTile: RCView {
         switch tone {
         case .accent: fill = RCColor.accentSoft; tint = RCColor.accent
         case .neutral: fill = RCColor.surfaceSunken; tint = RCColor.textSecondary
-        case .success: fill = RCColor.successSoft; tint = RCColor.success
+        // Sage on its wash is under the 3:1 non-text minimum in Warm.
+        case .success: fill = RCColor.successSoft; tint = RCColor.successText
         case .danger: fill = RCColor.dangerSoft; tint = RCColor.danger
         case .dashed: fill = nil; tint = RCColor.accent
         case .muted: fill = RCColor.surfaceSunken; tint = RCColor.textQuaternary

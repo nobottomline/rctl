@@ -62,6 +62,18 @@ extension GalleryCatalog {
                 pressedGhost.isHighlighted = true
                 return GalleryFlowView([loadingIcon, loadingText, disabled, disabledSecondary, pressedPrimary, pressedGhost])
             },
+            GalleryItem("Disabled filled · full width") { _ in
+                let accent = RCButton(title: "Connect", icon: .arrowRight, variant: .accent)
+                accent.iconPlacement = .trailing
+                accent.isEnabled = false
+                let destructive = RCButton(title: "Delete relay", icon: .trash2, variant: .destructive, size: .medium)
+                destructive.isEnabled = false
+                let toggling = RCButton(title: "Replace address and connect", icon: .arrowRight, variant: .accent)
+                toggling.iconPlacement = .trailing
+                let stack = GalleryStackView([accent, destructive, toggling], spacing: 12)
+                stack.ticker = GalleryTicker(interval: 1.6) { tick in toggling.isEnabled = tick % 2 == 0 }
+                return stack
+            },
             GalleryItem("Loading · press demo (toggles)") { _ in
                 let withIcon = RCButton(title: "Refresh", icon: .refreshCw, variant: .secondary, size: .medium)
                 let textOnly = RCButton(title: "Pair device", variant: .primary, size: .medium)

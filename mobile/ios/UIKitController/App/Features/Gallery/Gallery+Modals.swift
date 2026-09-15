@@ -27,6 +27,7 @@ extension GalleryCatalog {
             GallerySection(id: "modals", title: "Sheets", items: [
                 item("Detents", ["sheet-fitting", "sheet-detents", "sheet-large"]),
                 item("Behavior", ["sheet-keyboard", "sheet-locked", "sheet-drag"]),
+                item("Actions · wrap at accessibility sizes", ["sheet-actions"]),
                 GalleryItem("Dark host (stage)", onStage: true) { host in
                     let child = GalleryDarkHostController()
                     host.addChild(child)
@@ -109,6 +110,9 @@ private enum GalleryModalSpecimens {
                     }
                 }
             }
+        },
+        GalleryModalSpecimen(id: "sheet-actions", label: "Long actions") { host in
+            RCSheet.present(GallerySheetActionsController(), from: host)
         },
         GalleryModalSpecimen(id: "sheet-grow", label: "Grow content") { host in
             let content = GallerySheetTextController()
@@ -363,6 +367,32 @@ private final class GallerySheetTextController: GallerySheetColumnController {
         toggle.title = extra.isHidden ? "Show more" : "Show less"
         view.setNeedsLayout()
         view.layoutIfNeeded()
+    }
+}
+
+/// Mirrors the nearby-device decision sheet: stacked actions sized by
+/// `sizeThatFits`, so long titles wrap instead of truncating at
+/// accessibility text sizes.
+@MainActor
+private final class GallerySheetActionsController: GallerySheetColumnController {
+    override func viewDidLoad() {
+        let title = RCLabel("Bedroom iPad", style: .title2)
+        let body = RCLabel("Found on this network by name. Sessions start in View mode.", style: .subheadline, color: RCColor.textSecondary, lines: 0)
+        let open = RCButton(title: "Open in View mode", icon: .eye, variant: .primary)
+        let save = RCButton(title: "Save device", variant: .secondary)
+        let replace = RCButton(title: "Use this address for a saved device…", variant: .ghost, size: .medium)
+        let connect = RCButton(title: "Replace address and connect", icon: .arrowRight, variant: .accent)
+        connect.iconPlacement = .trailing
+        connect.isEnabled = false
+        for button in [open, save, replace] {
+            button.onTap = { [weak self] in
+                guard let self else { return }
+                RCSheet.dismiss(self)
+            }
+        }
+        views = [title, body, open, save, replace, connect]
+        spacings = [RCSpace.xs, RCSpace.xl, RCSpace.sm, RCSpace.xs, RCSpace.md]
+        super.viewDidLoad()
     }
 }
 
