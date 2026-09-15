@@ -1,14 +1,18 @@
 import UIKit
 
-/// Frame math for the remote screen. Chrome never covers the viewport: the
-/// video area is whatever remains between the header and the dock (or the
-/// keyboard panel that replaces it).
+/// Frame math for the remote screen. Chrome never covers the viewport, with
+/// one deliberate exception: the keyboard panel on landscape phones.
 ///
 /// - `bars`: portrait phones and every iPad size. Full-bleed header under the
-///   status bar, floating dock centered at the bottom (≤ 680 pt).
+///   status bar, floating dock centered at the bottom (≤ 680 pt). The keyboard
+///   panel replaces the dock above the keyboard and the video area shrinks.
 /// - `rail`: landscape phones. A slim header pill at the top-leading corner and
 ///   a vertical dock rail on the trailing side, so the video keeps the full
-///   screen height.
+///   screen height. With the keyboard open there is no height left to shrink
+///   into (the video would become a thumbnail), so the viewport keeps its
+///   resting frame and a compact single-row panel overlays the bottom of the
+///   video above the keyboard. That covered strip (down to the bottom edge) is
+///   `viewportOcclusion` and must not forward touches to the remote device.
 struct RemoteSessionLayout: Equatable {
     enum Style: Equatable {
         case bars
@@ -40,6 +44,9 @@ struct RemoteSessionLayout: Equatable {
     /// The dock, or the keyboard panel while it is shown.
     let dock: CGRect
     let viewport: CGRect
+    /// Part of `viewport` (in the same coordinates) hidden by the keyboard
+    /// panel and everything below it; `.null` when chrome does not overlap it.
+    let viewportOcclusion: CGRect
 
     /// Containers shorter than this in landscape use the rail (every landscape
     /// phone, short Stage Manager windows); iPads are always taller.
@@ -65,8 +72,17 @@ struct RemoteSessionLayout: Equatable {
     init(_ input: Input) {
         style = input.style
         switch input.style {
-        case .bars: (header, dock, viewport) = Self.bars(input)
-        case .rail: (header, dock, viewport) = Self.rail(input)
+        case .bars:
+            (header, dock, viewport) = Self.bars(input)
+            viewportOcclusion = .null
+        case .rail:
+            (header, dock, viewport) = Self.rail(input)
+            if input.keyboardPanelHeight != nil {
+                let covered = CGRect(x: dock.minX, y: dock.minY, width: dock.width, height: max(0, input.size.height - dock.minY))
+                viewportOcclusion = viewport.intersection(covered)
+            } else {
+                viewportOcclusion = .null
+            }
         }
     }
 
@@ -114,31 +130,26 @@ struct RemoteSessionLayout: Equatable {
         let top = max(safe.top, margin)
         let header = CGRect(x: leading, y: top, width: input.headerWidth, height: input.headerHeight)
         let videoX = header.maxX + gap
-        if let panelHeight = input.keyboardPanelHeight {
-            let restingBottom = max(safe.bottom, margin)
-            let bottomInset = input.keyboardOverlap > 0 ? max(input.keyboardOverlap + gap, restingBottom) : restingBottom
-            let dock = CGRect(
-                x: videoX,
-                y: size.height - bottomInset - panelHeight,
-                width: max(0, size.width - trailing - videoX),
-                height: panelHeight
-            )
-            let viewport = CGRect(
-                x: videoX,
-                y: 0,
-                width: max(0, size.width - safe.right - videoX),
-                height: max(0, dock.minY - gap)
-            )
-            return (header, dock, viewport)
-        }
         let availableHeight = size.height - top - max(safe.bottom, margin)
-        let dock = CGRect(
+        let rail = CGRect(
             x: size.width - trailing - input.dockSize.width,
             y: top + max(0, (availableHeight - input.dockSize.height) / 2),
             width: input.dockSize.width,
             height: input.dockSize.height
         )
-        let viewport = CGRect(x: videoX, y: 0, width: max(0, dock.minX - gap - videoX), height: size.height)
-        return (header, dock, viewport)
+        // The video never resizes for the keyboard here (see the type comment).
+        let viewport = CGRect(x: videoX, y: 0, width: max(0, rail.minX - gap - videoX), height: size.height)
+        if let panelHeight = input.keyboardPanelHeight {
+            let restingBottom = max(safe.bottom, margin)
+            let bottomInset = input.keyboardOverlap > 0 ? max(input.keyboardOverlap + gap, restingBottom) : restingBottom
+            let panel = CGRect(
+                x: videoX,
+                y: max(top, size.height - bottomInset - panelHeight),
+                width: max(0, size.width - trailing - videoX),
+                height: panelHeight
+            )
+            return (header, panel, viewport)
+        }
+        return (header, rail, viewport)
     }
 }

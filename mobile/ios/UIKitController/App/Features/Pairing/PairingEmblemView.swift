@@ -8,8 +8,8 @@ import UIKit
 final class PairingEmblemView: RCView {
     /// Regular edge length; the geometry scales with the frame.
     static let side: CGFloat = 128
-    /// Edge length on short phones.
-    static let compactSide: CGFloat = 100
+    /// Edge length on short containers (iPhone SE, landscape phones).
+    static let compactSide: CGFloat = 88
     private static let introKey = "rc.emblem.intro"
 
     private let ambientShadow = CALayer()

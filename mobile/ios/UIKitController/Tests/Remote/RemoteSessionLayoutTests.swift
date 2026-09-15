@@ -54,7 +54,14 @@ final class RemoteSessionLayoutTests: XCTestCase {
                 XCTAssertGreaterThan(result.viewport.height, 0, context)
                 XCTAssertTrue(bounds.contains(result.viewport), context)
                 XCTAssertTrue(result.viewport.intersection(result.header).isNull || result.viewport.intersection(result.header).isEmpty, context)
-                XCTAssertTrue(result.viewport.intersection(result.dock).isNull || result.viewport.intersection(result.dock).isEmpty, context)
+                if result.style == .rail, panel != nil {
+                    // Landscape phones overlay the panel instead of shrinking the video.
+                    XCTAssertEqual(result.viewport, layout(screen).viewport, context)
+                    XCTAssertTrue(result.viewportOcclusion.contains(result.viewport.intersection(result.dock)), context)
+                } else {
+                    XCTAssertTrue(result.viewport.intersection(result.dock).isNull || result.viewport.intersection(result.dock).isEmpty, context)
+                    XCTAssertTrue(result.viewportOcclusion.isNull, context)
+                }
                 XCTAssertTrue(bounds.contains(result.dock), context)
                 if result.style == .bars {
                     XCTAssertLessThanOrEqual(result.dock.width, RemoteSessionLayout.maximumDockWidth, context)
@@ -76,6 +83,23 @@ final class RemoteSessionLayoutTests: XCTestCase {
         let pad = layout(screens[4])
         XCTAssertEqual(pad.dock.width, 574)
         XCTAssertEqual(pad.dock.midX, 410, accuracy: 0.5)
+    }
+
+    func testRailKeyboardPanelOverlaysTheBottomOfTheVideo() {
+        let screen = screens[3]
+        let keyboard: CGFloat = 209
+        let resting = layout(screen)
+        let typing = layout(screen, panelHeight: 64, keyboard: keyboard)
+        XCTAssertEqual(typing.viewport, resting.viewport, "The video keeps its size while typing")
+        XCTAssertEqual(typing.dock.maxY, 402 - keyboard - RemoteSessionLayout.gap, accuracy: 0.5, "The panel sits on the keyboard")
+        XCTAssertGreaterThan(typing.dock.minX, typing.header.maxX, "The panel never covers the header pill")
+        XCTAssertLessThanOrEqual(typing.dock.maxX, 874 - 62)
+        // Everything from the panel down to the bottom edge is excluded from remote input.
+        XCTAssertEqual(typing.viewportOcclusion.minY, typing.dock.minY, accuracy: 0.5)
+        XCTAssertEqual(typing.viewportOcclusion.maxY, typing.viewport.maxY, accuracy: 0.5)
+        XCTAssertEqual(typing.viewportOcclusion.minX, typing.viewport.minX, accuracy: 0.5)
+        XCTAssertEqual(typing.viewportOcclusion.maxX, typing.viewport.maxX, accuracy: 0.5)
+        XCTAssertTrue(layout(screens[2], panelHeight: 118, keyboard: 336).viewportOcclusion.isNull, "Portrait shrinks the video instead")
     }
 
     func testRailKeepsFullVideoHeight() {

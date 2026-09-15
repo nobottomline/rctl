@@ -1,7 +1,8 @@
 import RctlClient
 import UIKit
 
-/// Floating session dock: source, View/Control, Home, Keyboard, Session controls.
+/// Session dock: source, View/Control, Home, Keyboard, Session controls. Opaque
+/// with a hairline edge and no shadow, since it sits right next to the video.
 ///
 /// - `horizontal`: regular widths show titled segmented controls; compact widths
 ///   turn the source into a menu button and show icon-only segments, with the
@@ -74,6 +75,13 @@ final class RemoteControlDockView: RCSurfaceView {
         toolsButton.haptic = .selection
         toolsButton.onTap = { [weak self] in self?.onTools?() }
         applyAxis()
+    }
+
+    override func updateAppearance() {
+        super.updateAppearance()
+        // The dock borders the video: an opaque fill and its hairline separate
+        // it; a floating shadow would spill onto the picture.
+        withoutImplicitAnimations { RCShadow.clear(layer) }
     }
 
     func apply(_ presentation: RemoteSessionPresentation) {

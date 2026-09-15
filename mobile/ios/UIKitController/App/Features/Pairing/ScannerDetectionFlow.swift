@@ -254,19 +254,20 @@ struct ScannerPresentation: Equatable, Sendable {
     }
 
     /// Every title/message pair the scanner can show, for reserving space.
-    static let allCopy: [(title: String, message: String)] = [
+    static let allCopy: [(title: String, message: String, progress: Bool)] = [
         ScannerPresentation(phase: .scanning, isShowingForeignCode: false, hasDetection: false, reduceMotion: false),
         ScannerPresentation(phase: .scanning, isShowingForeignCode: true, hasDetection: true, reduceMotion: false),
         ScannerPresentation(phase: .locked(payload: ""), isShowingForeignCode: false, hasDetection: true, reduceMotion: false),
         ScannerPresentation(phase: .pairing, isShowingForeignCode: false, hasDetection: true, reduceMotion: false),
-    ].map { ($0.title, $0.message) }
+    ].map { ($0.title, $0.message, $0.showsPairingProgress) }
 
     let tone: Tone
     let title: String
     let message: String
     let showsForeignCaption: Bool
     let showsLockBadge: Bool
-    let showsPairingCard: Bool
+    /// A claim is running: the window dims over the code and the copy shows a spinner.
+    let showsPairingProgress: Bool
     /// Idle scale pulse of the brackets: only while searching with nothing in view.
     let isBreathing: Bool
     let controlsEnabled: Bool
@@ -278,8 +279,8 @@ struct ScannerPresentation: Equatable, Sendable {
             tone = foreign ? .rejected : .searching
             title = foreign ? "That is not a pairing code" : "Scan the pairing code"
             message = foreign
-                ? "Open relay admin and show the controller pairing QR code."
-                : "Point the camera at the QR code shown in relay admin."
+                ? "Show the controller pairing QR code from relay admin."
+                : "Point the camera at the QR code in relay admin."
         case .locked:
             tone = .locked
             title = "Code found"
@@ -291,7 +292,7 @@ struct ScannerPresentation: Equatable, Sendable {
         }
         showsForeignCaption = foreign
         showsLockBadge = tone == .locked
-        showsPairingCard = phase == .pairing
+        showsPairingProgress = phase == .pairing
         isBreathing = phase == .scanning && !hasDetection && !isShowingForeignCode && !reduceMotion
         controlsEnabled = phase != .pairing
     }

@@ -233,6 +233,7 @@ final class ScannerDetectionFlowTests: XCTestCase {
         let searching = ScannerPresentation(phase: .scanning, isShowingForeignCode: false, hasDetection: false, reduceMotion: false)
         XCTAssertEqual(searching.tone, .searching)
         XCTAssertEqual(searching.title, "Scan the pairing code")
+        XCTAssertEqual(searching.message, "Point the camera at the QR code in relay admin.")
         XCTAssertTrue(searching.isBreathing)
         XCTAssertTrue(searching.controlsEnabled)
         XCTAssertFalse(searching.showsLockBadge)
@@ -240,6 +241,7 @@ final class ScannerDetectionFlowTests: XCTestCase {
         let foreign = ScannerPresentation(phase: .scanning, isShowingForeignCode: true, hasDetection: true, reduceMotion: false)
         XCTAssertEqual(foreign.tone, .rejected)
         XCTAssertEqual(foreign.title, "That is not a pairing code")
+        XCTAssertEqual(foreign.message, "Show the controller pairing QR code from relay admin.")
         XCTAssertTrue(foreign.showsForeignCaption)
         XCTAssertFalse(foreign.isBreathing)
 
@@ -250,7 +252,8 @@ final class ScannerDetectionFlowTests: XCTestCase {
 
         let pairing = ScannerPresentation(phase: .pairing, isShowingForeignCode: false, hasDetection: false, reduceMotion: false)
         XCTAssertEqual(pairing.title, "Pairing with relay")
-        XCTAssertTrue(pairing.showsPairingCard)
+        XCTAssertTrue(pairing.showsPairingProgress)
+        XCTAssertFalse(searching.showsPairingProgress)
         XCTAssertFalse(pairing.controlsEnabled)
         XCTAssertFalse(pairing.isBreathing)
     }

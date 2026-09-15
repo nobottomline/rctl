@@ -8,7 +8,9 @@ import UIKit
 ///
 /// Layering: the preview, the edge gradients and the reticle share one
 /// full-bleed stage so detection bounds (preview-layer coordinates) map 1:1.
-/// Copy and controls sit above it inside the safe area.
+/// Copy and controls sit above it inside the safe area. Every state (live,
+/// camera denied, camera unavailable) uses the same top-left overlay back
+/// control as the rest of the app.
 @MainActor
 final class ScannerViewController: RCViewController, AppRoutable {
     let route: AppRoute = .scanPairingCode
@@ -21,11 +23,21 @@ final class ScannerViewController: RCViewController, AppRoutable {
     private let bottomGradient = CAGradientLayer()
     private let reticle = ScannerReticleView()
     private let instruction = ScannerInstructionView()
-    private let backButton = RCIconButton(icon: .arrowLeft, variant: .overlayProminent, diameter: 60, iconSize: 22, accessibilityLabel: "Back")
-    private let pasteButton = RCButton(title: "Paste code", icon: nil, variant: .ghost, size: .medium)
-    private let torchButton = RCIconButton(icon: .flashlightOff, variant: .overlay, diameter: 60, iconSize: 22, accessibilityLabel: "Flashlight")
-    private let unavailableView = ScannerCameraUnavailableView()
-    private let unavailableBackButton = RCIconButton(icon: .arrowLeft, variant: .overlay, diameter: 48, iconSize: 20, accessibilityLabel: "Back")
+    private let topBar = RCTopBar()
+    private let pasteButton = RCButton(title: "Paste code", icon: .clipboardPaste, variant: .secondary, size: .medium)
+    private let torchButton = RCIconButton(icon: .flashlightOff, variant: .overlay, diameter: ScannerViewController.torchSide, iconSize: 22, accessibilityLabel: "Flashlight")
+    private let settingsButton = RCButton(title: "Open Settings", icon: .settings, variant: .primary)
+    private let emptyPasteButton = RCButton(title: "Paste pairing code", icon: .clipboardPaste, variant: .secondary)
+    private let emptyState = RCEmptyStateView(icon: .cameraOff, title: "", message: "")
+    /// What the empty state currently says, so detections never rewrite it.
+    private var emptyContent: EmptyContent?
+    private static let torchSide: CGFloat = 52
+
+    private enum EmptyContent: Equatable {
+        case denied
+        case unavailable(String)
+        case pairing(denied: Bool)
+    }
 
     private var isVisible = false
     /// Scene activity as last published (`@Published` emits before storing, so it is kept here).
@@ -160,22 +172,26 @@ final class ScannerViewController: RCViewController, AppRoutable {
     private func buildControls() {
         view.addSubview(instruction)
 
-        backButton.onTap = { [weak self] in self?.environment.router.pop() }
         pasteButton.haptic = nil
         pasteButton.accessibilityLabel = "Paste pairing code"
         pasteButton.onTap = { [weak self] in self?.paste() }
         torchButton.onTap = { [weak self] in self?.toggleTorch() }
-        view.addSubview(backButton)
+        torchButton.isHidden = true
         view.addSubview(pasteButton)
         view.addSubview(torchButton)
 
-        unavailableView.isHidden = true
-        unavailableView.settingsButton.onTap = { [weak self] in self?.openSettings() }
-        unavailableView.pasteButton.onTap = { [weak self] in self?.paste() }
-        unavailableBackButton.onTap = { [weak self] in self?.environment.router.pop() }
-        unavailableBackButton.isHidden = true
-        view.addSubview(unavailableView)
-        view.addSubview(unavailableBackButton)
+        emptyState.isHidden = true
+        settingsButton.onTap = { [weak self] in self?.openSettings() }
+        emptyPasteButton.haptic = nil
+        emptyPasteButton.onTap = { [weak self] in self?.paste() }
+        view.addSubview(emptyState)
+
+        // Same back control as every pushed screen, in the overlay variant.
+        topBar.isOverlayStyle = true
+        topBar.showsBackButton = true
+        topBar.onBack = { [weak self] in self?.environment.router.pop() }
+        view.addSubview(topBar)
+        view.accessibilityElements = [topBar, instruction, reticle, emptyState, pasteButton, torchButton]
     }
 
     private func wireFlow() {
@@ -202,46 +218,44 @@ final class ScannerViewController: RCViewController, AppRoutable {
         demoPreview?.frame = bounds
 #endif
         reticle.frame = bounds
+        let barHeight = topBar.preferredHeight(safeAreaTop: insets.top)
+        topBar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: barHeight)
         restingRect = ScannerGeometry.restingRect(safeFrame: safe)
 
         let compactHeight = traitCollection.verticalSizeClass == .compact
-        let controlSide: CGFloat = 60
+        let torchSide = Self.torchSide
         let pasteSize = pasteButton.sizeThatFits(bounds.size)
         let copyBottom: CGFloat
         let controlsTop: CGFloat
 
         if compactHeight {
-            // Landscape phone: copy in the left column, controls stacked on the right.
+            // Landscape phone: copy in the left column, Paste and the torch in the right one.
             let columnWidth = max(0, restingRect.minX - safe.minX - 2 * RCSpace.xl)
             let size = instruction.sizeThatFits(CGSize(width: columnWidth, height: safe.height))
-            instruction.frame = CGRect(x: safe.minX + RCSpace.xl, y: safe.midY - size.height / 2, width: columnWidth, height: size.height)
+            let copyY = max(barHeight + RCSpace.xs, safe.midY - size.height / 2)
+            instruction.frame = CGRect(x: safe.minX + RCSpace.xl, y: copyY, width: columnWidth, height: size.height)
             copyBottom = safe.minY
-            let x = safe.maxX - RCSpace.xl - controlSide
-            backButton.frame = CGRect(x: x, y: safe.minY + RCSpace.md, width: controlSide, height: controlSide)
-            torchButton.frame = CGRect(x: x, y: safe.maxY - RCSpace.md - controlSide, width: controlSide, height: controlSide)
-            pasteButton.frame = CGRect(
-                x: min(x + controlSide / 2 - pasteSize.width / 2, safe.maxX - pasteSize.width),
-                y: safe.midY - pasteSize.height / 2,
-                width: pasteSize.width,
-                height: pasteSize.height
-            )
+            let columnMidX = safe.maxX - RCSpace.xl - torchSide / 2
+            torchButton.frame = CGRect(x: columnMidX - torchSide / 2, y: safe.maxY - RCSpace.md - torchSide, width: torchSide, height: torchSide)
+            let pasteX = min(columnMidX - pasteSize.width / 2, safe.maxX - RCSpace.sm - pasteSize.width)
+            pasteButton.frame = CGRect(x: pasteX, y: safe.midY - pasteSize.height / 2, width: pasteSize.width, height: pasteSize.height)
             controlsTop = bounds.maxY
         } else {
-            let width = min(safe.width - 2 * RCSpace.xxxl, 440)
+            let width = min(safe.width - 2 * RCSpace.xl, 440)
             let size = instruction.sizeThatFits(CGSize(width: width, height: safe.height))
-            instruction.frame = CGRect(x: safe.midX - width / 2, y: safe.minY + 18, width: width, height: size.height)
+            let copyY = barHeight + RCSpace.xxs
+            instruction.frame = CGRect(x: safe.midX - width / 2, y: copyY, width: width, height: size.height)
             copyBottom = instruction.frame.maxY
-            let reservedCopyBottom = instruction.frame.minY + instruction.reservedHeight(width: width)
+            let reservedCopyBottom = copyY + instruction.reservedHeight(width: width)
             let bottomPadding: CGFloat = insets.bottom > 0 ? 14 : RCSpace.xl
-            let rowCenter = safe.maxY - bottomPadding - controlSide / 2
-            // Keep the controls within thumb reach on wide screens.
-            let rowWidth = min(safe.width - 44, 520)
-            let rowMinX = safe.midX - rowWidth / 2
-            backButton.frame = CGRect(x: rowMinX, y: rowCenter - controlSide / 2, width: controlSide, height: controlSide)
-            torchButton.frame = CGRect(x: rowMinX + rowWidth - controlSide, y: rowCenter - controlSide / 2, width: controlSide, height: controlSide)
-            let pasteWidth = min(pasteSize.width, torchButton.frame.minX - backButton.frame.maxX - 2 * RCSpace.sm)
+            let rowHeight = max(torchSide, pasteSize.height)
+            let rowCenter = safe.maxY - bottomPadding - rowHeight / 2
+            // Paste is centered; the torch keeps to the trailing thumb zone, capped on wide screens.
+            let rowWidth = min(safe.width - 2 * RCSpace.xl, 520)
+            torchButton.frame = CGRect(x: safe.midX + rowWidth / 2 - torchSide, y: rowCenter - torchSide / 2, width: torchSide, height: torchSide)
+            let pasteWidth = min(pasteSize.width, 2 * (torchButton.frame.minX - RCSpace.md - safe.midX))
             pasteButton.frame = CGRect(x: safe.midX - pasteWidth / 2, y: rowCenter - pasteSize.height / 2, width: pasteWidth, height: pasteSize.height)
-            controlsTop = rowCenter - controlSide / 2
+            controlsTop = rowCenter - rowHeight / 2
             // Large Dynamic Type: rest below the tallest copy, above the controls.
             restingRect = ScannerGeometry.restingRect(
                 safeFrame: safe,
@@ -251,15 +265,15 @@ final class ScannerViewController: RCViewController, AppRoutable {
         }
         reticle.restingRect = restingRect
         withoutImplicitAnimations {
-            // The top scrim always backs the copy, however tall it gets.
+            // The top scrim always backs the back control and the copy, however tall it gets.
             topGradient.frame = CGRect(x: 0, y: 0, width: bounds.width, height: max(insets.top + 130, copyBottom + 56))
             let bottomHeight = insets.bottom + 170
             bottomGradient.frame = CGRect(x: 0, y: bounds.height - bottomHeight, width: bounds.width, height: bottomHeight)
         }
         reticle.captionLimits = (top: copyBottom + RCSpace.sm, bottom: controlsTop - RCSpace.md)
 
-        unavailableView.frame = bounds.inset(by: UIEdgeInsets(top: insets.top + 56, left: insets.left, bottom: insets.bottom, right: insets.right))
-        unavailableBackButton.frame = CGRect(x: safe.minX + RCSpace.lg, y: safe.minY + RCSpace.sm, width: 48, height: 48)
+        let emptyWidth = max(0, safe.width - 2 * RCSpace.xl)
+        emptyState.frame = CGRect(x: safe.minX + RCSpace.xl, y: barHeight, width: emptyWidth, height: max(0, safe.maxY - barHeight - RCSpace.lg))
 
         if bounds != laidOutBounds || restingRect != laidOutRestingRect {
             laidOutBounds = bounds
@@ -308,28 +322,26 @@ final class ScannerViewController: RCViewController, AppRoutable {
     private func render(animated: Bool) {
         guard isViewLoaded else { return }
         let availability = availability
+        let pairing = flow.phase == .pairing
         let showsStage: Bool
         switch availability {
         case .initializing, .running:
             showsStage = true
         case .denied:
             showsStage = false
-            unavailableView.configure(.denied)
+            configureEmptyState(pairing ? .pairing(denied: true) : .denied)
         case let .unavailable(reason):
             showsStage = false
-            unavailableView.configure(.unavailable(reason: reason))
+            configureEmptyState(pairing ? .pairing(denied: false) : .unavailable(reason))
         }
         // Runs on every camera detection: only write what changed.
-        for chrome in [reticle, instruction, backButton, pasteButton, torchButton] as [UIView] where chrome.isHidden == showsStage {
+        for chrome in [reticle, instruction, pasteButton] as [UIView] where chrome.isHidden == showsStage {
             chrome.isHidden = !showsStage
         }
-        if unavailableView.isHidden != showsStage {
-            unavailableView.isHidden = showsStage
-            unavailableBackButton.isHidden = showsStage
-        }
-        let unavailableControlsEnabled = flow.phase != .pairing
-        setEnabled(unavailableView.pasteButton, unavailableControlsEnabled)
-        setEnabled(unavailableBackButton, unavailableControlsEnabled)
+        if emptyState.isHidden != showsStage { emptyState.isHidden = showsStage }
+        setEnabled(topBar.backButton, !pairing)
+        if emptyPasteButton.isLoading != pairing { emptyPasteButton.isLoading = pairing }
+        setEnabled(settingsButton, !pairing)
 
         let presentation = ScannerPresentation(
             phase: flow.phase,
@@ -347,31 +359,61 @@ final class ScannerViewController: RCViewController, AppRoutable {
                 tone: presentation.tone,
                 showsBadge: presentation.showsLockBadge,
                 showsCaption: presentation.showsForeignCaption,
-                showsCard: presentation.showsPairingCard,
+                dimsWindow: presentation.showsPairingProgress,
                 breathing: presentation.isBreathing && showsStage,
                 animated: animated && isVisible
             )
         }
 
-        if instruction.setText(title: presentation.title, message: presentation.message, animated: animated && isVisible) {
+        if instruction.setText(title: presentation.title, message: presentation.message,
+                               showsProgress: presentation.showsPairingProgress, animated: animated && isVisible) {
             view.setNeedsLayout()
             if animated, isVisible, UIAccessibility.isVoiceOverRunning {
                 UIAccessibility.post(notification: .announcement, argument: presentation.title)
             }
         }
 
-        setEnabled(backButton, presentation.controlsEnabled)
         setEnabled(pasteButton, presentation.controlsEnabled)
-        let torchAvailable = camera?.isTorchAvailable ?? false
+        // A camera without a torch shows no torch control at all.
+        let torchAvailable = showsStage && (camera?.isTorchAvailable ?? false)
+        if torchButton.isHidden == torchAvailable { torchButton.isHidden = !torchAvailable }
         let torchOn = camera?.isTorchOn ?? false
         torchButton.setGlyphIfNeeded(torchOn ? .flashlight : .flashlightOff)
         let torchVariant: RCIconButton.Variant = torchOn ? .overlayProminent : .overlay
         if torchButton.variant != torchVariant { torchButton.variant = torchVariant }
         let torchValue = torchOn ? "On" : "Off"
         if torchButton.accessibilityValue != torchValue { torchButton.accessibilityValue = torchValue }
-        setEnabled(torchButton, presentation.controlsEnabled && torchAvailable)
-        let torchAlpha: CGFloat = torchAvailable ? (torchButton.isEnabled ? 1 : 0.4) : 0.35
-        if torchButton.alpha != torchAlpha { torchButton.alpha = torchAlpha }
+        setEnabled(torchButton, presentation.controlsEnabled)
+    }
+
+    private func configureEmptyState(_ content: EmptyContent) {
+        guard content != emptyContent else { return }
+        let previous = emptyContent
+        emptyContent = content
+        switch content {
+        case .denied:
+            emptyState.update(
+                title: "Camera access needed",
+                message: "Allow camera access in Settings to scan pairing codes, or paste the code instead."
+            )
+        case let .unavailable(reason):
+            emptyState.update(title: "Camera unavailable", message: reason + " You can still paste the pairing code.")
+        case .pairing:
+            emptyState.update(title: "Pairing with relay", message: "Creating your controller key and claiming the code.")
+        }
+        let denied: Bool = switch content {
+        case .denied, .pairing(denied: true): true
+        case .unavailable, .pairing(denied: false): false
+        }
+        let wasDenied: Bool? = previous.map {
+            switch $0 {
+            case .denied, .pairing(denied: true): true
+            case .unavailable, .pairing(denied: false): false
+            }
+        }
+        if wasDenied != denied {
+            emptyState.setActions(denied ? [settingsButton, emptyPasteButton] : [emptyPasteButton])
+        }
     }
 
     private func setEnabled(_ control: UIControl, _ enabled: Bool) {

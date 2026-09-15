@@ -3,6 +3,10 @@ import UIKit
 /// Relay pairing introduction: what to do in relay admin, then Scan QR code
 /// (a further push) or Paste pairing code (claims in place). Success pops to
 /// Devices through the router; claim errors are presented by the app.
+///
+/// Short containers (iPhone SE, landscape phones, small Stage Manager
+/// windows) pin both actions in a bottom bar so they are always reachable;
+/// taller ones keep them inline with the content.
 @MainActor
 final class PairingViewController: RCViewController, AppRoutable, UIScrollViewDelegate {
     let route: AppRoute = .pairRelay
@@ -24,6 +28,9 @@ final class PairingViewController: RCViewController, AppRoutable, UIScrollViewDe
     private let steps = PairingStepsView()
     private let scanButton = RCButton(title: "Scan QR code", icon: .scanQrCode, variant: .accent, size: .large)
     private let pasteButton = RCButton(title: "Paste pairing code", icon: .clipboardPaste, variant: .secondary, size: .large)
+    private let actionBar = PairingActionBar()
+    /// Containers shorter than this pin the actions in `actionBar`.
+    static let actionBarMaximumHeight: CGFloat = 700
 
     private lazy var renderer = RenderScheduler { [weak self] in self?.render() }
     /// A claim started from this screen (paste) is running.
@@ -56,6 +63,8 @@ final class PairingViewController: RCViewController, AppRoutable, UIScrollViewDe
         for subview in [emblem, titleLabel, subtitleLabel, stepsCard, scanButton, pasteButton] as [UIView] {
             scrollView.addSubview(subview)
         }
+        actionBar.isHidden = true
+        view.addSubview(actionBar)
 
         scanButton.accessibilityIdentifier = "scan-pairing-code"
         scanButton.onTap = { [weak self] in self?.environment.router.push(.scanPairingCode) }
@@ -64,6 +73,7 @@ final class PairingViewController: RCViewController, AppRoutable, UIScrollViewDe
         pasteButton.onTap = { [weak self] in self?.paste() }
 
         topBar.title = "Pair with relay"
+        topBar.contentColumnWidth = RCLayout.maxFormWidth
         topBar.showsBackButton = true
         topBar.onBack = { [weak self] in self?.environment.router.pop() }
         view.addSubview(topBar)
@@ -108,29 +118,33 @@ final class PairingViewController: RCViewController, AppRoutable, UIScrollViewDe
         let width = max(0, bounds.width - column.left - column.right)
         let fit = CGSize(width: width, height: .greatestFiniteMagnitude)
         let titleHeight = ceil(titleLabel.sizeThatFits(fit).height)
-        let subtitleWidth = min(width, 440)
+        let subtitleWidth = PairingTextBalance.width(of: subtitleLabel, fitting: min(width, 440))
         let subtitleHeight = ceil(subtitleLabel.sizeThatFits(CGSize(width: subtitleWidth, height: .greatestFiniteMagnitude)).height)
         let stepsHeight = ceil(stepsCard.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height)
-        let buttonHeight = RCButton.Size.large.height
-        let actionsHeight = buttonHeight * 2 + RCSpace.md
+        // Titles wrap at accessibility sizes, so heights come from the column width.
+        let scanHeight = ceil(scanButton.sizeThatFits(fit).height)
+        let pasteHeight = ceil(pasteButton.sizeThatFits(fit).height)
+        let actionsHeight = scanHeight + RCSpace.md + pasteHeight
 
-        // Short phones get a smaller hero so the steps stay above the fold.
-        let isShort = bounds.height < 700
+        // Short containers get a smaller hero and tighter rhythm, and keep the
+        // actions in a pinned bar instead of below the fold.
+        let isShort = bounds.height < Self.actionBarMaximumHeight
         let emblemSide = isShort ? PairingEmblemView.compactSide : PairingEmblemView.side
-        let emblemGap = isShort ? RCSpace.xl : RCSpace.xxl + RCSpace.xs
-        let sectionGap = isShort ? RCSpace.xxl : RCSpace.xxxl
+        let emblemGap = isShort ? RCSpace.lg : RCSpace.xxl + RCSpace.xs
+        let sectionGap = isShort ? RCSpace.xl : RCSpace.xxxl
         let heroHeight = emblemSide + emblemGap + titleHeight + RCSpace.sm + subtitleHeight
         let contentHeight = heroHeight + sectionGap + stepsHeight
         let bottomPadding = max(safe.bottom, RCSpace.lg) + RCSpace.lg
-        let top = barHeight + RCSpace.sm
+        let top = barHeight + (isShort ? RCSpace.xs : RCSpace.sm)
         let available = bounds.height - top - bottomPadding
         let fits = contentHeight + sectionGap + actionsHeight <= available
         let isPhone = traitCollection.horizontalSizeClass == .compact
+        setActionsPinned(isShort)
 
         // Regular width: center the whole block. Phones keep content at the top
         // and pin the actions to the bottom when everything fits.
         var y = top
-        if fits, !isPhone {
+        if !isShort, fits, !isPhone {
             y += floor((available - contentHeight - sectionGap - actionsHeight) * 0.42)
         }
         emblem.frame = CGRect(x: floor(bounds.midX - emblemSide / 2), y: y, width: emblemSide, height: emblemSide)
@@ -140,34 +154,66 @@ final class PairingViewController: RCViewController, AppRoutable, UIScrollViewDe
         subtitleLabel.frame = CGRect(x: floor(bounds.midX - subtitleWidth / 2), y: y, width: subtitleWidth, height: subtitleHeight)
         y += subtitleHeight + sectionGap
         stepsCard.frame = CGRect(x: x, y: y, width: width, height: stepsHeight)
-        y += stepsHeight + sectionGap
+        y += stepsHeight
 
-        let actionsY: CGFloat
-        let contentSizeHeight: CGFloat
-        if fits, isPhone {
-            actionsY = bounds.height - bottomPadding - actionsHeight
-            contentSizeHeight = bounds.height
+        if isShort {
+            let layout = actionBar.layout(scan: scanButton, paste: pasteButton, width: bounds.width, column: column, safeBottom: safe.bottom)
+            actionBar.frame = CGRect(x: 0, y: bounds.height - layout.height, width: bounds.width, height: layout.height)
+            scanButton.frame = layout.scan
+            pasteButton.frame = layout.paste
+            // Content scrolls behind the opaque bar and can always clear it.
+            let insets = UIEdgeInsets(top: 0, left: 0, bottom: layout.height, right: 0)
+            if scrollView.contentInset != insets {
+                scrollView.contentInset = insets
+                scrollView.scrollIndicatorInsets = insets
+            }
+            scrollView.contentSize = CGSize(width: bounds.width, height: y + RCSpace.xl)
         } else {
-            actionsY = y
-            contentSizeHeight = y + actionsHeight + bottomPadding
+            if scrollView.contentInset != .zero {
+                scrollView.contentInset = .zero
+                scrollView.scrollIndicatorInsets = .zero
+            }
+            y += sectionGap
+            let actionsY: CGFloat
+            let contentSizeHeight: CGFloat
+            if fits, isPhone {
+                actionsY = bounds.height - bottomPadding - actionsHeight
+                contentSizeHeight = bounds.height
+            } else {
+                actionsY = y
+                contentSizeHeight = y + actionsHeight + bottomPadding
+            }
+            scanButton.frame = CGRect(x: x, y: actionsY, width: width, height: scanHeight)
+            pasteButton.frame = CGRect(x: x, y: actionsY + scanHeight + RCSpace.md, width: width, height: pasteHeight)
+            scrollView.contentSize = CGSize(width: bounds.width, height: contentSizeHeight)
         }
-        scanButton.frame = CGRect(x: x, y: actionsY, width: width, height: buttonHeight)
-        pasteButton.frame = CGRect(x: x, y: actionsY + buttonHeight + RCSpace.md, width: width, height: buttonHeight)
-        scrollView.contentSize = CGSize(width: bounds.width, height: contentSizeHeight)
-        updateTopBar()
+        updateScrollChrome()
+    }
+
+    /// Moves the actions between the scroll content and the pinned bar.
+    private func setActionsPinned(_ pinned: Bool) {
+        let host: UIView = pinned ? actionBar : scrollView
+        guard scanButton.superview !== host else { return }
+        host.addSubview(scanButton)
+        host.addSubview(pasteButton)
+        actionBar.isHidden = !pinned
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        updateTopBar()
+        updateScrollChrome()
     }
 
-    /// The small title fades in as the large title passes under the bar.
-    private func updateTopBar() {
+    /// The small title fades in as the large title passes under the bar; the
+    /// action bar's hairline shows only while content continues beneath it.
+    private func updateScrollChrome() {
         topBar.setScrollProgress(RCLargeTitleView.collapseProgress(
             titleTop: titleLabel.frame.minY - scrollView.contentOffset.y,
             titleHeight: titleLabel.frame.height,
             barBottom: topBar.bounds.height
         ))
+        guard !actionBar.isHidden else { return }
+        let visibleBottom = scrollView.contentOffset.y + scrollView.bounds.height - scrollView.contentInset.bottom
+        actionBar.showsHairline = scrollView.contentSize.height - visibleBottom > 0.5
     }
 
     // MARK: - State
@@ -246,4 +292,70 @@ final class PairingViewController: RCViewController, AppRoutable, UIScrollViewDe
         }
     }
 #endif
+}
+
+/// Opaque bottom bar holding the pairing actions on short containers. A top
+/// hairline separates it from content scrolled beneath.
+@MainActor
+private final class PairingActionBar: RCView {
+    struct Layout {
+        let scan: CGRect
+        let paste: CGRect
+        let height: CGFloat
+    }
+
+    var showsHairline = true {
+        didSet {
+            guard showsHairline != oldValue else { return }
+            let opacity: Float = showsHairline ? 1 : 0
+            withoutImplicitAnimations { hairline.opacity = opacity }
+        }
+    }
+
+    private let hairline = CALayer()
+
+    override func setUp() {
+        layer.addSublayer(hairline)
+    }
+
+    override func updateAppearance() {
+        withoutImplicitAnimations {
+            layer.backgroundColor = RCColor.background.cgColor(for: self)
+            hairline.backgroundColor = RCColor.line.cgColor(for: self)
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        withoutImplicitAnimations {
+            hairline.frame = CGRect(x: 0, y: 0, width: bounds.width, height: RCLayout.hairline)
+        }
+    }
+
+    /// Side by side when both titles fit at equal widths (landscape, wide
+    /// windows); stacked otherwise. Frames are in the bar's coordinates.
+    func layout(scan: RCButton, paste: RCButton, width: CGFloat, column: (left: CGFloat, right: CGFloat), safeBottom: CGFloat) -> Layout {
+        let columnWidth = max(0, width - column.left - column.right)
+        let gap = RCSpace.md
+        let top = RCSpace.md
+        let bottom = safeBottom > 0 ? safeBottom : RCSpace.lg
+        let halfWidth = floor((columnWidth - gap) / 2)
+        // Natural single-line widths decide the arrangement; heights are
+        // measured at the final width because titles wrap at accessibility sizes.
+        let unbounded = CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        func height(_ button: RCButton, _ buttonWidth: CGFloat) -> CGFloat {
+            ceil(button.sizeThatFits(CGSize(width: buttonWidth, height: .greatestFiniteMagnitude)).height)
+        }
+        if max(scan.sizeThatFits(unbounded).width, paste.sizeThatFits(unbounded).width) <= halfWidth {
+            // Scan keeps the trailing (primary) position; both share the row height.
+            let scanWidth = columnWidth - halfWidth - gap
+            let rowHeight = max(height(scan, scanWidth), height(paste, halfWidth))
+            let paste = CGRect(x: column.left, y: top, width: halfWidth, height: rowHeight)
+            let scan = CGRect(x: column.left + halfWidth + gap, y: top, width: scanWidth, height: rowHeight)
+            return Layout(scan: scan, paste: paste, height: ceil(top + rowHeight + bottom))
+        }
+        let scan = CGRect(x: column.left, y: top, width: columnWidth, height: height(scan, columnWidth))
+        let paste = CGRect(x: column.left, y: scan.maxY + RCSpace.sm, width: columnWidth, height: height(paste, columnWidth))
+        return Layout(scan: scan, paste: paste, height: ceil(paste.maxY + bottom))
+    }
 }

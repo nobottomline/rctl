@@ -44,12 +44,30 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
     private let statusOverlay = RemoteStatusOverlayView()
     private var keyboardPanel: RemoteKeyboardPanelView?
     private weak var toolsController: RemoteToolsViewController?
-    private var missingState: (back: RCIconButton, empty: RCEmptyStateView)?
+    private var missingState: (topBar: RCTopBar, empty: RCEmptyStateView)?
 
     private var presentation: RemoteSessionPresentation?
     private var toolsDiagnostics: RctlRealtimeDiagnostics?
+    /// The user wants the keyboard panel (it may still be waiting for the keyboard).
     private var keyboardVisible = false
     private var keyboardOverlap: CGFloat = 0
+    private var panelPhase: KeyboardPanelPhase = .hidden
+    /// The panel is visible or animating out.
+    private var panelOnScreen = false
+    /// Invalidates deferred focus and fallback reveals from an earlier toggle.
+    private var keyboardToggle = 0
+
+    private enum KeyboardPanelPhase {
+        case hidden
+        /// Focus was requested; the panel appears with the keyboard's own animation.
+        case awaitingKeyboard
+        case shown
+    }
+
+    private struct KeyboardTiming {
+        let duration: TimeInterval
+        let options: UIView.AnimationOptions
+    }
     private var didStartSession = false
     private var tornDown = false
 
@@ -180,17 +198,23 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
             Task { await model.connect() }
         }
 #if DEBUG
+        // A forced demo orientation rotates after appearance; hooks that present
+        // or focus something wait until it settled.
+        let settle: TimeInterval = demo?.orientation == nil ? 0 : 1
         switch demo?.state {
         case .keyboard:
-            // A forced demo orientation rotates after appearance; open the keyboard once it settled.
-            let delay: TimeInterval = demo?.orientation == nil ? 0 : 1
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
                 MainActor.assumeIsolated { self?.setKeyboardVisible(true) }
             }
-        case .tools: presentTools()
+        case .tools:
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+                MainActor.assumeIsolated { self?.presentTools() }
+            }
         case .lock:
-            presentTools()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+                MainActor.assumeIsolated { self?.presentTools() }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle + 0.8) { [weak self] in
                 MainActor.assumeIsolated { self?.toolsController?.presentLockConfirmation() }
             }
         case .sourceMenu:
@@ -399,7 +423,7 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
         }
         panel.onClose = { [weak self] in self?.setKeyboardVisible(false) }
         panel.onHeightChange = { [weak self] in
-            guard let self, self.keyboardVisible else { return }
+            guard let self, self.panelPhase == .shown else { return }
             self.view.setNeedsLayout()
             RCMotion.animate(RCMotion.snappy) { self.view.layoutIfNeeded() }
         }
@@ -409,56 +433,115 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
         return panel
     }
 
+    /// Opening waits for the system keyboard and then moves the panel with the
+    /// keyboard's own duration and curve, so it arrives attached to it instead
+    /// of appearing first and riding up afterwards. Without a docked keyboard
+    /// (hardware keyboard, floating iPad keyboard) the panel springs in on its own.
     private func setKeyboardVisible(_ visible: Bool, animated: Bool = true) {
         guard visible != keyboardVisible else { return }
         if visible, presentation?.controlsEnabled != true { return }
         keyboardVisible = visible
-        guard let panel = visible ? makeKeyboardPanel() : keyboardPanel else { return }
-        let incoming: UIView = visible ? panel : dock
-        let outgoing: UIView = visible ? dock : panel
-        let offset = RCMotion.reduceMotion ? CGAffineTransform.identity : CGAffineTransform(translationX: 0, y: 14)
-
-        incoming.isHidden = false
+        keyboardToggle &+= 1
+        let toggle = keyboardToggle
+        let animate = animated && view.window != nil
         if visible {
+            let panel = makeKeyboardPanel()
+            panelPhase = .awaitingKeyboard
+            // Parks the hidden panel where it starts from.
             view.setNeedsLayout()
             view.layoutIfNeeded()
+            guard animate else {
+                revealKeyboardPanel(timing: nil, animated: false)
+                return
+            }
             // Becoming first responder loads the keyboard (hundreds of ms the
-            // first time); commit the transition first so it never waits on it.
+            // first time); the tap's feedback is committed before it blocks.
             DispatchQueue.main.async { [weak self, weak panel] in
                 MainActor.assumeIsolated {
-                    guard let self, let panel, self.keyboardVisible else { return }
+                    guard let self, let panel, self.keyboardToggle == toggle else { return }
                     panel.focus()
+                    guard self.panelPhase == .awaitingKeyboard else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        MainActor.assumeIsolated {
+                            guard let self, self.keyboardToggle == toggle, self.panelPhase == .awaitingKeyboard else { return }
+                            self.revealKeyboardPanel(timing: nil, animated: true)
+                        }
+                    }
                 }
             }
         } else {
-            panel.resignFocus()
-            view.setNeedsLayout()
+            panelPhase = .hidden
+            // A docked keyboard reports its hide synchronously and the panel leaves with it.
+            keyboardPanel?.resignFocus()
+            if panelOnScreen {
+                concealKeyboardPanel(timing: nil, animated: animate)
+            }
         }
-        let animate = animated && view.window != nil
-        if animate, incoming.alpha < 1 { incoming.transform = offset }
+    }
 
-        // The outgoing surface leaves quickly so the two never read as stacked;
-        // the incoming one settles with a spring (a fade under Reduce Motion).
-        let hideOutgoing: @MainActor @Sendable () -> Void = { outgoing.alpha = 0 }
-        let finishOutgoing: @MainActor @Sendable (Bool) -> Void = { [weak self] _ in
-            guard let self, self.keyboardVisible == visible else { return }
-            outgoing.isHidden = true
-            outgoing.transform = .identity
-        }
-        let showIncoming: @MainActor @Sendable () -> Void = {
-            self.view.layoutIfNeeded()
-            incoming.alpha = 1
-            incoming.transform = .identity
-        }
-        if animate {
-            RCMotion.animate(duration: 0.12, animations: hideOutgoing, completion: finishOutgoing)
-            RCMotion.animate(RCMotion.standard, animations: showIncoming)
+    private func revealKeyboardPanel(timing: KeyboardTiming?, animated: Bool) {
+        guard let panel = keyboardPanel else { return }
+        panelPhase = .shown
+        panelOnScreen = true
+        panel.isHidden = false
+        view.setNeedsLayout()
+        if animated {
+            // The dock leaves quickly so the two never read as stacked.
+            RCMotion.animate(duration: 0.12, animations: { self.dock.alpha = 0 }, completion: { [weak self] _ in
+                guard let self, self.panelPhase == .shown else { return }
+                self.dock.isHidden = true
+            })
+            if let timing {
+                UIView.animate(withDuration: timing.duration, delay: 0, options: timing.options, animations: { self.view.layoutIfNeeded() })
+                RCMotion.animate(duration: min(0.2, max(timing.duration, 0.1))) { panel.alpha = 1 }
+            } else {
+                if !RCMotion.reduceMotion { panel.transform = CGAffineTransform(translationX: 0, y: 14) }
+                RCMotion.animate(RCMotion.standard) {
+                    self.view.layoutIfNeeded()
+                    panel.alpha = 1
+                    panel.transform = .identity
+                }
+            }
         } else {
-            hideOutgoing()
-            finishOutgoing(true)
-            showIncoming()
+            dock.alpha = 0
+            dock.isHidden = true
+            panel.alpha = 1
+            panel.transform = .identity
+            view.layoutIfNeeded()
+            panel.focus()
         }
-        UIAccessibility.post(notification: .layoutChanged, argument: incoming)
+        UIAccessibility.post(notification: .layoutChanged, argument: panel)
+    }
+
+    private func concealKeyboardPanel(timing: KeyboardTiming?, animated: Bool) {
+        guard let panel = keyboardPanel, panelOnScreen else { return }
+        panelOnScreen = false
+        dock.isHidden = false
+        view.setNeedsLayout()
+        if animated {
+            RCMotion.animate(duration: 0.12, animations: { panel.alpha = 0 }, completion: { [weak self] _ in
+                guard let self, self.panelPhase == .hidden else { return }
+                panel.isHidden = true
+                panel.transform = .identity
+            })
+            if let timing {
+                UIView.animate(withDuration: timing.duration, delay: 0, options: timing.options, animations: { self.view.layoutIfNeeded() })
+            } else {
+                RCMotion.animate(RCMotion.standard) { self.view.layoutIfNeeded() }
+            }
+            if dock.alpha < 1, !RCMotion.reduceMotion { dock.transform = CGAffineTransform(translationX: 0, y: 14) }
+            RCMotion.animate(RCMotion.standard) {
+                self.dock.alpha = 1
+                self.dock.transform = .identity
+            }
+        } else {
+            panel.alpha = 0
+            panel.isHidden = true
+            dock.alpha = 1
+            dock.transform = .identity
+            view.layoutIfNeeded()
+        }
+        UIAccessibility.post(notification: .layoutChanged, argument: dock)
     }
 
     @objc private func keyboardWillChangeFrame(_ notification: Notification) {
@@ -469,18 +552,31 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
         let overlap = notification.name == UIResponder.keyboardWillHideNotification
             ? 0
             : RCKeyboardObserver.overlap(of: endFrame, in: view)
-        guard abs(overlap - keyboardOverlap) > 0.5 else { return }
+        let changed = abs(overlap - keyboardOverlap) > 0.5
         keyboardOverlap = overlap
-        guard keyboardVisible else { return }
         let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
         let curve = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
-        view.setNeedsLayout()
-        UIView.animate(
-            withDuration: duration,
-            delay: 0,
-            options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState, .allowUserInteraction],
-            animations: { self.view.layoutIfNeeded() }
+        let timing = KeyboardTiming(
+            duration: duration,
+            options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState, .allowUserInteraction]
         )
+        let animated = view.window != nil && duration > 0
+        switch panelPhase {
+        case .awaitingKeyboard:
+            if overlap > 0 { revealKeyboardPanel(timing: timing, animated: animated) }
+        case .shown:
+            guard changed else { return }
+            view.setNeedsLayout()
+            if animated {
+                UIView.animate(withDuration: timing.duration, delay: 0, options: timing.options, animations: { self.view.layoutIfNeeded() })
+            }
+        case .hidden:
+            if panelOnScreen {
+                concealKeyboardPanel(timing: timing, animated: animated)
+            } else if changed {
+                view.setNeedsLayout()
+            }
+        }
     }
 
     // MARK: Layout
@@ -512,23 +608,28 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
         )
         let resting = RemoteSessionLayout(input)
         var active = resting
-        if keyboardVisible, let panel = keyboardPanel {
+        if let panel = keyboardPanel {
+            panel.isCompact = style == .rail
             let panelWidth = style == .bars
                 ? RemoteSessionLayout.dockAvailableWidth(size: size, safeArea: safe)
                 : RemoteSessionLayout.railPanelAvailableWidth(size: size, safeArea: safe, headerWidth: headerSize.width)
             input.keyboardPanelHeight = panel.sizeThatFits(CGSize(width: panelWidth, height: .greatestFiniteMagnitude)).height
-            active = RemoteSessionLayout(input)
-            place(panel, active.dock)
-        } else if let panel = keyboardPanel {
-            // Parked just above the resting dock so the next show starts from there.
-            let width = style == .bars ? RemoteSessionLayout.dockAvailableWidth(size: size, safeArea: safe) : resting.viewport.width
-            let height = panel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-            place(panel, CGRect(x: style == .bars ? (size.width - width) / 2 : resting.viewport.minX, y: size.height - max(safe.bottom, RemoteSessionLayout.margin) - height, width: width, height: height))
+            if panelPhase == .shown {
+                active = RemoteSessionLayout(input)
+                place(panel, active.dock)
+            } else {
+                // Parked where the dock rests, so it rises from there with the keyboard.
+                input.keyboardOverlap = 0
+                place(panel, RemoteSessionLayout(input).dock)
+            }
         }
         place(header, active.header)
         place(dock, resting.dock)
         place(viewport, active.viewport)
         place(statusOverlay, active.viewport)
+        viewport.inputExclusion = active.viewportOcclusion.isNull
+            ? .null
+            : active.viewportOcclusion.offsetBy(dx: -active.viewport.minX, dy: -active.viewport.minY)
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -584,9 +685,12 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
     // MARK: Missing relay device
 
     private func buildMissingState() {
-        let back = RCIconButton(icon: .chevronLeft, variant: .stage, diameter: 40, accessibilityLabel: "Back to devices")
-        back.haptic = .selection
-        back.onTap = { [weak self] in self?.environment.router.pop() }
+        // The same overlay back control as the scanner's camera states.
+        let topBar = RCTopBar()
+        topBar.isOverlayStyle = true
+        topBar.showsBackButton = true
+        topBar.backButton.accessibilityLabel = "Back to devices"
+        topBar.onBack = { [weak self] in self?.environment.router.pop() }
         let action = RCButton(title: "Back to devices", variant: .primary, size: .medium)
         action.onTap = { [weak self] in self?.environment.router.pop() }
         let empty = RCEmptyStateView(
@@ -596,21 +700,17 @@ final class RemoteSessionViewController: RCViewController, AppRoutable {
             actions: [action]
         )
         view.addSubview(empty)
-        view.addSubview(back)
-        missingState = (back, empty)
+        view.addSubview(topBar)
+        missingState = (topBar, empty)
     }
 
     private func layoutMissingState() {
-        guard let (back, empty) = missingState else { return }
-        let safe = view.safeAreaInsets
-        back.frame = CGRect(x: safe.left + RemoteSessionLayout.margin, y: safe.top + 8, width: 40, height: 40)
-        let width = min(360, view.bounds.width - safe.left - safe.right - 40)
-        let height = empty.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        empty.frame = CGRect(
-            x: safe.left + (view.bounds.width - safe.left - safe.right - width) / 2,
-            y: safe.top + max(56, (view.bounds.height - safe.top - safe.bottom - height) / 2),
-            width: width,
-            height: height
-        )
+        guard let (topBar, empty) = missingState else { return }
+        let bounds = view.bounds
+        let safe = bounds.inset(by: view.safeAreaInsets)
+        let barHeight = topBar.preferredHeight(safeAreaTop: view.safeAreaInsets.top)
+        topBar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: barHeight)
+        // Centered below the bar, like the scanner's camera states.
+        empty.frame = CGRect(x: safe.minX + RCSpace.xl, y: barHeight, width: max(0, safe.width - 2 * RCSpace.xl), height: max(0, safe.maxY - barHeight - RCSpace.lg))
     }
 }

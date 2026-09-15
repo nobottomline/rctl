@@ -21,6 +21,8 @@ final class RemoteStatusOverlayView: RCView {
     private let progressLabel = RCLabel(style: .footnoteStrong, color: RCColor.textSecondary)
 
     private var overlay: RemoteSessionPresentation.Overlay = .hidden
+    /// Interruption waiting for the card's content to finish fading out.
+    private var pendingInterruption: RemoteSessionPresentation.Interruption?
 
     private static let cardMaximumWidth: CGFloat = 320
     private static let cardInsets = UIEdgeInsets(top: 22, left: 20, bottom: 20, right: 20)
@@ -75,26 +77,64 @@ final class RemoteStatusOverlayView: RCView {
     }
 
     private func configureCard(_ interruption: RemoteSessionPresentation.Interruption, crossfade: Bool) {
-        let update = {
-            self.cardIcon.glyph = interruption.kind == .sessionEnded ? .circleStop : .wifiOff
-            self.cardTitle.text = interruption.title
-            self.cardMessage.text = interruption.message
-            switch interruption.recovery {
-            case let .reconnecting(label):
-                self.reconnectButton.isHidden = true
-                self.progressLabel.text = label
-                self.progressLabel.isHidden = false
-                self.progressSpinner.startAnimating()
-            case .reconnectButton:
-                self.reconnectButton.isHidden = false
-                self.progressLabel.isHidden = true
-                self.progressSpinner.stopAnimating()
-            }
+        guard crossfade else {
+            pendingInterruption = nil
+            card.contentView.layer.removeAllAnimations()
+            card.contentView.alpha = 1
+            applyCardContent(interruption)
+            return
         }
-        if crossfade {
-            UIView.transition(with: card.contentView, duration: RCMotion.quickDuration, options: [.transitionCrossDissolve, .allowUserInteraction], animations: update)
-        } else {
-            update()
+        // Out, swap and resize, in: a cross-dissolve would show both states'
+        // titles and buttons at once while the card changes height.
+        let fadingOut = pendingInterruption != nil
+        pendingInterruption = interruption
+        guard !fadingOut else { return }
+        RCMotion.animate(duration: 0.09, curve: RCMotion.easeIn, animations: {
+            self.card.contentView.alpha = 0
+        }, completion: { [weak self] _ in
+            // A newer update without a crossfade already replaced the content.
+            guard let self, let next = self.pendingInterruption else { return }
+            self.pendingInterruption = nil
+            self.applyCardContent(next)
+            // Content lands at its new positions while invisible; only the
+            // card's size and position animate, so labels never stretch.
+            let card = self.card
+            let from = (bounds: card.bounds, center: card.center)
+            UIView.performWithoutAnimation {
+                self.setNeedsLayout()
+                self.layoutIfNeeded()
+            }
+            let to = (bounds: card.bounds, center: card.center)
+            if to.bounds != from.bounds || to.center != from.center {
+                UIView.performWithoutAnimation {
+                    card.bounds = from.bounds
+                    card.center = from.center
+                    card.layoutIfNeeded()
+                }
+                RCMotion.animate(RCMotion.snappy) {
+                    card.bounds = to.bounds
+                    card.center = to.center
+                    card.layoutIfNeeded()
+                }
+            }
+            RCMotion.animate(duration: 0.16) { card.contentView.alpha = 1 }
+        })
+    }
+
+    private func applyCardContent(_ interruption: RemoteSessionPresentation.Interruption) {
+        cardIcon.glyph = interruption.kind == .sessionEnded ? .circleStop : .wifiOff
+        cardTitle.text = interruption.title
+        cardMessage.text = interruption.message
+        switch interruption.recovery {
+        case let .reconnecting(label):
+            reconnectButton.isHidden = true
+            progressLabel.text = label
+            progressLabel.isHidden = false
+            progressSpinner.startAnimating()
+        case .reconnectButton:
+            reconnectButton.isHidden = false
+            progressLabel.isHidden = true
+            progressSpinner.stopAnimating()
         }
         if case .reconnecting = interruption.recovery {
             UIAccessibility.post(notification: .layoutChanged, argument: progressLabel)
@@ -174,14 +214,16 @@ final class RemoteStatusOverlayView: RCView {
         let messageHeight = cardMessage.sizeThatFits(CGSize(width: inner, height: .greatestFiniteMagnitude)).height
         cardMessage.frame = CGRect(x: insets.left, y: y, width: inner, height: messageHeight)
         y += messageHeight + 18
-        reconnectButton.frame = CGRect(x: insets.left, y: y, width: inner, height: RCButton.Size.medium.height)
+        // The action row is as tall as the Reconnect button, whose title wraps at accessibility sizes.
+        let rowHeight = ceil(reconnectButton.sizeThatFits(CGSize(width: inner, height: .greatestFiniteMagnitude)).height)
+        reconnectButton.frame = CGRect(x: insets.left, y: y, width: inner, height: rowHeight)
         let progressWidth = progressLabel.sizeThatFits(CGSize(width: inner, height: 40)).width
-        let rowWidth = 16 + 8 + progressWidth
-        let rowX = insets.left + (inner - rowWidth) / 2
-        progressSpinner.frame = CGRect(x: rowX, y: y + (RCButton.Size.medium.height - 16) / 2, width: 16, height: 16)
+        let progressRowWidth = 16 + 8 + progressWidth
+        let rowX = insets.left + (inner - progressRowWidth) / 2
+        progressSpinner.frame = CGRect(x: rowX, y: y + (rowHeight - 16) / 2, width: 16, height: 16)
         let progressHeight = RCTypography.lineHeight(.footnoteStrong, compatibleWith: traitCollection)
-        progressLabel.frame = CGRect(x: rowX + 24, y: y + (RCButton.Size.medium.height - progressHeight) / 2, width: progressWidth, height: progressHeight)
-        y += RCButton.Size.medium.height + insets.bottom
+        progressLabel.frame = CGRect(x: rowX + 24, y: y + (rowHeight - progressHeight) / 2, width: progressWidth, height: progressHeight)
+        y += rowHeight + insets.bottom
         let transform = card.transform
         card.transform = .identity
         card.frame = CGRect(x: (bounds.width - width) / 2, y: max(8, (bounds.height - y) / 2), width: width, height: y)

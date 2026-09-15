@@ -31,6 +31,11 @@ final class RemoteViewportView: UIView {
         }
     }
 
+    /// Region (in this view's coordinates) covered by chrome, such as the
+    /// landscape keyboard panel and the strip below it. Touches cannot start
+    /// there, so nothing the user cannot see is ever tapped on the device.
+    var inputExclusion: CGRect = .null
+
     private var tracker = RemoteTouchTracker<ObjectIdentifier>()
 
     override init(frame: CGRect) {
@@ -73,6 +78,11 @@ final class RemoteViewportView: UIView {
     }
 
     // MARK: Touches
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if !inputExclusion.isNull, inputExclusion.contains(point) { return false }
+        return super.point(inside: point, with: event)
+    }
 
     private var normalize: RemoteTouchTracker<ObjectIdentifier>.Normalizer {
         { [videoView] point, clamped in videoView.normalizedRemotePoint(for: point, clamped: clamped) }

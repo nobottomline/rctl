@@ -1,27 +1,52 @@
 import UIKit
 
 /// Title and guidance at the top of the scanner; crossfades between phases.
+/// While a claim runs a small spinner sits beside the title (or below the
+/// message when the title has no room for it). Lines are balanced so short
+/// sentences never end on a single word.
 @MainActor
 final class ScannerInstructionView: RCView {
     private let titleLabel = RCLabel(style: .title2, color: RCColor.onStage, lines: 0, alignment: .center)
     private let messageLabel = RCLabel(style: .subheadline, color: RCColor.onStage.withAlphaComponent(0.78), lines: 0, alignment: .center)
+    private let spinner = RCSpinner(diameter: ScannerInstructionView.spinnerSide, lineWidth: 2)
     private static let spacing: CGFloat = 6
+    private static let spinnerSide: CGFloat = 18
+    private static let spinnerGap: CGFloat = 10
 
     private(set) var title = ""
     private(set) var message = ""
+    private(set) var showsProgress = false
     private var fadeGeneration = 0
     /// Hidden twins that measure every phase's copy with the live traits.
     private let measureTitle = RCLabel(style: .title2, lines: 0, alignment: .center)
     private let measureMessage = RCLabel(style: .subheadline, lines: 0, alignment: .center)
     private var reservedCache: (width: CGFloat, category: UIContentSizeCategory, height: CGFloat)?
 
+    private struct LayoutKey: Equatable {
+        let width: CGFloat
+        let category: UIContentSizeCategory
+        let progress: Bool
+        let title: String
+        let message: String
+    }
+    private var liveCache: (key: LayoutKey, layout: Layout)?
+
+    private struct Layout {
+        var title: CGRect
+        var message: CGRect
+        var spinner: CGRect?
+        var height: CGFloat
+    }
+
     override func setUp() {
         isUserInteractionEnabled = false
         isAccessibilityElement = true
         accessibilityTraits = [.staticText, .updatesFrequently]
         titleLabel.accessibilityTraits = .header
+        spinner.tintColor = RCColor.onStage
         addSubview(titleLabel)
         addSubview(messageLabel)
+        addSubview(spinner)
         for label in [measureTitle, measureMessage] {
             label.isHidden = true
             addSubview(label)
@@ -35,23 +60,24 @@ final class ScannerInstructionView: RCView {
         if let reservedCache, reservedCache.width == width, reservedCache.category == category {
             return reservedCache.height
         }
-        let fit = CGSize(width: width, height: .greatestFiniteMagnitude)
         let height = ScannerPresentation.allCopy.map { copy -> CGFloat in
             measureTitle.text = copy.title
             measureMessage.text = copy.message
-            return ceil(measureTitle.sizeThatFits(fit).height) + Self.spacing + ceil(measureMessage.sizeThatFits(fit).height)
+            return Self.layout(title: measureTitle, message: measureMessage, progress: copy.progress, width: width).height
         }.max() ?? 0
         reservedCache = (width, category, height)
         return height
     }
 
-    /// Returns true when the text changed.
+    /// Returns true when the copy changed.
     @discardableResult
-    func setText(title: String, message: String, animated: Bool) -> Bool {
-        guard title != self.title || message != self.message else { return false }
+    func setText(title: String, message: String, showsProgress: Bool, animated: Bool) -> Bool {
+        guard title != self.title || message != self.message || showsProgress != self.showsProgress else { return false }
         self.title = title
         self.message = message
+        self.showsProgress = showsProgress
         accessibilityLabel = "\(title). \(message)"
+        accessibilityValue = showsProgress ? "In progress" : nil
         fadeGeneration += 1
         let generation = fadeGeneration
         guard animated, window != nil else {
@@ -73,14 +99,13 @@ final class ScannerInstructionView: RCView {
     private func applyText() {
         titleLabel.text = title
         messageLabel.text = message
+        if showsProgress { spinner.startAnimating() } else { spinner.stopAnimating() }
         layoutLabels()
         superview?.setNeedsLayout()
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
-        let fit = CGSize(width: size.width, height: .greatestFiniteMagnitude)
-        let height = titleLabel.sizeThatFits(fit).height + Self.spacing + messageLabel.sizeThatFits(fit).height
-        return CGSize(width: size.width, height: ceil(height))
+        CGSize(width: size.width, height: liveLayout(width: size.width).height)
     }
 
     override func layoutSubviews() {
@@ -88,102 +113,57 @@ final class ScannerInstructionView: RCView {
         layoutLabels()
     }
 
+    /// The displayed copy's layout; balancing measures several widths, so the
+    /// last result is reused until the copy, width or text size changes.
+    private func liveLayout(width: CGFloat) -> Layout {
+        let key = LayoutKey(width: width, category: traitCollection.preferredContentSizeCategory, progress: spinner.isAnimating,
+                            title: titleLabel.text ?? "", message: messageLabel.text ?? "")
+        if let liveCache, liveCache.key == key { return liveCache.layout }
+        let layout = Self.layout(title: titleLabel, message: messageLabel, progress: key.progress, width: width)
+        liveCache = (key, layout)
+        return layout
+    }
+
     private func layoutLabels() {
-        let fit = CGSize(width: bounds.width, height: .greatestFiniteMagnitude)
-        let titleHeight = ceil(titleLabel.sizeThatFits(fit).height)
-        titleLabel.frame = CGRect(x: 0, y: 0, width: bounds.width, height: titleHeight)
-        let messageHeight = ceil(messageLabel.sizeThatFits(fit).height)
-        messageLabel.frame = CGRect(x: 0, y: titleHeight + Self.spacing, width: bounds.width, height: messageHeight)
-    }
-}
-
-/// Camera denied / unavailable: explanation plus the paste fallback.
-@MainActor
-final class ScannerCameraUnavailableView: RCView {
-    enum Kind: Equatable {
-        case denied
-        case unavailable(reason: String)
+        let layout = liveLayout(width: bounds.width)
+        titleLabel.frame = layout.title
+        messageLabel.frame = layout.message
+        if let frame = layout.spinner { spinner.frame = frame }
     }
 
-    let settingsButton = RCButton(title: "Open Settings", icon: .settings, variant: .primary, size: .large)
-    let pasteButton = RCButton(title: "Paste pairing code", icon: .clipboardPaste, variant: .secondary, size: .large)
-
-    private let halo = CAShapeLayer()
-    private let tile = RCIconTile(glyph: .cameraOff, tone: .neutral, side: 64)
-    private let titleLabel = RCLabel(style: .title2, color: RCColor.onStage, lines: 0, alignment: .center)
-    private let messageLabel = RCLabel(style: .subheadline, color: RCColor.textSecondary, lines: 0, alignment: .center)
-    private var kind: Kind?
-    private static let columnWidth: CGFloat = 340
-
-    override func setUp() {
-        halo.fillColor = nil
-        halo.lineWidth = 1
-        layer.addSublayer(halo)
-        addSubview(tile)
-        titleLabel.accessibilityTraits = .header
-        addSubview(titleLabel)
-        addSubview(messageLabel)
-        pasteButton.haptic = nil
-        addSubview(settingsButton)
-        addSubview(pasteButton)
-    }
-
-    override func updateAppearance() {
-        halo.strokeColor = RCColor.line.cgColor(for: self)
-    }
-
-    func configure(_ next: Kind) {
-        guard next != kind else { return }
-        kind = next
-        switch next {
-        case .denied:
-            tile.glyph = .cameraOff
-            titleLabel.text = "Camera access needed"
-            messageLabel.text = "Allow camera access in Settings to scan pairing codes, or paste the code instead."
-            settingsButton.isHidden = false
-        case let .unavailable(reason):
-            tile.glyph = .camera
-            titleLabel.text = "Camera unavailable"
-            messageLabel.text = reason + " You can still paste the pairing code."
-            settingsButton.isHidden = true
+    /// One pass for measuring and placing. The spinner leads a single-line
+    /// title when both fit; otherwise it gets its own row under the message.
+    private static func layout(title: RCLabel, message: RCLabel, progress: Bool, width: CGFloat) -> Layout {
+        let unbounded = CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        let natural = title.sizeThatFits(unbounded)
+        let inline = progress && ceil(natural.width) + spinnerSide + spinnerGap <= width
+        var titleFrame: CGRect
+        var spinnerFrame: CGRect?
+        if inline {
+            let titleWidth = ceil(natural.width)
+            let titleHeight = ceil(natural.height)
+            let groupX = (width - (spinnerSide + spinnerGap + titleWidth)) / 2
+            titleFrame = CGRect(x: groupX + spinnerSide + spinnerGap, y: 0, width: titleWidth, height: titleHeight)
+            spinnerFrame = CGRect(x: groupX, y: (titleHeight - spinnerSide) / 2, width: spinnerSide, height: spinnerSide)
+        } else {
+            let titleWidth = PairingTextBalance.width(of: title, fitting: width)
+            let titleHeight = ceil(title.sizeThatFits(CGSize(width: titleWidth, height: .greatestFiniteMagnitude)).height)
+            titleFrame = CGRect(x: (width - titleWidth) / 2, y: 0, width: titleWidth, height: titleHeight)
         }
-        setNeedsLayout()
-    }
-
-    /// Height of the centered content block for a width.
-    private func contentHeight(width: CGFloat) -> CGFloat {
-        let fit = CGSize(width: width, height: .greatestFiniteMagnitude)
-        var height: CGFloat = 64 + RCSpace.xxl
-        height += titleLabel.sizeThatFits(fit).height + RCSpace.sm
-        height += messageLabel.sizeThatFits(fit).height + RCSpace.xxl
-        height += RCButton.Size.large.height
-        if !settingsButton.isHidden { height += RCSpace.md + RCButton.Size.large.height }
-        return ceil(height)
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let width = min(bounds.width - 2 * RCSpace.xxl, Self.columnWidth)
-        let x = (bounds.width - width) / 2
-        var y = max(0, (bounds.height - contentHeight(width: width)) / 2)
-        let tileFrame = CGRect(x: (bounds.width - 64) / 2, y: y, width: 64, height: 64)
-        tile.frame = tileFrame
-        withoutImplicitAnimations {
-            halo.frame = bounds
-            halo.path = UIBezierPath.continuousRoundedRect(tileFrame.insetBy(dx: -10, dy: -10), radius: 64 * 0.28 + 10).cgPath
+        let messageWidth = PairingTextBalance.width(of: message, fitting: width)
+        let messageHeight = ceil(message.sizeThatFits(CGSize(width: messageWidth, height: .greatestFiniteMagnitude)).height)
+        let messageFrame = CGRect(x: (width - messageWidth) / 2, y: titleFrame.maxY + spacing, width: messageWidth, height: messageHeight)
+        var height = messageFrame.maxY
+        if progress, !inline {
+            spinnerFrame = CGRect(x: (width - spinnerSide) / 2, y: height + spinnerGap, width: spinnerSide, height: spinnerSide)
+            height += spinnerGap + spinnerSide
         }
-        y += 64 + RCSpace.xxl
-        let fit = CGSize(width: width, height: .greatestFiniteMagnitude)
-        let titleHeight = ceil(titleLabel.sizeThatFits(fit).height)
-        titleLabel.frame = CGRect(x: x, y: y, width: width, height: titleHeight)
-        y += titleHeight + RCSpace.sm
-        let messageHeight = ceil(messageLabel.sizeThatFits(fit).height)
-        messageLabel.frame = CGRect(x: x, y: y, width: width, height: messageHeight)
-        y += messageHeight + RCSpace.xxl
-        if !settingsButton.isHidden {
-            settingsButton.frame = CGRect(x: x, y: y, width: width, height: RCButton.Size.large.height)
-            y += RCButton.Size.large.height + RCSpace.md
-        }
-        pasteButton.frame = CGRect(x: x, y: y, width: width, height: RCButton.Size.large.height)
+        titleFrame = RCLayout.pixelAligned(titleFrame)
+        return Layout(
+            title: titleFrame,
+            message: RCLayout.pixelAligned(messageFrame),
+            spinner: spinnerFrame.map { RCLayout.pixelAligned($0) },
+            height: ceil(height)
+        )
     }
 }

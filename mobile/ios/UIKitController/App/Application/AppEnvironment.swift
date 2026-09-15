@@ -105,12 +105,12 @@ private final class AppAlertsCoordinator {
 
     init(appModel: ControllerAppModel, localDevices: LocalDevicesModel) {
         requestErrors = ErrorChannel(
-            title: "Request failed",
+            title: "Relay error",
             read: { [weak appModel] in appModel?.presentedError },
             clear: { [weak appModel] in appModel?.presentedError = nil }
         )
         localErrors = ErrorChannel(
-            title: "Local devices",
+            title: "Local network",
             read: { [weak localDevices] in localDevices?.errorMessage },
             clear: { [weak localDevices] in localDevices?.errorMessage = nil }
         )

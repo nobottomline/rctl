@@ -1,6 +1,7 @@
 import UIKit
 
 extension RemoteTone {
+    /// Fills, dots and borders.
     var color: UIColor {
         switch self {
         case .success: RCColor.success
@@ -9,6 +10,16 @@ extension RemoteTone {
         case .text: RCColor.text
         case .secondary: RCColor.textSecondary
         case .tertiary: RCColor.textTertiary
+        }
+    }
+
+    /// Text and glyphs (AA variants of the status tones).
+    var textColor: UIColor {
+        switch self {
+        case .success: RCColor.successText
+        case .accent: RCColor.accentText
+        case .danger: RCColor.dangerText
+        case .text, .secondary, .tertiary: color
         }
     }
 }
@@ -209,7 +220,7 @@ final class RemoteModeChip: RCView {
 
     private func applyContent() {
         label.text = text
-        label.color = tone.color
+        label.color = tone.textColor
         label.isHidden = isCompact
         iconView.isHidden = !isCompact
         iconView.glyph = switch glyph {
@@ -217,7 +228,7 @@ final class RemoteModeChip: RCView {
         case .control: .pointer
         case .camera: .camera
         }
-        iconView.tintColor = tone.color
+        iconView.tintColor = tone.textColor
         withoutImplicitAnimations { updateAppearance() }
     }
 
@@ -342,27 +353,19 @@ final class RemoteSessionHeaderView: RCView {
         set {}
     }
 
+    /// Opaque in both styles and never shadowed: the header borders the video,
+    /// so a translucent fill or a shadow would blend with every video frame.
+    /// The hairline (bar) or border (rail) separates it instead.
     override func updateAppearance() {
+        layer.backgroundColor = RCColor.surface.cgColor(for: self)
         if style == .bar {
-            layer.backgroundColor = RCColor.surface.resolved(for: self).withAlphaComponent(0.96).cgColor
             layer.borderWidth = 0
         } else {
-            layer.backgroundColor = RCColor.surface.resolved(for: self).withAlphaComponent(0.96).cgColor
             layer.borderColor = RCColor.line.cgColor(for: self)
             layer.borderWidth = RCLayout.hairline
         }
         hairline.backgroundColor = RCColor.line.cgColor(for: self)
         railDivider.backgroundColor = RCColor.line.cgColor(for: self)
-        applyShadow()
-    }
-
-    /// Only the floating rail pill casts a shadow; the full-bleed bar has nothing beneath it.
-    private func applyShadow() {
-        guard style == .rail, bounds.width > 0 else {
-            RCShadow.clear(layer)
-            return
-        }
-        RCShadow.floating.apply(to: layer, path: UIBezierPath.continuousRoundedRect(bounds, radius: bounds.width / 2).cgPath, traits: traitCollection)
     }
 
     /// Bars: content height below the top safe area. Rail: pill size.
@@ -383,7 +386,6 @@ final class RemoteSessionHeaderView: RCView {
         withoutImplicitAnimations {
             layer.cornerRadius = style == .rail ? bounds.width / 2 : 0
             layer.cornerCurve = .continuous
-            applyShadow()
         }
         switch style {
         case .bar: layoutBar()

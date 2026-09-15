@@ -4,6 +4,10 @@ import UIKit
 /// Text and special-key input for Control mode. Replaces the dock and rides
 /// above the system keyboard. Text is sent as HID keystrokes through the
 /// model; focus stays in the field after sends and key taps.
+///
+/// Regular: the field with Send and Close, and the special-key strip below.
+/// Compact (landscape phones, where the panel overlays the video): one row
+/// with a single-line field, Send, the key strip and Close.
 @MainActor
 final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
     var onSendText: ((String) -> RemoteTextInputResult)?
@@ -12,17 +16,31 @@ final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
     /// The panel's preferred height changed (text wrapped or a message appeared).
     var onHeightChange: (() -> Void)?
 
+    var isCompact = false {
+        didSet {
+            guard isCompact != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
+
     private let inputWell = UIView()
     private let textView = UITextView()
     private let placeholderLabel = RCLabel("Type on the device", style: .body, color: RCColor.textQuaternary)
     private let sendButton = RCIconButton(icon: .arrowUp, variant: .stage, shape: .rounded, diameter: 44, iconSize: 20, accessibilityLabel: "Send text to the device")
     private let closeButton = RCIconButton(icon: .x, variant: .stage, shape: .rounded, diameter: 44, iconSize: 18, accessibilityLabel: "Close keyboard")
+    /// Hosts the strip so its edge fades stay put while the keys scroll.
+    private let keyStripContainer = UIView()
     private let keyStrip = UIScrollView()
+    private let leadingFade = CAGradientLayer()
+    private let trailingFade = CAGradientLayer()
     private let keycaps: [RemoteKeycapButton] = RemoteKeyboardKey.allCases.map { RemoteKeycapButton($0) }
-    private let messageLabel = RCLabel(style: .caption, color: RCColor.danger, lines: 0)
+    private let messageLabel = RCLabel(style: .caption, color: RCColor.dangerText, lines: 0)
 
     private static let padding: CGFloat = 10
     private static let keyHeight: CGFloat = 44
+    private static let keySpacing: CGFloat = 6
+    /// Width of the strip's edge fades.
+    static let fadeWidth: CGFloat = 16
     private static let textInsets = UIEdgeInsets(top: 11, left: 8, bottom: 11, right: 8)
     private static let maximumLines = 3
     private var lastInputHeight: CGFloat = 0
@@ -67,11 +85,23 @@ final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
         keyStrip.showsHorizontalScrollIndicator = false
         keyStrip.alwaysBounceHorizontal = true
         keyStrip.clipsToBounds = true
+        keyStrip.delegate = self
         for keycap in keycaps {
             keycap.onTap = { [weak self] key in self?.sendKey(key) }
             keyStrip.addSubview(keycap)
         }
-        contentView.addSubview(keyStrip)
+        // Fades are opaque-fill gradients over the strip edges, not a layer
+        // mask: the panel can sit over live video, and a mask would add an
+        // offscreen pass to every frame.
+        for fade in [leadingFade, trailingFade] {
+            fade.startPoint = CGPoint(x: 0, y: 0.5)
+            fade.endPoint = CGPoint(x: 1, y: 0.5)
+            fade.opacity = 0
+        }
+        keyStripContainer.addSubview(keyStrip)
+        keyStripContainer.layer.addSublayer(leadingFade)
+        keyStripContainer.layer.addSublayer(trailingFade)
+        contentView.addSubview(keyStripContainer)
 
         messageLabel.isHidden = true
         messageLabel.accessibilityTraits = .staticText
@@ -85,6 +115,14 @@ final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
         inputWell.layer.borderColor = (messageLabel.isHidden ? RCColor.lineStrong : RCColor.danger).cgColor(for: self)
         textView.textColor = RCColor.text
         textView.tintColor = RCColor.accent
+        // The panel always resolves Console tokens; the fades end in its fill.
+        let fill = RCColor.surface.resolvedColor(with: UITraitCollection(traitsFrom: [traitCollection, UITraitCollection(userInterfaceStyle: .dark)]))
+        withoutImplicitAnimations {
+            leadingFade.colors = [fill.cgColor, fill.withAlphaComponent(0).cgColor]
+            trailingFade.colors = [fill.withAlphaComponent(0).cgColor, fill.cgColor]
+            // Chrome next to the video casts no shadow onto it.
+            RCShadow.clear(layer)
+        }
     }
 
     override func updateTypography() {
@@ -147,6 +185,25 @@ final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
         textDidChange(enforceLimit: true)
     }
 
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === keyStrip else { return }
+        updateStripFades()
+    }
+
+    /// Each fade shows only while keys continue past that edge, easing in over
+    /// the first points of scroll so it never pops.
+    private func updateStripFades() {
+        let offset = keyStrip.contentOffset.x
+        let remaining = keyStrip.contentSize.width - keyStrip.bounds.width - offset
+        let leading = Float(min(max(offset / Self.fadeWidth, 0), 1))
+        let trailing = Float(min(max(remaining / Self.fadeWidth, 0), 1))
+        guard leadingFade.opacity != leading || trailingFade.opacity != trailing else { return }
+        withoutImplicitAnimations {
+            leadingFade.opacity = leading
+            trailingFade.opacity = trailing
+        }
+    }
+
     private func textDidChange(enforceLimit: Bool) {
         if enforceLimit {
             let limit = HIDKeyboard.maximumTextCharacters
@@ -181,18 +238,31 @@ final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
 
     // MARK: Layout
 
+    private var maximumLines: Int { isCompact ? 1 : Self.maximumLines }
+
+    /// Width of the text field in the single compact row.
+    private func compactInputWidth(for width: CGFloat) -> CGFloat {
+        let flexible = max(0, width - Self.padding * 2 - 44 * 2 - 8 * 3)
+        return min(max(flexible * 0.42, 150), 300)
+    }
+
     private func inputHeight(for width: CGFloat) -> CGFloat {
-        let textWidth = max(1, width - Self.padding * 2 - 44 * 2 - 8 * 2)
+        let textWidth = isCompact
+            ? max(1, compactInputWidth(for: width))
+            : max(1, width - Self.padding * 2 - 44 * 2 - 8 * 2)
         let font = textView.font ?? RCTypography.font(.body, compatibleWith: traitCollection)
         let lineHeight = font.lineHeight
         let minimum = ceil(lineHeight + Self.textInsets.top + Self.textInsets.bottom)
-        let maximum = ceil(lineHeight * CGFloat(Self.maximumLines) + Self.textInsets.top + Self.textInsets.bottom)
+        let maximum = ceil(lineHeight * CGFloat(maximumLines) + Self.textInsets.top + Self.textInsets.bottom)
         let fitted = ceil(textView.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude)).height)
         return min(max(max(44, minimum), fitted), maximum)
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
-        var height = Self.padding + inputHeight(for: size.width) + 8 + Self.keyHeight + Self.padding
+        let input = inputHeight(for: size.width)
+        var height = isCompact
+            ? Self.padding + max(input, Self.keyHeight) + Self.padding
+            : Self.padding + input + 8 + Self.keyHeight + Self.padding
         if !messageLabel.isHidden {
             height += 6 + messageLabel.sizeThatFits(CGSize(width: size.width - Self.padding * 2 - 4, height: .greatestFiniteMagnitude)).height
         }
@@ -205,9 +275,24 @@ final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
         let padding = Self.padding
         let inputHeight = inputHeight(for: bounds.width)
         lastInputHeight = inputHeight
-        closeButton.frame = CGRect(x: bounds.width - padding - 44, y: padding + inputHeight - 44, width: 44, height: 44)
-        sendButton.frame = CGRect(x: closeButton.frame.minX - 8 - 44, y: closeButton.frame.minY, width: 44, height: 44)
-        inputWell.frame = CGRect(x: padding, y: padding, width: max(0, sendButton.frame.minX - 8 - padding), height: inputHeight)
+        var y: CGFloat
+        if isCompact {
+            let rowHeight = max(inputHeight, Self.keyHeight)
+            let rowMid = padding + rowHeight / 2
+            inputWell.frame = CGRect(x: padding, y: rowMid - inputHeight / 2, width: compactInputWidth(for: bounds.width), height: inputHeight)
+            sendButton.frame = CGRect(x: inputWell.frame.maxX + 8, y: rowMid - 22, width: 44, height: 44)
+            closeButton.frame = CGRect(x: bounds.width - padding - 44, y: rowMid - 22, width: 44, height: 44)
+            let stripX = sendButton.frame.maxX + 8
+            keyStripContainer.frame = CGRect(x: stripX, y: rowMid - Self.keyHeight / 2, width: max(0, closeButton.frame.minX - 8 - stripX), height: Self.keyHeight)
+            y = padding + rowHeight
+        } else {
+            closeButton.frame = CGRect(x: bounds.width - padding - 44, y: padding + inputHeight - 44, width: 44, height: 44)
+            sendButton.frame = CGRect(x: closeButton.frame.minX - 8 - 44, y: closeButton.frame.minY, width: 44, height: 44)
+            inputWell.frame = CGRect(x: padding, y: padding, width: max(0, sendButton.frame.minX - 8 - padding), height: inputHeight)
+            // Aligned with the field and Close, so the fade and the cut sit on the panel's inner edge.
+            keyStripContainer.frame = CGRect(x: padding, y: padding + inputHeight + 8, width: max(0, bounds.width - padding * 2), height: Self.keyHeight)
+            y = keyStripContainer.frame.maxY
+        }
         inputWell.applyCornerRadius(RCRadius.md)
         textView.frame = inputWell.bounds
         textView.isScrollEnabled = textView.contentSize.height > inputHeight + 1
@@ -218,22 +303,33 @@ final class RemoteKeyboardPanelView: RCSurfaceView, UITextViewDelegate {
             width: max(0, inputWell.bounds.width - Self.textInsets.left - Self.textInsets.right),
             height: placeholderHeight
         )
+        layoutKeyStrip()
 
-        var y = padding + inputHeight + 8
-        keyStrip.frame = CGRect(x: 0, y: y, width: bounds.width, height: Self.keyHeight)
-        var x = padding
-        for keycap in keycaps {
-            let width = keycap.sizeThatFits(CGSize(width: 0, height: Self.keyHeight)).width
-            keycap.frame = CGRect(x: x, y: 0, width: width, height: Self.keyHeight)
-            x += width + 6
-        }
-        keyStrip.contentSize = CGSize(width: x - 6 + padding, height: Self.keyHeight)
-        y += Self.keyHeight
         if !messageLabel.isHidden {
             let width = bounds.width - padding * 2 - 4
             let height = messageLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
             messageLabel.frame = CGRect(x: padding + 2, y: y + 6, width: width, height: height)
         }
+    }
+
+    private func layoutKeyStrip() {
+        let size = keyStripContainer.bounds.size
+        keyStrip.frame = CGRect(origin: .zero, size: size)
+        var x: CGFloat = 0
+        for keycap in keycaps {
+            let width = keycap.sizeThatFits(CGSize(width: 0, height: Self.keyHeight)).width
+            keycap.frame = CGRect(x: x, y: 0, width: width, height: Self.keyHeight)
+            x += width + Self.keySpacing
+        }
+        // Fades appear only while keys continue past an edge, so the last key
+        // lands on the edge, fully clear, when scrolled to the end.
+        keyStrip.contentSize = CGSize(width: max(0, x - Self.keySpacing), height: Self.keyHeight)
+        withoutImplicitAnimations {
+            let fade = Self.fadeWidth
+            leadingFade.frame = CGRect(x: 0, y: 0, width: fade, height: size.height)
+            trailingFade.frame = CGRect(x: max(0, size.width - fade), y: 0, width: fade, height: size.height)
+        }
+        updateStripFades()
     }
 }
 

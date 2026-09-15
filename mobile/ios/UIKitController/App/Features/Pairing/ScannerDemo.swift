@@ -3,7 +3,8 @@ import UIKit
 
 /// Replays a scripted detection sequence so the scanner can be reviewed in
 /// the Simulator, which has no camera (`--rctl-route=scan --rctl-scanner-demo`).
-/// Never compiled into Release.
+/// `--rctl-scanner-demo-script=idle` keeps the frame empty (idle breathing
+/// and render-server cost). Never compiled into Release.
 @MainActor
 final class ScannerDemo {
     static var isEnabled: Bool { DebugLaunch.flag("rctl-scanner-demo") }
@@ -35,9 +36,9 @@ final class ScannerDemo {
         // The pairing code stays in view past the simulated claim result and
         // then leaves, so the window returns to rest in the same update that
         // starts breathing (the case that used to oscillate).
-        let script: [(ScannerDetection?, TimeInterval)] = [
-            (nil, 1.5), (foreign, 2), (nil, 3.5), (pairing, 3), (nil, 3.5),
-        ]
+        let script: [(ScannerDetection?, TimeInterval)] = DebugLaunch.argument("rctl-scanner-demo-script") == "idle"
+            ? [(nil, 3_600)]
+            : [(nil, 1.5), (foreign, 2), (nil, 3.5), (pairing, 3), (nil, 3.5)]
         task = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 for (detection, hold) in script {

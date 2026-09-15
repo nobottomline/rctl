@@ -163,7 +163,7 @@ private final class RemoteToolsContentView: RCView {
         badge.isAccessibilityElement = false
         pathRow = RemoteToolsInfoRow(title: "Path", value: path.pathDescription, leadingAccessory: badge)
         endpointRow = RemoteToolsInfoRow(title: "Endpoint", value: path.endpoint, monospaced: true)
-        trustRow = RemoteToolsInfoRow(title: "Trust", value: path.trust, valueColor: path.trustTone.color)
+        trustRow = RemoteToolsInfoRow(title: "Trust", value: path.trust, valueColor: path.trustTone.textColor)
         super.init(frame: .zero)
         subtitleLabel.text = deviceName
         [pathRow, endpointRow, trustRow].forEach(connectionCard.contentView.addSubview)
@@ -330,10 +330,13 @@ private final class RemoteToolsContentView: RCView {
             y += noteHeight + 10
         }
         y += 8
-        place(lockButton, CGRect(x: x, y: y, width: inner, height: RCButton.Size.large.height))
-        y += RCButton.Size.large.height + 10
-        place(reconnectButton, CGRect(x: x, y: y, width: inner, height: RCButton.Size.large.height))
-        y += RCButton.Size.large.height + 20
+        // Titles wrap at accessibility sizes: heights follow the column width.
+        let lockHeight = ceil(lockButton.sizeThatFits(CGSize(width: inner, height: .greatestFiniteMagnitude)).height)
+        place(lockButton, CGRect(x: x, y: y, width: inner, height: lockHeight))
+        y += lockHeight + 10
+        let reconnectHeight = ceil(reconnectButton.sizeThatFits(CGSize(width: inner, height: .greatestFiniteMagnitude)).height)
+        place(reconnectButton, CGRect(x: x, y: y, width: inner, height: reconnectHeight))
+        y += reconnectHeight + 20
         return ceil(y)
     }
 }
@@ -438,7 +441,7 @@ private final class RemoteMetricTile: RCView {
     func configure(_ metric: RemoteDiagnosticsPresentation.Metric) {
         titleLabel.text = metric.title
         valueLabel.text = metric.value
-        valueLabel.color = metric.value == RemoteDiagnosticsPresentation.unavailable ? RCColor.textQuaternary : RCColor.text
+        valueLabel.color = metric.value == RemoteDiagnosticsPresentation.unavailable ? RCColor.textTertiary : RCColor.text
         accessibilityLabel = metric.title
         accessibilityValue = metric.value
     }

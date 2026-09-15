@@ -503,6 +503,12 @@ final class ControllerAppModel: ObservableObject {
 #endif
     }
 
+    static let invalidPairingCodeMessage = "This isn't a valid pairing code. Create a new one in relay admin."
+    static let relayUnreachableMessage = "Can't reach the relay. Check your connection and try again."
+    static let relayTimeoutMessage = "The relay didn't respond in time. Try again."
+
+    /// User-facing copy for relay, pairing and session errors: what happened
+    /// and what to do next. Never includes secrets or raw payloads.
     static func message(for error: Error) -> String {
         switch error {
         case ControllerProfileStoreError.duplicateIdentity:
@@ -513,10 +519,14 @@ final class ControllerAppModel: ObservableObject {
             "The pairing code expired. Create a new one in relay admin."
         case ControllerClientError.incompatibleProtocol:
             "This controller and relay use incompatible protocol versions."
+        case ControllerClientError.unsupportedPairingVersion:
+            "This pairing code is from a newer relay. Update the app, then scan the code again."
         case ControllerClientError.insecureRelayOrigin:
             "Pairing requires an HTTPS relay."
-        case ControllerClientError.invalidPairing:
-            "The pairing code is invalid."
+        // The only decoding the model does itself is the pairing payload;
+        // relay responses surface as `invalidResponse`.
+        case ControllerClientError.invalidPairing, ControllerClientError.invalidRelayOrigin, is DecodingError:
+            invalidPairingCodeMessage
         case ControllerClientError.relayIdentityMismatch,
              ControllerClientError.http(status: 401, code: "relay_identity_mismatch"):
             "The relay identity does not match this pairing code. Create a new code on the intended relay."
@@ -524,6 +534,24 @@ final class ControllerAppModel: ObservableObject {
             "Relay request failed (\(status), \(code))."
         case ControllerClientError.corruptCredential:
             "The local controller credential is missing or damaged. Reset this profile and pair again."
+        case let error as URLError:
+            transportMessage(for: error)
+        default:
+            "The request could not be completed."
+        }
+    }
+
+    private static func transportMessage(for error: URLError) -> String {
+        switch error.code {
+        case .timedOut:
+            relayTimeoutMessage
+        case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost,
+             .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff, .callIsActive:
+            relayUnreachableMessage
+        case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
+             .serverCertificateNotYetValid, .serverCertificateHasUnknownRoot, .clientCertificateRejected,
+             .clientCertificateRequired:
+            "Can't establish a secure connection to the relay. Check its certificate and try again."
         default:
             "The request could not be completed."
         }
