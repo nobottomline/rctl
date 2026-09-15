@@ -7,6 +7,17 @@ fresh-client-build fixes. The existing `v0.4.0` tag and draft stay unchanged and
 unpublished. The checks below identify their own artifact sets; none is
 automatically a qualification report for `0.4.1`.
 
+The `v0.4.1` tag is bound to `71eac0689f93af0cf46eca2b795b2fa1d0b8b9f4`.
+Its [draft build](https://github.com/nobottomline/rctl/actions/runs/35016303247)
+and [CI](https://github.com/nobottomline/rctl/actions/runs/35016073548) are the
+authoritative remote runs; starting them does not imply they passed.
+Local preparation passed `make test`, all 43 device-client tests, Go tests/vet,
+setup/relay/package/qualification race tests, generated-contract verification,
+package-build tests, and the WebRTC packet-budget/ownership/Talk tests. Both
+local public `0.4.1` DEBs built and passed their package audits. These local
+artifacts were not installed or published and are not substitutes for the
+GitHub-built draft bytes.
+
 The rootless device has been restored to the non-pacing baseline
 `0.4.0~test.20260913213641.23e8bcff8aed` through an independent SSH/sudo
 installation. Package audit passed and the relay configuration was verified

@@ -61,15 +61,19 @@ Every stable tag publishes version-matched artifacts:
 ```text
 rctl_<version>_iphoneos-arm.deb
 rctl_<version>_iphoneos-arm64.deb
-rctl-setup_<version>_linux_amd64
-rctl-setup_<version>_linux_arm64
-rctl-relay_<version>_linux_amd64
-rctl-relay_<version>_linux_arm64
+rctl-setup_linux_amd64
+rctl-setup_linux_arm64
+rctl-relay_linux_amd64
+rctl-relay_linux_arm64
+rctl-update-stable.json
+rctl-update-rootless-stable.json
 install.sh
 SHA256SUMS
 ```
 
-The dual-package release contract applies to the upcoming `0.4.0` release;
+The binaries and catalogs are version-scoped by their immutable release URL,
+not by an extra version component in their filenames. The dual-package release
+contract applies to the upcoming `0.4.x` release line;
 older rootful-only releases remain valid inputs to the bootstrap. Each package
 has its own architecture-bound update catalog; see `UPDATES.md`.
 
@@ -96,9 +100,11 @@ creates GitHub's signed release attestation. [Setup qualification](SETUP-QUALIFI
 records current evidence and [release qualification](QUALIFICATION.md) defines
 the enforced draft-to-publication procedure.
 
-`update-manifest.json` is published only when a previous verified package is
-available for rollback. It is signed by the independent device-update key and
-is uploaded last; it is not a generic artifact produced for a first release.
+The two update catalogs are signed by the independent device-update key and
+assembled with the draft. The first rootless catalog can contain only its
+target, since no earlier public rootless package exists. This does not allow a
+transactional update without a verified installed-version rollback artifact;
+see [UPDATES.md](UPDATES.md) for that requirement and separate test catalogs.
 
 While the repository and container package are private, this pipeline is a
 maintainer dry run and requires GitHub authentication. No private token may be
