@@ -73,13 +73,18 @@ final class AppRouter {
     }
 
     /// Pairing finished somewhere in the flow: return to the device list.
+    /// Only a change of the selected relay identity counts; authorization
+    /// updates to the current profile (renames, permissions from the heartbeat)
+    /// must not close a pairing screen the user is working in.
     func startObservingPairing() {
         environment.appModel.$profile
+            .map { profile in profile.map { "\($0.relayID)\n\($0.origin)\n\($0.controller.id)" } }
+            .removeDuplicates()
             .dropFirst()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] profile in
+            .sink { [weak self] identity in
                 MainActor.assumeIsolated {
-                    guard let self, profile != nil, self.routes.contains(where: \.isPairing) else { return }
+                    guard let self, identity != nil, self.routes.contains(where: \.isPairing) else { return }
                     self.popToRoot()
                 }
             }

@@ -97,11 +97,11 @@ final class RCProgressRequest: RCQueuedModalRequest {
     private func performDismiss() {
         guard state == .visible || state == .presenting else { return }
         RCModalQueue.shared.markDismissing(self)
-        guard let controller, controller.presentingViewController != nil else {
+        guard let controller, let presenting = controller.presentingViewController else {
             RCModalQueue.shared.controllerDidDismiss(for: self)
             return
         }
-        controller.dismiss(animated: animatesDismissal && RCModalSupport.animationsEnabled)
+        presenting.dismiss(animated: animatesDismissal && RCModalSupport.animationsEnabled)
     }
 
     override func didFinish() {

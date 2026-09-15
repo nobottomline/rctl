@@ -895,18 +895,23 @@ final class DevicesViewController: RCViewController, UIScrollViewDelegate {
             actions: [
                 RCDialogAction("Keep", style: .cancel) { [weak self] in
                     guard let self else { return }
-                    self.presentingDeletionFailure = false
                     if self.appModel.relayDeletionFailure == failure { self.appModel.relayDeletionFailure = nil }
                 },
                 RCDialogAction("Delete anyway", style: .destructive) { [weak self] in
                     guard let self else { return }
-                    self.presentingDeletionFailure = false
                     // A stale dialog must not delete a profile whose failure was cleared or replaced.
                     guard self.appModel.relayDeletionFailure == failure else { return }
                     self.appModel.forceDeleteRelay()
                 },
             ],
-            from: self
+            from: self,
+            onFinish: { [weak self] in
+                // Also runs when the card is torn down without a choice, so the
+                // screen can offer a newer failure instead of staying blocked.
+                guard let self else { return }
+                self.presentingDeletionFailure = false
+                self.presentDeletionFailureIfNeeded()
+            }
         )
     }
 

@@ -86,53 +86,85 @@ private final class PresenceCoordinator {
 }
 
 /// Presents model-level errors that are not owned by a specific screen.
+/// One dialog per source at a time; a newer error that arrives while one is
+/// shown is presented after it, and a model error is cleared only if it is
+/// still the message the user saw.
 @MainActor
 private final class AppAlertsCoordinator {
-    weak var window: UIWindow?
+    weak var window: UIWindow? {
+        didSet {
+            requestErrors.window = window
+            localErrors.window = window
+            requestErrors.presentIfNeeded()
+            localErrors.presentIfNeeded()
+        }
+    }
     private var cancellables: Set<AnyCancellable> = []
-    private var presentingRequestError = false
-    private var presentingLocalError = false
+    private let requestErrors: ErrorChannel
+    private let localErrors: ErrorChannel
 
     init(appModel: ControllerAppModel, localDevices: LocalDevicesModel) {
+        requestErrors = ErrorChannel(
+            title: "Request failed",
+            read: { [weak appModel] in appModel?.presentedError },
+            clear: { [weak appModel] in appModel?.presentedError = nil }
+        )
+        localErrors = ErrorChannel(
+            title: "Local devices",
+            read: { [weak localDevices] in localDevices?.errorMessage },
+            clear: { [weak localDevices] in localDevices?.errorMessage = nil }
+        )
+        // `@Published` emits before storing; reading on the next turn sees the settled value.
         appModel.$presentedError
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak appModel] message in
-                MainActor.assumeIsolated {
-                    guard let self, let message, !self.presentingRequestError else { return }
-                    self.presentingRequestError = true
-                    self.present(title: "Request failed", message: message) {
-                        self.presentingRequestError = false
-                        appModel?.presentedError = nil
-                    }
-                }
-            }
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.requestErrors.presentIfNeeded() } }
             .store(in: &cancellables)
         localDevices.$errorMessage
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak localDevices] message in
-                MainActor.assumeIsolated {
-                    guard let self, let message, !self.presentingLocalError else { return }
-                    self.presentingLocalError = true
-                    self.present(title: "Local devices", message: message) {
-                        self.presentingLocalError = false
-                        localDevices?.errorMessage = nil
-                    }
-                }
-            }
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.localErrors.presentIfNeeded() } }
             .store(in: &cancellables)
     }
+}
 
-    private func present(title: String, message: String, completion: @escaping @MainActor () -> Void) {
-        guard let root = window?.rootViewController else { completion(); return }
+@MainActor
+private final class ErrorChannel {
+    weak var window: UIWindow?
+    private let title: String
+    private let read: @MainActor () -> String?
+    private let clear: @MainActor () -> Void
+    /// Message currently on screen (or queued in the dialog queue).
+    private var shown: String?
+
+    init(title: String, read: @escaping @MainActor () -> String?, clear: @escaping @MainActor () -> Void) {
+        self.title = title
+        self.read = read
+        self.clear = clear
+    }
+
+    func presentIfNeeded() {
+        guard shown == nil, let message = read(), let root = window?.rootViewController else { return }
+        shown = message
         RCDialog.present(
             title: title,
             message: message,
             icon: .circleAlert,
             tone: .danger,
-            actions: [RCDialogAction("OK", style: .primary, handler: completion)],
-            from: root
+            actions: [RCDialogAction("OK", style: .primary)],
+            from: root,
+            onFinish: { [weak self] in self?.didFinish(message) }
         )
+    }
+
+    /// Runs once the dialog is gone, whether OK was tapped or the card was torn
+    /// down with its presenter, so the channel can never stay blocked.
+    private func didFinish(_ message: String) {
+        shown = nil
+        if read() == message {
+            clear()
+        } else {
+            presentIfNeeded()
+        }
     }
 }

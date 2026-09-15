@@ -154,6 +154,7 @@ final class RCSheetSession: NSObject, UIViewControllerTransitioningDelegate {
             from: presenter,
             window: presenter.viewIfLoaded?.window,
             animated: RCModalSupport.animationsEnabled,
+            waitsForDialogs: true,
             isCancelled: { [weak self] in self?.state != .waiting }
         ) { [weak self] presented in
             guard let self else { return }

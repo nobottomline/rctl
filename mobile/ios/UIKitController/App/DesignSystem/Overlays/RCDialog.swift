@@ -42,11 +42,13 @@ enum RCDialog {
         icon: RCIconGlyph? = nil,
         tone: Tone = .neutral,
         actions: [RCDialogAction],
-        from presenter: UIViewController
+        from presenter: UIViewController,
+        onFinish: (@MainActor () -> Void)? = nil
     ) {
         let request = RCDialogRequest(
             content: RCDialogContent(title: title, message: message, icon: icon, tone: tone, actions: actions),
-            presenter: presenter
+            presenter: presenter,
+            onFinish: onFinish
         )
         RCModalQueue.shared.enqueue(request)
     }
@@ -216,9 +218,13 @@ struct RCDialogContent {
 final class RCDialogRequest: RCQueuedModalRequest {
     let content: RCDialogContent
     private(set) var chosenIndex: Int?
+    /// Runs exactly once after the dialog is gone, whether an action was
+    /// chosen or the card was torn down with its presenter.
+    private var onFinish: (@MainActor () -> Void)?
 
-    init(content: RCDialogContent, presenter: UIViewController) {
+    init(content: RCDialogContent, presenter: UIViewController, onFinish: (@MainActor () -> Void)? = nil) {
         self.content = content
+        self.onFinish = onFinish
         super.init(presenter: presenter)
     }
 
@@ -245,11 +251,13 @@ final class RCDialogRequest: RCQueuedModalRequest {
         chosenIndex = index
         (controller as? RCDialogViewController)?.lockActions()
         RCModalQueue.shared.markDismissing(self)
-        guard let controller, controller.presentingViewController != nil else {
+        guard let controller, let presenting = controller.presentingViewController else {
             RCModalQueue.shared.controllerDidDismiss(for: self)
             return true
         }
-        controller.dismiss(animated: RCModalSupport.animationsEnabled)
+        // Ask the presenter: `controller.dismiss` would close whatever the card
+        // itself presented (e.g. a sheet stacked above it) instead of the card.
+        presenting.dismiss(animated: RCModalSupport.animationsEnabled)
         return true
     }
 
@@ -259,8 +267,12 @@ final class RCDialogRequest: RCQueuedModalRequest {
     }
 
     override func didFinish() {
-        guard let chosenIndex else { return }
-        content.actions[chosenIndex].handler?()
+        if let chosenIndex {
+            content.actions[chosenIndex].handler?()
+        }
+        let finish = onFinish
+        onFinish = nil
+        finish?()
     }
 }
 

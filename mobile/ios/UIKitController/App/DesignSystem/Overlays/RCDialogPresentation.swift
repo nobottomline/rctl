@@ -53,10 +53,13 @@ class RCCardViewController: UIViewController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        // Safety net for teardown paths that skip presentation callbacks.
-        DispatchQueue.main.async { [weak self] in
+        // Safety net for teardown paths that skip presentation callbacks (the
+        // card went away with its presenter). Keep the card alive until the
+        // check runs: the queue holds it weakly, so a weak capture here would
+        // let it deallocate first and leave the queue blocked forever.
+        DispatchQueue.main.async { [self] in
             MainActor.assumeIsolated {
-                guard let self, self.presentingViewController == nil else { return }
+                guard self.presentingViewController == nil else { return }
                 self.finishIfNeeded()
             }
         }

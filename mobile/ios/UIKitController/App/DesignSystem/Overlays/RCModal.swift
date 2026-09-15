@@ -115,10 +115,11 @@ enum RCModalSupport {
         from presenter: UIViewController?,
         window: UIWindow?,
         animated: Bool,
+        waitsForDialogs: Bool = false,
         isCancelled: @escaping @MainActor () -> Bool = { false },
         completion: @escaping @MainActor (Bool) -> Void
     ) {
-        attemptPresent(controller, presenter: presenter, window: window, animated: animated, isCancelled: isCancelled, attempt: 0, completion: completion)
+        attemptPresent(controller, presenter: presenter, window: window, animated: animated, waitsForDialogs: waitsForDialogs, isCancelled: isCancelled, attempt: 0, completion: completion)
     }
 
     private static func attemptPresent(
@@ -126,6 +127,7 @@ enum RCModalSupport {
         presenter: UIViewController?,
         window: UIWindow?,
         animated: Bool,
+        waitsForDialogs: Bool,
         isCancelled: @escaping @MainActor () -> Bool,
         attempt: Int,
         completion: @escaping @MainActor (Bool) -> Void
@@ -139,13 +141,16 @@ enum RCModalSupport {
             || base.transitionCoordinator != nil
             || base.isBeingPresented
             || base.isBeingDismissed
+            // A sheet must never cover a dialog or progress card: its actions
+            // would then close the sheet instead of the card.
+            || (waitsForDialogs && !RCModalQueue.shared.isIdle)
         // Give in-flight transitions time to finish (≈ 3 s), then keep polling
         // slowly: a dialog carrying an error must still appear eventually.
         if busy {
             let delay: TimeInterval = attempt < 60 ? 0.05 : 0.5
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 MainActor.assumeIsolated {
-                    attemptPresent(controller, presenter: presenter, window: window, animated: animated, isCancelled: isCancelled, attempt: attempt + 1, completion: completion)
+                    attemptPresent(controller, presenter: presenter, window: window, animated: animated, waitsForDialogs: waitsForDialogs, isCancelled: isCancelled, attempt: attempt + 1, completion: completion)
                 }
             }
             return
