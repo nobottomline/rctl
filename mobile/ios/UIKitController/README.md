@@ -48,6 +48,7 @@ Debug launch arguments (Release ignores them), handled in
 - `--rctl-scanner-state=denied|unavailable`, `--rctl-pairing-action=paste|claim-invalid` — camera-less scanner states and pairing actions without network
 - `--rctl-editor-error` / `--rctl-editor-pending` — local device editor error and checking states without network
 - `--rctl-remote-demo=connecting|live|control|camera|failed|reconnecting|stalled|ended|keyboard|tools|lock|source-menu|missing|cycle` with `--rctl-route=remote` (`--rctl-remote-demo-path=relay`, `--rctl-remote-demo-orientation=landscape`) — remote session states without a connection
+- `--rctl-demo=first-run|nearby-denied|nearby-searching|nearby-empty|relay-loading`, `--rctl-demo-menu=<menu or dialog>`, `--rctl-demo-sheet`, `--rctl-demo-cycle`, `--rctl-scroll=<pt>` — Devices screen fixtures, menus and states
 - `--rctl-allow-insecure-loopback` / `RCTL_CONTROLLER_ALLOW_INSECURE_LOOPBACK=1` — loopback HTTP relay for tests
 
 ## Architecture
