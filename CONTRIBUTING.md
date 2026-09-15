@@ -26,6 +26,40 @@ Keep unrelated fixes and formatting out of the change. Dependency updates also
 need evidence: a green build is not proof that audio still plays or a release
 workflow still publishes correct artifacts.
 
+## Fork and Pull Request Workflow
+
+1. Fork the repository and create a topic branch in your fork, not in `main`.
+2. Make one focused change and run the relevant development checks.
+3. Push the branch to your fork and open a PR targeting this repository's `main`.
+4. Complete the PR template, respond to review, and keep the branch up to date
+   with `main`. A maintainer may need to approve the workflow run for a first-time
+   contributor; that approval is separate from approval of the code.
+5. A maintainer reviews and merges the PR after the requirements below pass.
+
+Contributors do not need write access to submit a PR. Appointed maintainers with
+write access may use a branch in this repository instead of a fork, but still
+follow the same PR requirements.
+
+## Review and Branch Rules
+
+PRs require one approving review from an eligible maintainer with write access,
+resolved review conversations, and successful required CI/CodeQL checks against
+an up-to-date branch. New reviewable commits dismiss stale approvals. Authors
+cannot approve their own PRs. [CODEOWNERS](.github/CODEOWNERS) requests review
+from the project owner by default; it does not grant permissions or require an
+additional owner-only approval. The owner can appoint other maintainers to
+review and merge contributions without granting them a direct-push exception.
+
+The `Main contribution checks` ruleset has a personal bypass for `@nobottomline`.
+The owner may push ordinary commits directly to `main` or merge without the PR
+gates; other users and bots do not have that exception. Direct owner pushes
+still trigger CI, but checks run after the push rather than blocking it.
+
+The separate `Protect main history` ruleset prohibits force-push and deletion
+of `main` with no bypass. Keep these rulesets separate: the owner's contribution
+bypass must not weaken history protection. Changing the list of CI jobs also
+requires updating the ruleset's exact check names and their GitHub Actions source.
+
 ## Protect Users
 
 - Preserve LAN access when a relay is absent or unavailable, except for the

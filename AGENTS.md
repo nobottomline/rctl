@@ -123,8 +123,12 @@ needed and report anything not exercised. An untested path stays unqualified.
 
 ## Delivery
 
-Work on the current primary branch unless the task requires another branch or
-worktree. Stage only task-owned files and commit coherent, verified work with
+Owner-authorized work may use the current primary branch unless the task
+requires another branch or worktree. External contributions use a fork and
+topic branch; other maintainers also submit PRs. Follow the
+[contribution workflow](CONTRIBUTING.md#fork-and-pull-request-workflow).
+The owner's personal bypass is not permission to force-push or delete `main`.
+Stage only task-owned files and commit coherent, verified work with
 concise English Conventional Commit messages. Keep AI signatures and
 `Co-authored-by` trailers out of commit messages. Do not commit generated build
 artifacts or personalized packages.
