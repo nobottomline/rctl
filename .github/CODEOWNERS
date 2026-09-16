@@ -1,0 +1,3 @@
+# Default review routing. Required approval may come from any appointed
+# maintainer with write access; code-owner approval is not separately required.
+* @nobottomline
