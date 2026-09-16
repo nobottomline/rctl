@@ -3,7 +3,7 @@
 This record distinguishes implemented behavior from release qualification. It
 contains no private hostname, address, credential, device identity, or package.
 
-## Managed host updater: unreleased implementation
+## Managed host updater: qualification prereleases
 
 Local verification covers signed catalog verification and replay/expiry
 rejection; artifact hash/size checks before execution; serialized durable jobs;
@@ -23,7 +23,7 @@ existing admin session once the API recovered, without another login.
 The fixture deliberately substitutes installation outcomes: it is not evidence
 of a real server upgrade, Docker restart, or signed release publication.
 
-Before enabling this in a public release, qualify two downloadable signed
+Before enabling this in a stable release, qualify two downloadable signed
 release sets on a disposable wizard-managed VPS: update through the admin
 button; reopen the page during restart; confirm preserved credentials, device
 bindings and data; exercise failed health verification and restart recovery;
@@ -37,9 +37,75 @@ Follow-up restart regressions cover a recent catalog timestamp after process
 restart, a stale job phase with a pending lifecycle checkpoint, failed recovery
 preserving staged evidence, and operator recovery unblocking the next service
 start. The runtime-directory contract now preserves the Docker-bound directory
-across stop/start. This setting still requires the real systemd/container test;
-a unit assertion is not runtime proof. Publication report schema 5 requires the
+across stop/start; the real systemd/container rehearsal is recorded below.
+A unit assertion alone is not runtime proof. Publication report schema 5 requires the
 five host-update acceptance checks in [QUALIFICATION.md](QUALIFICATION.md).
+
+### 2026-09-16 temporary-host rehearsal
+
+Published `v0.4.2` (source `9775071`, workflow `35135214845`) and `v0.4.3`
+(source `6fcfb7e`, workflow `35135447428`) as qualification-only prereleases,
+explicitly excluding `latest` and APT promotion. Stable remained `v0.3.2`.
+Downloaded release checksums, signed host catalogs, and GitHub provenance
+were verified against the exact source tags; `v0.4.3` CI passed. These two
+versions share runtime code: the version transition is intentional test input.
+
+On an existing wizard-managed Ubuntu amd64 VPS, with both public package lanes
+configured and device updates disabled:
+
+- The verified bootstrap upgraded the existing preview to `0.4.2`, created its
+  pre-upgrade backup, verified HTTPS/WebSocket/admin authentication and relay
+  restart persistence, and activated the real systemd supervisor.
+- The root-managed source selected the official `v0.4.3` signed host catalog.
+  The admin UI discovered the newer version with automatic installation off.
+  **Update relay** and **Install update** installed `0.4.3`; reloading during
+  restart retained the admin session. The UI showed the completed job, the
+  existing device reconnected, and relay/TURN were healthy. Device update
+  policy remained off; no device package was installed.
+- Separate supervisor restart and stop/start retained the inode of its
+  Docker-bound socket directory. While stopped, the reloaded admin page showed
+  service unavailability without logging out; status recovered after start.
+  Rapid test restarts exhausted systemd's five-start/300-second guard once;
+  an operator reset of that counter restored the supervisor. This intervention
+  is not counted as unattended restart success.
+- After a verified restore to `0.4.2`, the supervisor service cgroup was killed
+  only after the upgrade checkpoint and target manifest existed. Its automatic
+  restart recovered the backup, cleared the checkpoint, and returned healthy
+  `0.4.2`. The persisted job and UI reported an interrupted/recovered update.
+- A separate retry stopped only the newly applied `0.4.3` relay container.
+  Failed runtime verification automatically rolled back to healthy `0.4.2`;
+  the checkpoint cleared and the UI retained a failed job instead of claiming
+  success. Fault injection changed neither release artifacts nor the iPad.
+- Enabling automatic installation in the current UTC window after that failure
+  did not retry the failed target, including after a supervisor restart and a
+  scheduler tick. The UI could disable the policy again. An unauthenticated
+  request to the deployed host-update API returned `401`.
+- For an independent scheduler test, the failed-job state was archived with the
+  supervisor stopped, then a fresh supervisor state was created against the
+  same signed B source and restored A deployment. Relay data, credentials, and
+  release artifacts were not reset. UI opt-in followed by opt-out prevented a
+  new job throughout a 65-second interval in the current maintenance window.
+  After explicit UI opt-in again, a scheduler tick installed `0.4.3` without
+  pressing **Update relay**. Relay, setup, and supervisor reported `0.4.3`, the
+  job succeeded, and the supervisor restarted without operator intervention.
+- Read-only SQLite integrity and comparisons against the pre-test backup
+  confirmed retained device identities/approvals, controller public keys/scopes,
+  and relay metadata. Admin/session/TURN secrets were unchanged.
+- A real VPS reboot restored the relay, TURN, and supervisor without operator
+  startup commands. The signed catalog was rechecked, the successful job and
+  enabled schedule survived, and the existing admin session reopened the page.
+  The test finished on `0.4.3` with automatic installation disabled and the
+  maintenance hour restored to `03:00` UTC. Device updates remained disabled.
+- Final `doctor` checks passed for ownership, managed permissions, protected
+  secrets, Compose, service health, HTTPS and WebSocket routes. Its external
+  TURN-allocation warning remains: this host-updater rehearsal did not retest
+  off-host TURN traffic or device media/control behavior.
+
+This is scoped engineering evidence, not a complete schema-5 publication report.
+Fresh-host supervisor activation and the remaining release-wide acceptance
+checks still need explicit evidence. The existing-install migration above must
+not be reported as a clean-host bootstrap, and prerelease results do not qualify
+different stable artifacts automatically.
 
 ## 2026-08-21 through 2026-08-22 engineering qualification
 
