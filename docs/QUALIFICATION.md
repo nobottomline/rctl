@@ -63,15 +63,18 @@ assets.
 ## Qualification report
 
 The report is privacy-safe evidence binding the external acceptance run to the
-exact artifacts under review. Schema 4 adds required rootless acceptance checks;
-schema-3 reports do not establish those checks and are rejected. It is strict: unknown fields, trailing
+exact artifacts under review. Schema 5 retains rootless acceptance and adds the
+managed host-update service. Schema-4 and older reports do not establish the new
+checks and are rejected; changing only their schema number is not qualification.
+The independent APT rootless admission report has a separate schema and is not
+changed by this version. Validation is strict: unknown fields, trailing
 JSON, symlinks, oversized input, malformed identities, reports older than 30
 days, reports over five minutes in the future, and any false or missing check
 are rejected.
 
 ```json
 {
-  "schema": 4,
+  "schema": 5,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",
@@ -111,12 +114,42 @@ are rejected.
     "rootless_personalization": false,
     "rootless_relay_control": false,
     "rootless_device_update": false,
-    "rootless_device_rollback": false
+    "rootless_device_rollback": false,
+    "host_update_bootstrap": false,
+    "host_update_admin": false,
+    "host_update_automatic": false,
+    "host_update_restart": false,
+    "host_update_recovery": false
   }
 }
 ```
 
 The checks have the following minimum evidence contract:
+
+- `host_update_bootstrap`: the verified bootstrap activates the actual systemd
+  update service on a fresh host and on an existing wizard-managed deployment.
+  An authenticated admin can read its status through the relay container, and
+  automatic installation is off until explicit consent. Check both installation
+  paths; mocked systemctl results are insufficient.
+- `host_update_admin`: the admin **Update relay** button installs a newer signed
+  release through the host supervisor. Reload the page during downtime; it must
+  recover without another login. Verify target version, preserved credentials,
+  device bindings and persistent data, and post-update relay/TURN health.
+- `host_update_automatic`: on a disposable host, enable a maintenance window
+  through the admin UI, observe a real scheduled installation, and verify that
+  disabling the policy prevents it. A failed target must not loop unattended.
+  Confirm that this policy never installs a device package on an iPad.
+- `host_update_restart`: restart and separately stop/start the actual update
+  service without recreating the relay container. Status/check must reconnect
+  through its existing Unix-socket directory bind mount. Reboot the host and
+  verify recovery of policy, last job and verified release discovery.
+- `host_update_recovery`: make a target unhealthy after application and observe
+  rollback to the previous healthy deployment. Separately interrupt installation
+  after mutation; restart the supervisor and verify checkpoint recovery before
+  accepting further work. Confirm data/identity preservation and an honest final
+  job state. Unresolved recovery must block installation, and successful operator
+  recovery followed by service restart must unblock it. Faults belong only on a
+  disposable host with a verified recovery path, never in stable artifacts.
 
 - `bootstrap`: a clean host installed from the complete checksum- and
   provenance-verified draft asset set and pulled the exact digest-pinned

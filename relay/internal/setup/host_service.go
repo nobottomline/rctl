@@ -54,6 +54,8 @@ TimeoutStopSec=1300
 KillMode=mixed
 RuntimeDirectory=rctl-update
 RuntimeDirectoryMode=0755
+# Docker binds this directory, not the socket. Keep its inode across restarts.
+RuntimeDirectoryPreserve=yes
 UMask=0077
 NoNewPrivileges=true
 # Docker must see the private temporary candidate paths used by setup validation.

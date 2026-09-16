@@ -168,13 +168,19 @@ func (u *HostUpdater) Start(ctx context.Context) error {
 	if err := os.MkdirAll(u.stateDir, 0o700); err != nil {
 		return err
 	}
-	if u.state.Status.Phase == "installing" || u.state.Status.Phase == "downloading" || u.state.Status.Phase == "recovering" {
+	_, checkpointErr := os.Lstat(u.paths.RecoveryPath)
+	if checkpointErr != nil && !errors.Is(checkpointErr, os.ErrNotExist) {
+		return checkpointErr
+	}
+	// The lifecycle checkpoint is authoritative even when persisting the job
+	// result failed. Re-evaluate a prior recovery failure after operator repair.
+	if checkpointErr == nil || u.state.Status.Phase == "installing" || u.state.Status.Phase == "downloading" || u.state.Status.Phase == "recovering" || u.state.Status.Phase == "recovery_required" {
 		recoveryCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 		recoveryErr := u.recover(recoveryCtx)
 		cancel()
 		if recoveryErr != nil {
 			u.state.Status.Phase = "recovery_required"
-			u.state.Status.Error = "Recovery needs operator attention. Run rctl-setup recover on the VPS."
+			u.state.Status.Error = "Recovery needs operator attention. Run rctl-setup recover, then restart rctl-update-agent on the VPS."
 		} else {
 			u.state.Status.Phase = "interrupted"
 			u.state.Status.Error = "The interrupted update was recovered. Check the installed version before retrying."
@@ -212,7 +218,9 @@ func (u *HostUpdater) Start(ctx context.Context) error {
 	u.wg.Add(1)
 	go func() {
 		defer u.wg.Done()
-		_ = u.Check()
+		// Catalog bytes are deliberately not persisted. A recent check timestamp
+		// must not suppress verification after a restart or leave 'checking' stuck.
+		_ = u.checkRelease(true)
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
@@ -239,11 +247,15 @@ func (u *HostUpdater) tick() {
 	if check {
 		_ = u.Check()
 	} else if install {
-		_ = u.Install(s.Latest)
+		_ = u.install(s.Latest, true)
 	}
 }
 
 func (u *HostUpdater) Check() error {
+	return u.checkRelease(false)
+}
+
+func (u *HostUpdater) checkRelease(force bool) error {
 	u.mu.Lock()
 	if u.ctx.Err() != nil {
 		u.mu.Unlock()
@@ -257,7 +269,7 @@ func (u *HostUpdater) Check() error {
 		u.mu.Unlock()
 		return errors.New("recovery required")
 	}
-	if u.now().Unix()-u.state.Status.CheckedAt < 60 {
+	if !force && u.now().Unix()-u.state.Status.CheckedAt < 60 {
 		u.mu.Unlock()
 		return nil
 	}
@@ -327,10 +339,18 @@ func (u *HostUpdater) Policy(p HostUpdatePolicy) error {
 }
 
 func (u *HostUpdater) Install(version string) error {
+	return u.install(version, false)
+}
+
+func (u *HostUpdater) install(version string, automatic bool) error {
 	u.mu.Lock()
 	if u.ctx.Err() != nil {
 		u.mu.Unlock()
 		return errors.New("update service is stopping")
+	}
+	if automatic && (!u.state.Status.Policy.Automatic || u.now().UTC().Hour() != u.state.Status.Policy.HourUTC || u.state.Attempted == version) {
+		u.mu.Unlock()
+		return errors.New("automatic update is not authorized")
 	}
 	if u.busy || !u.snapshotLocked().Available || version != u.state.Status.Latest || u.state.Status.Phase == "recovery_required" {
 		u.mu.Unlock()
@@ -370,7 +390,7 @@ func (u *HostUpdater) Install(version string) error {
 			u.mu.Lock()
 			if recoveryErr != nil {
 				u.state.Status.Phase = "recovery_required"
-				u.state.Status.Error = "Update recovery needs operator attention. Run rctl-setup recover on the VPS."
+				u.state.Status.Error = "Update recovery needs operator attention. Run rctl-setup recover, then restart rctl-update-agent on the VPS."
 			} else {
 				u.state.Status.Phase = "failed"
 				u.state.Status.Error = "Update did not complete. Check the installed version; automatic retry is paused for this release."

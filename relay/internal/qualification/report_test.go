@@ -26,6 +26,8 @@ func validReport() (Report, Expected) {
 		UninstallKeepData: true, UninstallDeleteData: true,
 		RootlessInstall: true, RootlessPackageManagerUpgrade: true, RootlessPersonalization: true,
 		RootlessRelayControl: true, RootlessDeviceUpdate: true, RootlessDeviceRollback: true,
+		HostUpdateBootstrap: true, HostUpdateAdmin: true, HostUpdateAutomatic: true,
+		HostUpdateRestart: true, HostUpdateRecovery: true,
 	}
 	return Report{
 		Schema: ReportSchema, Product: "rctl", Tag: "v1.2.3", Version: "1.2.3", SourceSHA: commit,
@@ -89,6 +91,9 @@ func TestValidateRejectsEveryIncompleteCheck(t *testing.T) {
 		{"rootless_install", &checks.RootlessInstall}, {"rootless_package_manager_upgrade", &checks.RootlessPackageManagerUpgrade},
 		{"rootless_personalization", &checks.RootlessPersonalization}, {"rootless_relay_control", &checks.RootlessRelayControl},
 		{"rootless_device_update", &checks.RootlessDeviceUpdate}, {"rootless_device_rollback", &checks.RootlessDeviceRollback},
+		{"host_update_bootstrap", &checks.HostUpdateBootstrap}, {"host_update_admin", &checks.HostUpdateAdmin},
+		{"host_update_automatic", &checks.HostUpdateAutomatic}, {"host_update_restart", &checks.HostUpdateRestart},
+		{"host_update_recovery", &checks.HostUpdateRecovery},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

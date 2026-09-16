@@ -789,7 +789,7 @@ that draft before installing another candidate or running host lifecycle tests.
    complete. Re-run the required release matrix for both package architectures,
    including package-manager upgrade/recovery and rootful transactional compatibility.
    The RC tests above cannot sign off different final artifact hashes.
-3. Record only completed schema-4 qualification checks, then publish through
+3. Record only completed checks in the current [qualification schema](QUALIFICATION.md), then publish through
    the guarded release/APT workflows. Never use a personalized DEB as a public
    artifact or omit the installed-version rollback source from an update feed.
 

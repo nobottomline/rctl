@@ -18,7 +18,7 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
 	checksums := strings.Repeat("b", 64)
 	image := "ghcr.io/nobottomline/rctl-relay@sha256:" + strings.Repeat("c", 64)
 	raw := []byte(`{
-  "schema": 4,
+  "schema": 5,
   "product": "rctl",
   "tag": "v1.2.3",
   "version": "1.2.3",
@@ -41,7 +41,10 @@ func TestRunVerifiesExactReportAndDigest(t *testing.T) {
     "uninstall_keep_data": true, "uninstall_delete_data": true,
     "rootless_install": true, "rootless_package_manager_upgrade": true,
     "rootless_personalization": true, "rootless_relay_control": true,
-    "rootless_device_update": true, "rootless_device_rollback": true
+    "rootless_device_update": true, "rootless_device_rollback": true,
+    "host_update_bootstrap": true, "host_update_admin": true,
+    "host_update_automatic": true, "host_update_restart": true,
+    "host_update_recovery": true
   }
 }`)
 	path := filepath.Join(t.TempDir(), "report.json")

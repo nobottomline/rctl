@@ -33,6 +33,14 @@ Device updates require their own rootful/rootless acceptance and are not
 automatically installed by the host policy. Existing version-scoped device and
 server qualification below does not qualify this new host supervisor.
 
+Follow-up restart regressions cover a recent catalog timestamp after process
+restart, a stale job phase with a pending lifecycle checkpoint, failed recovery
+preserving staged evidence, and operator recovery unblocking the next service
+start. The runtime-directory contract now preserves the Docker-bound directory
+across stop/start. This setting still requires the real systemd/container test;
+a unit assertion is not runtime proof. Publication report schema 5 requires the
+five host-update acceptance checks in [QUALIFICATION.md](QUALIFICATION.md).
+
 ## 2026-08-21 through 2026-08-22 engineering qualification
 
 Qualification target: the immutable commit referenced by tag `v0.3.0`. Several

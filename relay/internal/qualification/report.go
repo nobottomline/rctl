@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	ReportSchema   = 4
+	ReportSchema   = 5
 	maxReportBytes = 1 << 20
 )
 
@@ -58,6 +58,11 @@ type Checks struct {
 	RootlessRelayControl          bool `json:"rootless_relay_control"`
 	RootlessDeviceUpdate          bool `json:"rootless_device_update"`
 	RootlessDeviceRollback        bool `json:"rootless_device_rollback"`
+	HostUpdateBootstrap           bool `json:"host_update_bootstrap"`
+	HostUpdateAdmin               bool `json:"host_update_admin"`
+	HostUpdateAutomatic           bool `json:"host_update_automatic"`
+	HostUpdateRestart             bool `json:"host_update_restart"`
+	HostUpdateRecovery            bool `json:"host_update_recovery"`
 }
 
 type Report struct {
@@ -185,6 +190,9 @@ func failedChecks(checks Checks) []string {
 		{"rootless_install", checks.RootlessInstall}, {"rootless_package_manager_upgrade", checks.RootlessPackageManagerUpgrade},
 		{"rootless_personalization", checks.RootlessPersonalization}, {"rootless_relay_control", checks.RootlessRelayControl},
 		{"rootless_device_update", checks.RootlessDeviceUpdate}, {"rootless_device_rollback", checks.RootlessDeviceRollback},
+		{"host_update_bootstrap", checks.HostUpdateBootstrap}, {"host_update_admin", checks.HostUpdateAdmin},
+		{"host_update_automatic", checks.HostUpdateAutomatic}, {"host_update_restart", checks.HostUpdateRestart},
+		{"host_update_recovery", checks.HostUpdateRecovery},
 	}
 	missing := make([]string, 0)
 	for _, value := range values {

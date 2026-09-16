@@ -348,12 +348,19 @@ running the next verified bootstrap once; routine upgrades then use the admin UI
   persisted under root-only `/var/lib/rctl-update`, outside rollback snapshots.
   Closing a browser does not cancel an installation. systemd restarts the
   supervisor after failure/reboot; interrupted transactions use the existing
-  recovery checkpoint before accepting new work.
+  recovery checkpoint before accepting new work, even if the saved job phase
+  was stale after a storage failure. After a failed recovery is repaired with
+  `rctl-setup recover`, restart `rctl-update-agent.service` to re-evaluate it.
+  Startup always re-verifies the catalog; the manual-check cooldown cannot
+  suppress discovery after a restart.
 - Only root and relay UID 65532 may use `/run/rctl-update/agent.sock` (0660,
   root:65532, plus Linux peer-credential verification and the relay's server-side
   admin credential). The credential is re-read on each request, so a credential
   rotation takes effect immediately. Compose mounts only this
-  directory read-only. The API exposes status/check/install/policy, not a shell,
+  directory read-only. systemd preserves that directory across stop/start so
+  the existing container mount can see the replacement socket; removing the
+  directory would leave the container bound to a stale inode. The API exposes
+  status/check/install/policy, not a shell,
   Docker API, arbitrary URL, or arbitrary file path. Admin routes require an
   authenticated session, same-origin JSON mutations, and rate limiting.
 - Uninstall disables the managed update service before changing deployment
