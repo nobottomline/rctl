@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Download, RefreshCw, ExternalLink, ChevronDown, Check } from 'lucide-react'
 import { Panel } from './Shell'
 import { Button } from './ui/Button'
+import { Checkbox } from './ui/Checkbox'
 import { Modal } from './ui/Modal'
 import { Menu, MenuItem } from './ui/Menu'
 import { api, ApiError } from '../lib/api'
@@ -16,6 +17,7 @@ const phaseLabels: Record<string, string> = {
 }
 
 export function UpdatesPanel() {
+  const automaticId = useId()
   const [status, setStatus] = useState<HostUpdateStatus | null>(null)
   const [connectionError, setConnectionError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -73,10 +75,15 @@ export function UpdatesPanel() {
             {status.latest && /^\d+\.\d+\.\d+$/.test(status.latest) && <a className="inline-flex items-center gap-1 text-muted hover:text-fg" href={`https://github.com/nobottomline/rctl/releases/tag/v${status.latest}`} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />Release notes</a>}
           </div>
           <div className="border-t border-line pt-3 space-y-3">
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={status.policy.automatic} disabled={busy} onChange={e => e.target.checked ? setConfirm('automatic') : void act('policy', { ...status.policy, automatic: false })} />
-              Install relay updates automatically
-            </label>
+            <div className="flex items-center gap-2">
+              <Checkbox id={automaticId} checked={status.policy.automatic} disabled={busy} onCheckedChange={checked => {
+                if (checked === true) setConfirm('automatic')
+                else if (checked === false) void act('policy', { ...status.policy, automatic: false })
+              }} />
+              <label htmlFor={automaticId} className="cursor-pointer leading-snug peer-disabled:cursor-not-allowed peer-disabled:opacity-50">
+                Install relay updates automatically
+              </label>
+            </div>
             <div className="flex items-center justify-between gap-3 text-muted">
               <span>Maintenance hour (UTC)</span>
               <Menu trigger={<Button size="sm" disabled={busy} aria-label="Maintenance hour UTC">{String(status.policy.hour_utc).padStart(2, '0')}:00<ChevronDown className="size-4" /></Button>}>
@@ -95,8 +102,8 @@ export function UpdatesPanel() {
         {actionError && <p role="alert" className="text-danger break-words">{actionError}</p>}
       </div>
       <Modal open={confirm !== null} onOpenChange={open => !open && !pending && setConfirm(null)} title={confirm === 'automatic' ? 'Enable automatic relay updates?' : `Update relay to ${selectedVersion}?`} description={confirm === 'automatic'
-        ? `Verified releases will be installed during the selected UTC hour. Active remote connections may be interrupted. iPads still require a separate update confirmation.`
-        : 'Remote connections will briefly disconnect. The server creates a backup and verifies the new deployment, with recovery on failure. Device packages are not installed on iPads automatically.'}>
+        ? 'Verified releases will be installed during the selected UTC hour. Active remote connections may be interrupted. Device updates require separate confirmation.'
+        : 'Remote connections will briefly disconnect. The server creates a backup and verifies the new deployment, with recovery on failure. This does not update connected devices.'}>
         <div className="flex justify-end gap-2">
           <Button disabled={pending} onClick={() => setConfirm(null)}>Cancel</Button>
           <Button variant="primary" loading={pending} disabled={!!connectionError} onClick={() => confirm === 'automatic' && status ? void act('policy', { ...status.policy, automatic: true }) : void act('install')}><Download className="size-4" />{confirm === 'automatic' ? 'Enable' : 'Install update'}</Button>

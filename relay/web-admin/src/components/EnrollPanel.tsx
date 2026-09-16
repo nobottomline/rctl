@@ -113,7 +113,7 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, pac
     setPackaging(true)
     try {
       const filename = await api.createDevicePackage({
-        device_name: label.trim() || 'iPad',
+        device_name: label.trim() || 'Device',
         architecture: selectedPackage?.architecture,
         label: label.trim() || undefined,
         ttl_seconds: ttl.value,
@@ -314,7 +314,7 @@ export function EnrollPanel({ enrollments, packageAvailable, packageVersion, pac
             >
               <Field
                 label="Device name"
-                placeholder="iPad Air"
+                placeholder="Device name"
                 value={label}
                 autoFocus
                 maxLength={80}

@@ -579,7 +579,7 @@ function ConfirmMediaDelete({
           <h2 className="min-w-0 truncate text-[14px] font-semibold">Delete {asset.name}?</h2>
         </div>
         <p className="mb-4 text-[12px] leading-relaxed text-muted">
-          This moves the {asset.live ? 'Live Photo and its motion resource' : asset.type === 'video' ? 'video' : 'photo'} to Recently Deleted on the iPad. It can be recovered there until Photos removes it permanently.
+          This moves the {asset.live ? 'Live Photo and its motion resource' : asset.type === 'video' ? 'video' : 'photo'} to Recently Deleted on the device. It can be recovered there until Photos removes it permanently.
         </p>
         <div className="flex justify-end gap-2">
           <button

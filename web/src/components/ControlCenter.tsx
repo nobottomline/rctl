@@ -96,7 +96,7 @@ export default function ControlCenter({
         />
         <Key
           icon={ctl.audio.deviceSpeaker ? Volume2 : VolumeX}
-          label="iPad"
+          label="Device"
           active={ctl.audio.deviceSpeaker}
           onClick={ctl.audio.toggleSpeaker}
         />

@@ -396,7 +396,7 @@ function ClipboardCard() {
       <div className="mt-1.5 flex gap-1.5">
         <Btn onClick={get}>Get</Btn>
         <Btn primary onClick={() => api('/v1/clipboard', { method: 'POST', body: v }).catch(() => {})}>
-          Set on iPad
+          Set on device
         </Btn>
       </div>
     </Card>
@@ -632,7 +632,7 @@ function CameraLiveView({
     }
   }
   const stateLabel = status?.state === 'waiting_for_app'
-    ? 'Open an app on the iPad'
+    ? 'Open an app on the device'
     : status?.state === 'live'
       ? `${position === 'front' ? 'Front' : 'Rear'} camera${status.owner ? ` · ${status.owner}` : ''}`
       : transportState

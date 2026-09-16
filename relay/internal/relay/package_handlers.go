@@ -75,7 +75,7 @@ func (s *server) handleCreateDevicePackage(w http.ResponseWriter, r *http.Reques
 		name = strings.TrimSpace(req.Label)
 	}
 	if name == "" {
-		name = "iPad"
+		name = "Device"
 	}
 	validation := deb.Personalization{RelayURL: s.deviceWebSocketURL(), Token: strings.Repeat("x", 32), DeviceName: name}
 	if err := validation.Validate(); err != nil {
