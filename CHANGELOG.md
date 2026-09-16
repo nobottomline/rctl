@@ -5,6 +5,14 @@ determined by GitHub Releases, not by the presence of a changelog entry.
 
 ## Unreleased
 
+## 0.4.3
+
+Host-update qualification prerelease B; not a stable release or APT promotion.
+
+- Versioned successor to `0.4.2` for testing signed relay upgrades, retained
+  identity, supervisor restart and recovery. No additional device-runtime
+  changes are introduced by this qualification version.
+
 ## 0.4.2
 
 Host-update qualification prerelease A; not a stable release or APT promotion.

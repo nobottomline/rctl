@@ -795,9 +795,11 @@ that draft before installing another candidate or running host lifecycle tests.
 
 ## Version Decision
 
-`control` now uses `0.4.1`. This is the replacement candidate for the unpublished
-`v0.4.0` draft: use a new tag and artifact set rather than replacing or retagging
-existing artifacts. Rootless support and the accumulated features belong to
+`0.4.1` replaced the unpublished `v0.4.0` candidate. The current `0.4.2` and
+`0.4.3` versions are host-updater qualification prereleases A/B, not stable or
+APT releases. Their new tags and artifact sets do not replace prior artifacts;
+their existence does not complete the release gates above. A stable version
+decision follows exact-artifact acceptance. Rootless support and the accumulated features belong to
 the `0.4.x` release line; they do not by themselves establish the support
 guarantees of `1.0.0`. The wire protocol major is unchanged.
 
