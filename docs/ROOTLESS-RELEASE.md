@@ -1,6 +1,55 @@
 # Rootless Release Readiness
 
-## Current Checkpoint (2026-09-16)
+## Current Checkpoint (2026-09-17)
+
+The stable candidate is now `v0.4.4`, source
+`672e4bb3793a05769a3ff05a287047f2045e240e`. It remains a draft; creating and
+signing it has not published a stable release or changed APT. The older draft
+and qualification-prerelease tags remain unchanged.
+
+[CI](https://github.com/nobottomline/rctl/actions/runs/35146785844) and the
+[tag-bound draft build](https://github.com/nobottomline/rctl/actions/runs/35146864483)
+passed. Independent verification passed all release checksums and all eleven
+repository/workflow/tag/source-bound artifact attestations. Both public DEBs
+passed their package audits. The checksum-set SHA-256 is
+`1167cede4ea678beba5119cef3581548884d63256c9c7d2235e277f94952bcf1`;
+the relay candidate digest is
+`sha256:2d935a096ba6ae2b42f35c5eba439f687159bf93a1f54be12bca5969244004e8`.
+Local `make test` also passed; this is not a substitute for physical checks.
+
+### Exact-Candidate Device Update
+
+- Both test devices first installed the verified public `0.4.3` baseline
+  through dpkg. The rootful deployment used `scripts/deploy.sh`; rootless used
+  the documented independent SSH/sudo path. Existing relay identity survived.
+- The temporary relay used the exact `0.4.4` candidate and version-matched public
+  packages. Test-only signed catalogs served the unchanged `0.4.3` and `0.4.4`
+  DEB bytes over trusted HTTPS. These were not the final GitHub catalog URLs.
+- **Update device > Start update** in the real admin UI completed
+  `0.4.3 -> 0.4.4` on both rootful and Dopamine rootless. Each updater reported
+  `complete` / `Update verified`; dpkg and the running client reported `0.4.4`.
+  Both devices retained their two configured, connected relay entries.
+- After operator unlock, the exact client displayed live video on both devices
+  through the relay. SpringBoard commands and Files worked; rootless also
+  opened Clock by a browser-generated touch. Independently over LAN, both
+  devices displayed video, opened Clock by touch, returned Home and loaded Files.
+- These relay browser sessions selected a peer-reflexive/host ICE pair, not
+  forced TURN. Rootless showed 60 fps with zero reported freezes in the sample;
+  rootful showed 47-60 fps and four short freezes totaling one second. This is
+  functional acceptance, not a sustained-performance guarantee.
+- Cleanup restored the temporary relay environment byte-for-byte. The rootful
+  test-only relay entry was removed and its temporary server access revoked;
+  the original relay reconnected. Rootless retained its existing two bindings.
+  Public staging files were removed. VPN, sleep policy, and permanent relay
+  services were not changed. Both devices remain on `0.4.4`.
+
+The temporary host's verified upgrade, TURN probes and recovery checks are
+recorded in [SETUP-QUALIFICATION.md](SETUP-QUALIFICATION.md). This checkpoint is
+not a complete schema-5 publication report: exact-candidate forced-TURN device
+media, watchdog failure recovery, package-manager recovery, and the remaining
+host lifecycle gates must not be inferred from the successful Update buttons.
+
+## Historical 0.4.1 Checkpoint (2026-09-16)
 
 The next candidate is `0.4.1`, incorporating the retained packet-sizing and
 fresh-client-build fixes. The existing `v0.4.0` tag and draft stay unchanged and
@@ -48,7 +97,7 @@ and interrupted recovery still need exact-candidate acceptance. Forced-TURN
 device media has a new unresolved failure described below. The
 `v0.4.0` tag and GitHub draft exist; no stable release or APT publication has
 occurred. The
-[remaining gates](#remaining-release-gates) distinguish this
+[historical gates](#historical-041-release-gates) distinguish this
 preparation from exact-artifact acceptance; older sections below are historical.
 
 ### Additional Relay Enrollment (2026-09-16)
@@ -767,7 +816,7 @@ orchestration tests and setup/personalization race tests passed. These local
 packages were not installed or published, and their checksums are not a
 replacement for the tag-bound draft's artifact provenance.
 
-## Remaining Release Gates
+## Historical 0.4.1 Release Gates
 
 These historical results guide the next acceptance pass; a `0.4.1` publication
 report must bind to its new draft hashes, image, and source. Build and verify
@@ -795,11 +844,12 @@ that draft before installing another candidate or running host lifecycle tests.
 
 ## Version Decision
 
-`0.4.1` replaced the unpublished `v0.4.0` candidate. The current `0.4.2` and
+`0.4.1` replaced the unpublished `v0.4.0` candidate. The `0.4.2` and
 `0.4.3` versions are host-updater qualification prereleases A/B, not stable or
 APT releases. Their new tags and artifact sets do not replace prior artifacts;
-their existence does not complete the release gates above. A stable version
-decision follows exact-artifact acceptance. Rootless support and the accumulated features belong to
+their existence does not complete the release gates above. `0.4.4` is the next
+stable candidate, pending exact-artifact acceptance. Rootless support and the
+accumulated features belong to
 the `0.4.x` release line; they do not by themselves establish the support
 guarantees of `1.0.0`. The wire protocol major is unchanged.
 

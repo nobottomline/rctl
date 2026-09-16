@@ -3,6 +3,71 @@
 This record distinguishes implemented behavior from release qualification. It
 contains no private hostname, address, credential, device identity, or package.
 
+## 2026-09-17: Exact 0.4.4 Candidate
+
+This run used the tag-bound `v0.4.4` draft at
+`672e4bb3793a05769a3ff05a287047f2045e240e`, not a local rebuild. All eleven
+release files passed checksums and repository/workflow/tag/source-bound GitHub
+provenance verification before transfer. The pinned image is
+`ghcr.io/nobottomline/rctl-relay@sha256:2d935a096ba6ae2b42f35c5eba439f687159bf93a1f54be12bca5969244004e8`.
+The draft's checksum-set digest and device acceptance are recorded in
+[ROOTLESS-RELEASE.md](ROOTLESS-RELEASE.md#current-checkpoint-2026-09-17).
+
+On the operator-authorized temporary Ubuntu amd64 VPS:
+
+- The verified staged bootstrap upgraded the owned `0.4.3` installation to
+  `0.4.4`, created its recovery backup, and passed trusted HTTPS/WebSocket,
+  admin authentication and relay-restart persistence checks. The existing admin
+  session survived; the rootless device reconnected. The real update service
+  reported active with automatic installation still disabled.
+- A reversible, test-only device-catalog override enabled the actual admin
+  Update actions for both device architectures. Exact target bytes, successful
+  installation and preserved bindings were checked independently. The original
+  environment was restored byte-for-byte afterward; the wizard ownership
+  manifest was never altered to conceal the temporary override.
+- Off-host `turnutils_uclient` tests used short-lived credentials and exchanged
+  20 of 20 packets separately over UDP and TCP. This verifies TURN allocation
+  and relayed traffic, not forced-TURN browser/device media acceptance.
+- `uninstall --keep-data` removed managed services/configuration while retaining
+  the database and a verified backup. `restore` recovered the deployment from
+  that backup. The host update service was explicitly reactivated with
+  `rctl-setup updates enable` after restoration; do not describe that operator
+  step as automatic recovery.
+- `uninstall --delete-data` removed the live data directory and retained the
+  verified recovery archives. A fresh bootstrap correctly refused the still
+  present backup directory before mutation. The original deployment was
+  restored and passed doctor after that refusal.
+- For a second fresh-install rehearsal, all former managed rctl data and
+  backups were moved out of the installation namespace into protected recovery
+  storage. The VPS OS and Docker installation were reused, not reimaged. With
+  an empty Docker credential directory and no GitHub credentials, the complete
+  staged draft set installed the pinned image, obtained trusted HTTPS, passed
+  public-route verification and activated the systemd update supervisor.
+  Automatic installation was off by default.
+- Repeating the exact bootstrap succeeded without rotating the new deployment's
+  secrets. Fresh-install doctor passed. The disposable fresh deployment was
+  then removed through the supported delete-data path and the original relay
+  restored from its verified archive. Its original supervisor state/source
+  were restored and the service was reactivated.
+- Independent read-only database checks passed `quick_check` and comparisons
+  of device identities/approvals, controller keys/scopes and relay metadata
+  against the archive. Relay/TURN configuration matched byte-for-byte. The
+  existing browser session remained authenticated after reload and the rootless
+  device was online. Final doctor passed without failed checks; it retained the
+  documented warning that local inspection alone cannot verify external TURN.
+
+No permanent relay service, VPN setting, or device sleep policy was changed.
+Temporary public device catalogs and artifacts were removed. The temporary
+rootful enrollment was revoked after its device entry was removed, preserving
+its original permanent-relay access. Both test devices remain on `0.4.4`.
+
+This closes the scoped successful-upgrade, staged bootstrap/idempotence,
+fresh/existing supervisor activation, backup/restore and both uninstall paths.
+It does not qualify forced-TURN device media, certificate renewal, faulted
+host/device rollback, or the UI/scheduled host-update matrix for these exact
+candidate bytes. Earlier version-scoped results below remain separate; no
+all-passed schema-5 report or stable publication is implied.
+
 ## Managed host updater: qualification prereleases
 
 Local verification covers signed catalog verification and replay/expiry
