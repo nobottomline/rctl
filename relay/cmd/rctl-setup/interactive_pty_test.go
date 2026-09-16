@@ -58,6 +58,8 @@ func TestDomainPickerPTY(t *testing.T) {
 		{"manual", "\r", "PICKED=https://custom.example.com ERROR=<nil>", "custom.example.com\n"},
 		{"cancel", "\x03", "ERROR=^C", ""},
 		{"eof", "\x04", "ERROR=^D", ""},
+		{"search_cancel", "/site-699\x03", "ERROR=^C", ""},
+		{"search_eof", "/site-699\x04", "ERROR=^D", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestDomainPickerHelper$")

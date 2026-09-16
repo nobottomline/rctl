@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/manifoldco/promptui"
@@ -19,6 +20,31 @@ import (
 type promptOutput struct{ io.Writer }
 
 func (promptOutput) Close() error { return nil }
+
+// promptui/readline renders Ctrl-C/Ctrl-D on its input goroutine after waking
+// Select's error path, racing screen cleanup. Convert those keys to a real EOF,
+// whose readline path stops before notifying Select; preserve the cancel reason.
+type domainPickerInput struct {
+	io.Reader
+	cancel atomic.Uint32
+}
+
+func (r *domainPickerInput) Read(p []byte) (int, error) {
+	if r.cancel.Load() != 0 {
+		return 0, io.EOF
+	}
+	n, err := r.Reader.Read(p)
+	for i, key := range p[:n] {
+		if key == 3 || key == 4 {
+			r.cancel.Store(uint32(key))
+			if i == 0 {
+				return 0, io.EOF
+			}
+			return i, nil
+		}
+	}
+	return n, err
+}
 
 func chooseOrigin(reader *bufio.Reader, output io.Writer) (string, error) {
 	fmt.Fprintln(output, styled(output, "Looking for local domain hints (not a complete DNS inventory)...", ansiCyan))
@@ -47,9 +73,10 @@ func selectDomain(hints []string, input io.ReadCloser, output io.Writer) (value 
 		defer func() { err = errors.Join(err, term.Restore(fd, state)) }()
 	}
 	items := append([]string{"Enter my own domain"}, hints...)
+	pickerInput := &domainPickerInput{Reader: input}
 	selector := promptui.Select{
 		Label: "Relay domain (local hints; ownership is not verified)",
-		Items: items, Size: 8, Stdin: input, Stdout: promptOutput{output},
+		Items: items, Size: 8, Stdin: io.NopCloser(pickerInput), Stdout: promptOutput{output},
 		Searcher: func(query string, index int) bool {
 			return index == 0 || strings.Contains(strings.ToLower(items[index]), strings.ToLower(query))
 		},
@@ -61,6 +88,12 @@ func selectDomain(hints []string, input io.ReadCloser, output io.Writer) (value 
 		}
 	}
 	index, value, err := selector.Run()
+	switch pickerInput.cancel.Load() {
+	case 3:
+		return "", promptui.ErrInterrupt
+	case 4:
+		return "", promptui.ErrEOF
+	}
 	if err != nil || index == 0 {
 		return "", err
 	}
