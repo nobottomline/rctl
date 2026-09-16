@@ -5,6 +5,51 @@ determined by GitHub Releases, not by the presence of a changelog entry.
 
 ## Unreleased
 
+## 0.4.4
+
+Consolidates the unpublished candidates and qualification prereleases below.
+Changes since stable `0.3.2`:
+
+### Added
+
+- Ordinary Dopamine rootless support with a separate `iphoneos-arm64` package;
+  rootful devices continue to use `iphoneos-arm`.
+- Game Keyboard with held keys and WASD, plus captured mouse movement, buttons,
+  and scrolling. Session loss releases held input.
+- Device orientation locking, recorded-input playback pause/resume and JSON
+  export, screenshot previews, and device volume controls.
+- Personalized rootless packages and signed transactional device updates from
+  relay admin, with rollback and preservation of device identity.
+- Signed relay update discovery, installation from the admin page, and opt-in
+  scheduled server updates with backup, health verification, and recovery.
+  Device package installation still requires separate confirmation.
+- Installer domain selection, public-address inference, optional Docker
+  provisioning, clearer progress, and terminal-aware colors.
+- Controller permissions, presence, audit history, Bonjour discovery, and an
+  explicit LAN + Relay / Relay only access policy.
+
+### Fixed
+
+- Rootless screen orientation and touch geometry, video thumbnails, microphone
+  recording, Talk playback, shell prompts, and duplicate tweak listings.
+- Duplicate keyboard input, stuck modifiers, inverted trackpad scrolling, and
+  input-session timeouts during mouse capture.
+- Installing a package for an additional relay now preserves existing relay
+  bindings and consumes the new enrollment instead of discarding it.
+- TURN/TCP negotiation and RTP packet sizing; stale web clients can no longer
+  survive package rebuilds. Experimental video pacing is not included.
+- Controller pairing now validates relay identity and origin; permission changes
+  invalidate stale sessions, and device updates reject downgrades.
+- Interrupted relay updates recover before new work starts, updater connections
+  survive service restarts, and failed scheduled releases are not retried in a loop.
+- Consistent dropdowns, stable hover feedback, device-neutral labels, and a
+  styled automatic-update checkbox. Unsupported HTTP-only sharing/copy actions
+  are hidden while downloads remain available.
+
+RootHide is not qualified. The native iOS controller remains in development;
+it is not distributed in the device packages. Sustained intermittent Listen
+noise testing remains open.
+
 ## 0.4.3
 
 Host-update qualification prerelease B; not a stable release or APT promotion.
