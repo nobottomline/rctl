@@ -5,11 +5,20 @@ determined by GitHub Releases, not by the presence of a changelog entry.
 
 ## Unreleased
 
+## 0.4.2
+
+Host-update qualification prerelease A; not a stable release or APT promotion.
+
 - Added signed server-release discovery and a managed update supervisor, with
   admin-page installation, persistent job results, and opt-in scheduled relay
   updates. Device installation remains separately confirmed.
 - Reject device update downgrades using Debian version ordering, including
   rootless qualification versions and package revisions.
+- Preserve updater connectivity across service restarts, recheck release
+  signatures on startup, and recover interrupted jobs before accepting updates.
+- Fixed a terminal rendering race when cancelling domain selection with
+  Ctrl+C or Ctrl+D, including while searching.
+- Require separate managed-host update acceptance before stable publication.
 
 ## 0.4.1
 
