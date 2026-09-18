@@ -1,8 +1,8 @@
 # Transactional Device Updates
 
 Device updates are initiated from the relay admin page. There is no app,
-PreferenceBundle, prompt, or other UI on the iPad. The update path is disabled
-when the relay is configured with `device_update_channel: off`. Official wizard
+PreferenceBundle, prompt, or other UI on the controlled device. The update path
+is disabled when the relay is configured with `device_update_channel: off`. Official wizard
 installations use a signed, version-bound stable catalog by default.
 
 Relay-server discovery and installation are a separate managed service, exposed
@@ -14,14 +14,13 @@ revisions and prerelease tildes; a different but older version is not an update.
 Custom catalogs without a declared target still rely on device-side verification.
 
 Ordinary rootless builds advertise `update.transactional` and
-`update.transactional.rootless`. Physical Dopamine/iPadOS 15.5 acceptance covered
-the relay UI update, failed-runtime rollback, and external-watchdog recovery
-after terminating the updater following installation. No qualification build
-flag is required. A configured architecture-bound catalog and verified target
-and rollback packages are still mandatory. The existing Go wizard's relay
-upgrade is a separate lifecycle. See
-[`ROOTLESS-RELEASE.md`](ROOTLESS-RELEASE.md) for the remaining integration and
-physical acceptance work.
+`update.transactional.rootless`; no qualification build flag is required.
+Physical `0.4.3 -> 0.4.4` acceptance passed through the relay admin Update button
+on both tested lanes, preserving relay identity. Failed-runtime rollback and
+external-watchdog recovery have separate, version-scoped evidence; earlier
+passes do not qualify every later candidate. An architecture-bound catalog and
+verified target and rollback packages remain mandatory. See
+[ROOTLESS-RELEASE.md](ROOTLESS-RELEASE.md) for the exact evidence and open gates.
 
 The public Cydia/Installer/Sileo/Zebra feed is a separate distribution channel.
 Relay installations should continue to use this transactional updater. A
@@ -32,7 +31,8 @@ report proves the real package-manager upgrade and recovery paths; see
 ## Security model
 
 - The package pins an ECDSA P-256 public key at
-  `/usr/local/share/rctl/update-public-key.pem`. The corresponding private key
+  `/usr/local/share/rctl/update-public-key.pem` (under `/var/jb` for ordinary
+  Dopamine rootless). The corresponding private key
   must remain outside the repository and release artifacts.
 - The catalog is a signed envelope. `payload` is base64 JSON and `signature` is
   an ASN.1 ECDSA signature over the decoded payload bytes using SHA-256.
@@ -89,12 +89,13 @@ architecture before removing anything. A rootless catalog is configured through
 `RCTL_RELAY_ROOTLESS_UPDATE_TARGET_VERSION`; it never falls back to the rootful
 URL. The admin menu selects the configured lane from device capabilities.
 
-The first public rootless catalog may contain only its target package because
-no previous public rootless release exists. This does not authorize an update
-without rollback: the installed version must still be present and differ from
-the target. Qualification uses a separate signed catalog containing both exact
-RC artifacts. Future releases list supported historical rootless tags through
-the draft workflow's `rootless_rollback_tags` input.
+A catalog containing only its target cannot update an older installation: the
+installed version must also be present as a verified rollback package and differ
+from the target. List supported historical rootless tags through the draft
+workflow's `rootless_rollback_tags` input, independently of rootful
+`rollback_tags`. Qualification can use a separate signed catalog containing the
+exact test artifacts; that does not publish them or qualify the final public
+catalog URLs.
 
 Current daemons advertise exact `package_version` separately from the product
 version. Update health verification and the relay's already-current check use

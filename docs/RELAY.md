@@ -597,6 +597,13 @@ with every local API, a trusted-LAN caller that can already reach port `8080`
 has equivalent root control. A daemon restart causes a brief expected
 offline/reconnect interval.
 
+The policy is device-wide and preserved during public upgrades and additional
+relay enrollment. Relay-only mode never falls back to LAN automatically on
+relay loss. Conversely, relay revocation cannot restrict an independent LAN
+caller while LAN is enabled. Complete enrollment on a trusted network, verify
+relay access and independent recovery, then explicitly disable LAN before
+using an untrusted network. See [recovery for both package lanes](SECURITY.md#local-network-policy).
+
 ## Security Rules
 
 - Use a domain and TLS. The device endpoint must be `wss://`.

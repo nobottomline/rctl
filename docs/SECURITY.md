@@ -28,8 +28,24 @@ while rejecting direct LAN connections. The transition requires a one-time
 confirmation token and at least one enabled relay entry with a permanent
 `DeviceSecret`; a one-time enrollment token is not sufficient.
 
-If relay access is lost while Relay-only mode is active, recover over SSH and
-restart the daemon:
+This policy applies to the entire device, not one relay binding. Package
+upgrades and additional relay enrollment preserve the installed policy. Relay
+revocation does not revoke independent LAN access; a local caller can bypass
+relay permissions while LAN remains enabled. Conversely, relay failure does
+not automatically re-enable LAN in Relay-only mode.
+
+Keep LAN available during initial enrollment on a trusted network. Before using
+shared or untrusted Wi-Fi, approve the device, verify remote control, establish
+independent recovery access, then explicitly choose Relay only. The approval
+check prevents switching with only an enrollment token; it is not proof that a
+relay will remain reachable or that SSH recovery is configured.
+
+If relay access is lost while Relay-only mode is active, recover through an
+independent SSH connection. Run the commands for the installed package lane as
+root, only on a trusted network. Stop on any error; do not use rctl's own web
+terminal to restart the service carrying that terminal.
+
+Rootful:
 
 ```sh
 /usr/local/bin/rctld --local-access lan
@@ -37,8 +53,19 @@ launchctl unload /Library/LaunchDaemons/com.greatlove.rctld.plist
 launchctl load /Library/LaunchDaemons/com.greatlove.rctld.plist
 ```
 
+Ordinary Dopamine rootless:
+
+```sh
+/var/jb/usr/local/bin/rctld --local-access lan
+launchctl bootout system/com.greatlove.rctld
+launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.greatlove.rctld.plist
+```
+
+After restart, verify direct access and relay reconnection. The CLI alone saves
+the setting; the restart applies the listener and Bonjour policy. If independent
+access is unavailable, physical recovery is required, not a public fallback port.
 The CLI changes only the policy value and preserves device and relay secrets.
-It is an operator recovery path, not an iPad UI.
+It is an operator recovery path, not an on-device setup UI.
 
 ## Relay control
 

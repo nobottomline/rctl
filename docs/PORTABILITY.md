@@ -1,21 +1,24 @@
 # Platform Portability
 
-## Supported baseline
+## Platform Status
 
-The release package is currently qualified only on iPad11,3, iOS 14.4, rootful
-unc0ver and Substitute. It must not be advertised as rootless or iOS 15/16
-compatible until the runtime matrix below passes on physical hardware.
+The published stable baseline is rootful iPadOS 14.4 on iPad11,3 with unc0ver
+and Substitute. Rootless is no longer build-only: physical testing on an iPad
+Pro with iPadOS 15.5, ordinary Dopamine, and ElleKit includes LAN/relay control,
+input, media, enrollment preservation, and signed updates. Exact versions and
+limits are recorded in [Rootless Release Readiness](ROOTLESS-RELEASE.md).
 
-An experimental rootless build lane is available for manual Dopamine testing.
-It is not a qualified release. See [Rootless Testing](ROOTLESS.md) for the build,
-installation, recovery, and result checklist. The rootful lane retains its
-existing deployment target and installation paths.
+As of 2026-09-19, `0.4.4` is still a draft. Successful candidate checks do not
+publish rootless to stable or APT and do not qualify iOS 16, other hardware, or
+RootHide. See [Rootless Installation and Testing](ROOTLESS.md) for build,
+installation, and recovery. The rootful lane retains its existing deployment
+target and installation paths.
 
 ## Build lanes
 
 Keep one package identifier and produce separate artifacts:
 
-| Lane | Package scheme | Minimum iOS | Package architecture | Qualified injector |
+| Lane | Package scheme | Minimum iOS | Package architecture | Tested injector |
 |---|---|---:|---|---|
 | Rootful | default | 14.0 | `iphoneos-arm` | Substitute |
 | Rootless | `THEOS_PACKAGE_SCHEME=rootless` | 15.0 | `iphoneos-arm64` | ElleKit |
@@ -40,7 +43,7 @@ Paths fall into three groups and must not be prefixed indiscriminately:
 | Persistent user data | relay preferences, recordings, media cache | keep under `/var/mobile` |
 | Ephemeral/system | `/tmp`, `/var/run`, `/var/mobile/Media`, Apple frameworks | keep in the root filesystem namespace |
 
-The experimental lane now prefixes the loader's media library, playback-audio
+The rootless lane prefixes the loader's media library, playback-audio
 payload and injection paths, package database access, package tools, shell, and
 diagnostics. The daemon supplies the bootstrap's executable search path to its
 children. File deletion protects the resolved jailbreak root and its ancestors.
@@ -55,21 +58,23 @@ The web client is a package asset: rootless installs it at
 `/var/mobile/rctl/index.html`. Relay identity, recordings, media caches, loopback
 ports, and Unix sockets retain their existing locations.
 
-Still unqualified or intentionally unavailable:
+Qualification and tooling boundaries:
 
 - The complete runtime matrix on untested iOS/hardware/bootstrap combinations.
   Selected iPadOS 15.5/ElleKit results, including relay enrollment and control,
   are recorded in `ROOTLESS.md`; they must not be generalized to iOS 16 or RootHide.
-- Fresh-host wizard delivery of both package variants. Personalization and
-  wizard staging support both lanes, but package inspection is not deployment
-  acceptance on a clean host.
+- Wizard and update qualification belongs to the exact artifact set.
+  Both package variants are supported by personalization and wizard staging;
+  [SETUP-QUALIFICATION.md](SETUP-QUALIFICATION.md) records the candidate's
+  fresh-host, upgrade, and recovery evidence and remaining gates.
 - Transactional updates have physical update, runtime-failure rollback and
   watchdog recovery evidence for the tested rootless device; see
   `ROOTLESS-RELEASE.md`. The ordinary rootful SSH deployment helper remains
   inappropriate for rootless recovery.
 - `scripts/audio.sh` is a rootful operator helper, not the rootless test entry
   point. Exercise audio through the web control client.
-- Publishing rootless artifacts to the APT feed or public releases.
+- Stable and APT publication of rootless. Qualification prereleases already
+  contain both architectures; their existence does not enable rootless APT.
 
 ## Private API policy
 
@@ -98,9 +103,10 @@ For each supported iOS/jailbreak pair, validate on a physical device:
 9. Public-package secret audit and personalized relay upgrade continuity.
 10. Idle, memory, thermal and 30-minute media soak tests.
 
-The first rootless target should be one known Dopamine device on iOS 15 or 16.
-Only after that lane passes should CI publish a rootless `.deb` beside the
-existing rootful artifact.
+The tested rootless lane is ordinary Dopamine on iPadOS 15.5. CI already builds
+separate rootful and rootless artifacts. Stable publication and APT admission
+are separate gates tied to the exact package bytes, not to build success; see
+[QUALIFICATION.md](QUALIFICATION.md) and [APT-REPOSITORY.md](APT-REPOSITORY.md).
 
 ## References
 

@@ -10,7 +10,8 @@ The feed is compatible with Cydia, Installer, Sileo, Zebra, and other package
 managers that consume the standard flat Debian APT repository format. A custom
 domain is not required; GitHub Pages provides the public HTTPS origin.
 
-The published feed currently advertises only `iphoneos-arm` (rootful). Sileo on
+As checked on 2026-09-19, the published feed serves `0.3.2` and advertises only
+`iphoneos-arm` (rootful). Sileo on
 Dopamine/rootless expects `iphoneos-arm64` and can reject this feed with
 `Didn't find architectures` followed by `Could not find release file`, even
 when the server returns the Release file successfully. Package-manager format
@@ -78,9 +79,12 @@ delivery. Add a tag only after its immutable release includes:
 Rootless has no bootstrap exemption. Its validator additionally checks the
 `/var/jb` layout, non-empty web client, maintainer-script prefix, ElleKit and
 firmware dependencies, and absence of prefixed or unprefixed relay secrets.
-The release generator in this monorepo still produces rootful release sets;
-rootless immutable release assembly and physical APT qualification are pending.
-The experimental `~rootless` builds are not substitutes for those release assets.
+The monorepo release generator now produces both architectures. The `0.4.2`
+and `0.4.3` qualification prereleases contain rootless packages, and `0.4.4`
+remains a draft. None of this admits rootless to APT: exact-artifact
+package-manager qualification, publication, and the rootless ledger entry are
+still separate requirements. Historical `~rootless` test builds are not
+substitutes for those release assets.
 
 `Release` and depictions derive their architecture list from the actual verified
 `Packages` index, not from the list of architectures the generator can validate.

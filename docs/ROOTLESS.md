@@ -1,9 +1,9 @@
-# Rootless Device Testing
+# Rootless Installation and Testing
 
-The rootless lane is experimental. Its first target is a user-owned iPad on
-iPadOS 15.5 with ordinary Dopamine and ElleKit. Compilation and package audits
-are not proof that the private APIs work on that device. RootHide and other
-bootstrap variants are outside this first test lane.
+The tested rootless target is an iPad Pro on iPadOS 15.5 with ordinary Dopamine
+and ElleKit. Physical LAN/relay and update checks exist; stable and APT
+publication are still pending. RootHide and other bootstrap variants are not
+covered by this evidence. Compilation alone does not qualify another device.
 
 For the current release-preparation status, including the existing wizard,
 operator-confirmed Talk fix, and verified transactional update/recovery, see
@@ -29,11 +29,18 @@ architecture and dependencies on `ellekit` and `firmware (>= 15.0)`.
 
 To build both lanes with the same version, use `scripts/build-packages.sh`.
 For a release candidate with an exact Debian version, pass
-`--version '0.4.0~rc.4'` (replace this example with the intended candidate).
+`--version "$VERSION"`, setting `VERSION` to the intended Debian version.
 Both lanes are built
 sequentially because they share the web build and Theos aggregate metadata.
 These scripts do not install, deploy, publish, or personalize the package.
-The public APT feed remains rootful until device qualification is recorded.
+The public APT feed remains rootful until the rootless package-manager gates
+pass and its release is admitted to the feed. See [APT admission](APT-REPOSITORY.md#rootless-admission).
+
+### Historical Early Builds
+
+The following September 6-11 observations describe early test artifacts, not
+the current candidate's status. Use the [release checkpoint](ROOTLESS-RELEASE.md)
+for the latest exact-artifact evidence.
 
 Local verification on 2026-09-06: rootful and rootless packages both built and
 passed `release_check.sh`; `make test` passed, including staging, relocated-path
@@ -63,7 +70,7 @@ version. See [`MEDIA.md`](MEDIA.md) for implementation, evidence and limitations
 
 ## First Install
 
-1. Keep physical access to the iPad. Record its model, iOS version, Dopamine
+1. Keep physical access to the device. Record its model, iOS version, Dopamine
    version, and ElleKit version. If a terminal is already available,
    `dpkg --print-architecture` should report `iphoneos-arm64`.
 2. In Sileo, confirm that **ElleKit** (package identifier `ellekit`) is installed.
@@ -72,13 +79,13 @@ version. See [`MEDIA.md`](MEDIA.md) for implementation, evidence and limitations
    <https://ellekit.space/> (add it if absent), install ElleKit, and follow the
    package manager's restart instructions. Filza's `dpkg -i` installation does
    not download dependencies automatically.
-3. Transfer the exact test `.deb` to the iPad using AirDrop or another local
+3. Transfer the exact test `.deb` to the device using AirDrop or another local
    file-transfer method. Open it in Filza and use its package installation
    action. Inspect the installation output for errors. After dpkg has exited,
    use the package manager's Restart SpringBoard action. A direct terminal
    installation prints a reminder instead; run `sudo sbreload` only after the
    installation command has completed. Do not interrupt dpkg with a respring.
-4. On a trusted Wi-Fi network, open `http://<ipad-ip>:8080/` in a browser. Local
+4. On a trusted Wi-Fi network, open `http://<device-ip>:8080/` in a browser. Local
    access has the same unauthenticated trusted-LAN policy as the rootful build.
 5. Test screen display, orientation, taps, typing, and Home first. Then proceed
    with media and the remaining functions below.
@@ -123,10 +130,13 @@ Filza for the already downloaded rctl test package. The rootful public feed
 does not contain this rootless prerelease, so refreshing that feed cannot make
 Sileo download it.
 
-## Test Record
+## Historical Initial Test Record
 
-Record pass/fail and the concrete symptom for each item. For media failures,
-record the foreground app and whether another audio/camera session was active.
+This table retains the initial `rootless2` results, not a current checklist of
+untested features. Later feature-specific records and the
+[current release checkpoint](ROOTLESS-RELEASE.md) supersede its status.
+For new media failures, record the foreground app and whether another
+audio/camera session was active.
 
 | Area | Checks | Initial status |
 | --- | --- | --- |
@@ -141,7 +151,9 @@ record the foreground app and whether another audio/camera session was active.
 | Recovery | Remove; reinstall; jailbreak re-enable; no crash loop | Not tested |
 | Soak | 30-minute stream; idle cleanup; memory/thermal behavior | Not tested |
 
-Personalized packages can now be generated from either public architecture.
+## Relay Enrollment and Updates
+
+Personalized packages can be generated from either public architecture.
 The rootless code remains below `/var/jb`; enrollment and persistent relay
 identity remain at `/var/mobile/Library/Preferences/com.greatlove.rctl.relay.plist`.
 Use `scripts/personalize_deb.sh PATH_TO_ROOTLESS_DEB` or
@@ -151,15 +163,24 @@ must not already contain relay configuration.
 
 The relay has an independent optional `RCTL_RELAY_ROOTLESS_PACKAGE` path and
 advertises only loaded package variants in Pair device. The existing
-`RCTL_RELAY_PUBLIC_PACKAGE` remains rootful. Physical enrollment and a limited
-remote smoke test are recorded below; they do not qualify the full remote
-feature matrix or transactional updates.
+`RCTL_RELAY_PUBLIC_PACKAGE` remains rootful. A personalized package can be
+installed over the existing public or personalized package without removing it
+or the APT source. Existing approved identities and the device-wide LAN policy
+are preserved; a new relay still requires approval in its admin page. The base
+package on the relay must include this behavior; rebuilding local source alone
+does not update the server's downloadable packages.
 
 Signed transactional updates use a separate architecture-bound catalog, never
 the rootful feed. The default build gate was removed after physical relay-UI
 update, failed-runtime rollback, and external-watchdog recovery acceptance on
 Dopamine/iPadOS 15.5. This does not qualify a future release artifact set or an
 untested jailbreak; see `UPDATES.md` and `ROOTLESS-RELEASE.md`.
+
+## Historical Qualification Details
+
+The records below apply to their named builds and dates. In particular, early
+enrollment and TURN failures must not be confused with current Update-button
+acceptance or treated as proof that all networking limits have been resolved.
 
 ### Package Preparation Qualification (2026-09-11)
 

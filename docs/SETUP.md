@@ -1,9 +1,11 @@
-# Self-Hosted Setup Product
+# Self-Hosted Relay Setup
 
-This document defines the supported zero-friction installation and lifecycle
-contract for a self-hosted rctl relay. It is a product boundary, not merely a
-convenience script. `docs/RELAY.md` remains the protocol and manual-operations
-reference.
+This guide describes the implemented Go wizard, release bootstrap, and managed
+relay lifecycle. It covers current source, not necessarily the older release
+selected by `latest`. See the [project status](../README.md#project-status) for
+published availability and [setup qualification](SETUP-QUALIFICATION.md) for
+version-scoped checks. [RELAY.md](RELAY.md) owns the protocol and manual
+operations reference.
 
 ## Outcome
 
@@ -40,9 +42,9 @@ The normal user journey is:
 2. SSH to the VPS and run the release bootstrap.
 3. Complete the interactive `rctl-setup install` checks.
 4. Open the HTTPS admin page and download a personalized device package.
-5. Install that package on the owned jailbroken iPad.
+5. Install that package on the owned jailbroken device.
 6. Approve the pending device in the browser and use it locally or through the
-   relay. The iPad has no setup UI, PreferenceBundle, or secret-entry flow.
+   relay. The device has no setup UI, PreferenceBundle, or secret-entry flow.
 
 The installer must leave a system that can be diagnosed, upgraded, backed up,
 restored, and removed without cloning this repository or installing a compiler.
@@ -63,7 +65,10 @@ restored, and removed without cloning this repository or installing a compiler.
   committed files.
 - Installing relay configuration leaves LAN access enabled by default. After an
   approved relay identity exists, the administrator may explicitly select the
-  loopback-only `Relay only` policy from the relay admin page.
+  loopback-only `Relay only` policy from the relay admin page. Existing policies
+  survive upgrades and additional enrollment. Relay authentication does not
+  protect the LAN port; verify remote access and independent recovery before
+  disabling LAN. See [network policy](SECURITY.md#local-network-policy).
 
 ## Release contract
 
@@ -85,7 +90,7 @@ SHA256SUMS
 
 The binaries and catalogs are version-scoped by their immutable release URL,
 not by an extra version component in their filenames. The dual-package release
-contract applies to the upcoming `0.4.x` release line;
+contract applies to the `0.4.x` candidates and qualification prereleases;
 older rootful-only releases remain valid inputs to the bootstrap. Each package
 has its own architecture-bound update catalog; see `UPDATES.md`.
 
@@ -113,15 +118,17 @@ records current evidence and [release qualification](QUALIFICATION.md) defines
 the enforced draft-to-publication procedure.
 
 The device catalogs and purpose-bound host catalog are signed by the independent
-release key and assembled with the draft. The first rootless catalog can contain only its
-target, since no earlier public rootless package exists. This does not allow a
-transactional update without a verified installed-version rollback artifact;
-see [UPDATES.md](UPDATES.md) for that requirement and separate test catalogs.
+release key and assembled with the draft. Each lane needs the exact installed
+version as a verified rollback artifact before a device can update. A target-only
+catalog cannot update an older installation. Use immutable, attested historical
+packages in that lane; qualification prereleases are not automatically stable
+or APT releases. See [UPDATES.md](UPDATES.md) for the catalog contract.
 
-While the repository and container package are private, this pipeline is a
-maintainer dry run and requires GitHub authentication. No private token may be
-embedded in bootstrap output or generated VPS configuration. Anonymous install
-is enabled only after both release assets and the GHCR package are public.
+For private forks or unpublished drafts, qualification requires separate
+authenticated staging. No private token may be embedded in bootstrap output or
+generated VPS configuration. Normal user installation requires anonymously
+available release assets and a public GHCR image; a successful authenticated
+maintainer download does not establish that availability.
 
 Both release workflows must be dispatched from the release tag itself, not
 from a branch. Draft creation uses:
@@ -133,7 +140,7 @@ gh workflow run release-draft.yml --ref "$TAG" \
 ```
 
 Set `TAG` to the existing candidate tag and `ROOTFUL_ROLLBACK_TAGS` to a
-non-empty comma-separated list of prior immutable stable tags whose rootful
+non-empty comma-separated list of prior immutable published tags whose rootful
 packages must remain available for rollback. `ROOTLESS_ROLLBACK_TAGS` is the
 separate list for rootless packages; leave it empty only for the first rootless
 release. A target-only first-rootless catalog cannot transactionally update an

@@ -1,6 +1,6 @@
 # rctl — Architecture & Engineering Notes
 
-Remote-control system for a jailbroken iPad: view the screen, hear the device's
+Remote-control system for a jailbroken iOS device: view the screen, hear the device's
 real playback audio, inject touch/keyboard/buttons from a browser, plus camera,
 file transfer, a root web terminal, automation, and device control. Local LAN
 control and self-hosted relay signaling with WebRTC are implemented; current
@@ -56,7 +56,9 @@ Seven runtime parts ship in one `.deb` (`com.greatlove.rctl`):
 `core/` holds the shared C/C++/ObjC modules (capture, encode, stream, net, input,
 ipc) so rctlsbcap, rctld, and the media payloads don't duplicate code. `layout/`
 is the static package payload (LaunchDaemon plist and maintainer scripts);
-`Makefile` stages `web/dist/index.html` into `/var/mobile/rctl/index.html`.
+`Makefile` stages `web/dist/index.html` into `/var/mobile/rctl/index.html`
+on rootful or `/var/jb/usr/local/share/rctl/web/index.html` on ordinary
+Dopamine rootless.
 That non-empty file is a required package artifact: staging, `postinst`, and the
 public release audit validate it. `rctld` returns `503` and logs a diagnostic if
 it is unavailable at runtime; there is no embedded legacy control-page fallback.
@@ -68,10 +70,14 @@ owns independent native controller products; neither directory participates in
 the device `.deb` build.
 `scripts/deploy.sh` is the one-command safe deploy.
 
-That deploy path is qualified for rootful only. The experimental rootless lane
-uses `scripts/build-rootless.sh` and manual installation; see
+That deploy path is qualified for rootful only. The rootless lane builds with
+`scripts/build-rootless.sh`; initial installation and independent SSH recovery
+are described in
 [`ROOTLESS.md`](ROOTLESS.md). Its code and static web client live below the
 jailbreak root, while personal data and sockets retain their existing paths.
+Both lanes support separately confirmed, signed transactional updates through
+the relay admin page; exact-artifact acceptance is recorded in
+[`ROOTLESS-RELEASE.md`](ROOTLESS-RELEASE.md).
 
 Wizard-managed relay updates have a separate host owner: the systemd
 `rctl-update-agent` runs the verified setup binary outside the relay container.

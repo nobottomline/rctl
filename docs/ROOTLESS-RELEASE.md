@@ -1,5 +1,23 @@
 # Rootless Release Readiness
 
+## Status Follow-Up (2026-09-19)
+
+GitHub still reports `v0.4.4` as a draft; stable/latest and the public APT feed
+remain `v0.3.2`, with only `iphoneos-arm` in the feed. The checks below did not
+publish a release, admit rootless to APT, or deploy the candidate to the
+permanent relay.
+
+The operator reported that the rootless test device went offline after battery
+depletion and returned to its existing relay after re-enabling Dopamine, without
+reinstalling or pairing again. This is operator-reported recovery on that test
+device, not qualification for every jailbreak or unattended reboot recovery.
+
+Separately, the rootful device reconnected without a service change after an
+offline interval. Device and relay observations showed silent-session closures
+and delayed reconnects; the cause was not established. Do not label this a
+resolved sleep/network issue or infer an always-online guarantee. No permanent
+wake lock, display policy change, or VPN change was introduced.
+
 ## Current Checkpoint (2026-09-17)
 
 The stable candidate is now `v0.4.4`, source

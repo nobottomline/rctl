@@ -26,32 +26,40 @@ trusted local network or through an authenticated relay hosted on your own VPS.
 
 ## Project Status
 
-The current public package is physically qualified on an iPad Air 3
-(`iPad11,3`) running iPadOS 14.4 with rootful unc0ver and Substitute. The code
-retains an iOS 14 deployment target and `arm64`/`arm64e` support, but newer iOS
-versions, rootless jailbreaks, and other injectors are not advertised as
-supported until their physical-device qualification matrix passes.
+As of 2026-09-19, **stable/latest and the APT feed are `0.3.2` (rootful)**.
+`0.4.2` and `0.4.3` are qualification prereleases; **`0.4.4` remains a draft**,
+not an installable stable update. Features described below reflect the current
+source; a published older package may not include them.
+
+Physical testing covers an iPad Air 3 (`iPad11,3`) on iPadOS 14.4 with rootful
+unc0ver/Substitute and an iPad Pro on iPadOS 15.5 with Dopamine/ElleKit. Both
+passed the relay-admin device update from `0.4.3` to the exact `0.4.4` candidate,
+with relay identity preserved and subsequent LAN/relay control checks. This is
+not blanket support for iOS 15/16, every device, or RootHide.
 
 | Profile | Status | Installation |
 | --- | --- | --- |
 | Local network, rootful iOS 14 | Public | [Cydia/Installer/Sileo/Zebra repository](https://nobottomline.github.io/rctl-repo/) |
-| Self-hosted internet relay | Available | Private package produced by the VPS wizard |
-| Rootless Dopamine, iOS 15+ | Experimental, not device-qualified | [Manual test build](docs/ROOTLESS.md); not in the APT feed |
+| Self-hosted internet relay | Available; wizard features depend on release | Private package produced by the VPS wizard |
+| Rootless Dopamine, tested on iPadOS 15.5 | Physical candidate checks passed; stable publication pending | [Rootless guide](docs/ROOTLESS.md); not yet in the APT feed |
 
-Release readiness and known limitations are recorded in
-[docs/QUALIFICATION.md](docs/QUALIFICATION.md).
+See the [device release checkpoint](docs/ROOTLESS-RELEASE.md) and
+[VPS qualification record](docs/SETUP-QUALIFICATION.md) for exact versions,
+passed checks, and remaining limits. [QUALIFICATION.md](docs/QUALIFICATION.md)
+defines the publication gates; a successful test is not a published release.
 
 ## Features
 
 - Low-latency H.264 screen streaming over WebRTC
-- Touch, keyboard, hardware buttons, clipboard, and app launching
+- Touch, text and Game keyboard input, captured mouse, hardware buttons,
+  clipboard, and app launching
 - Device playback audio, room microphone, intercom, and virtual microphone
 - Root PTY terminal and bounded file transfer
 - Photos and video library with preview, download, copy, and protected deletion
 - Front and rear camera streaming, still capture, and device-side recording
 - Multi-device, multi-relay enrollment with revocable browser sessions
 - Transactional signed updates with watchdog verification and rollback
-- No setup UI, account, or secret entry on the iPad
+- No setup UI, account, or secret entry on the controlled device
 
 ## Install
 
@@ -97,11 +105,13 @@ The verified Go wizard checks the host and DNS, installs the digest-pinned relay
 stack, obtains TLS, and verifies HTTPS and persistence. It does not require a
 repository clone or compiler.
 
-The upcoming setup wizard offers searchable local domain hints, manual domain
-entry, and confirmed Docker Engine/Compose installation on a clean host. Older
-published installers require Docker Engine and Compose v2 beforehand. The
-`latest` URL selects the published release, never a draft. Domain hints are not
-a complete list of domains pointing to the VPS; choose a domain you control.
+The `0.4.4` candidate wizard implements searchable local domain hints, manual
+domain entry, and confirmed Docker Engine/Compose installation on a clean host.
+The `latest` command above still selects the published stable release, never a
+draft; the older stable installer requires Docker Engine and Compose v2
+beforehand. Domain hints cannot enumerate every domain pointing to a VPS;
+choose a domain you control. See [setup inputs](docs/SETUP.md#bootstrap-contract)
+for DNS, public IPv4, and optional certificate-contact email behavior.
 
 1. Open the HTTPS admin URL printed by the wizard.
 2. Sign in with the generated admin secret.
@@ -115,11 +125,12 @@ identity automatically; there is nothing to configure on iOS. For pinned
 releases, non-interactive installation, upgrades, backup, and recovery, read
 [docs/SETUP.md](docs/SETUP.md).
 
-The next wizard release adds an **Updates** section to the admin page: automatic
-release checks, confirmed relay installation, and optional scheduled automatic
-server updates. Device updates remain separately confirmed and preserve relay
-pairings. Older installations need one verified bootstrap upgrade to enable the
-host service. See [update behavior and recovery](docs/SETUP.md#admin-managed-server-updates).
+The `0.4.4` candidate includes an **Updates** section backed by a restricted host
+service: automatic release checks, confirmed relay installation, and optional
+scheduled automatic server updates. Device DEB updates require their own
+confirmation and preserve relay pairings; upgrading the server does not update
+devices automatically. Older installations need one verified bootstrap upgrade
+to enable the host service. See [update behavior and recovery](docs/SETUP.md#admin-managed-server-updates).
 
 ## Network Modes
 
@@ -128,9 +139,15 @@ when the VPS is unavailable. An administrator can switch an approved online
 device to **Relay only** from its action menu in the relay admin page.
 
 In Relay-only mode, `rctld` binds port `8080` to `127.0.0.1`. Relay tunneling
-continues to work, while direct Wi-Fi and USB browser connections are rejected.
+continues to work, while direct LAN connections are rejected.
 The daemon refuses this mode until it has an approved persistent relay identity.
-See [security and recovery](docs/SECURITY.md#local-network-policy).
+
+**Relay login and revocation do not protect the independent LAN port.** Use
+Relay-only mode before joining shared or untrusted Wi-Fi. First approve the
+device, verify relay control, and establish an independent recovery path such
+as SSH. The policy is device-wide, survives package upgrades, and does not
+silently re-enable LAN if the relay goes offline. Installation does not change
+an existing explicit policy. See [security and recovery](docs/SECURITY.md#local-network-policy).
 
 ## Architecture
 

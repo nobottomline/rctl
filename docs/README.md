@@ -6,6 +6,11 @@
 - Changing the project: [development guide](DEVELOPMENT.md) and
   [contribution guide](../CONTRIBUTING.md).
 - Reporting a vulnerability: [security policy](../SECURITY.md).
+- Platform support and package selection: [portability](PORTABILITY.md) and
+  [rootless installation](ROOTLESS.md).
+- Release status: [device candidate evidence](ROOTLESS-RELEASE.md) and
+  [VPS lifecycle evidence](SETUP-QUALIFICATION.md). These distinguish tested
+  artifacts from stable publication and APT availability.
 
 ## Architecture and Feature Contracts
 
@@ -28,12 +33,14 @@ flow, then read the feature document for the code being changed.
 - [CONTROLLER-AUTH.md](CONTROLLER-AUTH.md): native pairing, P-256 proof of
   possession, scoped tokens, recoverable refresh, replay protection, and
   revocation.
-- [MOBILE-LAN.md](MOBILE-LAN.md): implemented direct-LAN connection boundaries
-  and qualification; [MOBILE-LAN-PLAN.md](MOBILE-LAN-PLAN.md): planned Bonjour
-  discovery, access-path indicator, and authenticated local pairing.
+- [MOBILE-LAN.md](MOBILE-LAN.md): implemented direct-IP/Bonjour connection,
+  LAN/Relay indicator, and qualification; [MOBILE-LAN-PLAN.md](MOBILE-LAN-PLAN.md):
+  delivery gates and the separate authenticated local-pairing work.
 - [MEDIA.md](MEDIA.md), [CAM.md](CAM.md), [AUDIO.md](AUDIO.md), and
   [VIRTUAL_MIC.md](VIRTUAL_MIC.md): media ownership and lifecycle.
 - [TERMINAL.md](TERMINAL.md): terminal protocol and relay tunneling.
+- [KEYBOARD.md](KEYBOARD.md) and [POINTER.md](POINTER.md): Game keyboard,
+  captured mouse, input leases, and physical-device evidence.
 - [QUALIFICATION.md](QUALIFICATION.md): immutable release qualification.
 
 Historical qualification records describe evidence for a specific release;
