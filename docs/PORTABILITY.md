@@ -8,8 +8,8 @@ Pro with iPadOS 15.5, ordinary Dopamine, and ElleKit includes LAN/relay control,
 input, media, enrollment preservation, and signed updates. Exact versions and
 limits are recorded in [Rootless Release Readiness](ROOTLESS-RELEASE.md).
 
-As of 2026-09-19, `0.4.4` is published as GitHub latest by explicit maintainer
-decision before the full qualification matrix was complete. APT rootless
+As of 2026-09-19, `0.4.4` is published as GitHub latest. The full qualification
+matrix is not yet complete. APT rootless
 admission remains pending. Publication does not qualify iOS 16, other hardware,
 or RootHide. See [Rootless Installation and Testing](ROOTLESS.md) for build,
 installation, and recovery. The rootful lane retains its existing deployment

@@ -2,11 +2,10 @@
 
 ## Latest Publication (2026-09-19)
 
-The owner explicitly authorized publication as latest after being informed that
-the schema-5 report was incomplete. `v0.4.4` is now a public, non-prerelease,
-immutable GitHub release. This is a documented maintainer exception to the normal
-publication gate, not a claim that the missing checks passed. No qualification
-report was fabricated and no validator or release workflow was weakened.
+`v0.4.4` is a public, non-prerelease, immutable GitHub release marked latest.
+The full schema-5 qualification matrix is not yet complete, and the release
+does not include an all-passed qualification report. Published availability and
+completed runtime checks are tracked separately below.
 
 Publication verification reconfirmed the exact tagged commit's successful CI.
 All eleven release files matched GitHub asset sizes and SHA-256 digests, and
@@ -20,7 +19,10 @@ renewal, faulted host/device recovery, package-manager recovery, and remaining
 admin/scheduled host-update checks. The known Listen-noise and rootful delayed
 reconnect observations remain open. No always-online guarantee is implied.
 
-The APT ledger/feed was not advanced; rootless admission remains separate.
+The APT ledger/feed was not advanced. Its generator requires package-manager
+qualification reports for both architectures; neither report is included in
+`0.4.4`. Immutable release assets cannot be extended after publication, so the
+next APT-eligible release must include the reports before it is published.
 Publication did not deploy a relay or install anything on the test devices.
 Installers continue to use the verified digest-pinned image.
 

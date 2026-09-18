@@ -19,6 +19,20 @@ compatibility is not a claim of rootless runtime support. Use the separate
 [manual rootless test build](ROOTLESS.md) until that lane is qualified; do not
 add an unsupported architecture to Release just to suppress Sileo's check.
 
+### GitHub 0.4.4 and APT
+
+GitHub latest `0.4.4` is not eligible for the current APT generator. Its
+immutable asset set lacks `rctl-qualification_0.4.4.json` for rootful and
+`rctl-qualification_0.4.4_iphoneos-arm64.json` for rootless. The generator
+requires these reports and verifies their release attestations before admitting
+the packages. A successful relay-admin update is not a substitute for the
+package-manager upgrade and recovery checks.
+
+Do not append `v0.4.4` to either ledger: that would fail the Pages build, not
+make the packages available. The next APT-eligible release must complete the
+required checks and attach both reports before immutable publication. Until
+then, GitHub downloads provide `0.4.4`; APT continues to serve `0.3.2` rootful.
+
 ## Ownership boundary
 
 The source monorepo is the only build and qualification authority. The separate
@@ -108,9 +122,13 @@ to the APT release ledger or Pages artifact.
 
 ## Maintainer recovery
 
-The ledger operation is idempotent. If the source release is public but the APT
-push or Pages deployment fails, rerun `release-publish.yml` or invoke
+The ledger operation is idempotent. Before adding a public release, confirm that
+its immutable assets include the required qualification reports. If a valid
+release was published but the ledger push failed, invoke
 `scripts/publish_apt_release.sh vMAJOR.MINOR.PATCH` with the scoped deploy key.
+If the ledger already contains the tag, rerun the distribution repository's
+Pages workflow. Do not rerun the source `release-publish.yml` after publication:
+that workflow requires a draft and will reject an already public release.
 The distribution workflow fails closed and keeps the prior successful Pages
 deployment when release identity, qualification, signing, or package validation
 does not pass.

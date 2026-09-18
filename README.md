@@ -28,10 +28,10 @@ trusted local network or through an authenticated relay hosted on your own VPS.
 
 As of 2026-09-19, **GitHub latest is `0.4.4`**, with separate rootful and
 ordinary Dopamine rootless packages. **The APT feed remains `0.3.2` (rootful)**.
-The maintainer authorized latest publication before the full qualification
-matrix was complete; [release notes](https://github.com/nobottomline/rctl/releases/tag/v0.4.4)
-identify the outstanding checks. Back up and retain independent recovery access
-before upgrading. Native controller work in current source is not a released app.
+The full qualification matrix is not yet complete;
+[release notes](https://github.com/nobottomline/rctl/releases/tag/v0.4.4) identify
+the outstanding checks. Back up and retain independent recovery access before
+upgrading. Native controller work in current source is not a released app.
 
 Physical testing covers an iPad Air 3 (`iPad11,3`) on iPadOS 14.4 with rootful
 unc0ver/Substitute and an iPad Pro on iPadOS 15.5 with Dopamine/ElleKit. Both
