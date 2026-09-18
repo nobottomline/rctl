@@ -1,5 +1,29 @@
 # Rootless Release Readiness
 
+## Latest Publication (2026-09-19)
+
+The owner explicitly authorized publication as latest after being informed that
+the schema-5 report was incomplete. `v0.4.4` is now a public, non-prerelease,
+immutable GitHub release. This is a documented maintainer exception to the normal
+publication gate, not a claim that the missing checks passed. No qualification
+report was fabricated and no validator or release workflow was weakened.
+
+Publication verification reconfirmed the exact tagged commit's successful CI.
+All eleven release files matched GitHub asset sizes and SHA-256 digests, and
+their tag/source-bound build attestations passed. Both DEBs passed public-package
+audits. The signed rootful/rootless catalogs and their referenced rollback
+packages verified, as did the signed host catalog and OCI image provenance.
+The original source tag and artifact bytes were retained without rebuilding.
+
+Release notes disclose the outstanding forced-TURN device media, certificate
+renewal, faulted host/device recovery, package-manager recovery, and remaining
+admin/scheduled host-update checks. The known Listen-noise and rootful delayed
+reconnect observations remain open. No always-online guarantee is implied.
+
+The APT ledger/feed was not advanced; rootless admission remains separate.
+Publication did not deploy a relay or install anything on the test devices.
+Installers continue to use the verified digest-pinned image.
+
 ## Status Follow-Up (2026-09-19)
 
 GitHub still reports `v0.4.4` as a draft; stable/latest and the public APT feed

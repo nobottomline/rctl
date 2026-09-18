@@ -90,7 +90,7 @@ SHA256SUMS
 
 The binaries and catalogs are version-scoped by their immutable release URL,
 not by an extra version component in their filenames. The dual-package release
-contract applies to the `0.4.x` candidates and qualification prereleases;
+contract applies to `0.4.4` and the preceding `0.4.x` qualification prereleases;
 older rootful-only releases remain valid inputs to the bootstrap. Each package
 has its own architecture-bound update catalog; see `UPDATES.md`.
 

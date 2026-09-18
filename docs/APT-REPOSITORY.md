@@ -81,7 +81,8 @@ Rootless has no bootstrap exemption. Its validator additionally checks the
 firmware dependencies, and absence of prefixed or unprefixed relay secrets.
 The monorepo release generator now produces both architectures. The `0.4.2`
 and `0.4.3` qualification prereleases contain rootless packages, and `0.4.4`
-remains a draft. None of this admits rootless to APT: exact-artifact
+was published as GitHub latest on 2026-09-19. None of this admits rootless to
+APT: exact-artifact
 package-manager qualification, publication, and the rootless ledger entry are
 still separate requirements. Historical `~rootless` test builds are not
 substitutes for those release assets.

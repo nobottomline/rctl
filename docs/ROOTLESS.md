@@ -1,9 +1,10 @@
 # Rootless Installation and Testing
 
 The tested rootless target is an iPad Pro on iPadOS 15.5 with ordinary Dopamine
-and ElleKit. Physical LAN/relay and update checks exist; stable and APT
-publication are still pending. RootHide and other bootstrap variants are not
-covered by this evidence. Compilation alone does not qualify another device.
+and ElleKit. GitHub latest `0.4.4` includes a rootless package; APT admission and
+the remaining qualification checks are still pending. RootHide and other
+bootstrap variants are not covered by this evidence. Compilation alone does
+not qualify another device.
 
 For the current release-preparation status, including the existing wizard,
 operator-confirmed Talk fix, and verified transactional update/recovery, see

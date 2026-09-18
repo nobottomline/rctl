@@ -26,10 +26,12 @@ trusted local network or through an authenticated relay hosted on your own VPS.
 
 ## Project Status
 
-As of 2026-09-19, **stable/latest and the APT feed are `0.3.2` (rootful)**.
-`0.4.2` and `0.4.3` are qualification prereleases; **`0.4.4` remains a draft**,
-not an installable stable update. Features described below reflect the current
-source; a published older package may not include them.
+As of 2026-09-19, **GitHub latest is `0.4.4`**, with separate rootful and
+ordinary Dopamine rootless packages. **The APT feed remains `0.3.2` (rootful)**.
+The maintainer authorized latest publication before the full qualification
+matrix was complete; [release notes](https://github.com/nobottomline/rctl/releases/tag/v0.4.4)
+identify the outstanding checks. Back up and retain independent recovery access
+before upgrading. Native controller work in current source is not a released app.
 
 Physical testing covers an iPad Air 3 (`iPad11,3`) on iPadOS 14.4 with rootful
 unc0ver/Substitute and an iPad Pro on iPadOS 15.5 with Dopamine/ElleKit. Both
@@ -39,9 +41,9 @@ not blanket support for iOS 15/16, every device, or RootHide.
 
 | Profile | Status | Installation |
 | --- | --- | --- |
-| Local network, rootful iOS 14 | Public | [Cydia/Installer/Sileo/Zebra repository](https://nobottomline.github.io/rctl-repo/) |
+| Local network, rootful iOS 14 | Public | [APT `0.3.2`](https://nobottomline.github.io/rctl-repo/) or [GitHub `0.4.4`](https://github.com/nobottomline/rctl/releases/tag/v0.4.4) |
 | Self-hosted internet relay | Available; wizard features depend on release | Private package produced by the VPS wizard |
-| Rootless Dopamine, tested on iPadOS 15.5 | Physical candidate checks passed; stable publication pending | [Rootless guide](docs/ROOTLESS.md); not yet in the APT feed |
+| Rootless Dopamine, tested on iPadOS 15.5 | Public GitHub package; qualification limits apply | [Rootless guide](docs/ROOTLESS.md); not yet in the APT feed |
 
 See the [device release checkpoint](docs/ROOTLESS-RELEASE.md) and
 [VPS qualification record](docs/SETUP-QUALIFICATION.md) for exact versions,
@@ -71,8 +73,11 @@ packages intentionally remain separate.
 Open the **[rctl package repository](https://nobottomline.github.io/rctl-repo/)**
 on the jailbroken device, choose Cydia, Installer, Sileo, or Zebra, and install
 `rctl`.
-The same verified public `.deb` is attached to the
+For the newer `0.4.4` package, use the
 [latest GitHub release](https://github.com/nobottomline/rctl/releases/latest).
+Choose `iphoneos-arm` for rootful or `iphoneos-arm64` for ordinary Dopamine
+rootless; these are separate packages, not interchangeable files. Follow the
+[rootless installation guide](docs/ROOTLESS.md) for dependencies and installation.
 
 After installation, open:
 
@@ -105,11 +110,11 @@ The verified Go wizard checks the host and DNS, installs the digest-pinned relay
 stack, obtains TLS, and verifies HTTPS and persistence. It does not require a
 repository clone or compiler.
 
-The `0.4.4` candidate wizard implements searchable local domain hints, manual
+The `0.4.4` wizard implements searchable local domain hints, manual
 domain entry, and confirmed Docker Engine/Compose installation on a clean host.
-The `latest` command above still selects the published stable release, never a
-draft; the older stable installer requires Docker Engine and Compose v2
-beforehand. Domain hints cannot enumerate every domain pointing to a VPS;
+The `latest` command above selects the published release, never a draft.
+Older installers may require Docker Engine and Compose v2 beforehand.
+Domain hints cannot enumerate every domain pointing to a VPS;
 choose a domain you control. See [setup inputs](docs/SETUP.md#bootstrap-contract)
 for DNS, public IPv4, and optional certificate-contact email behavior.
 
@@ -125,7 +130,7 @@ identity automatically; there is nothing to configure on iOS. For pinned
 releases, non-interactive installation, upgrades, backup, and recovery, read
 [docs/SETUP.md](docs/SETUP.md).
 
-The `0.4.4` candidate includes an **Updates** section backed by a restricted host
+The `0.4.4` release includes an **Updates** section backed by a restricted host
 service: automatic release checks, confirmed relay installation, and optional
 scheduled automatic server updates. Device DEB updates require their own
 confirmation and preserve relay pairings; upgrading the server does not update
