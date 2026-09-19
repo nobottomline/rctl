@@ -39,6 +39,9 @@ additional trust-cache entries or changes to the jailbreak. Do not infer a Go
 incompatibility or disable code validation from the Documents failure.
 This location is for an unprivileged, disposable probe, not the final package
 layout. Do not replace installed rctl binaries or restart its services.
+Transfer each test build to a new filename instead of overwriting a previously
+executed inode: the final follow-up build failed after an in-place copy but
+passed `--check` unchanged from a fresh file in the same rootless directory.
 
 ## Opt-In Network Probe
 
