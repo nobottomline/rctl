@@ -29,6 +29,10 @@ remain separate from successful compilation. Do not deploy it over `rctld`.
 
 `--check` prints non-sensitive runtime/build facts and exits without creating
 state, registering a node or starting listeners. It is the first device test.
+The executable selects upstream's `TS_FORCE_NOISE_443` before starting tsnet;
+`--check` reports `control_https_only: true`. This uses HTTPS/443 for the control
+connection instead of the port-80 Noise upgrade. It does not force peer/media
+traffic through port 443 or DERP, and changes no system VPN settings.
 
 On the qualified iOS 15.5 Dopamine device, execute the probe inside the
 jailbreak root, for example in a private test directory below
@@ -156,20 +160,29 @@ upstream challenge values and preserve HTTP 429 with a validated `Retry-After`.
 Review this adapter when changing the pinned dependency: upstream must not
 register the same handler on iOS too.
 
-The iOS runtime and browser enrollment checks pass on the rootless device.
-Tailnet HTTPS certificates were enabled during qualification, but actual
-issuance still fails at the control-plane DNS challenge request. Ordinary
-HTTPS to both Tailscale and ACME succeeds. A separate diagnostic request over
-the existing Noise connection was written successfully but received no response
-before its deadline; this does not yet identify the underlying cause.
-The controller also has a separate system-DNS failure despite successful
-direct MagicDNS queries. Neither the certificate nor normal browser HTTPS path
-is qualified yet. Existing VPN settings and rctl services were left unchanged.
-Do not install this experimental mode in the public package.
+The iOS runtime, browser enrollment and actual certificate issuance pass on
+the tested iOS 15.5 rootless device. Control requests stalled on the default
+transport but completed after selecting HTTPS/443; the specific intermediary
+responsible was not identified. The final build starts with that setting
+without an external environment override and reuses the saved certificate.
+Strict TLS checks returned `200` for diagnostic health and the opt-in rctl
+document/API, `404` for rctl in diagnostic mode, and `403` for missing or
+cross-origin API authorization, excluded gateway routes and a mismatched
+allowed identity. SIGTERM stopped the probe cleanly; the installed rctl HTTP
+endpoint remained available afterward.
+
+These requests used curl's explicit DNS mapping, without disabling CA or
+hostname verification. The controller's system resolver still fails despite
+successful direct MagicDNS queries, so the normal browser HTTPS path remains
+unqualified. Existing VPN settings and rctl services were left unchanged.
+Certificate renewal and the embedded media path remain separate gates. Do not
+install this experimental mode in the public package.
 
 ## What Tests Establish
 
 - No-network check does not initialize state.
+- The CLI selects HTTPS-only control before starting tsnet, even if an ambient
+  environment variable requests the port-80 fast path.
 - Browser enrollment uses a private, disposable link document, validates the
   login destination, redacts errors and logs, and responds to cancellation.
   Reuse of saved state rejects missing, public or symlink identity files.

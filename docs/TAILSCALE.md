@@ -257,18 +257,30 @@ domain authorization, issuance, cache and renewal behavior. Startup obtains and
 checks a certificate before reporting HTTPS readiness; no HTTP or untrusted
 certificate fallback is used.
 
-Real issuance remains blocked at the control-plane DNS challenge request.
-The device reaches the public Tailscale and ACME HTTPS services, and reports an
-online control-plane connection. A diagnostic request over an existing Noise
-connection was sent successfully but timed out waiting for a response. An
-isolated process-only routing comparison did not resolve it; no system routes
-or VPN settings were changed. Do not infer that ACME, iOS permissions or the
-VPN is the cause from the timeout alone.
+Real certificate issuance subsequently passed after selecting upstream's
+`TS_FORCE_NOISE_443` control transport. With the default transport, diagnostic
+control requests timed out despite an online node. The same requests completed
+over HTTPS/443, followed by successful issuance on the device. Switching from
+a phone hotspot to home Wi-Fi alone had not fixed the failure. This establishes
+a working control-transport choice, not which VPN or intermediary caused the
+original stall. The executable now selects this upstream setting before tsnet
+starts. It changes neither system VPN settings nor peer/media routing.
+
+The final iOS build started without an external environment override, reused
+the saved identity/certificate and returned diagnostic health `200` with normal
+CA and hostname verification. Diagnostic mode returned `404` for the rctl page.
+The opt-in gateway served the real rctl document and same-origin capabilities
+API with `200`; requests missing Origin/Referer, cross-origin API requests and
+an excluded configuration route returned `403`. A separate run allowing a
+different user ID denied the actual controller with `403`. The probe shut down
+cleanly on SIGTERM, and the existing rctl HTTP endpoint still returned `200`.
+No device package or installed rctl service was changed.
 
 The controller has a separate DNS qualification gap: direct queries to
 MagicDNS return the test node address, while the system resolver and browser
-do not resolve it. Existing VPNs remain enabled. Certificate issuance and
-normal browser-name resolution must both pass before HTTPS acceptance.
+do not resolve it. Existing VPNs remain enabled. The successful HTTPS requests
+used curl's explicit DNS mapping, not a TLS exception. Ordinary browser-name
+resolution still needs to pass before end-to-end browser HTTPS acceptance.
 
 The isolated tool now has an explicit experimental `--rctl` HTTPS gateway
 mode. Its default remains diagnostic-only. The gateway checks the selected
@@ -279,11 +291,12 @@ fail or the gateway stops. Tests use disposable TLS endpoints and synthetic
 traffic, not live identities, media or credentials. See the tool's README for
 the route exclusions and lifecycle contract.
 
-This is source-level gateway groundwork, not on-device HTTPS acceptance.
-Certificate issuance/renewal, actual control-plane revocation propagation,
-browser Talk/clipboard and the embedded ICE bridge remain open. The official
-app route still uses the existing HTTP listener; neither it nor a new HTTPS
-listener was installed as a side effect of these tests.
+This establishes device-side TLS/HTTP behavior, not complete browser or
+embedded-media acceptance. Certificate renewal, actual control-plane revocation
+propagation, browser Talk/clipboard and the embedded ICE bridge remain open.
+The official app was still connected during these tests: they do not establish
+operation without it. The official-app route still uses the existing HTTP
+listener; no persistent HTTPS service or public-package change was installed.
 
 ## Upstream References
 
@@ -295,6 +308,7 @@ listener was installed as a side effect of these tests.
 - [Subnet routers](https://tailscale.com/docs/features/subnet-routers)
 - [Go Darwin compatibility](https://go.dev/wiki/Darwin)
 - [Pinned Tailscale module](https://github.com/tailscale/tailscale/blob/v1.102.4/go.mod)
+- [Pinned HTTPS control transport](https://github.com/tailscale/tailscale/blob/v1.102.4/control/controlhttp/client.go)
 - [Pion TURN](https://github.com/pion/turn/tree/v5.1.2)
 - [Concurrent VPN limitations](https://tailscale.com/docs/reference/faq/other-vpns)
 - [CGNAT conflict diagnosis](https://tailscale.com/docs/reference/troubleshooting/network-configuration/cgnat-conflicts)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -66,6 +67,27 @@ func TestCheckDoesNotInitializeState(t *testing.T) {
 	}
 	if _, err := os.Stat(state); !os.IsNotExist(err) {
 		t.Fatalf("state unexpectedly initialized: %v", err)
+	}
+}
+
+func TestCLIControlTransport(t *testing.T) {
+	if os.Getenv("RCTL_PROBE_TEST_ENTRYPOINT") == "1" {
+		os.Args = []string{"tailnet-probe", "--check"}
+		main()
+		os.Exit(0)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestCLIControlTransport$")
+	command.Env = append(os.Environ(), "RCTL_PROBE_TEST_ENTRYPOINT=1", "TS_FORCE_NOISE_443=false")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal("entrypoint check failed", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["control_https_only"] != true || result["network_started"] != false || result["rctl_access"] != false {
+		t.Fatal("entrypoint did not select HTTPS-only control without starting the network", result)
 	}
 }
 

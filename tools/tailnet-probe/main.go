@@ -21,10 +21,15 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/envknob"
 	"tailscale.com/tsnet"
 )
 
 func main() {
+	// Keep the control connection inside HTTPS: some network intermediaries
+	// accept the port-80 Noise upgrade but stall subsequent requests.
+	// Set this before tsnet starts; it does not constrain peer/media traffic.
+	envknob.Setenv("TS_FORCE_NOISE_443", "true")
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "tailnet-probe:", err)
 		os.Exit(1)
@@ -50,6 +55,7 @@ func run(args []string, out io.Writer) error {
 		return json.NewEncoder(out).Encode(map[string]any{
 			"runtime": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH,
 			"tailscale": "1.102.4", "network_started": false, "rctl_access": false,
+			"control_https_only": envknob.Bool("TS_FORCE_NOISE_443"),
 		})
 	}
 	if err := validateIdentity(*hostname, *userID); err != nil {
