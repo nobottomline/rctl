@@ -28,6 +28,19 @@ package-manager recovery or other runtime checks above.
 Publication did not deploy a relay or install anything on the test devices.
 Installers continue to use the verified digest-pinned image.
 
+### APT Distribution Verification
+
+The public feed now offers `0.4.4` for `iphoneos-arm` and `iphoneos-arm64`,
+retaining the existing OpenPGP signing key. The signed Pages workflow passed
+release/asset verification, package-content checks and isolated Linux APT
+signature, candidate, download and install/upgrade dependency-resolution tests
+for both architectures, including checks against the public HTTPS feed.
+An isolated APT session on the physical iPadOS 15.5 / Dopamine device also
+verified the feed, selected `0.4.4` and downloaded the rootless DEB. This did not
+change system sources or install/restart anything. Fresh physical installation
+and package-manager recovery were not re-tested in this distribution change.
+The separate stable-release synchronization workflow passed an idempotent retry.
+
 ## Historical Pre-Publication Check (2026-09-19)
 
 At this earlier check, GitHub reported `v0.4.4` as a draft; stable/latest and
