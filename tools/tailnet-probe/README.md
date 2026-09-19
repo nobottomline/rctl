@@ -30,10 +30,39 @@ remain separate from successful compilation. Do not deploy it over `rctld`.
 `--check` prints non-sensitive runtime/build facts and exits without creating
 state, registering a node or starting listeners. It is the first device test.
 
+On the qualified iOS 15.5 Dopamine device, execute the probe inside the
+jailbreak root, for example in a private test directory below
+`/var/jb/var/mobile/`. Executing the same bytes from `/var/mobile/Documents/`
+exited 137 before `main`; moving them inside the jailbreak root resolved it.
+Both the original Go build and independent C controls passed there without
+additional trust-cache entries or changes to the jailbreak. Do not infer a Go
+incompatibility or disable code validation from the Documents failure.
+This location is for an unprivileged, disposable probe, not the final package
+layout. Do not replace installed rctl binaries or restart its services.
+
 ## Opt-In Network Probe
 
-Only after the runtime check passes, prepare an isolated, owner-only directory
-and a mode-0600 file containing a **one-off, non-ephemeral** Tailscale auth key.
+Only after the runtime check passes, prepare an isolated, owner-only state
+directory. Browser enrollment avoids handling an auth key:
+
+```sh
+./tailnet-probe --enroll \
+  --state-dir "$PRIVATE_STATE_DIR" \
+  --hostname "$NEUTRAL_HOSTNAME" \
+  --allow-user-id "$CONTROLLER_TAILSCALE_USER_ID"
+```
+
+This writes a fresh mode-0600 Markdown login document inside the state
+directory. The console prints only its path, never the login URL. Open that
+document privately and approve the expected test node through Tailscale.
+Enrollment has a five-minute deadline and starts no HTTPS listener or rctl
+gateway. Completion, cancellation and timeout remove the login document;
+remove any copy transferred to the controller too. The enrolled identity stays
+in the private state directory. Run again with the same arguments **without
+`--enroll`** to start the diagnostic HTTPS endpoint using that identity.
+
+Alternatively, create a mode-0600 file containing a **one-off,
+non-ephemeral** Tailscale auth key.
 Never put the key in arguments, shell history, source, test fixtures or a
 public package. This probe does not validate the key's one-off policy; select
 that policy when creating the key. Keep both files outside this checkout.
@@ -56,12 +85,15 @@ Only an untagged peer owned by the explicitly allowed Tailscale user can call
 request is checked. In the default diagnostic mode, all rctl routes return 404,
 not proxied responses.
 
-Enrollment has a 90-second deadline. Ctrl-C/SIGTERM closes the HTTP listener
+Normal startup has a 90-second deadline. Ctrl-C/SIGTERM closes the HTTP listener
 and tsnet instance. Auth URLs and upstream diagnostics are suppressed rather
 than copied to logs; this is intentionally not a general troubleshooting CLI.
-The diagnostic build requires the key-file argument on each start; persistent
-node identity is stored separately by tsnet. Production one-time bootstrap
-consumption and recovery are not implemented here.
+Subsequent starts use saved private state without requiring the key-file
+argument. Expired or revoked enrollment requires explicit re-enrollment;
+there is no automatic approval. Ambient Tailscale enrollment variables are
+rejected, so another shell's auth key or forced-login setting cannot select a
+different identity. Production bootstrap consumption, service supervision and
+recovery are not implemented here.
 
 After testing, stop the tracked process, remove its node from Tailscale, revoke
 any unused enrollment key, and delete only the test's state/key directory.
@@ -107,13 +139,16 @@ qualification gates. An HTTPS proxy does not solve the embedded node's WebRTC
 ICE boundary; the planned TURN bridge is not implemented. Do not claim Talk,
 camera or remote WebRTC support from successful TLS/HTTP tests.
 
-The iOS runtime remains blocked before `--check` executes. No real certificate,
-enrollment or browser HTTPS path has been qualified on the controlled device.
+The iOS runtime check now passes on the rootless device. No real certificate
+or browser HTTPS path has yet been qualified on the controlled device.
 Do not install this experimental mode in the public package.
 
 ## What Tests Establish
 
 - No-network check does not initialize state.
+- Browser enrollment uses a private, disposable link document, validates the
+  login destination, redacts errors and logs, and responds to cancellation.
+  Reuse of saved state rejects missing, public or symlink identity files.
 - State/key permissions, owner and final-component symlink checks reject
   unsafe inputs; key reads are bounded and use the opened file descriptor.
 - Identity input is explicit; diagnostics reject unauthenticated peers,

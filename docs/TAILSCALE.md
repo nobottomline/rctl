@@ -224,25 +224,34 @@ Go 1.26.6 and Tailscale v1.102.4 for iOS/arm64, minimum iOS 15.0. Local race
 tests cover diagnostic authorization boundaries, private files and a loopback
 Pion TURN packet round trip with invalid-credential/peer rejection.
 
-Physical-device execution is **not qualified**: the ad-hoc signed probe exits
-137 before printing `--check` output on the iOS 15.5 Dopamine test device. An
-independent minimal C executable fails identically, including when using the
-iOS 15.6 SDK rather than Xcode's current SDK. This does not establish a tsnet
-runtime incompatibility; device executable trust/launch must be diagnosed
-first. No Tailscale node has been registered by the probe, no device API was
-exposed, and installed rctl, VPN and relay configuration were left unchanged.
+The iOS 15.5 Dopamine runtime check passed on 2026-09-19: the original
+ad-hoc signed Go executable returned `os: ios`, `arch: arm64`, Go 1.26.6 and
+Tailscale 1.102.4, with no networking or rctl exposure started.
 
-Follow-up: SSH transfer checksums matched, and the exact diagnostic binary's
-code-directory hash was registered through Dopamine's `jbctl`. The hash was
-present in the trust cache (its output uses uppercase hexadecimal), but the
-binary still exited 137, including from a fresh file. Minimal C comparisons
-without chained fixups and with Apple's ad-hoc signer also failed to launch.
-These results rule out a Go-only failure and do not justify disabling code
-validation or changing the jailbreak. Device-side launch remains unresolved;
-no respring or package replacement was performed for these probes. Temporary
-device executables were removed afterward. The diagnostic hash remains in
+The earlier exit-137 failure depended on executable location. Identical
+minimal C binaries failed in `/var/mobile/Documents/` but executed below
+`/var/jb/var/mobile/`; the existing Go build then passed there too. Independent
+Homebrew and Procursus signing controls both worked in that location. An
+earlier explicit trust-cache registration alone had not fixed the Documents
+failure. No additional trust entries, disabled code validation, respring or
+package replacement were needed for the successful follow-up. This qualifies
+the tested rootless runtime location, not arbitrary iOS/jailbreak combinations
+or the final service/package layout. The earlier diagnostic hash remains in
 the current jailbreak trust cache; clearing unrelated entries is not part of
 test cleanup.
+
+The probe also supports explicit browser enrollment without copying auth keys.
+It writes a mode-0600 login document, waits for approval, then exits without
+opening an HTTPS listener. Subsequent runs reuse the saved private identity.
+Login URLs and upstream private details are excluded from console diagnostics.
+See the tool's README for timeout, cleanup and enrollment boundaries.
+
+The same physical-device session completed browser enrollment and exited
+successfully without opening rctl. A second process reused the saved identity
+without an auth key and reached the HTTPS prerequisite check. The tailnet had
+HTTPS certificates disabled, so startup failed explicitly instead of exposing
+HTTP or using an untrusted certificate. Real HTTPS acceptance remains pending
+the separately confirmed certificate setup and browser tests.
 
 The isolated tool now has an explicit experimental `--rctl` HTTPS gateway
 mode. Its default remains diagnostic-only. The gateway checks the selected

@@ -38,6 +38,7 @@ func run(args []string, out io.Writer) error {
 	hostname := flags.String("hostname", "", "non-personal DNS label for this probe")
 	userID := flags.String("allow-user-id", "", "Tailscale user ID allowed to use this probe (full device control with --rctl)")
 	keyFile := flags.String("auth-key-file", "", "private file containing a one-off, non-ephemeral auth key")
+	enroll := flags.Bool("enroll", false, "enroll through a private browser login link, then exit without opening listeners")
 	rctl := flags.Bool("rctl", false, "experimental HTTPS gateway to this device's LAN-enabled rctl; not a release feature")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -54,6 +55,12 @@ func run(args []string, out io.Writer) error {
 	if err := validateIdentity(*hostname, *userID); err != nil {
 		return err
 	}
+	if *enroll && (*rctl || *keyFile != "") {
+		return errors.New("enroll cannot be combined with rctl or auth-key-file")
+	}
+	if err := explicitEnrollmentEnvironment(); err != nil {
+		return err
+	}
 	if err := prepareState(*state); err != nil {
 		return err
 	}
@@ -61,8 +68,10 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if key == "" {
-		return errors.New("an auth-key-file is required for this diagnostic build")
+	if key == "" && !*enroll {
+		if err := requireSavedIdentity(*state); err != nil {
+			return err
+		}
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -72,6 +81,24 @@ func run(args []string, out io.Writer) error {
 		Logf: func(string, ...any) {}, UserLogf: func(string, ...any) {},
 	}
 	defer server.Close()
+	if *enroll {
+		login, err := newLoginDocument(*state)
+		if err != nil {
+			return err
+		}
+		defer login.Close()
+		client, err := server.LocalClient()
+		if err != nil {
+			return errors.New("Tailscale enrollment could not start")
+		}
+		startup, stopStartup := context.WithTimeout(ctx, 5*time.Minute)
+		defer stopStartup()
+		if err := enrollBrowser(startup, client.Status, login, out); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Enrollment complete; no HTTPS listener or rctl access was started.")
+		return nil
+	}
 	startup, stopStartup := context.WithTimeout(ctx, 90*time.Second)
 	status, err := server.Up(startup)
 	stopStartup()
