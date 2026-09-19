@@ -24,6 +24,8 @@ flow, then read the feature document for the code being changed.
 - [APT-REPOSITORY.md](APT-REPOSITORY.md): public Cydia/Installer/Sileo/Zebra feed,
   signing, release synchronization, and relay-package isolation.
 - [TRANSPORT.md](TRANSPORT.md): WebRTC/DataChannel architecture.
+- [TAILSCALE.md](TAILSCALE.md): optional private-network integration, user choices,
+  embedded prototype boundaries and qualification gates (not yet shipped).
 - [MOBILE.md](MOBILE.md): native iOS/Android controller architecture, authentication,
   media ownership, and delivery gates.
 - [MOBILE-PLAN.md](MOBILE-PLAN.md): monorepo layout, implementation sequence,

@@ -6,3 +6,6 @@ to run from a dirty worktree.
 
 Production lifecycle behavior belongs in `scripts/`, `rctl-setup`, or the device
 runtime rather than an undocumented tool.
+
+- [tailnet-probe](tailnet-probe/README.md): isolated Tailscale runtime/HTTPS
+  qualification and loopback TURN tests; no rctl API or production integration.
