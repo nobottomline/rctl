@@ -1,4 +1,4 @@
-// tailnet-probe qualifies the optional transport without exposing rctl APIs.
+// tailnet-probe qualifies the optional transport; device proxying is opt-in.
 package main
 
 import (
@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -35,8 +36,9 @@ func run(args []string, out io.Writer) error {
 	check := flags.Bool("check", false, "check the runtime without registering a node or starting listeners")
 	state := flags.String("state-dir", "", "private directory for this probe's Tailscale identity")
 	hostname := flags.String("hostname", "", "non-personal DNS label for this probe")
-	userID := flags.String("allow-user-id", "", "Tailscale user ID allowed to call the diagnostic endpoint")
+	userID := flags.String("allow-user-id", "", "Tailscale user ID allowed to use this probe (full device control with --rctl)")
 	keyFile := flags.String("auth-key-file", "", "private file containing a one-off, non-ephemeral auth key")
+	rctl := flags.Bool("rctl", false, "experimental HTTPS gateway to this device's LAN-enabled rctl; not a release feature")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -71,7 +73,7 @@ func run(args []string, out io.Writer) error {
 	}
 	defer server.Close()
 	startup, stopStartup := context.WithTimeout(ctx, 90*time.Second)
-	_, err = server.Up(startup)
+	status, err := server.Up(startup)
 	stopStartup()
 	if err != nil {
 		return errors.New("Tailscale connection failed; check enrollment, approval and connectivity")
@@ -85,24 +87,50 @@ func run(args []string, out io.Writer) error {
 		return errors.New("HTTPS listener unavailable; enable MagicDNS and HTTPS certificates in Tailscale")
 	}
 	defer listener.Close()
-	handler := diagnosticHandler(func(ctx context.Context, addr string) bool {
+	authorize := func(ctx context.Context, addr string) bool {
 		identity, err := client.WhoIs(ctx, addr)
 		return err == nil && allowedIdentity(identity, *userID)
-	})
+	}
+	var handler http.Handler = diagnosticHandler(authorize)
+	var deviceGateway *gateway
+	if *rctl {
+		if status.Self == nil {
+			return errors.New("gateway identity is unavailable")
+		}
+		deviceGateway, err = newGateway(strings.TrimSuffix(status.Self.DNSName, "."), authorize)
+		if err != nil {
+			return err
+		}
+		defer deviceGateway.Close()
+		handler = deviceGateway
+	}
 	httpServer := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
 		WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192,
+		ErrorLog: log.New(io.Discard, "", 0),
+	}
+	if deviceGateway != nil {
+		httpServer.ReadTimeout = 60 * time.Second
+		// Downloads stream with backpressure rather than a whole-file buffer.
+		httpServer.WriteTimeout = 0
 	}
 	stopped := make(chan struct{})
 	defer close(stopped)
 	go func() {
 		select {
 		case <-ctx.Done():
+			if deviceGateway != nil {
+				deviceGateway.Close()
+			}
 			_ = httpServer.Close()
 		case <-stopped:
 		}
 	}()
-	fmt.Fprintln(out, "Private HTTPS probe ready; only GET /healthz is available. No rctl access is exposed.")
+	if deviceGateway == nil {
+		fmt.Fprintln(out, "Private HTTPS probe ready; only GET /healthz is available. No rctl access is exposed.")
+	} else {
+		fmt.Fprintln(out, "Experimental private HTTPS gateway ready; LAN policy and permitted identity are required.")
+	}
 	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return errors.New("diagnostic HTTPS server stopped unexpectedly")
 	}
@@ -111,6 +139,7 @@ func run(args []string, out io.Writer) error {
 
 func allowedIdentity(identity *apitype.WhoIsResponse, userID string) bool {
 	return identity != nil && identity.UserProfile != nil && identity.Node != nil &&
+		!identity.Node.Expired && (identity.Node.KeyExpiry.IsZero() || identity.Node.KeyExpiry.After(time.Now())) &&
 		len(identity.Node.Tags) == 0 && identity.UserProfile.ID > 0 &&
 		strconv.FormatInt(int64(identity.UserProfile.ID), 10) == userID
 }

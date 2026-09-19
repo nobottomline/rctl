@@ -14,4 +14,4 @@ GOTOOLCHAIN=go1.26.6 CGO_ENABLED=1 GOOS=ios GOARCH=arm64 CC="$clang" \
     CGO_LDFLAGS="-isysroot $sdk -miphoneos-version-min=15.0" \
     go build -trimpath -o "$1" .
 ldid -S "$1"
-printf 'Built diagnostic-only iOS 15+ executable: %s\n' "$1"
+printf 'Built experimental iOS 15+ probe (gateway requires --rctl): %s\n' "$1"

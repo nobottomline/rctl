@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
@@ -25,6 +26,19 @@ func TestWhoIsIdentity(t *testing.T) {
 	}
 	if allowedIdentity(identity, "userid:123") {
 		t.Fatal("display string accepted instead of numeric ID")
+	}
+	identity.Node.Expired = true
+	if allowedIdentity(identity, "123") {
+		t.Fatal("expired node accepted")
+	}
+	identity.Node.Expired = false
+	identity.Node.KeyExpiry = time.Now().Add(-time.Minute)
+	if allowedIdentity(identity, "123") {
+		t.Fatal("expired key accepted")
+	}
+	identity.Node.KeyExpiry = time.Now().Add(time.Minute)
+	if !allowedIdentity(identity, "123") {
+		t.Fatal("valid expiring key denied")
 	}
 	identity.Node.Tags = []string{"tag:server"}
 	if allowedIdentity(identity, "123") {

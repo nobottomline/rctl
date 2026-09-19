@@ -232,6 +232,33 @@ runtime incompatibility; device executable trust/launch must be diagnosed
 first. No Tailscale node has been registered by the probe, no device API was
 exposed, and installed rctl, VPN and relay configuration were left unchanged.
 
+Follow-up: SSH transfer checksums matched, and the exact diagnostic binary's
+code-directory hash was registered through Dopamine's `jbctl`. The hash was
+present in the trust cache (its output uses uppercase hexadecimal), but the
+binary still exited 137, including from a fresh file. Minimal C comparisons
+without chained fixups and with Apple's ad-hoc signer also failed to launch.
+These results rule out a Go-only failure and do not justify disabling code
+validation or changing the jailbreak. Device-side launch remains unresolved;
+no respring or package replacement was performed for these probes. Temporary
+device executables were removed afterward. The diagnostic hash remains in
+the current jailbreak trust cache; clearing unrelated entries is not part of
+test cleanup.
+
+The isolated tool now has an explicit experimental `--rctl` HTTPS gateway
+mode. Its default remains diagnostic-only. The gateway checks the selected
+Tailscale identity and the device's LAN-enabled policy, enforces same-origin
+requests and a fixed loopback upstream, and bounds concurrent work. Streaming
+responses and WebSockets are canceled when periodic identity/policy checks
+fail or the gateway stops. Tests use disposable TLS endpoints and synthetic
+traffic, not live identities, media or credentials. See the tool's README for
+the route exclusions and lifecycle contract.
+
+This is source-level gateway groundwork, not on-device HTTPS acceptance.
+Certificate issuance/renewal, actual control-plane revocation propagation,
+browser Talk/clipboard and the embedded ICE bridge remain open. The official
+app route still uses the existing HTTP listener; neither it nor a new HTTPS
+listener was installed as a side effect of these tests.
+
 ## Upstream References
 
 - [Official iOS client](https://tailscale.com/docs/install/ios)
