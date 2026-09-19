@@ -122,7 +122,7 @@ LAN HTTP returned 200. Inspection showed a competing macOS route for
 `100.64.0.0/10` through the ordinary Wi-Fi gateway. Tailscale's own dialer and
 an explicitly Tailscale-source-bound HTTP request both reached rctl and
 returned 200. The installed rctl server did not need a transport patch for
-that failure. Concurrent VPN connections were not disabled or reconfigured.
+that failure. Concurrent VPN connections were not disabled during diagnosis.
 
 A temporary loopback-only diagnostic proxy bound its upstream TCP connections
 to the controller's Tailscale address. The browser used that proxy for HTTP
@@ -152,8 +152,38 @@ Observed through the browser UI:
 The loopback browser origin is treated as a secure context by browsers. It
 does **not** qualify Talk/clipboard over the device's ordinary HTTP Tailscale
 URL. Camera, audio/Talk, bulk files, prolonged idle/power behavior, DERP,
-revocation and unattended recovery remain untested in this route. The ordinary
-browser path on the controller still requires resolution of its route conflict.
+revocation and unattended recovery remain untested in this diagnostic route.
+
+### Direct Browser Follow-Up
+
+A node attribute targeted only at the macOS controller's existing Tailscale
+IPv4 address, `one-cgnat?v=false`, was accepted and saved by the Tailscale
+policy editor. Existing access grants and SSH rules were preserved. The
+controller then installed a peer-specific `/32` route through the Tailscale
+interface instead of selecting the competing Wi-Fi `/10` route. An ordinary
+HTTP request, with neither source binding nor a proxy, returned 200. Both
+Tailscale and the concurrent VPN remained connected.
+
+With the controlled device still on a phone hotspot, the browser opened its
+Tailscale HTTP address directly. WebRTC screen video rendered around 60 fps
+at 1024 x 1366. A Control Center command, a tap to dismiss it, and a terminal
+command with a synthetic marker succeeded. Reloading the page restored video
+without intervention on the device. No diagnostic proxy, candidate filter or
+rctl relay was used for this check.
+
+During this session, `tailscale ping` reported DERP fallback. Browser RTT was
+commonly around 140-190 ms, with an observed spike above 500 ms. Dropped-frame
+and freeze counters increased. The direct browser test did not constrain ICE
+candidates or verify the selected pair's addresses: a DERP ping alone does
+not prove that WebRTC media used DERP rather than another available ICE path.
+This is not forced-DERP media qualification or a loss-free performance claim.
+No transport or quality defaults were changed to conceal the network behavior.
+
+This resolves the observed controller route conflict, not every VPN conflict.
+The direct HTTP origin still lacks browser secure-context capabilities;
+Talk/clipboard, HTTPS setup, camera/audio, bulk files, power behavior and
+revocation require separate qualification. The embedded agent is unaffected
+and remains experimental.
 
 ### Route Troubleshooting
 
@@ -172,9 +202,15 @@ curl --noproxy '*' --connect-timeout 5 --max-time 10 \
 If only the bound request succeeds, inspect the conflicting VPN's routes and
 Tailscale routing policy. Change only the specific conflicting configuration
 after confirming its purpose; preserve the existing internet/recovery path.
-Tailscale has a per-node route-granularity capability (`one-cgnat?v=false`) for
-preferring peer `/32` routes, but this was not applied or qualified in this
-test. It is not a blanket instruction to change a user's access policy.
+Tailscale's per-node route-granularity capability (`one-cgnat?v=false`) prefers
+peer `/32` routes. The direct-browser follow-up above verified this setting
+with a single controller IPv4 target. It is not a blanket instruction to
+change every node or replace the access policy. Preserve unrelated policy
+entries, preview the diff, and verify the actual route and ordinary HTTP
+request afterward. Route updates can briefly disrupt active connections.
+Removing only the added node-attribute entry restores the previous automatic
+route selection; do not change grants, device tags or other VPN configuration
+as part of this workaround.
 
 IPv6 SSH connectivity also succeeded, but rctl's current HTTP listener binds
 IPv4 only. Enabling an unrestricted `[::]` listener would expand exposure on
