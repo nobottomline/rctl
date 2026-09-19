@@ -248,10 +248,27 @@ See the tool's README for timeout, cleanup and enrollment boundaries.
 
 The same physical-device session completed browser enrollment and exited
 successfully without opening rctl. A second process reused the saved identity
-without an auth key and reached the HTTPS prerequisite check. The tailnet had
-HTTPS certificates disabled, so startup failed explicitly instead of exposing
-HTTP or using an untrusted certificate. Real HTTPS acceptance remains pending
-the separately confirmed certificate setup and browser tests.
+without an auth key and reached the HTTPS prerequisite check. HTTPS
+certificates were subsequently enabled for the tailnet. The pinned upstream
+iOS build omits the LocalAPI certificate route despite including the ACME
+backend. The probe now provides an iOS-only, in-process adapter to that backend,
+with strict request validation and redacted failures. It retains upstream
+domain authorization, issuance, cache and renewal behavior. Startup obtains and
+checks a certificate before reporting HTTPS readiness; no HTTP or untrusted
+certificate fallback is used.
+
+Real issuance remains blocked at the control-plane DNS challenge request.
+The device reaches the public Tailscale and ACME HTTPS services, and reports an
+online control-plane connection. A diagnostic request over an existing Noise
+connection was sent successfully but timed out waiting for a response. An
+isolated process-only routing comparison did not resolve it; no system routes
+or VPN settings were changed. Do not infer that ACME, iOS permissions or the
+VPN is the cause from the timeout alone.
+
+The controller has a separate DNS qualification gap: direct queries to
+MagicDNS return the test node address, while the system resolver and browser
+do not resolve it. Existing VPNs remain enabled. Certificate issuance and
+normal browser-name resolution must both pass before HTTPS acceptance.
 
 The isolated tool now has an explicit experimental `--rctl` HTTPS gateway
 mode. Its default remains diagnostic-only. The gateway checks the selected

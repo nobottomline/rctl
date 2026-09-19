@@ -88,7 +88,11 @@ Only an untagged peer owned by the explicitly allowed Tailscale user can call
 request is checked. In the default diagnostic mode, all rctl routes return 404,
 not proxied responses.
 
-Normal startup has a 90-second deadline. Ctrl-C/SIGTERM closes the HTTP listener
+Connection startup has a 90-second deadline, followed by a separate 90-second
+certificate acquisition deadline. Readiness is reported only after the key
+pair, hostname and validity interval have been checked. Certificate failures
+stop startup without enabling plain HTTP or weakening TLS validation.
+Ctrl-C/SIGTERM closes the HTTP listener
 and tsnet instance. Auth URLs and upstream diagnostics are suppressed rather
 than copied to logs; this is intentionally not a general troubleshooting CLI.
 Subsequent starts use saved private state without requiring the key-file
@@ -142,8 +146,25 @@ qualification gates. An HTTPS proxy does not solve the embedded node's WebRTC
 ICE boundary; the planned TURN bridge is not implemented. Do not claim Talk,
 camera or remote WebRTC support from successful TLS/HTTP tests.
 
-The iOS runtime check now passes on the rootless device. No real certificate
-or browser HTTPS path has yet been qualified on the controlled device.
+The pinned upstream iOS build includes ACME support but excludes the LocalAPI
+certificate handler. An iOS-only, in-process adapter supplies that missing
+route through the upstream backend. It does not expose a LocalAPI TCP port or
+implement another ACME client. Issuance, node/domain authorization, certificate
+storage and renewal remain upstream-owned. Requests accept only canonical
+`*.ts.net` names and the certificate-pair operation. Error responses redact
+upstream challenge values and preserve HTTP 429 with a validated `Retry-After`.
+Review this adapter when changing the pinned dependency: upstream must not
+register the same handler on iOS too.
+
+The iOS runtime and browser enrollment checks pass on the rootless device.
+Tailnet HTTPS certificates were enabled during qualification, but actual
+issuance still fails at the control-plane DNS challenge request. Ordinary
+HTTPS to both Tailscale and ACME succeeds. A separate diagnostic request over
+the existing Noise connection was written successfully but received no response
+before its deadline; this does not yet identify the underlying cause.
+The controller also has a separate system-DNS failure despite successful
+direct MagicDNS queries. Neither the certificate nor normal browser HTTPS path
+is qualified yet. Existing VPN settings and rctl services were left unchanged.
 Do not install this experimental mode in the public package.
 
 ## What Tests Establish
@@ -156,6 +177,9 @@ Do not install this experimental mode in the public package.
   unsafe inputs; key reads are bounded and use the opened file descriptor.
 - Identity input is explicit; diagnostics reject unauthenticated peers,
   unsupported methods, rctl routes and query strings.
+- The iOS certificate adapter rejects unauthorized, noncanonical and malformed
+  requests before invoking the backend. Tests cover error redaction, rate-limit
+  propagation, invalid key pairs, hostname mismatch and certificate dates.
 - Pion TURN accepts separate packet connections, transfers a synthetic packet
   in both directions, rejects an incorrect password and denies a non-local
   peer address. All sockets are ephemeral loopback sockets and are closed.

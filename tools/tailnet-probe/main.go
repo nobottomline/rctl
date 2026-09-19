@@ -109,6 +109,19 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return errors.New("Tailscale identity service is unavailable")
 	}
+	if status.Self == nil || !validCertificateName(strings.TrimSuffix(status.Self.DNSName, ".")) {
+		return errors.New("HTTPS requires a canonical Tailscale node name")
+	}
+	certName := strings.TrimSuffix(status.Self.DNSName, ".")
+	certContext, stopCert := context.WithTimeout(ctx, 90*time.Second)
+	certPEM, keyPEM, certErr := client.CertPair(certContext, certName)
+	stopCert()
+	if certErr != nil {
+		return fmt.Errorf("HTTPS certificate acquisition failed (%s); check tailnet HTTPS settings and ACME connectivity", certificateFailure(certErr))
+	}
+	if err := validateCertificate(certName, certPEM, keyPEM); err != nil {
+		return err
+	}
 	listener, err := server.ListenTLS("tcp", ":443")
 	if err != nil {
 		return errors.New("HTTPS listener unavailable; enable MagicDNS and HTTPS certificates in Tailscale")
