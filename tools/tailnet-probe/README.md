@@ -133,6 +133,10 @@ Boundaries implemented and covered by isolated tests:
   unknown routes, relay/update/access configuration and legacy vendor assets
   are excluded. This allowlist is not a privilege partition: an authorized
   device administrator already has terminal and file access.
+- Terminal WebSockets accept optional `cols`/`rows` query parameters required
+  by the web client. Values must be nonzero decimal uint16 integers. Unknown
+  names, duplicate keys and URL-encoded dimensions are rejected before the
+  native parser; these checks do not replace identity or Origin authorization.
 - Cookies, authorization, forwarded identity and other unnecessary request
   headers are not passed to the native parser. Upstream cookies and CORS
   headers are removed. Sensitive responses are not cached.
@@ -173,8 +177,13 @@ endpoint remained available afterward.
 
 These requests used curl's explicit DNS mapping, without disabling CA or
 hostname verification. The controller's system resolver still fails despite
-successful direct MagicDNS queries, so the normal browser HTTPS path remains
-unqualified. Existing VPN settings and rctl services were left unchanged.
+successful direct MagicDNS queries; a domain-specific resolver and cache refresh
+did not fix it. A temporary mapping of only the probe's hostname subsequently
+allowed browser qualification: screen video, Control Center, a terminal marker,
+page reload and reconnect after probe restart. This is not automatic DNS
+acceptance. The same-Wi-Fi test kept the official device Tailscale app active
+and did not constrain ICE addresses, so it does not qualify embedded media or
+a different-network route. Existing VPN settings and rctl services were left unchanged.
 Certificate renewal and the embedded media path remain separate gates. Do not
 install this experimental mode in the public package.
 
@@ -198,7 +207,8 @@ install this experimental mode in the public package.
   peer address. All sockets are ephemeral loopback sockets and are closed.
 - HTTPS gateway identity/origin/route/policy denials, header sanitization,
   request quotas, streamed responses, WebSocket round trips and cancellation
-  on identity loss, local-policy changes and shutdown. TLS integration tests
+  on identity loss, local-policy changes and shutdown for both signaling and
+  terminal connections with dimensions. TLS integration tests
   trust only their disposable test server's certificate via its test client.
 
 The TURN test does **not** establish tsnet routing, browser ICE connectivity,

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -232,7 +233,7 @@ func gatewayRoute(r *http.Request) bool {
 	case "/", "/index.html", "/stream", "/input", "/key", "/config", "/orient", "/audio_test":
 		return r.Method == http.MethodGet
 	case "/ws/term":
-		return r.Method == http.MethodGet && r.URL.RawQuery == ""
+		return r.Method == http.MethodGet && terminalQuery(r.URL.RawQuery)
 	case "/ws/signal":
 		return r.Method == http.MethodGet && (r.URL.RawQuery == "" || r.URL.RawQuery == "media=camera")
 	case "/v1/capabilities", "/v1/talk_route", "/v1/tap", "/v1/swipe", "/v1/key", "/v1/button",
@@ -250,4 +251,23 @@ func gatewayRoute(r *http.Request) bool {
 		// Ingest, future endpoints and access/update configuration are not proxied.
 		return false
 	}
+}
+
+// The device's terminal parser reads raw decimal cols/rows into uint16 values.
+// Do not accept encodings or duplicate keys that it would interpret differently.
+func terminalQuery(raw string) bool {
+	values, err := url.ParseQuery(raw)
+	if err != nil || strings.ContainsAny(raw, "%+;") {
+		return false
+	}
+	for name, items := range values {
+		if (name != "cols" && name != "rows") || len(items) != 1 {
+			return false
+		}
+		value, err := strconv.ParseUint(items[0], 10, 16)
+		if err != nil || value == 0 {
+			return false
+		}
+	}
+	return true
 }

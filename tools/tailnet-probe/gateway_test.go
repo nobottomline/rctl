@@ -77,6 +77,22 @@ func TestGatewayBoundary(t *testing.T) {
 		{name: "document", method: "GET", path: "/"},
 		{name: "query-on-document", method: "GET", path: "/?x=1", denied: true},
 		{name: "same-origin", method: "GET", path: "/v1/deviceinfo", origin: g.origin},
+		{name: "terminal-dimensions", method: "GET", path: "/ws/term?cols=120&rows=40", origin: g.origin},
+		{name: "terminal-default", method: "GET", path: "/ws/term", origin: g.origin},
+		{name: "terminal-reordered", method: "GET", path: "/ws/term?rows=40&cols=120", origin: g.origin},
+		{name: "terminal-partial", method: "GET", path: "/ws/term?rows=40", origin: g.origin},
+		{name: "terminal-uint16-limit", method: "GET", path: "/ws/term?cols=65535", origin: g.origin},
+		{name: "terminal-csrf", method: "GET", path: "/ws/term?cols=120&rows=40", denied: true},
+		{name: "terminal-unknown-query", method: "GET", path: "/ws/term?cols=120&command=unused", origin: g.origin, denied: true},
+		{name: "terminal-duplicate", method: "GET", path: "/ws/term?cols=120&cols=80", origin: g.origin, denied: true},
+		{name: "terminal-overflow", method: "GET", path: "/ws/term?rows=65536", origin: g.origin, denied: true},
+		{name: "terminal-zero", method: "GET", path: "/ws/term?rows=0", origin: g.origin, denied: true},
+		{name: "terminal-negative", method: "GET", path: "/ws/term?cols=-1", origin: g.origin, denied: true},
+		{name: "terminal-encoded", method: "GET", path: "/ws/term?cols=%31", origin: g.origin, denied: true},
+		{name: "terminal-malformed", method: "GET", path: "/ws/term?cols=12x", origin: g.origin, denied: true},
+		{name: "terminal-empty", method: "GET", path: "/ws/term?cols=", origin: g.origin, denied: true},
+		{name: "terminal-semicolon", method: "GET", path: "/ws/term?cols=120;rows=40", origin: g.origin, denied: true},
+		{name: "terminal-post", method: "POST", path: "/ws/term?cols=120&rows=40", origin: g.origin, denied: true},
 		{name: "safari-referer", method: "GET", path: "/v1/deviceinfo", referer: g.origin + "/"},
 		{name: "csrf-get", method: "GET", path: "/v1/button?name=home", denied: true},
 		{name: "csrf-post", method: "POST", path: "/v1/keyboard", origin: "https://untrusted.example", denied: true},
@@ -192,8 +208,11 @@ func TestGatewayRequestLimits(t *testing.T) {
 }
 
 func TestGatewayClosesWebSocket(t *testing.T) {
-	for _, reason := range []string{"identity", "policy", "shutdown"} {
-		t.Run(reason, func(t *testing.T) {
+	for _, tc := range []struct{ reason, path string }{
+		{"identity", "/ws/signal"}, {"policy", "/ws/signal"}, {"shutdown", "/ws/signal"},
+		{"identity", "/ws/term?cols=120&rows=40"}, {"policy", "/ws/term?cols=120&rows=40"}, {"shutdown", "/ws/term?cols=120&rows=40"},
+	} {
+		t.Run(tc.reason+tc.path, func(t *testing.T) {
 			var allowed, local atomic.Bool
 			allowed.Store(true)
 			local.Store(true)
@@ -206,6 +225,9 @@ func TestGatewayClosesWebSocket(t *testing.T) {
 						w.WriteHeader(403)
 					}
 					return
+				}
+				if r.URL.RequestURI() != tc.path {
+					t.Errorf("WebSocket target changed: %q", r.URL.RequestURI())
 				}
 				c, err := websocket.Accept(w, r, nil)
 				if err != nil {
@@ -225,7 +247,7 @@ func TestGatewayClosesWebSocket(t *testing.T) {
 			g.origin = srv.URL
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			c, _, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(srv.URL, "https")+"/ws/signal", &websocket.DialOptions{
+			c, _, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(srv.URL, "https")+tc.path, &websocket.DialOptions{
 				HTTPClient: srv.Client(), HTTPHeader: http.Header{"Origin": {srv.URL}},
 			})
 			if err != nil {
@@ -238,7 +260,7 @@ func TestGatewayClosesWebSocket(t *testing.T) {
 			if _, data, err := c.Read(ctx); err != nil || string(data) != "synthetic-signal" {
 				t.Fatalf("WebSocket round trip failed: %v", err)
 			}
-			switch reason {
+			switch tc.reason {
 			case "identity":
 				allowed.Store(false)
 			case "policy":

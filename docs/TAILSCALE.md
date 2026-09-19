@@ -282,6 +282,28 @@ do not resolve it. Existing VPNs remain enabled. The successful HTTPS requests
 used curl's explicit DNS mapping, not a TLS exception. Ordinary browser-name
 resolution still needs to pass before end-to-end browser HTTPS acceptance.
 
+A follow-up confirmed that a domain-specific macOS resolver and a DNS cache
+refresh did not resolve this conflict. The test resolver was removed. A
+temporary hosts entry for only the enrolled probe's name then allowed a real
+browser test with normal certificate validation. This is a diagnostic mapping,
+not a product setup requirement or a fix for concurrent-VPN DNS behavior.
+
+Through that HTTPS origin, the browser rendered WebRTC at about 60 fps /
+1024 x 1366, with observed RTT around 8-15 ms and no displayed drops/freezes
+during the short test. A Control Center command visibly changed the device
+screen. Opening Terminal initially failed: the gateway rejected the web
+client's `cols`/`rows` query. The corrected allowlist accepts only valid raw
+decimal uint16 dimensions and rejects unknown, duplicate, encoded or invalid
+parameters. The real terminal then connected and printed a synthetic marker.
+Reloading the page restored WebRTC. Stopping the probe dropped the existing
+tab to 0 fps; restarting it with the saved identity restored 60 fps in that
+same tab without a reload.
+
+The browser was tested on the same Wi-Fi while the official device Tailscale
+app remained active. ICE showed `prflx/host`; selected candidate addresses were
+not constrained. Neither these figures nor successful HTTPS prove an embedded
+media bridge, a different-network path, or DERP media support.
+
 The isolated tool now has an explicit experimental `--rctl` HTTPS gateway
 mode. Its default remains diagnostic-only. The gateway checks the selected
 Tailscale identity and the device's LAN-enabled policy, enforces same-origin
@@ -291,7 +313,7 @@ fail or the gateway stops. Tests use disposable TLS endpoints and synthetic
 traffic, not live identities, media or credentials. See the tool's README for
 the route exclusions and lifecycle contract.
 
-This establishes device-side TLS/HTTP behavior, not complete browser or
+This establishes device-side TLS/HTTP and scoped browser behavior, not complete
 embedded-media acceptance. Certificate renewal, actual control-plane revocation
 propagation, browser Talk/clipboard and the embedded ICE bridge remain open.
 The official app was still connected during these tests: they do not establish
