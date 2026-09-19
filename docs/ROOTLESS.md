@@ -1,8 +1,8 @@
 # Rootless Installation and Testing
 
 The tested rootless target is an iPad Pro on iPadOS 15.5 with ordinary Dopamine
-and ElleKit. GitHub latest `0.4.4` includes a rootless package; APT admission and
-the remaining qualification checks are still pending. RootHide and other
+and ElleKit. GitHub latest and the public APT source offer rootless `0.4.4`;
+remaining qualification checks are recorded separately. RootHide and other
 bootstrap variants are not covered by this evidence. Compilation alone does
 not qualify another device.
 
@@ -34,8 +34,7 @@ For a release candidate with an exact Debian version, pass
 Both lanes are built
 sequentially because they share the web build and Theos aggregate metadata.
 These scripts do not install, deploy, publish, or personalize the package.
-The public APT feed remains rootful until the rootless package-manager gates
-pass and its release is admitted to the feed. See [APT admission](APT-REPOSITORY.md#rootless-admission).
+The public APT feed serves both architectures. See [APT publication](APT-REPOSITORY.md).
 
 ### Historical Early Builds
 
@@ -80,12 +79,12 @@ version. See [`MEDIA.md`](MEDIA.md) for implementation, evidence and limitations
    <https://ellekit.space/> (add it if absent), install ElleKit, and follow the
    package manager's restart instructions. Filza's `dpkg -i` installation does
    not download dependencies automatically.
-3. Transfer the exact test `.deb` to the device using AirDrop or another local
-   file-transfer method. Open it in Filza and use its package installation
-   action. Inspect the installation output for errors. After dpkg has exited,
-   use the package manager's Restart SpringBoard action. A direct terminal
-   installation prints a reminder instead; run `sudo sbreload` only after the
-   installation command has completed. Do not interrupt dpkg with a respring.
+3. Add `https://nobottomline.github.io/rctl-repo/` in Sileo, refresh sources,
+   search for **rctl**, and install it. The manager selects `iphoneos-arm64`
+   and resolves dependencies. Follow its Restart SpringBoard action only after
+   installation completes. For an unpublished test DEB, transfer it to Filza
+   and inspect the installation output; direct dpkg installation does not fetch
+   dependencies. Never interrupt dpkg with a respring.
 4. On a trusted Wi-Fi network, open `http://<device-ip>:8080/` in a browser. Local
    access has the same unauthenticated trusted-LAN policy as the rootful build.
 5. Test screen display, orientation, taps, typing, and Home first. Then proceed

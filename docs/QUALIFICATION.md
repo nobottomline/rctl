@@ -66,8 +66,9 @@ The report is privacy-safe evidence binding the external acceptance run to the
 exact artifacts under review. Schema 5 retains rootless acceptance and adds the
 managed host-update service. Schema-4 and older reports do not establish the new
 checks and are rejected; changing only their schema number is not qualification.
-The independent APT rootless admission report has a separate schema and is not
-changed by this version. Validation is strict: unknown fields, trailing
+APT distributes verified stable artifacts without a separate rootless report;
+see [APT publication](APT-REPOSITORY.md). Source release report validation is
+strict: unknown fields, trailing
 JSON, symlinks, oversized input, malformed identities, reports older than 30
 days, reports over five minutes in the future, and any false or missing check
 are rejected.

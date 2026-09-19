@@ -19,17 +19,19 @@ renewal, faulted host/device recovery, package-manager recovery, and remaining
 admin/scheduled host-update checks. The known Listen-noise and rootful delayed
 reconnect observations remain open. No always-online guarantee is implied.
 
-The APT ledger/feed was not advanced. Its generator requires package-manager
-qualification reports for both architectures; neither report is included in
-`0.4.4`. Immutable release assets cannot be extended after publication, so the
-next APT-eligible release must include the reports before it is published.
+The initial GitHub publication did not advance APT. The subsequent APT
+synchronization distributes the same immutable `0.4.4` DEBs for both
+architectures after release-attestation and public-package validation. The
+distribution contract no longer requires duplicate runtime-report assets; see
+[APT publication](APT-REPOSITORY.md). This does not complete the outstanding
+package-manager recovery or other runtime checks above.
 Publication did not deploy a relay or install anything on the test devices.
 Installers continue to use the verified digest-pinned image.
 
-## Status Follow-Up (2026-09-19)
+## Historical Pre-Publication Check (2026-09-19)
 
-GitHub still reports `v0.4.4` as a draft; stable/latest and the public APT feed
-remain `v0.3.2`, with only `iphoneos-arm` in the feed. The checks below did not
+At this earlier check, GitHub reported `v0.4.4` as a draft; stable/latest and
+the public APT feed remained `v0.3.2`, with only `iphoneos-arm`. The checks below did not
 publish a release, admit rootless to APT, or deploy the candidate to the
 permanent relay.
 

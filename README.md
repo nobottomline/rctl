@@ -27,7 +27,7 @@ trusted local network or through an authenticated relay hosted on your own VPS.
 ## Project Status
 
 As of 2026-09-19, **GitHub latest is `0.4.4`**, with separate rootful and
-ordinary Dopamine rootless packages. **The APT feed remains `0.3.2` (rootful)**.
+ordinary Dopamine rootless packages, also distributed through the **APT feed**.
 The full qualification matrix is not yet complete;
 [release notes](https://github.com/nobottomline/rctl/releases/tag/v0.4.4) identify
 the outstanding checks. Back up and retain independent recovery access before
@@ -41,9 +41,9 @@ not blanket support for iOS 15/16, every device, or RootHide.
 
 | Profile | Status | Installation |
 | --- | --- | --- |
-| Local network, rootful iOS 14 | Public | [APT `0.3.2`](https://nobottomline.github.io/rctl-repo/) or [GitHub `0.4.4`](https://github.com/nobottomline/rctl/releases/tag/v0.4.4) |
+| Local network, rootful iOS 14 | Public | [APT repository](https://nobottomline.github.io/rctl-repo/) or [GitHub release](https://github.com/nobottomline/rctl/releases/latest) |
 | Self-hosted internet relay | Available; wizard features depend on release | Private package produced by the VPS wizard |
-| Rootless Dopamine, tested on iPadOS 15.5 | Public GitHub package; qualification limits apply | [Rootless guide](docs/ROOTLESS.md); not yet in the APT feed |
+| Rootless Dopamine, tested on iPadOS 15.5 | Public; qualification limits apply | Same [APT repository](https://nobottomline.github.io/rctl-repo/); [rootless guide](docs/ROOTLESS.md) |
 
 See the [device release checkpoint](docs/ROOTLESS-RELEASE.md) and
 [VPS qualification record](docs/SETUP-QUALIFICATION.md) for exact versions,
@@ -72,8 +72,8 @@ packages intentionally remain separate.
 
 Open the **[rctl package repository](https://nobottomline.github.io/rctl-repo/)**
 on the jailbroken device, choose Cydia, Installer, Sileo, or Zebra, and install
-`rctl`.
-For the newer `0.4.4` package, use the
+`rctl`. The package manager selects the compatible architecture and offers
+updates from the same source. Direct DEB downloads are also available in the
 [latest GitHub release](https://github.com/nobottomline/rctl/releases/latest).
 Choose `iphoneos-arm` for rootful or `iphoneos-arm64` for ordinary Dopamine
 rootless; these are separate packages, not interchangeable files. Follow the

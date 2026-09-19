@@ -1,134 +1,100 @@
 # Public APT Repository
 
-The public LAN-only package is available from the APT source:
+Add this source in Cydia, Sileo, Installer, Zebra or another compatible manager:
 
 ```text
 https://nobottomline.github.io/rctl-repo/
 ```
 
-The feed is compatible with Cydia, Installer, Sileo, Zebra, and other package
-managers that consume the standard flat Debian APT repository format. A custom
-domain is not required; GitHub Pages provides the public HTTPS origin.
+The site provides add-source buttons. Refresh sources, search for **rctl**, and
+install or update it. One source serves two separate packages with the same
+identifier, `com.greatlove.rctl`:
 
-As checked on 2026-09-19, the published feed serves `0.3.2` and advertises only
-`iphoneos-arm` (rootful). Sileo on
-Dopamine/rootless expects `iphoneos-arm64` and can reject this feed with
-`Didn't find architectures` followed by `Could not find release file`, even
-when the server returns the Release file successfully. Package-manager format
-compatibility is not a claim of rootless runtime support. Use the separate
-[manual rootless test build](ROOTLESS.md) until that lane is qualified; do not
-add an unsupported architecture to Release just to suppress Sileo's check.
+| Layout | APT architecture | Tested platform |
+| --- | --- | --- |
+| Rootful | `iphoneos-arm` | iPadOS 14.4, unc0ver / Substitute |
+| Rootless | `iphoneos-arm64` | iPadOS 15.5, Dopamine / ElleKit |
 
-### GitHub 0.4.4 and APT
+The package manager selects a compatible architecture; its name does not
+determine the jailbreak layout. RootHide is not qualified. Both lanes use
+ordinary release versions, without historical `~rootlessN` suffixes.
 
-GitHub latest `0.4.4` is not eligible for the current APT generator. Its
-immutable asset set lacks `rctl-qualification_0.4.4.json` for rootful and
-`rctl-qualification_0.4.4_iphoneos-arm64.json` for rootless. The generator
-requires these reports and verifies their release attestations before admitting
-the packages. A successful relay-admin update is not a substitute for the
-package-manager upgrade and recovery checks.
+## Distribution Boundary
 
-Do not append `v0.4.4` to either ledger: that would fail the Pages build, not
-make the packages available. The next APT-eligible release must complete the
-required checks and attach both reports before immutable publication. Until
-then, GitHub downloads provide `0.4.4`; APT continues to serve `0.3.2` rootful.
+The source monorepo owns builds, runtime qualification and the stable release
+decision. The separate [distribution repository](https://github.com/nobottomline/rctl-repo)
+owns the static site, release ledgers, generator and signing workflow.
+It downloads exact immutable release assets, without rebuilding or personalizing
+them. GitHub Pages supplies HTTPS without requiring a custom domain.
 
-## Ownership boundary
+Every admitted package must pass:
 
-The source monorepo is the only build and qualification authority. The separate
-[`nobottomline/rctl-repo`](https://github.com/nobottomline/rctl-repo) repository
-is a deliberately small distribution boundary: it stores the generator, static
-depictions, and an append-only ledger of approved release tags. Generated APT
-indexes and `.deb` files are assembled into the Pages artifact and are not
-committed to either repository.
+- Public, stable, immutable release identity and GitHub release-attestation checks.
+- Asset verification against that attestation and an exact `SHA256SUMS` match.
+- Package ID, version, architecture, dependencies and runtime layout checks.
+- A non-empty web client and checks against symlinks, relay configuration
+  and enrollment credentials.
 
-The generator accepts separate `rctl_<version>_iphoneos-arm.deb` (rootful) and
-`rctl_<version>_iphoneos-arm64.deb` (rootless) artifacts from immutable public
-GitHub Releases. Both retain package identifier `com.greatlove.rctl`; they are
-not a universal DEB. The generator verifies release and asset attestations, release
-checksums, package identifier/version/architecture, required web client, and
-absence of the relay plist or data resembling an enrollment credential. It then
-generates `Packages` plus gzip, bzip2, xz, and zstd variants, creates `Release`,
-and publishes both `InRelease` and `Release.gpg`.
+The generator derives `Release` architectures from verified `Packages`.
+It produces gzip, bzip2, xz and zstd indexes, web/native depictions,
+`InRelease` and `Release.gpg`. The existing OpenPGP key is retained and its
+fingerprint pinned. Private key material stays in the protected
+`apt-repository-signing` environment and offline backup, never in source.
 
-The APT signing key is separate from the ECDSA device-update key. Its private
-material exists only in the protected `apt-repository-signing` environment of
-the distribution repository and in the maintainer's mode-0600 offline file. The
-public key and fingerprint are published with the feed.
+Before deployment, isolated Linux APT clients verify signatures, select and
+download each architecture, and simulate installation and upgrade. The workflow
+repeats these checks against the public feed. Simulations prove repository and
+dependency resolution, not physical-device installation or recovery.
 
-## Release synchronization
+## Release Synchronization
 
-`release-publish.yml` publishes and anonymously verifies the immutable source
-release first. It then uses a dedicated SSH deploy key, scoped for write access
-to `nobottomline/rctl-repo` only, to append the tag to `releases.txt`. That push
-starts the Pages workflow. The distribution workflow downloads the exact public
-release assets rather than rebuilding them.
+After publishing and anonymously verifying a stable release,
+`release-publish.yml` invokes `scripts/publish_apt_release.sh`. The publisher
+clones the distribution repository and runs its public-artifact verifier for
+both architectures before changing either ledger. It updates `releases.txt`
+and `rootless-releases.txt` in one commit using the scoped APT deploy key.
+The push starts the signed Pages build. Missing, private or invalid artifacts
+abort publication; a failed build leaves the previous deployment available.
 
-The source workflow reads the deploy key only from the protected
-`apt-repository-publish` environment. The Pages workflow reads the repository
-signing key only from `apt-repository-signing`. Neither secret is present in
-source, artifacts, logs, or the generated site.
+`apt-publish.yml` also handles stable releases published through GitHub or `gh`
+and provides a manual retry action. The explicit call in `release-publish.yml`
+is retained because releases created with `GITHUB_TOKEN` do not trigger another
+workflow through the release event. Both routes use the same idempotent publisher.
 
-The initial feed contains immutable `v0.3.2`. Every later ledger entry must have
-a schema-3 qualification report with `package_manager_upgrade` and
-`package_manager_recovery` set to true. This prevents a normal APT in-place
-upgrade from bypassing the clean transactional updater without physical-device
-evidence that the package-manager path and recovery behavior are acceptable.
+The operation is idempotent, including recovery of a tag previously added only
+to the rootful ledger. Tags must be increasing. Historical rootful-only releases
+do not need rootless artifacts. To retry missed synchronization, run:
 
-### Rootless admission
+```sh
+scripts/publish_apt_release.sh vMAJOR.MINOR.PATCH
+```
 
-The distribution repository additionally owns `rootless-releases.txt`, an
-explicit subset of the approved tags in `releases.txt`. It is initially empty.
-The ordinary synchronization step does not automatically approve rootless
-delivery. Add a tag only after its immutable release includes:
+This requires GitHub read access and write access to the distribution repository.
+If both ledgers already contain the tag, rerun its Pages workflow instead. Do not
+rerun source release-publication on an already public release.
 
-- `rctl_<version>_iphoneos-arm64.deb` and its `SHA256SUMS` entry.
-- An attested `rctl-qualification_<version>_iphoneos-arm64.json`, schema 4,
-  with matching `product`, `tag`, and `version`.
-- `package: {name, architecture, sha256}` bound to that exact rootless artifact.
-- Boolean checks `rootless_runtime`, `package_manager_install`,
-  `package_manager_upgrade`, and `package_manager_recovery`, all true after
-  physical-device validation. Every other reported check must also be true.
+### 0.4.4 Synchronization
 
-Rootless has no bootstrap exemption. Its validator additionally checks the
-`/var/jb` layout, non-empty web client, maintainer-script prefix, ElleKit and
-firmware dependencies, and absence of prefixed or unprefixed relay secrets.
-The monorepo release generator now produces both architectures. The `0.4.2`
-and `0.4.3` qualification prereleases contain rootless packages, and `0.4.4`
-was published as GitHub latest on 2026-09-19. None of this admits rootless to
-APT: exact-artifact
-package-manager qualification, publication, and the rootless ledger entry are
-still separate requirements. Historical `~rootless` test builds are not
-substitutes for those release assets.
+The feed previously remained on rootful `0.3.2` after GitHub latest became
+`0.4.4`. The old APT contract required additional runtime reports, including
+a rootless report the source release workflow did not produce. Its publisher
+also advanced only the rootful ledger.
 
-`Release` and depictions derive their architecture list from the actual verified
-`Packages` index, not from the list of architectures the generator can validate.
-Consequently adding generator support alone does not make the current rootful
-feed installable on Dopamine. The distribution tests cover both layouts and
-reject renamed rootful DEBs, mismatched reports and corrupt checksums.
+APT now consumes the stable release decision and verifies the exact public
+packages independently of those duplicate reports. This allows the existing
+immutable `0.4.4` DEBs to be distributed without rebuilding, replacing release
+assets or manufacturing test evidence. Source release qualification requirements
+are unchanged; current evidence and remaining gaps are in
+[ROOTLESS-RELEASE.md](ROOTLESS-RELEASE.md).
 
-## Public and relay installations
+## Public and Relay Installations
 
-The repository is intended for the ordinary LAN-only installation. A user who
-starts with the self-hosted relay wizard does not need to add this source: the
-wizard returns a private personalized package and relay admin owns its signed,
-transactional updates.
+Public packages contain no relay credentials and provide trusted-LAN access on
+fresh installation. Existing identity, relay bindings and explicitly chosen LAN
+policy live outside the package and must survive updates. A public package does
+not add, remove or transfer a relay binding.
 
-A public installation can later be replaced by a personalized package with the
-same package identifier. Relay identity lives outside the public package and
-must survive any qualified package-manager update. Personalized packages,
-enrollment tokens, device secrets, relay URLs, and VPS data must never be added
-to the APT release ledger or Pages artifact.
-
-## Maintainer recovery
-
-The ledger operation is idempotent. Before adding a public release, confirm that
-its immutable assets include the required qualification reports. If a valid
-release was published but the ledger push failed, invoke
-`scripts/publish_apt_release.sh vMAJOR.MINOR.PATCH` with the scoped deploy key.
-If the ledger already contains the tag, rerun the distribution repository's
-Pages workflow. Do not rerun the source `release-publish.yml` after publication:
-that workflow requires a draft and will reject an already public release.
-The distribution workflow fails closed and keeps the prior successful Pages
-deployment when release identity, qualification, signing, or package validation
-does not pass.
+The relay wizard creates personalized packages privately. Those packages and
+enrollment tokens must never enter APT. Relay's signed transactional updater
+remains a separate route; do not run it concurrently with a package-manager
+transaction.

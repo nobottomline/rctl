@@ -1,0 +1,48 @@
+name: Sync stable release to APT
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable stable release tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+
+concurrency:
+  group: apt-release-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  synchronize:
+    if: github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && !github.event.release.draft)
+    runs-on: ubuntu-24.04
+    environment: apt-repository-publish
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify and synchronize both package architectures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RCTL_APT_REPO_DEPLOY_KEY: ${{ secrets.RCTL_APT_REPO_DEPLOY_KEY }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          test -n "$RCTL_APT_REPO_DEPLOY_KEY" || {
+            echo "APT repository deploy key is not configured" >&2
+            exit 1
+          }
+          key="$(mktemp)"
+          known_hosts="$(mktemp)"
+          trap 'rm -f "$key" "$known_hosts"' EXIT
+          printf '%s\n' "$RCTL_APT_REPO_DEPLOY_KEY" > "$key"
+          chmod 0600 "$key"
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$known_hosts"
+          test -s "$known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes"
+          scripts/publish_apt_release.sh "$TAG"
