@@ -113,6 +113,76 @@ Qualification order:
 
 ## Evidence: 2026-09-19
 
+### Official App and Remote Control
+
+The official clients joined the same tailnet on a macOS controller and an
+iOS 15.5 Dopamine device running the existing rctl package. Tailscale discovery,
+TSMP and ICMP succeeded. Initial ordinary IPv4 TCP requests timed out while
+LAN HTTP returned 200. Inspection showed a competing macOS route for
+`100.64.0.0/10` through the ordinary Wi-Fi gateway. Tailscale's own dialer and
+an explicitly Tailscale-source-bound HTTP request both reached rctl and
+returned 200. The installed rctl server did not need a transport patch for
+that failure. Concurrent VPN connections were not disabled or reconfigured.
+
+A temporary loopback-only diagnostic proxy bound its upstream TCP connections
+to the controller's Tailscale address. The browser used that proxy for HTTP
+and WebSocket signaling. To avoid falsely qualifying a same-LAN video path,
+the diagnostic signal filter removed non-Tailscale ICE candidates from both
+trickle messages and SDP, and rejected the `/stream` HTTP fallback. The proxy
+was test infrastructure, not a shipped connection mode or user workaround.
+
+Observed through the browser UI:
+
+- WebRTC video rendered at approximately 60 fps / 1024 x 1366 with initial
+  same-Wi-Fi RTT around 7-12 ms and zero displayed freezes/drops at that point.
+- After moving the controlled device to a phone hotspot, the same browser tab
+  recovered video. Tailscale reported a direct public endpoint rather than the
+  household LAN endpoint. Typical observed RTT was around 49-80 ms, with spikes
+  above 400 ms. This establishes a different-network path, not DERP acceptance.
+- A Control Center command visibly changed the remote screen, and a remote
+  tap dismissed it. The terminal connected and printed a synthetic marker.
+- The hot-spot session accumulated dropped frames and brief freezes, including
+  network handover. Do not characterize this as loss-free performance or full
+  feature qualification just because the displayed frame rate recovered.
+- A short Balanced-profile comparison showed approximately 30 fps, an
+  unchanged dropped-frame counter and one additional brief freeze. The source
+  scene and mobile network were not controlled, so this is not a benchmark or
+  proof that the lower bitrate solves every freeze. Smooth was restored.
+
+The loopback browser origin is treated as a secure context by browsers. It
+does **not** qualify Talk/clipboard over the device's ordinary HTTP Tailscale
+URL. Camera, audio/Talk, bulk files, prolonged idle/power behavior, DERP,
+revocation and unattended recovery remain untested in this route. The ordinary
+browser path on the controller still requires resolution of its route conflict.
+
+### Route Troubleshooting
+
+Do not disable an existing VPN, flush routes, or rewrite the tailnet policy as
+an automatic response to a failed browser connection. A successful
+`tailscale ping` does not establish that ordinary application TCP takes the
+same route. On macOS, compare the route and an explicitly bound request:
+
+```sh
+route -n get "$DEVICE_TAILSCALE_IPV4"
+curl --noproxy '*' --connect-timeout 5 --max-time 10 \
+  --interface "$CONTROLLER_TAILSCALE_IPV4" \
+  "http://$DEVICE_TAILSCALE_IPV4:8080/" -o /dev/null -w '%{http_code}\n'
+```
+
+If only the bound request succeeds, inspect the conflicting VPN's routes and
+Tailscale routing policy. Change only the specific conflicting configuration
+after confirming its purpose; preserve the existing internet/recovery path.
+Tailscale has a per-node route-granularity capability (`one-cgnat?v=false`) for
+preferring peer `/32` routes, but this was not applied or qualified in this
+test. It is not a blanket instruction to change a user's access policy.
+
+IPv6 SSH connectivity also succeeded, but rctl's current HTTP listener binds
+IPv4 only. Enabling an unrestricted `[::]` listener would expand exposure on
+other interfaces and is not an acceptable silent workaround. Any IPv6 product
+support must carry the local-access policy and loopback protections with it.
+
+### Embedded Prototype
+
 The isolated [tailnet probe](../tools/tailnet-probe/README.md) builds with
 Go 1.26.6 and Tailscale v1.102.4 for iOS/arm64, minimum iOS 15.0. Local race
 tests cover diagnostic authorization boundaries, private files and a loopback
@@ -137,3 +207,6 @@ exposed, and installed rctl, VPN and relay configuration were left unchanged.
 - [Go Darwin compatibility](https://go.dev/wiki/Darwin)
 - [Pinned Tailscale module](https://github.com/tailscale/tailscale/blob/v1.102.4/go.mod)
 - [Pion TURN](https://github.com/pion/turn/tree/v5.1.2)
+- [Concurrent VPN limitations](https://tailscale.com/docs/reference/faq/other-vpns)
+- [CGNAT conflict diagnosis](https://tailscale.com/docs/reference/troubleshooting/network-configuration/cgnat-conflicts)
+- [Pinned per-node routing capability definitions](https://github.com/tailscale/tailscale/blob/v1.102.4/tailcfg/tailcfg.go)
