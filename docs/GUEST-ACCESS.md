@@ -270,19 +270,126 @@ counter checks and shell syntax validation passed. These checks establish owner
 LAN compatibility on this rootful artifact; guest authorization and retirement
 still require the matching relay candidate and real guest sessions.
 
-The configured rootless test device is reachable as an ordinary user, but the
-independent SSH install requires operator sudo authentication. Rootless
-expanded-feature runtime acceptance is not recorded. The existing VPS passed
-trusted HTTPS, SQLite and authenticated device-tunnel preflight; the expanded
-relay candidate has not been deployed. Exact-artifact deployment remains a
-separate acceptance gate.
+Subsequent qualification on 2026-10-03/04 used the rootful package
+`0.4.4~test.20261003191310.4a5c944cbf36` with native source `4a5c944cbf36`.
+Serial rootful iOS 14 and rootless iOS 15 arm64/arm64e package builds and audits
+passed; the supported deployment helper installed the rootful package and
+confirmed SpringBoard IPC after seven seconds. Native source is unchanged by
+the later browser-only teardown/expiry fixes. Rootless installation and runtime
+remain unqualified: the configured ordinary-user SSH lane needs operator sudo
+authentication. A rootful result does not qualify that lane.
 
-Expanded operations require exact-build verification of: independent channels,
-forged/denied requests, cross-session confirmations/transfers, path and symlink
-escapes, no-overwrite commit, cancellation/expiry during transfers/input/macros/
-recording/PTY, camera stop acknowledgements, old-device refusal, owner/native
-compatibility, relay loss/reconnect, and rootful/rootless runtime paths.
-A successful native compile is not physical audio/camera/input evidence.
+Acceptance subsequently found a SpringBoard crash during retirement on this
+native artifact. Exact installed arm64e symbols located it in shared-pointer
+control-block destruction from the asynchronous guest-end fence. A separate
+process reproduced the authentication failure without input injection; all
+24 owned QA grants were revoked and feature testing stopped. The corrected
+non-polymorphic ownership handle passed 10,000 queue handoffs and exact-once
+destructions on the affected arm64e device, plus host AddressSanitizer and
+UndefinedBehaviorSanitizer. Both corrected package lanes built and passed their content audits. Rootful
+package `0.4.4~test.20261003222950.55e5d92ca478` was cleanly installed with the
+watchdog confirming SpringBoard IPC after seven seconds. The dedicated relay
+configuration remained byte-identical. A real guest input session created native
+held-state bookkeeping. Its transport loss had already detached the browser video
+source/dimensions before a subsequent administrative revoke confirmed native
+retirement; that sequence does not prove active administrative pixel withdrawal.
+The SpringBoard crash-report count stayed
+unchanged, and independent IPC checks continued to pass. The prior artifact
+remains unqualified; corrected touch delivery, held-input behavior and the
+remaining physical gates below still require acceptance.
+
+The current relay/control runtime candidate `0.4.4-guest.6f20bca036b4`
+(source `6f20bca036b4fdf13bd99be5cc6ff5e5b6e56367`) was deployed to the configured
+unmanaged VPS. Its GitHub workflow passed protocol generation/fixtures, Go
+race/vet, 58 browser tests and both client builds/admin lint. All four assets
+passed checksums and repository/workflow/source-bound attestations. Deployment
+used a timestamped binary/control/configuration/SQLite backup, remote hash
+checks and atomic replacement. External system-trusted HTTPS verified health,
+exact version and protocol; SQLite, relay/proxy/TURN, retained service health
+and the authenticated configured-device tunnel passed. This is a deployed draft
+candidate, not a stable release or APT publication.
+
+Real relay-only acceptance initially failed despite successful TURN allocation.
+A separate browser pair reproduced the failure without guest authorization or
+an iPad. Correcting the unmanaged host's concrete relay bind and explicit
+external mapping preserved its peer ACLs, credentials, certificates and ports;
+the pair then connected and delivered all five owned test messages. The legacy
+setup helper now rejects wildcard, loopback, link-local and unassigned binds
+before mutation. The dedicated-host renderer already enforced this invariant.
+
+Computer Use and independent protocol clients exercised the physical rootful
+daemon with disposable owned grants/files. Video/file/PTY checks used relay
+candidate `a6b5da106828`; its server authorization/transport and native code are
+unchanged in `9dd9a049a70e`. Microphone checks used `1922501eda16`;
+system-fixture checks used the final `9dd9a049a70e` candidate. The expiry client from `9dd9a049a70e` was separately
+checked with a real 60-second session: expiry removed its tools, displayed
+`Access expired` and offered no invalid reconnect.
+
+- View-only signaling and device tools connected; the browser decoded an
+  834 × 1112 screen. Changing permissions to `files.list` returned
+  `disconnect_confirmed: true`, detached the video source and cleared its
+  dimensions/pixels. Manual reconnect exposed only file tools, without a
+  screen. Revoking that active session again confirmed native retirement.
+- A screenless file session uploaded and previewed a 48-byte neutral fixture;
+  a browser-saved download matched it byte for byte. Re-upload without overwrite
+  authority failed. Cancellation and revoke during a larger upload left neither
+  its target nor a temporary exchange file.
+- Direct native requests denied 37 ungranted operation variants and refused
+  traversal, absolute-path, symlink and hardlink reads. Two simultaneously live
+  guests could not share a read transfer or a destructive confirmation token.
+- An inert owned package appeared in the scoped system inventory, and its
+  downloaded tweak library matched the compiled fixture. Missing confirmation
+  prevented changes; fresh confirmations disabled/restored only that fixture.
+  Protected `dpkg` removal was refused. Removing the owned package succeeded,
+  with an independent SSH check confirming all its payload files were gone.
+- A terminal-only session denied file/input/device-info requests. Revoke closed
+  its owned root PTY, returned confirmed retirement and removed the exact
+  test child process. No process-name-based cleanup was used.
+- With explicit capture consent, a three-second physical microphone stream
+  delivered Opus packets and a three-second recording yielded a valid M4A
+  transfer. Revoke confirmed resource retirement, closed transport and removed
+  the owned recording; native status reported stopped/zero artifact bytes.
+  Raw audio was not retained in test evidence.
+- A 60-second physical session connected, automatically disconnected at expiry
+  and subsequently refused reconnect. Browser teardown clears media/tools;
+  browser fixture coverage separately proves absence of owner HTTP fallback,
+  rejected/stale ICE messages and old-channel input replay.
+
+A permitted still-camera capture previously produced a complete JPEG; no camera
+pixels were retained. Live-camera attempts, including the corrected native
+artifact, negotiated transport but delivered no decoded frames. A browser-style
+independent signaling test also closed before 165 seconds without client pings.
+The configured TLS proxy has a 3600-second WebSocket read timeout; changing that
+timeout is not an evidenced fix. The current relay adds bounded WebSocket control
+pings in a separate goroutine. Pong waits cannot delay grant cancellation, and
+these transport pings never renew device authority. Tests cover responsive idle
+peers, a non-reading peer, cancellation of an in-flight ping and the explicit
+heartbeat-disable configuration. Full Go race/vet and the exact candidate CI
+passed. After deployment, the independent TURN guest completed a native screen
+snapshot and stayed connected for 165 seconds without client pings. The embedded
+browser still reported 1006 during a separate camera-session attempt. A separate
+Chrome attempt failed to load the configured HTTPS endpoint with `ERR_TIMED_OUT`;
+no VPN, browser security or endpoint protections were changed. The independent
+native-camera test accepted start and stop, but seven observations over 21 seconds
+remained `waiting_for_app`, zero frames and no recording. This leaves real browser
+signaling and foreground-camera delivery unqualified despite the passing idle
+protocol check. All 31 labeled owned QA grants were subsequently revoked, with
+31 confirmed device retirements. Camera status was disabled with no recording
+or artifact bytes; the SpringBoard crash-report count remained 11 before and
+after the corrected-package tests. No personal media or non-QA grants were
+modified. The owned neutral app remains available for operator-assisted input
+and foreground-camera qualification.
+
+Remaining physical gates are touch/keyboard/held-input retirement, foreground
+camera capture/recording/stop acknowledgements, Talk/playback audibility, input
+macro interruption and relay partition recovery. Native controller applications
+retain their existing contract and are outside this guest-feature acceptance scope.
+The test iPad's lock screen must be opened by its operator for foreground/input
+acceptance. Photos deletion has permission/confirmation and native fixture coverage;
+physical positive acceptance must use disposable assets, not personal media.
+That path and the rootless lane remain explicitly unqualified. The owned
+package test above does not qualify arbitrary package lifecycle scripts. Compilation and a successful allocation do not
+substitute for these runtime checks.
 
 Build `relay/web-admin` before compiling the Go relay so embedded assets are
 current. Package staging rebuilds the device client. Qualify exact relay and
