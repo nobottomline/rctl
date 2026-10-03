@@ -44,6 +44,7 @@ rctld_FILES = main.mm \
               ../core/net/LocalDiscovery.mm \
               ../core/net/Term.mm \
               ../core/net/WebRTCBridge.cpp \
+              ../core/net/GuestDispatcher.mm \
               ../core/net/WebRTCPermissions.cpp \
               ../core/net/CameraIngest.mm \
               ../core/net/MpegTsRecorder.cpp \

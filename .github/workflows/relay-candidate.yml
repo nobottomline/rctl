@@ -1,0 +1,90 @@
+name: Relay deployment candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed commit on main
+        required: true
+        type: string
+
+concurrency:
+  group: relay-deployment-candidate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - id: source
+        name: Require exact main source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          printf '%s\n' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          test "$SOURCE_SHA" = "$GITHUB_SHA"
+          test "$SOURCE_SHA" = "$(git rev-parse HEAD)"
+          base="$(sed -n 's/^Version: //p' control)"
+          printf '%s\n' "$base" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          echo "version=$base-guest.${SOURCE_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          echo "tag=relay-candidate-${SOURCE_SHA:0:12}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: relay/go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            relay/web-admin/package-lock.json
+      - name: Verify protocol and browser clients
+        run: |
+          (cd protocol && npm ci && npm test)
+          node protocol/generate.mjs --check
+          (cd web && npm ci && npm test && npm run build)
+          (cd relay/web-admin && npm ci && npm run lint && npm run build)
+      - name: Verify relay
+        working-directory: relay
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Assemble exact candidate
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          mkdir -p candidate
+          (cd relay && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags="-s -w -X github.com/nobottomline/rctl/relay/internal/relay.Version=$VERSION" \
+            -o ../candidate/rctl-relay_linux_amd64 ./cmd/rctl-relay)
+          install -m 0644 web/dist/index.html candidate/control.html
+          printf '%s\n' "$SOURCE_SHA" > candidate/SOURCE_COMMIT
+          (cd candidate && sha256sum rctl-relay_linux_amd64 control.html SOURCE_COMMIT > SHA256SUMS)
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: candidate/*
+      - name: Create immutable draft deployment candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.source.outputs.tag }}
+          VERSION: ${{ steps.source.outputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          test -z "$(gh release view "$TAG" --json id --jq .id 2>/dev/null || true)"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            test "$(git rev-parse "$TAG^{commit}")" = "$SOURCE_SHA"
+          fi
+          printf 'Reviewed relay deployment candidate from commit `%s`.\n\nDraft only. No stable package, update catalog, APT feed or public installer is changed. Physical device qualification remains separate.\n' "$SOURCE_SHA" > candidate-notes.md
+          gh release create "$TAG" candidate/* --target "$SOURCE_SHA" --draft --prerelease \
+            --title "Relay candidate $VERSION" --notes-file candidate-notes.md

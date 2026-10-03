@@ -12,11 +12,14 @@ struct WebRTCPermissions {
     bool guest = false;
     bool inputTouch = false;
     bool inputKeyboard = false;
+    bool inputText = false;
     bool inputButtons = false;
     uint32_t buttonMask = 0;
     bool screenView = false;
     bool camera = false;
     bool audioListen = false;
+    bool roomMicListen = false;
+    std::vector<std::string> guestRights;
     bool deviceControl = false;
     bool filesRead = false;
     bool filesWrite = false;

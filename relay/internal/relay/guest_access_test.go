@@ -272,7 +272,7 @@ func TestGuestPermissionsRevocationAndExpiry(t *testing.T) {
 }
 func TestGuestFailsClosedAndRequiresSameOrigin(t *testing.T) {
 	f := newGuestFixture(t)
-	for _, permissions := range [][]string{{}, {"input.touch"}, {"screen.view", "terminal"}, {"screen.view", "device.control"}} {
+	for _, permissions := range [][]string{{}, {"input.unknown"}, {"screen.view", "terminal"}, {"screen.view", "device.control"}} {
 		w := f.request(t, "POST", "/api/admin/guest-grants", map[string]any{"device_id": "test-device", "permissions": permissions, "ttl_seconds": 3600}, f.admin)
 		if w.Code != 400 {
 			t.Fatalf("invalid rights %v: %d", permissions, w.Code)
@@ -324,100 +324,112 @@ func TestGuestScopePayloadAlwaysIncludesPrivacyPolicy(t *testing.T) {
 }
 
 func TestGuestSignalRevocationAcknowledgesDeviceRetirement(t *testing.T) {
-	f := newGuestFixture(t)
-	id, secret := f.create(t, "screen.view", "input.touch")
-	cookie := responseCookie(t, f.claim(t, id, secret, f.prepare(t)), guestCookie)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	dc := f.s.getDevice("test-device")
-	ready := make(chan struct{})
-	deviceServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ws, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer ws.CloseNow()
-		dc.ws = ws
-		close(ready)
-		for {
-			_, raw, err := ws.Read(ctx)
+	for _, scenario := range []struct {
+		name, role  string
+		permissions []string
+	}{
+		{"screen", "screen", []string{"screen.view", "input.touch"}},
+		{"screenless_files", "operations", []string{"files.list", "files.upload"}},
+		{"camera_without_screen", "camera", []string{"camera.live"}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			f := newGuestFixture(t)
+			f.s.getDevice("test-device").features = []string{guestCapability, "guest.operations_v1"}
+			id, secret := f.create(t, scenario.permissions...)
+			cookie := responseCookie(t, f.claim(t, id, secret, f.prepare(t)), guestCookie)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			dc := f.s.getDevice("test-device")
+			ready := make(chan struct{})
+			deviceServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ws, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer ws.CloseNow()
+				dc.ws = ws
+				close(ready)
+				for {
+					_, raw, err := ws.Read(ctx)
+					if err != nil {
+						return
+					}
+					dc.handleControlMessage(raw)
+				}
+			}))
+			defer deviceServer.Close()
+			device, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(deviceServer.URL, "http"), nil)
 			if err != nil {
-				return
+				t.Fatal(err)
 			}
-			dc.handleControlMessage(raw)
-		}
-	}))
-	defer deviceServer.Close()
-	device, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(deviceServer.URL, "http"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer device.CloseNow()
-	<-ready
-	ts := httptest.NewServer(f.mux)
-	defer ts.Close()
-	headers := http.Header{"Origin": []string{f.s.cfg.PublicURL}, "Cookie": []string{cookie.String()}}
-	browser, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/guest/signal", &websocket.DialOptions{HTTPHeader: headers})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer browser.CloseNow()
-	var open signalTunnelEvent
-	if wsjsonRead(ctx, device, &open) != nil || open.Kind != "open" {
-		t.Fatal("no scoped device open")
-	}
-	var payload signalOpenPayload
-	json.Unmarshal(open.Payload, &payload)
-	if payload.AccessMode != "guest-v1" || payload.AllowDirect == nil || *payload.AllowDirect || payload.AuthorizationRevision != 1 {
-		t.Fatal("guest scope missing at device")
-	}
-	var clientReady signalClientMessage
-	if wsjsonRead(ctx, browser, &clientReady) != nil || clientReady.Kind != "ready" {
-		t.Fatal("no client ready")
-	}
-	challenge := signalTunnelEvent{Type: "webrtc_signal", ID: open.ID, Kind: "authorization_challenge", Payload: json.RawMessage(fmt.Sprintf(`{"nonce":%q,"authorization_revision":1}`, strings.Repeat("a", 64)))}
-	if wsjsonWrite(ctx, device, challenge) != nil {
-		t.Fatal("challenge")
-	}
-	var renewed signalTunnelEvent
-	if wsjsonRead(ctx, device, &renewed) != nil || renewed.Kind != "authorization_renew" {
-		t.Fatal("no device renewal")
-	}
-	var renewal struct {
-		Remaining int `json:"remaining_ms"`
-	}
-	json.Unmarshal(renewed.Payload, &renewal)
-	if renewal.Remaining < 1 || renewal.Remaining > 20000 {
-		t.Fatal("unbounded guest lease")
-	}
-	result := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		result <- f.request(t, "POST", "/api/admin/guest-grants/"+id+"/revoke", map[string]any{}, f.admin)
-	}()
-	// The browser does not read/respond to a close frame: revoke cannot depend on it.
-	var closeEvent signalTunnelEvent
-	if wsjsonRead(ctx, device, &closeEvent) != nil || closeEvent.Kind != "close" {
-		t.Fatal("no immediate device retirement")
-	}
-	select {
-	case <-result:
-		t.Fatal("revocation claimed confirmation before device ack")
-	default:
-	}
-	if wsjsonWrite(ctx, device, signalTunnelEvent{Type: "webrtc_signal", ID: open.ID, Kind: "closed"}) != nil {
-		t.Fatal("ack")
-	}
-	response := <-result
-	if response.Code != 200 || !strings.Contains(response.Body.String(), `"disconnect_confirmed":true`) {
-		t.Fatalf("unconfirmed revoke %d %s", response.Code, response.Body.String())
-	}
-	readCtx, stop := context.WithTimeout(ctx, time.Second)
-	defer stop()
-	if _, _, err := browser.Read(readCtx); err == nil {
-		t.Fatal("browser kept receiving after revoke")
-	}
-	if f.s.guestGrantCurrent(ctx, guestPrincipal{GrantID: id, DeviceID: "test-device", Revision: 1}) {
-		t.Fatal("old authority renewed")
+			defer device.CloseNow()
+			<-ready
+			ts := httptest.NewServer(f.mux)
+			defer ts.Close()
+			headers := http.Header{"Origin": []string{f.s.cfg.PublicURL}, "Cookie": []string{cookie.String()}}
+			browser, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/guest/signal?media="+scenario.role, &websocket.DialOptions{HTTPHeader: headers})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer browser.CloseNow()
+			var open signalTunnelEvent
+			if wsjsonRead(ctx, device, &open) != nil || open.Kind != "open" {
+				t.Fatal("no scoped device open")
+			}
+			var payload signalOpenPayload
+			json.Unmarshal(open.Payload, &payload)
+			if payload.Role != scenario.role || payload.AccessMode != "guest-v1" || payload.AllowDirect == nil || *payload.AllowDirect || payload.AuthorizationRevision != 1 {
+				t.Fatal("guest scope missing at device")
+			}
+			var clientReady signalClientMessage
+			if wsjsonRead(ctx, browser, &clientReady) != nil || clientReady.Kind != "ready" {
+				t.Fatal("no client ready")
+			}
+			challenge := signalTunnelEvent{Type: "webrtc_signal", ID: open.ID, Kind: "authorization_challenge", Payload: json.RawMessage(fmt.Sprintf(`{"nonce":%q,"authorization_revision":1}`, strings.Repeat("a", 64)))}
+			if wsjsonWrite(ctx, device, challenge) != nil {
+				t.Fatal("challenge")
+			}
+			var renewed signalTunnelEvent
+			if wsjsonRead(ctx, device, &renewed) != nil || renewed.Kind != "authorization_renew" {
+				t.Fatal("no device renewal")
+			}
+			var renewal struct {
+				Remaining int `json:"remaining_ms"`
+			}
+			json.Unmarshal(renewed.Payload, &renewal)
+			if renewal.Remaining < 1 || renewal.Remaining > 20000 {
+				t.Fatal("unbounded guest lease")
+			}
+			result := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				result <- f.request(t, "POST", "/api/admin/guest-grants/"+id+"/revoke", map[string]any{}, f.admin)
+			}()
+			// The browser does not read/respond to a close frame: revoke cannot depend on it.
+			var closeEvent signalTunnelEvent
+			if wsjsonRead(ctx, device, &closeEvent) != nil || closeEvent.Kind != "close" {
+				t.Fatal("no immediate device retirement")
+			}
+			select {
+			case <-result:
+				t.Fatal("revocation claimed confirmation before device ack")
+			default:
+			}
+			if wsjsonWrite(ctx, device, signalTunnelEvent{Type: "webrtc_signal", ID: open.ID, Kind: "closed"}) != nil {
+				t.Fatal("ack")
+			}
+			response := <-result
+			if response.Code != 200 || !strings.Contains(response.Body.String(), `"disconnect_confirmed":true`) {
+				t.Fatalf("unconfirmed revoke %d %s", response.Code, response.Body.String())
+			}
+			readCtx, stop := context.WithTimeout(ctx, time.Second)
+			defer stop()
+			if _, _, err := browser.Read(readCtx); err == nil {
+				t.Fatal("browser kept receiving after revoke")
+			}
+			if f.s.guestGrantCurrent(ctx, guestPrincipal{GrantID: id, DeviceID: "test-device", Revision: 1}) {
+				t.Fatal("old authority renewed")
+			}
+		})
 	}
 }
 
@@ -445,5 +457,30 @@ func TestGuestControlBootstrapPreservesInlineScriptContents(t *testing.T) {
 	response = f.request(t, "GET", "/guest/control", nil, cookie)
 	if strings.Contains(response.Body.String(), `</script><script>alert(1)`) {
 		t.Fatal("guest label escaped JSON into HTML")
+	}
+}
+
+func TestGuestAdvancedRightsRequireCurrentOperationsDevice(t *testing.T) {
+	f := newGuestFixture(t)
+	for _, rights := range [][]string{{"files.list"}, {"screen.view", "audio.microphone.listen"}, {"camera.live"}} {
+		w := f.request(t, "POST", "/api/admin/guest-grants", map[string]any{"device_id": "test-device", "permissions": rights, "ttl_seconds": 3600}, f.admin)
+		if w.Code != 409 {
+			t.Fatalf("old device accepted advanced rights: %d", w.Code)
+		}
+	}
+	f.s.getDevice("test-device").features = []string{guestCapability, "guest.operations_v1"}
+	id, secret := f.create(t, "files.list", "files.upload")
+	cookie := responseCookie(t, f.claim(t, id, secret, f.prepare(t)), guestCookie)
+	if f.request(t, "GET", "/api/guest/session", nil, cookie).Code != 200 {
+		t.Fatal("screenless session denied")
+	}
+	for _, role := range []string{"screen", "camera"} {
+		if f.request(t, "GET", "/api/guest/signal?media="+role, nil, cookie).Code != 403 {
+			t.Fatal("unauthorized media role accepted")
+		}
+	}
+	f.s.getDevice("test-device").features = []string{guestCapability}
+	if f.request(t, "GET", "/api/guest/signal?media=operations", nil, cookie).Code != 409 {
+		t.Fatal("downgraded device accepted operations")
 	}
 }

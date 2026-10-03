@@ -102,6 +102,7 @@ test-media-activity:
 test-media-library:
 	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Wno-deprecated-declarations -Icore \
 		-DRCTL_MEDIA_ROOT='"/tmp/rctl-media-library-test/root"' \
+		-DRCTL_GUEST_MEDIA_BOUNDARY_ROOT='"/tmp/rctl-media-library-test"' \
 		-DRCTL_MEDIA_CACHE_ROOT='"/tmp/rctl-media-library-test/cache"' \
 		tests/MediaLibraryTest.mm core/net/MediaLibrary.mm -lsqlite3 \
 		-framework Foundation -framework AVFoundation -framework ImageIO \
@@ -124,6 +125,22 @@ test-webrtc-permissions:
 	@/tmp/rctl-webrtc-permissions-test
 
 .PHONY: test
+test: test-guest-dispatcher
+.PHONY: test-guest-dispatcher
+test-guest-dispatcher:
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/VirtualMicOwnershipTest.mm \
+		-framework Foundation -o /tmp/rctl-vmic-ownership-test
+	@/tmp/rctl-vmic-ownership-test
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/CameraOwnershipTest.mm \
+		core/net/CameraIngest.mm core/net/MpegTsRecorder.cpp -o /tmp/rctl-camera-ownership-test
+	@/tmp/rctl-camera-ownership-test
+	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/GuestFilesTest.cpp -o /tmp/rctl-guest-files-test
+	@/tmp/rctl-guest-files-test
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore \
+		-Ithird_party/webrtc/.lib/libdatachannel/deps/json/single_include \
+		tests/GuestDispatcherTest.mm -framework Foundation -o /tmp/rctl-guest-dispatcher-test
+	@/tmp/rctl-guest-dispatcher-test
+
 test: test-camera-recorder test-media-activity test-media-library test-virtual-mic test-webrtc-permissions test-destructive-actions test-local-access test-personalize test-update-signing-key test-apt-publish test-package-stage test-rootless-paths test-display-geometry test-capture-pcm test-script-validation test-game-keyboard test-http-headers
 
 .PHONY: test-game-keyboard test-http-headers test-game-pointer

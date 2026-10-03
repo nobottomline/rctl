@@ -20,6 +20,9 @@ enum {
 // Loopback-only PCM fanout for the injected foreground-app mic shim.
 int rctl_vmic_server_start(void);
 void rctl_vmic_push(const int16_t *pcm, int frames);
+// Caller has selected and authorized the destination; do not consult owner UI.
+void rctl_vmic_push_routed(const int16_t *pcm, int frames);
+void rctl_vmic_clear(void);
 void rctl_vmic_set_route(int route);
 int rctl_vmic_route(void);
 size_t rctl_vmic_client_count(void);

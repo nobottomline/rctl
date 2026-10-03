@@ -10,6 +10,8 @@
 // launchd restarts us on any crash.
 
 #import <Foundation/Foundation.h>
+#include <set>
+#include <functional>
 #import "platform/Paths.h"
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -46,6 +48,12 @@
 #import "input/ScriptValidation.h"
 #include "input/PointerLease.h"
 #import "net/WebRTCBridge.h"
+#import "net/GuestDispatcher.h"
+#include <nlohmann/json.hpp>
+#include <mutex>
+#include <map>
+#include <memory>
+#import <mach/mach_time.h>
 #import "net/CameraIngest.h"
 #import "net/MediaActivityPolicy.h"
 #import "net/MediaLibrary.h"
@@ -387,7 +395,8 @@ static void ipc_key(int page, int usage, int down) {
     rctl_ipc_key m = { (int32_t)page, (int32_t)usage, (int32_t)down }; send_to_sb(RCTL_MSG_KEY, &m, sizeof m);
 }
 
-static bool audio_capture_set(bool on, char *err, size_t errsz);
+static bool audio_capture_set(bool on, char *err, size_t errsz, const char *guestOwner=nullptr, double guestDeadline=0);
+namespace {double guest_clock();}
 
 // ---- Idle/active session gating (battery saver) -------------------------------
 // The capture+encode pipeline and the keep-awake idle-timer resets live in
@@ -687,8 +696,11 @@ static void set_err(char *err, size_t errsz, const char *msg) {
     if (err && errsz > 0) snprintf(err, errsz, "%s", msg);
 }
 
-static bool audio_capture_set(bool on, char *err, size_t errsz) {
+static bool audio_capture_set(bool on, char *err, size_t errsz, const char *guestOwner, double guestDeadline) {
     pthread_mutex_lock(&gAudioCtlLock);
+    if(on && guestOwner && (!rctl_webrtc_guest_operations_current(guestOwner) || guest_clock()>=guestDeadline)) {
+        pthread_mutex_unlock(&gAudioCtlLock);set_err(err,errsz,"access ended");return false;
+    }
     bool ok = true;
     if (on) {
         if (!file_exists(RCTL_AUDIO_PAYLOAD_DYLIB) || !file_exists(RCTL_AUDIO_PAYLOAD_PLIST)) {
@@ -1400,10 +1412,28 @@ static char *rctl_pkg_meta_json(const char *cid) {
     return out;
 }
 
+#include "GuestCameraTicket.inc"
+
 static char *rest_handler(void *ctx, const char *method, const char *content_type,
                           const char *path, const char *query, const char *body,
                           int body_len, int *status, int *out_len, const char **out_ctype) {
     *status = 200;
+    if(char *guestCamera=guest_camera_internal(method,path,query,body,body_len,status))return guestCamera;
+    // Owner mutations cannot reuse a guest-owned global capture/artifact. The
+    // administrator can revoke that guest first; hold the same gate through
+    // the operation to prevent a racing guest start or export.
+    std::unique_lock<std::mutex> captureReservation;
+    std::unique_lock<std::mutex> systemReservation;
+    if(!strcmp(path,"/v1/tweak_toggle") || !strcmp(path,"/v1/pkg_remove"))systemReservation=std::unique_lock<std::mutex>(guestSystemMutex);
+    const char *captureResource = !strcmp(path,"/v1/audio_capture") ? "playback" :
+        !strcmp(path,"/v1/mic_capture") ? "microphone" : !strcmp(path,"/v1/mic_record") ? "mic-record" :
+        !strcmp(path,"/v1/cam_live") ? "camera" : !strcmp(path,"/v1/cam_record") ? "camera-record" : nullptr;
+    if(captureResource) {
+        captureReservation=std::unique_lock<std::mutex>(guestResourcesMutex);
+        if(guestResources.count(captureResource) || (!strcmp(path,"/v1/cam_record") && guestResources.count("camera"))) {
+            *status=409;return strdup("{\"error\":\"guest_resource_in_use; revoke guest access first\"}");
+        }
+    }
     const bool destructive = !strcmp(path, "/v1/confirmation") || !strcmp(path, "/v1/rm") ||
                              !strcmp(path, "/v1/pkg_remove") || !strcmp(path, "/v1/tweak_toggle") ||
                              !strcmp(path, "/v1/respring") || !strcmp(path, "/v1/update");
@@ -1539,6 +1569,8 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
                                           !strstr(query, "mode=browser") && !strstr(query, "mode=both"))) {
             return audio_output_status_json();
         }
+        std::lock_guard<std::mutex> reservation(guestResourcesMutex);
+        if(guestResources.count("output")){*status=409;return strdup("{\"error\":\"guest_resource_in_use\"}");}
         bool deviceOn = strstr(query, "device=0") || strstr(query, "mode=browser") ? false : true;
         set_device_audio_enabled(deviceOn);
         return audio_output_status_json();
@@ -1775,6 +1807,17 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         }
         return rctl_camera_status_json();
     } else if (!strcmp(path, "/v1/cam_agent_state")) {
+        char agent[40]={},stopped[32]={},pid[32]={};
+        if(get_param(query,"agent",agent,sizeof agent)) {
+            get_param(query,"stopped",stopped,sizeof stopped);get_param(query,"pid",pid,sizeof pid);
+            char *pidEnd=nullptr,*stopEnd=nullptr;
+            errno=0;unsigned long process=strtoul(pid,&pidEnd,10);
+            bool validPID=pid[0]&&strspn(pid,"0123456789")==strlen(pid)&&!errno&&pidEnd&&!*pidEnd&&process>=2&&process<=INT_MAX;
+            errno=0;unsigned long long generation=strtoull(stopped,&stopEnd,10);
+            bool validStop=stopped[0]&&strspn(stopped,"0123456789")==strlen(stopped)&&!errno&&stopEnd&&!*stopEnd;
+            char *state=validPID&&validStop?rctl_camera_agent_state_owned(agent,generation,(int)process):nullptr;
+            if(!state){*status=409;return strdup("{\"enabled\":false}");}return state;
+        }
         return rctl_camera_agent_state_json();
     } else if (!strcmp(path, "/v1/cam_upload")) {     // the in-app capturer POSTs its JPEG here
         if (body_len > 0) {
@@ -1818,7 +1861,8 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
                      rec ? "true" : "false", (int)(fr / 48000), bytes, RCTL_MIC_REC_PATH);
             return j;
         }
-    } else if (!strcmp(path, "/v1/camera")) {         // snap a photo IN the frontmost app
+    } else if (!strcmp(path, "/v1/camera")) {
+        std::lock_guard<std::mutex> captureLock(stillCaptureMutex);         // snap a photo IN the frontmost app
         if (rctl_camera_is_enabled()) {
             *status = 409;
             return strdup("{\"error\":\"stop live camera before taking a still\"}");
@@ -1856,6 +1900,7 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         *out_len = (int)rd; *out_ctype = "image/jpeg";
         return buf;
     } else if (!strcmp(path, "/v1/screenshot")) {   // full-res lossless PNG (no stream downscale/H.264)
+        std::lock_guard<std::mutex> captureLock(screenSnapshotMutex);
         const char *shot = "/tmp/rctl-shot.png";
         unlink(shot);
         char *st = sb_query(RCTL_Q_SCREENSHOT, NULL, 0, 5.0);   // SB renders+encodes, then replies
@@ -1874,6 +1919,8 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
     }
     return strdup("{\"ok\":true}");
 }
+#include "GuestDeviceAdapter.inc"
+
 
 // Accept the SB agent, pump its messages to the HTTP server, re-accept on drop.
 static void *audio_ipc_thread(void *unused) {
@@ -2367,6 +2414,8 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
         rctl_webrtc_set_pointer_cb(on_webrtc_pointer);
         rctl_webrtc_set_guest_input_cb(on_guest_input, on_guest_end);
+        rctl_guest_dispatcher_init(guest_device_action);
+        guest_recording_limits_init();
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog(localAccessEnabled ? "http listening on LAN :8080" : "http listening on loopback :8080");
         rctl_camera_set_expired_cb(on_camera_lease_expired);

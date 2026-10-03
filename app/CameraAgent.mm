@@ -32,6 +32,8 @@ static uint64_t gCameraGeneration;
 static int64_t gCameraLastEncodedPTS;
 static _Atomic bool gCameraRunning;
 static _Atomic bool gCameraSyncInFlight;
+static _Atomic uint64_t gCameraStoppedGeneration;
+static char gCameraAgentIdentity[33];
 static int gCameraSocket = -1;
 static uint64_t gCameraSocketGeneration;
 static _Atomic int gCameraPendingFrames;
@@ -256,6 +258,7 @@ static void camera_stop_locked(void) {
     camera_set_tcc_active(NO);
     camera_set_idle_timer_disabled(NO);
     dispatch_async(gCameraNetworkQueue, ^{ camera_close_socket(); });
+    atomic_store(&gCameraStoppedGeneration,gCameraGeneration);
 }
 
 static BOOL camera_start_locked(void) {
@@ -317,6 +320,7 @@ static BOOL camera_start_locked(void) {
         atomic_store(&gCameraLastSampleMs, now);
         atomic_store(&gCameraLastEncodedMs, now);
         atomic_store(&gCameraLastDeliveredMs, now);
+        if(atomic_load(&gCameraStoppedGeneration)>=gCameraGeneration)atomic_store(&gCameraStoppedGeneration,0);
         atomic_store(&gCameraRunning, true);
         camera_set_idle_timer_disabled(YES);
         ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"startRunning"));
@@ -327,6 +331,8 @@ static BOOL camera_start_locked(void) {
 }
 
 static NSDictionary *camera_fetch_state(void) {
+    static dispatch_once_t identityOnce;
+    dispatch_once(&identityOnce, ^{unsigned char bytes[16];arc4random_buf(bytes,sizeof bytes);for(unsigned i=0;i<16;i++)snprintf(gCameraAgentIdentity+2*i,3,"%02x",bytes[i]);});
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return nil;
     struct sockaddr_in address;
@@ -341,7 +347,8 @@ static NSDictionary *camera_fetch_state(void) {
     struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    const char *request = "GET /v1/cam_agent_state HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    char request[256];
+    snprintf(request,sizeof request,"GET /v1/cam_agent_state?agent=%s&stopped=%llu&pid=%d HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",gCameraAgentIdentity,(unsigned long long)atomic_load(&gCameraStoppedGeneration),getpid());
     if (!camera_write_full(fd, request, strlen(request))) {
         close(fd);
         return nil;
@@ -368,7 +375,7 @@ void rctl_camera_agent_sync(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSDictionary *state = camera_fetch_state();
         dispatch_async(gCameraQueue, ^{
-            atomic_store(&gCameraSyncInFlight, false);
+            @try {
             UIApplication *application = [UIApplication sharedApplication];
             BOOL foreground = application && application.applicationState == UIApplicationStateActive;
             BOOL enabled = [state[@"enabled"] boolValue] && foreground;
@@ -399,6 +406,8 @@ void rctl_camera_agent_sync(void) {
             }
             if (!enabled) {
                 if (atomic_load(&gCameraRunning)) camera_stop_locked();
+                // A registered response that never started is retired too.
+                if([state[@"enabled"] boolValue] && generation)atomic_store(&gCameraStoppedGeneration,generation);
                 return;
             }
             if (!atomic_load(&gCameraRunning) || changed) {
@@ -408,6 +417,7 @@ void rctl_camera_agent_sync(void) {
                 gCameraBitrate = bitrate > 0 ? bitrate : 1500000;
                 camera_start_locked();
             }
+            } @finally { atomic_store(&gCameraSyncInFlight, false); }
         });
     });
 }

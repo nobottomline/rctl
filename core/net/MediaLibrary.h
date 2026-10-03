@@ -19,3 +19,10 @@ char *rctl_media_handle(const char *path, const char *query, const char *body,
 #ifdef __cplusplus
 }
 #endif
+
+// Internal guest adapters admit only an opaque ID from the current visible
+// index. Opened originals use no-follow descriptor walking, never caller paths.
+int rctl_media_guest_open(const char *identifier, const char *rendition);
+char *rctl_media_guest_uuid(const char *identifier);
+char *rctl_media_guest_name(const char *identifier);
+void rctl_media_guest_invalidate(void);

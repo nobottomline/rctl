@@ -15,6 +15,9 @@
 #ifndef RCTL_MEDIA_ROOT
 #define RCTL_MEDIA_ROOT "/var/mobile/Media"
 #endif
+#ifndef RCTL_GUEST_MEDIA_BOUNDARY_ROOT
+#define RCTL_GUEST_MEDIA_BOUNDARY_ROOT "/var/mobile"
+#endif
 #ifndef RCTL_MEDIA_CACHE_ROOT
 #define RCTL_MEDIA_CACHE_ROOT "/var/mobile/Library/Caches/com.greatlove.rctl/media"
 #endif
@@ -583,4 +586,46 @@ char *rctl_media_handle(const char *path, const char *query, const char *body,
 
     *status = 404;
     return strdup("{\"error\":\"unknown_media_action\"}");
+}
+
+int rctl_media_guest_open(const char *identifier, const char *rendition) {
+    if (!identifier || strlen(identifier) > 128 || !rendition) return -1;
+    __block NSString *path = nil;
+    dispatch_sync(media_queue(), ^{
+        NSDictionary *asset = lookup_asset(@(identifier));
+        if (!asset) return;
+        if (!strcmp(rendition, "original")) path = [asset[@"path"] copy];
+        else if (!strcmp(rendition, "motion")) path = [asset[@"motion_path"] copy];
+        else if (!strcmp(rendition, "preview") || !strcmp(rendition, "thumb"))
+            path = rendered_path(asset, !strcmp(rendition,"preview") ? 2048 : 640, 0.88, @(rendition));
+    });
+    NSString *root=@RCTL_GUEST_MEDIA_BOUNDARY_ROOT;
+    NSString *prefix=[root stringByAppendingString:@"/"];
+    if (!path.length || ![path hasPrefix:prefix]) return -1;
+    int dir = open(root.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    NSArray *parts = [[path substringFromIndex:prefix.length] componentsSeparatedByString:@"/"];
+    for (NSUInteger i = 0; dir >= 0 && i < parts.count; ++i) {
+        NSString *part = parts[i];
+        if (!part.length || [part isEqualToString:@"."] || [part isEqualToString:@".."]) { close(dir); return -1; }
+        int next = openat(dir, part.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK | (i + 1 < parts.count ? O_DIRECTORY : 0));
+        close(dir); dir = next;
+    }
+    struct stat st = {};
+    if (dir >= 0 && (fstat(dir,&st) || !S_ISREG(st.st_mode))) {close(dir);dir=-1;}
+    return dir;
+}
+char *rctl_media_guest_name(const char *identifier) {
+    if (!identifier || strlen(identifier)>128) return NULL;
+    __block NSString *name=nil;
+    dispatch_sync(media_queue(), ^{ name=[lookup_asset(@(identifier))[@"name"] lastPathComponent]; });
+    return name.length ? strdup(name.UTF8String) : NULL;
+}
+char *rctl_media_guest_uuid(const char *identifier) {
+    if (!identifier || strlen(identifier) > 128) return NULL;
+    __block NSString *uuid = nil;
+    dispatch_sync(media_queue(), ^{ if (lookup_asset(@(identifier))) uuid = [g_delete_uuid_by_id[@(identifier)] copy]; });
+    return uuid ? strdup(uuid.UTF8String) : NULL;
+}
+void rctl_media_guest_invalidate(void) {
+    dispatch_sync(media_queue(), ^{ g_assets=nil;g_assets_by_id=nil;g_delete_uuid_by_id=nil;g_scanned_at=0; });
 }

@@ -1,3 +1,4 @@
+#import <mach/mach_time.h>
 // rctlapp — app-side media agent injected into every UIKit app. The foreground app
 // owns still/live camera capture and sends media to rctld over loopback. A separate
 // A lazy AudioUnit hook replaces supported app microphone buffers with fresh browser PCM.
@@ -103,6 +104,39 @@ static void rctl_TCCAccessRequest(CFStringRef service, CFDictionaryRef options, 
     %orig;
 }
 
+// Guest capture has its own ticket and cancellation generation. Neither a late
+// completion nor a queued start may publish into a replacement session.
+static _Atomic(unsigned) gGuestCameraGeneration=0;
+static id gGuestStillSession = nil;
+static NSString *gGuestStillTicket = nil;
+static double guest_camera_now() {
+    static mach_timebase_info_data_t base=[] {mach_timebase_info_data_t b;mach_timebase_info(&b);return b;}();
+    return (double)mach_continuous_time()*base.numer/base.denom/1e9;
+}
+static NSData *guest_camera_http(NSString *path, NSData *body) {
+    int fd=socket(AF_INET,SOCK_STREAM,0);if(fd<0)return nil;
+    struct timeval timeout={1,0};setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof timeout);setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof timeout);
+    struct sockaddr_in address={};address.sin_family=AF_INET;address.sin_port=htons(8080);address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    NSMutableData *response=[NSMutableData data];
+    if(connect(fd,(struct sockaddr*)&address,sizeof address)==0) {
+        NSString *header=[NSString stringWithFormat:@"%@ %@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",body?@"POST":@"GET",path,(unsigned long)body.length];
+        NSData *head=[header dataUsingEncoding:NSUTF8StringEncoding];NSMutableData *request=[head mutableCopy];if(body)[request appendData:body];
+        const uint8_t *bytes=(const uint8_t*)request.bytes;size_t left=request.length;
+        while(left){ssize_t count=write(fd,bytes,left);if(count<=0)break;bytes+=count;left-=count;}
+        char chunk[1024];ssize_t count;while(response.length<8192&&(count=read(fd,chunk,sizeof chunk))>0)[response appendBytes:chunk length:count];
+    }
+    close(fd);NSString *raw=[[NSString alloc]initWithData:response encoding:NSUTF8StringEncoding];NSRange split=[raw rangeOfString:@"\r\n\r\n"];
+    if(!raw||![raw hasPrefix:@"HTTP/1.1 200"]||split.location==NSNotFound)return nil;
+    return [[raw substringFromIndex:split.location+4] dataUsingEncoding:NSUTF8StringEncoding];
+}
+static void guest_camera_cancel() {
+    atomic_fetch_add(&gGuestCameraGeneration,1);
+    if(gGuestStillSession){((void(*)(id,SEL))objc_msgSend)(gGuestStillSession,NSSelectorFromString(@"stopRunning"));gGuestStillSession=nil;}
+    if(gGuestStillTicket){atomic_store(&gRctlCapturing,false);gRctlSnapping=NO;}
+    NSString *ticket=gGuestStillTicket;gGuestStillTicket=nil;
+    if(ticket)dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{guest_camera_http([@"/v1/guest_camera_stopped?ticket=" stringByAppendingString:ticket],[NSData data]);});
+}
+
 // Send the JPEG to the root daemon over a RAW loopback socket. A sandboxed App
 // Store app can't write /tmp and ATS blocks NSURLSession http://, but a raw socket
 // to 127.0.0.1 is exempt from ATS and allowed by the app sandbox's outbound rules.
@@ -126,9 +160,10 @@ static void rctl_upload(NSData *jpeg) {
 
 static void caplog(NSString *s) { (void)s; }   // diagnostics off for production
 
-static void rctl_capture(int position) {
+static void rctl_capture(int position, NSString *guestTicket = nil, double guestDeadline = 0, unsigned guestGeneration = 0) {
     dispatch_async(dispatch_get_main_queue(), ^{
       @try {
+        if(guestTicket && (guestGeneration!=atomic_load(&gGuestCameraGeneration)||guest_camera_now()>=guestDeadline))return;
         NSString *pn = [[NSProcessInfo processInfo] processName];
         UIApplication *app = [UIApplication sharedApplication];
         long st = app ? [app applicationState] : -1;
@@ -166,10 +201,13 @@ static void rctl_capture(int position) {
         ((void (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"setOutputSettings:"), @{ @"AVVideoCodecKey": @"jpeg" });
         if (!((BOOL (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"canAddOutput:"), out)) return;
         ((void (*)(id, SEL, id))objc_msgSend)(session, NSSelectorFromString(@"addOutput:"), out);
+        if(guestTicket){gGuestStillSession=session;gGuestStillTicket=guestTicket;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(MAX(0.0,guestDeadline-guest_camera_now())*NSEC_PER_SEC)),dispatch_get_main_queue(),^{if(guestGeneration==atomic_load(&gGuestCameraGeneration))guest_camera_cancel();});}
         ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"startRunning"));
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
           @try {
+            if(guestTicket&&(guestGeneration!=atomic_load(&gGuestCameraGeneration)||guest_camera_now()>=guestDeadline))return;
             BOOL run = ((BOOL (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"isRunning"));
             id conn = ((id (*)(id, SEL, id))objc_msgSend)(out, NSSelectorFromString(@"connectionWithMediaType:"), @"vide");
             caplog([NSString stringWithFormat:@"running=%d conn=%d", run, conn != nil]);
@@ -183,9 +221,14 @@ static void rctl_capture(int position) {
               @try {
                 NSData *jpeg = sbuf ? ((id (*)(id, SEL, void *))objc_msgSend)((id)CStill, NSSelectorFromString(@"jpegStillImageNSDataRepresentation:"), sbuf) : nil;
                 caplog([NSString stringWithFormat:@"completion jpeg=%lu err=%@", (unsigned long)jpeg.length, e]);
-                if (jpeg.length) rctl_upload(jpeg);   // raw-socket loopback POST to the daemon
+                if(jpeg.length) {
+                    if(!guestTicket)rctl_upload(jpeg);
+                    else if(guestGeneration==atomic_load(&gGuestCameraGeneration)&&guest_camera_now()<guestDeadline)
+                        guest_camera_http([@"/v1/guest_camera_upload?ticket=" stringByAppendingString:guestTicket],jpeg);
+                }   // raw-socket loopback POST to the daemon
               } @catch (id e) {}
               ((void (*)(id, SEL))objc_msgSend)(session, NSSelectorFromString(@"stopRunning"));
+              if(guestTicket)dispatch_async(dispatch_get_main_queue(),^{if(guestGeneration==atomic_load(&gGuestCameraGeneration))guest_camera_cancel();});
             };
             gRctlSnapping = YES;   // mute the shutter for this snap
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ gRctlSnapping = NO; });
@@ -194,6 +237,30 @@ static void rctl_capture(int position) {
           } @catch (id e) {}
         });
       } @catch (id e) {}
+    });
+}
+
+static void guest_cam_cb(CFNotificationCenterRef, void *, CFStringRef name, const void *, CFDictionaryRef) {
+    if(CFStringCompare(name,CFSTR("com.greatlove.rctl.cam.guest.cancel"),0)==kCFCompareEqualTo){dispatch_async(dispatch_get_main_queue(),^{guest_camera_cancel();});return;}
+    dispatch_async(dispatch_get_main_queue(),^{
+        UIApplication *app=[UIApplication sharedApplication];
+        if(app.applicationState!=UIApplicationStateActive)return;
+        unsigned observedGeneration=atomic_load(&gGuestCameraGeneration);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+            double issued=guest_camera_now();NSData *data=guest_camera_http(@"/v1/guest_camera_ticket",nil);
+            NSDictionary *ticket=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+            NSString *nonce=[ticket[@"ticket"] isKindOfClass:[NSString class]]?ticket[@"ticket"]:nil;
+            double remaining=[ticket[@"remaining_ms"] doubleValue];int position=[ticket[@"position"] intValue];
+            if(nonce.length!=64||remaining<=0||remaining>4000||(position!=1&&position!=2))return;
+            dispatch_async(dispatch_get_main_queue(),^{
+                UIApplication *current=[UIApplication sharedApplication];
+                if(observedGeneration!=atomic_load(&gGuestCameraGeneration)||current.applicationState!=UIApplicationStateActive||guest_camera_now()>=issued+remaining/1000) {
+                    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{guest_camera_http([@"/v1/guest_camera_stopped?ticket=" stringByAppendingString:nonce],[NSData data]);});return;
+                }
+                guest_camera_cancel();unsigned generation=atomic_load(&gGuestCameraGeneration);
+                rctl_capture(position,nonce,issued+remaining/1000,generation);
+            });
+        });
     });
 }
 
@@ -218,6 +285,9 @@ static void cam_cb(CFNotificationCenterRef c, void *obs, CFStringRef name, const
         if ([[NSProcessInfo processInfo].processName isEqualToString:@"SpringBoard"]) return;
         caplog(@"LOADED");
         CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
+        CFNotificationCenterAddObserver(nc,NULL,guest_cam_cb,CFSTR("com.greatlove.rctl.cam.guest.front"),NULL,CFNotificationSuspensionBehaviorDeliverImmediately);
+        CFNotificationCenterAddObserver(nc,NULL,guest_cam_cb,CFSTR("com.greatlove.rctl.cam.guest.back"),NULL,CFNotificationSuspensionBehaviorDeliverImmediately);
+        CFNotificationCenterAddObserver(nc,NULL,guest_cam_cb,CFSTR("com.greatlove.rctl.cam.guest.cancel"),NULL,CFNotificationSuspensionBehaviorDeliverImmediately);
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.back"),  NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         CFNotificationCenterAddObserver(nc, NULL, cam_cb, CFSTR("com.greatlove.rctl.cam.front"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         CFNotificationCenterAddObserver(nc, NULL, vmic_cb, CFSTR("com.greatlove.rctl.vmic.active"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);

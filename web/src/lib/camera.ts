@@ -1,4 +1,4 @@
-import { RELAY_MODE, signalWS } from './rctl'
+import { GUEST_ACCESS, RELAY_MODE, signalWS } from './rctl'
 
 type CameraTransportCallbacks = {
   onState?: (state: string) => void
@@ -59,6 +59,7 @@ export class CameraTransport {
   }
 
   private scheduleReconnect() {
+    if (GUEST_ACCESS) { this.stop(); this.callbacks.onState?.('Camera disconnected'); return }
     if (this.stopped || this.retry) return
     this.callbacks.onState?.('reconnecting')
     this.retry = window.setTimeout(() => {
@@ -94,7 +95,7 @@ export class CameraTransport {
     this.lastFrameAt = performance.now()
     this.callbacks.onState?.('connecting')
 
-    const pc = new RTCPeerConnection({})
+    const pc = new RTCPeerConnection(GUEST_ACCESS ? { iceTransportPolicy: GUEST_ACCESS.allow_direct ? 'all' : 'relay' } : {})
     this.pc = pc
     let remoteReady = false
     const pending: RTCIceCandidateInit[] = []
@@ -151,7 +152,7 @@ export class CameraTransport {
       if (message.kind === 'ready') {
         if (Array.isArray(message.payload) && message.payload.length) {
           try {
-            pc.setConfiguration({ iceServers: message.payload as RTCIceServer[] })
+            pc.setConfiguration({ iceServers: message.payload as RTCIceServer[], ...(GUEST_ACCESS ? { iceTransportPolicy: GUEST_ACCESS.allow_direct ? 'all' as const : 'relay' as const } : {}) })
           } catch {
             // Host candidates remain available.
           }
@@ -160,10 +161,12 @@ export class CameraTransport {
         try {
           const payload = message.payload as { sdp: string }
           await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp })
+          if (this.stopped || generation !== this.generation) return
           remoteReady = true
           for (const candidate of pending.splice(0)) await pc.addIceCandidate(candidate).catch(() => {})
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
+          if (this.stopped || generation !== this.generation || ws.readyState !== WebSocket.OPEN) return
           ws.send(JSON.stringify({ kind: 'answer', payload: { sdp: pc.localDescription?.sdp || '' } }))
         } catch {
           this.scheduleReconnect()

@@ -35,6 +35,201 @@
       "id": "input.button.system_ui",
       "label": "Control Center and notifications",
       "group": "Device buttons"
+    },
+    {
+      "id": "screen.snapshot",
+      "label": "Capture screen image",
+      "group": "Screen"
+    },
+    {
+      "id": "device.info",
+      "label": "View device information",
+      "group": "Device"
+    },
+    {
+      "id": "device.diagnostics",
+      "label": "View diagnostics",
+      "group": "Device"
+    },
+    {
+      "id": "device.brightness",
+      "label": "Change brightness",
+      "group": "Device"
+    },
+    {
+      "id": "device.orientation",
+      "label": "Change orientation",
+      "group": "Device"
+    },
+    {
+      "id": "clipboard.read",
+      "label": "Read clipboard",
+      "group": "Clipboard"
+    },
+    {
+      "id": "clipboard.write",
+      "label": "Write clipboard",
+      "group": "Clipboard"
+    },
+    {
+      "id": "apps.list",
+      "label": "List applications",
+      "group": "Applications"
+    },
+    {
+      "id": "apps.launch",
+      "label": "Launch applications",
+      "group": "Applications"
+    },
+    {
+      "id": "apps.open_url",
+      "label": "Open web links",
+      "group": "Applications"
+    },
+    {
+      "id": "audio.playback.listen",
+      "label": "Listen to playback audio",
+      "group": "Sound"
+    },
+    {
+      "id": "audio.microphone.listen",
+      "label": "Listen to room microphone",
+      "group": "Sound"
+    },
+    {
+      "id": "audio.microphone.record",
+      "label": "Record room microphone",
+      "group": "Sound"
+    },
+    {
+      "id": "audio.output",
+      "label": "Change device output",
+      "group": "Sound"
+    },
+    {
+      "id": "talk.speaker",
+      "label": "Talk through device speaker",
+      "group": "Sound"
+    },
+    {
+      "id": "talk.virtual_microphone",
+      "label": "Talk through app microphone",
+      "group": "Sound"
+    },
+    {
+      "id": "camera.live",
+      "label": "View live camera",
+      "group": "Camera"
+    },
+    {
+      "id": "camera.snapshot",
+      "label": "Take camera photo",
+      "group": "Camera"
+    },
+    {
+      "id": "camera.record",
+      "label": "Record camera video",
+      "group": "Camera"
+    },
+    {
+      "id": "capture.download",
+      "label": "Download session captures",
+      "group": "Captures"
+    },
+    {
+      "id": "media.browse",
+      "label": "Browse photo library",
+      "group": "Media"
+    },
+    {
+      "id": "media.preview",
+      "label": "Preview photos and video thumbnails",
+      "group": "Media"
+    },
+    {
+      "id": "media.download",
+      "label": "Download media originals",
+      "group": "Media"
+    },
+    {
+      "id": "media.delete",
+      "label": "Delete library media",
+      "group": "Media"
+    },
+    {
+      "id": "files.list",
+      "label": "Browse exchange folder",
+      "group": "Files"
+    },
+    {
+      "id": "files.preview",
+      "label": "Preview exchange files",
+      "group": "Files"
+    },
+    {
+      "id": "files.download",
+      "label": "Download exchange files",
+      "group": "Files"
+    },
+    {
+      "id": "files.upload",
+      "label": "Upload exchange files",
+      "group": "Files"
+    },
+    {
+      "id": "files.overwrite",
+      "label": "Overwrite exchange files",
+      "group": "Files"
+    },
+    {
+      "id": "files.delete",
+      "label": "Delete exchange files",
+      "group": "Files"
+    },
+    {
+      "id": "system.inventory",
+      "label": "View packages and tweaks",
+      "group": "System"
+    },
+    {
+      "id": "system.package_download",
+      "label": "Download installed tweak libraries",
+      "group": "System"
+    },
+    {
+      "id": "system.tweak_toggle",
+      "label": "Enable or disable tweaks",
+      "group": "System"
+    },
+    {
+      "id": "system.package_remove",
+      "label": "Remove installed packages",
+      "group": "System"
+    },
+    {
+      "id": "system.respring",
+      "label": "Restart SpringBoard",
+      "group": "System"
+    },
+    {
+      "id": "terminal.root",
+      "label": "Use root terminal (full device authority)",
+      "group": "Terminal"
+    },
+    {
+      "id": "input.pointer",
+      "label": "Use relative mouse pointer",
+      "group": "Input"
+    },
+    {
+      "id": "input.text",
+      "label": "Type text",
+      "group": "Input"
+    },
+    {
+      "id": "automation.macros",
+      "label": "Record and play permitted input macros",
+      "group": "Automation"
     }
   ]
 }

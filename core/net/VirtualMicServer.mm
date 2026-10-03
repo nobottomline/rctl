@@ -23,7 +23,9 @@ static std::mutex g_clients_mutex;
 static std::vector<int> g_clients;
 static std::mutex g_queue_mutex;
 static std::condition_variable g_queue_cond;
-static std::deque<std::vector<int16_t>> g_queue;
+struct VirtualMicFrame { std::vector<int16_t> samples; uint64_t generation; };
+static std::deque<VirtualMicFrame> g_queue;
+static std::atomic<uint64_t> g_generation{1};
 static std::atomic<uint64_t> g_last_notify_ms{0};
 static std::atomic<uint64_t> g_frames_pushed{0};
 static std::atomic<uint64_t> g_frames_broadcast{0};
@@ -52,10 +54,11 @@ static bool write_all(int fd, const void *buffer, size_t length) {
     return true;
 }
 
-static void broadcast(const std::vector<int16_t> &frame) {
+static void broadcast(const std::vector<int16_t> &frame,uint64_t generation) {
     uint32_t bytes = static_cast<uint32_t>(frame.size() * sizeof(int16_t));
     uint32_t header = htonl(bytes);
     std::lock_guard<std::mutex> lock(g_clients_mutex);
+    if(generation!=g_generation.load())return;
     for (auto it = g_clients.begin(); it != g_clients.end();) {
         if (!write_all(*it, &header, sizeof(header)) || !write_all(*it, frame.data(), bytes)) {
             close(*it);
@@ -70,14 +73,14 @@ static void broadcast(const std::vector<int16_t> &frame) {
 static void *sender_main(void *) {
     pthread_setname_np("com.greatlove.rctl.vmic.send");
     for (;;) {
-        std::vector<int16_t> frame;
+        VirtualMicFrame frame;
         {
             std::unique_lock<std::mutex> lock(g_queue_mutex);
             g_queue_cond.wait(lock, [] { return !g_queue.empty(); });
             frame = std::move(g_queue.front());
             g_queue.pop_front();
         }
-        if (!frame.empty()) broadcast(frame);
+        if (!frame.samples.empty()) broadcast(frame.samples,frame.generation);
     }
     return nullptr;
 }
@@ -139,16 +142,29 @@ int rctl_vmic_server_start(void) {
 }
 
 void rctl_vmic_push(const int16_t *pcm, int frames) {
-    if (!pcm || frames <= 0 || g_route.load(std::memory_order_relaxed) == RCTL_TALK_SPEAKER) return;
+    if(g_route.load(std::memory_order_relaxed)==RCTL_TALK_SPEAKER)return;
+    rctl_vmic_push_routed(pcm,frames);
+}
+
+void rctl_vmic_push_routed(const int16_t *pcm,int frames) {
+    if(!pcm || frames<=0 || frames>5760)return;
     notify_active_app();
     g_frames_pushed.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
     std::vector<int16_t> copy(pcm, pcm + frames);
     {
         std::lock_guard<std::mutex> lock(g_queue_mutex);
         while (g_queue.size() >= kMaxQueuedFrames) g_queue.pop_front();
-        g_queue.push_back(std::move(copy));
+        g_queue.push_back({std::move(copy),g_generation.load()});
     }
     g_queue_cond.notify_one();
+}
+
+void rctl_vmic_clear(void) {
+    {std::lock_guard<std::mutex> lock(g_queue_mutex);g_generation.fetch_add(1);g_queue.clear();}
+    // Drain/fence all old writes before returning. App receivers clear their
+    // realtime rings on EOF and on the independent reset notification.
+    {std::lock_guard<std::mutex> lock(g_clients_mutex);for(int client:g_clients){shutdown(client,SHUT_RDWR);close(client);}g_clients.clear();}
+    notify_post("com.greatlove.rctl.vmic.reset");
 }
 
 void rctl_vmic_set_route(int route) {

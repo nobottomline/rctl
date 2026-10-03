@@ -34,8 +34,9 @@ static AudioQueueOutputCallback done;
 extern "C" bool rctl_audio_session_activate(void) { return sessionOK; }
 extern "C" void rctl_audio_boost_begin(void) { ++boosts; }
 extern "C" void rctl_audio_boost_end(void) { --boosts; }
+extern "C" void rctl_vmic_clear(void) {}
 extern "C" int rctl_vmic_route(void) { return route; }
-extern "C" void rctl_vmic_push(const int16_t *, int frames) { virtualFrames += frames; }
+extern "C" void rctl_vmic_push_routed(const int16_t *, int frames) { virtualFrames += frames; }
 
 static OSStatus fakeNewOutput(const AudioStreamBasicDescription *, AudioQueueOutputCallback callback,
                              void *, CFRunLoopRef, CFStringRef, UInt32, AudioQueueRef *out) {

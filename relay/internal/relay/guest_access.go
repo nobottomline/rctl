@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -60,17 +61,25 @@ func normalizeGuestPermissions(input []string) ([]string, error) {
 		}
 		set[p] = true
 	}
-	// Initial WebRTC policy requires a screen session. Command-only sessions are
-	// introduced with their own negotiated device dispatcher, never a proxy bypass.
-	if !set["screen.view"] {
-		return nil, errors.New("screen permission required")
-	}
 	result := make([]string, 0, len(set))
 	for p := range set {
 		result = append(result, p)
 	}
 	sort.Strings(result)
 	return result, nil
+}
+func guestRequiresOperations(permissions []string) bool {
+	if !slices.Contains(permissions, "screen.view") {
+		return true
+	}
+	for _, permission := range permissions {
+		switch permission {
+		case "screen.view", "input.touch", "input.keyboard", "input.button.home", "input.button.lock", "input.button.volume", "input.button.system_ui":
+		default:
+			return true
+		}
+	}
+	return false
 }
 func guestHas(p guestPrincipal, permission string) bool {
 	for _, v := range p.Permissions {
@@ -227,6 +236,13 @@ func (s *server) handleCreateGuestGrant(w http.ResponseWriter, r *http.Request) 
 	if e := s.guestDeviceReady(req.DeviceID, req.AllowDirect); e != "" {
 		writeErr(w, 409, e)
 		return
+	}
+	if guestRequiresOperations(perms) {
+		dc := s.getDevice(req.DeviceID)
+		if dc == nil || !hasFeature(dc.features, "guest.operations_v1") {
+			writeErr(w, 409, "device_guest_operations_not_supported")
+			return
+		}
 	}
 	origin, e := url.Parse(s.cfg.PublicURL)
 	if e != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" && origin.Path != "/" || origin.RawQuery != "" || origin.Fragment != "" {

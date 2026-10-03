@@ -35,9 +35,9 @@ flow, then read the feature document for the code being changed.
 - [CONTROLLER-AUTH.md](CONTROLLER-AUTH.md): native pairing, P-256 proof of
   possession, scoped tokens, recoverable refresh, replay protection, and
   revocation.
-- [GUEST-ACCESS.md](GUEST-ACCESS.md): proposed temporary browser invitations,
-  device-bound permissions, enforcement, revocation, and implementation gates
-  (not yet implemented).
+- [GUEST-ACCESS.md](GUEST-ACCESS.md): temporary browser invitations, fine-grained
+  device permissions, owned operations, immediate revocation and qualification
+  boundaries.
 - [MOBILE-LAN.md](MOBILE-LAN.md): implemented direct-IP/Bonjour connection,
   LAN/Relay indicator, and qualification; [MOBILE-LAN-PLAN.md](MOBILE-LAN-PLAN.md):
   delivery gates and the separate authenticated local-pairing work.

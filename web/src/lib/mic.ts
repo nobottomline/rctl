@@ -199,6 +199,12 @@ export class MicTalk {
     return true
   }
 
+  dispose() {
+    this.stop(); this.ch = null
+    this.node?.disconnect(); this.node = null
+    void this.ctx?.close().catch(() => {}); this.ctx = null
+  }
+
   stop() {
     ++this.generation
     this.active = false

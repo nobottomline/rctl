@@ -9,6 +9,8 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <signal.h>
+#include <errno.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -16,6 +18,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <map>
+#include <set>
+#include <string>
 
 static pthread_mutex_t g_camera_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool g_camera_enabled = false;
@@ -29,6 +34,7 @@ static uint64_t g_camera_bytes = 0;
 static uint64_t g_camera_last_frame_ms = 0;
 static uint64_t g_camera_lease_deadline_ms = 0;
 static char g_camera_owner[128] = {0};
+static std::map<uint64_t,std::map<std::string,pid_t>> g_camera_agents;
 static void (*g_camera_expired_cb)(void) = NULL;
 static pthread_mutex_t g_record_lock = PTHREAD_MUTEX_INITIALIZER;
 static rctl_ts_recorder *g_camera_recorder = NULL;
@@ -273,6 +279,48 @@ char *rctl_camera_agent_state_json(void) {
              enabled ? "true" : "false", position == 2 ? "front" : "back",
              (unsigned long long)generation, fps, bitrate);
     return json;
+}
+
+static void camera_prune_exited_agents_locked() {
+    for(auto generation=g_camera_agents.begin();generation!=g_camera_agents.end();) {
+        for(auto agent=generation->second.begin();agent!=generation->second.end();) {
+            if(kill(agent->second,0)<0 && errno==ESRCH)agent=generation->second.erase(agent);else ++agent;
+        }
+        if(generation->second.empty())generation=g_camera_agents.erase(generation);else ++generation;
+    }
+}
+
+char *rctl_camera_agent_state_owned(const char *agent,uint64_t stopped_generation,int process_id) {
+    if(!agent || strlen(agent)!=32 || strspn(agent,"0123456789abcdef")!=32 || process_id<2)return NULL;
+    pthread_mutex_lock(&g_camera_lock);
+    camera_prune_exited_agents_locked();
+    for(auto stopped=g_camera_agents.begin();stopped!=g_camera_agents.end() && stopped->first<=stopped_generation;) {
+        stopped->second.erase(agent);
+        if(stopped->second.empty())stopped=g_camera_agents.erase(stopped);else ++stopped;
+    }
+    const bool enabled=g_camera_enabled;
+    if(enabled) {
+        auto &agents=g_camera_agents[g_camera_generation];
+        if(agents.count(agent) || agents.size()<32)agents[agent]=process_id;
+        else {pthread_mutex_unlock(&g_camera_lock);return NULL;}
+    }
+    // Old generations remain until acknowledged: a failed app cleanup must not
+    // be reported as success merely because a socket or viewer disappeared.
+    bool bounded=g_camera_agents.size()<64;
+    char *state=(char*)malloc(256);
+    if(state)snprintf(state,256,"{\"enabled\":%s,\"position\":\"%s\",\"generation\":%llu,\"fps\":%d,\"bitrate\":%d}",enabled?"true":"false",g_camera_position==2?"front":"back",(unsigned long long)g_camera_generation,g_camera_fps,g_camera_bitrate);
+    pthread_mutex_unlock(&g_camera_lock);
+    if(!bounded){free(state);return NULL;}
+    return state;
+}
+
+bool rctl_camera_generation_retired(uint64_t generation) {
+    pthread_mutex_lock(&g_camera_lock);
+    // A confirmed exit releases capture. Permission errors and reused live
+    // PIDs stay unconfirmed, never causing a false retirement acknowledgement.
+    camera_prune_exited_agents_locked();
+    bool retired=!g_camera_agents.count(generation);
+    pthread_mutex_unlock(&g_camera_lock);return retired;
 }
 
 char *rctl_camera_status_json(void) {

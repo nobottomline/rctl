@@ -5,6 +5,7 @@
 // respring the UI. Reconnects automatically if the daemon restarts.
 
 #import <Foundation/Foundation.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
@@ -68,7 +69,7 @@ static void *rctl_bbs(void) {
     dispatch_once(&once, ^{ h = dlopen("/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices", RTLD_NOW); });
     return h;
 }
-static void rctl_set_brightness(double v) {
+static void rctl_set_brightness(double v, bool immediate = false) {
     if (v < 0) v = 0; else if (v > 1) v = 1;
     static void  (*BKSSet)(float, int)        = NULL;
     static void *(*BKSTxn)(CFAllocatorRef)     = NULL;
@@ -76,14 +77,15 @@ static void rctl_set_brightness(double v) {
     dispatch_once(&once, ^{ void *h = rctl_bbs(); if (h) {
         BKSSet = (void (*)(float, int))dlsym(h, "BKSDisplayBrightnessSet");
         BKSTxn = (void *(*)(CFAllocatorRef))dlsym(h, "BKSDisplayBrightnessTransactionCreate"); } });
-    dispatch_async(dispatch_get_main_queue(), ^{
+    void (^apply)(void) = ^{
         if (BKSSet) {
             void *t = BKSTxn ? BKSTxn(kCFAllocatorDefault) : NULL;  // hold a transaction across the set
             BKSSet((float)v, 1);
             if (t) CFRelease(t);
         }
         [UIScreen mainScreen].brightness = v;                       // keep UIKit's view in sync
-    });
+    };
+    if (immediate) apply(); else dispatch_async(dispatch_get_main_queue(), apply);
 }
 static float rctl_get_brightness(void) {
     static float (*BKSGet)(void) = NULL; static dispatch_once_t once;
@@ -621,14 +623,26 @@ static void *ipc_manager(void *unused) {
         // IPC ownership survives daemon failure. Retirement marks queued events
         // invalid before its main-queue release; the query reply is a real fence.
         struct GuestState {
+            std::string owner;
+            NSString *pointerOwner = nil;
+            double savedOutput = -1, setOutput = -1;
             std::atomic<bool> retired{false};
             std::atomic<double> deadline{0};
             std::atomic<unsigned> pending{0};
             rctl::GuestInputState input; // touched only on the main queue
         };
-        struct GuestRegistry { std::mutex mutex; std::map<std::string, std::shared_ptr<GuestState>> states; };
+        struct GuestRegistry { std::mutex mutex; std::map<std::string, std::shared_ptr<GuestState>> states; std::map<std::string, std::shared_ptr<GuestState>> retiring; std::map<std::string, double> cancelled; };
         auto guests = std::make_shared<GuestRegistry>();
         auto releaseGuest = [](const std::shared_ptr<GuestState> &state) {
+            if(state->savedOutput >= 0 && std::fabs(rctl_get_output_volume() - state->setOutput) < 0.03) {
+                id controller=rctl_av_system_controller();SEL set=NSSelectorFromString(@"setVolumeTo:forCategory:");
+                if(controller&&[controller respondsToSelector:set])((BOOL(*)(id,SEL,float,id))objc_msgSend)(controller,set,(float)state->savedOutput,@"Audio/Video");
+            }
+            state->savedOutput = -1;
+            if(state->pointerOwner) {
+                NSData *release=[NSJSONSerialization dataWithJSONObject:@{@"action":@"release",@"owner":state->pointerOwner} options:0 error:nil];
+                rctl_game_pointer_request(release);state->pointerOwner=nil;
+            }
             state->input.release([](int p, int f, double x, double y) { rctl_input_touch_now(f, x, y, p); },
                                  [](int p, int u, int d) { rctl_input_key_now(p, u, d); });
         };
@@ -636,16 +650,18 @@ static void *ipc_manager(void *unused) {
             static const mach_timebase_info_data_t base = [] { mach_timebase_info_data_t b; mach_timebase_info(&b); return b; }();
             return (double)mach_continuous_time() * base.numer / base.denom / 1e9;
         };
-        auto retireGuest = [guests](const std::string &owner) {
+        auto retireGuest = [guests, guestNow](const std::string &owner) {
             std::vector<std::shared_ptr<GuestState>> closing;
             std::lock_guard<std::mutex> lock(guests->mutex);
+            if(!owner.empty() && owner != "_guest_preflight")guests->cancelled[owner]=guestNow()+20.1;
             for (auto it = guests->states.begin(); it != guests->states.end();) {
                 if (owner.empty() || owner == it->first) {
                     it->second->retired.store(true);
-                    closing.push_back(it->second);
+                    closing.push_back(it->second); guests->retiring[it->first] = it->second;
                     it = guests->states.erase(it);
                 } else ++it;
             }
+            for (auto &entry : guests->retiring) if ((owner.empty() || owner == entry.first) && std::find(closing.begin(), closing.end(), entry.second) == closing.end()) closing.push_back(entry.second);
             return closing;
         };
         dispatch_source_t guestTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
@@ -656,12 +672,19 @@ static void *ipc_manager(void *unused) {
                 std::lock_guard<std::mutex> lock(guests->mutex);
                 for (auto it = guests->states.begin(); it != guests->states.end();) {
                     if (guestNow() >= it->second->deadline.load()) {
-                        it->second->retired.store(true); expired.push_back(it->second);
+                        it->second->retired.store(true); expired.push_back(it->second); guests->retiring[it->first] = it->second;
                         it = guests->states.erase(it);
                     } else ++it;
                 }
             }
             for (const auto &state : expired) releaseGuest(state);
+            std::lock_guard<std::mutex> lock(guests->mutex);
+            for (auto it=guests->cancelled.begin();it!=guests->cancelled.end();) {
+                if(guestNow()>=it->second)it=guests->cancelled.erase(it);else ++it;
+            }
+            for (auto it=guests->retiring.begin();it!=guests->retiring.end();) {
+                if(!it->second->pending) {releaseGuest(it->second);it=guests->retiring.erase(it);}else ++it;
+            }
         });
         dispatch_resume(guestTimer);
 
@@ -679,7 +702,7 @@ static void *ipc_manager(void *unused) {
                     const std::string owner(event.owner, ownerLength);
                     auto existing = guests->states.find(owner);
                     if (existing != guests->states.end()) state = existing->second;
-                    else if (event.kind != 2 && guests->states.size() < 16) { state = std::make_shared<GuestState>(); guests->states.emplace(owner, state); }
+                    else if (event.kind != 2 && !guests->cancelled.count(owner) && guests->states.size() < 16 && guests->cancelled.size() < 512) { state = std::make_shared<GuestState>(); state->owner = owner; guests->states.emplace(owner, state); }
                     if (state) state->deadline.store(event.deadline);
                 }
                 if (event.kind == 2) { free(buf); continue; }
@@ -732,12 +755,94 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_QUERY && len >= 5) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 uint8_t qtype = buf[4];
+                if (qtype == RCTL_Q_GUEST_COMMAND) {
+                    NSData *data = len > 5 && len <= 8197 ? [NSData dataWithBytes:buf + 5 length:len - 5] : nil;
+                    NSDictionary *command = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+                    NSString *owner = [command[@"owner"] isKindOfClass:[NSString class]] ? command[@"owner"] : nil;
+                    NSString *operation = [command[@"operation"] isKindOfClass:[NSString class]] ? command[@"operation"] : nil;
+                    NSDictionary *arguments = [command[@"args"] isKindOfClass:[NSDictionary class]] ? command[@"args"] : nil;
+                    double deadline = [command[@"deadline"] doubleValue];
+                    std::shared_ptr<GuestState> state;
+                    if (owner.length && owner.length < 64 && operation && arguments && std::isfinite(deadline) && deadline > guestNow() && deadline <= guestNow() + 20.1) {
+                        std::lock_guard<std::mutex> lock(guests->mutex);
+                        auto it = guests->states.find(owner.UTF8String);
+                        if (it != guests->states.end()) state = it->second;
+                        else if (!guests->cancelled.count(owner.UTF8String) && guests->states.size() < 16 && guests->cancelled.size() < 512) { state = std::make_shared<GuestState>(); state->owner = owner.UTF8String; guests->states.emplace(owner.UTF8String, state); }
+                        if (state) state->deadline = deadline;
+                    }
+                    if (!state || state->pending.fetch_add(1) >= 64) {
+                        if (state) state->pending.fetch_sub(1);
+                        send_reply(reqid, @"{\"error\":\"guest_command_unavailable\"}", guestGeneration); free(buf); continue;
+                    }
+                    if ([operation isEqualToString:@"apps.launch"] || [operation isEqualToString:@"apps.open_url"] || [operation isEqualToString:@"media.delete"]) {
+                        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                            NSString *result = @"{\"error\":\"access_ended\"}";
+                            if (!state->retired && guestNow() < deadline) {
+                                if ([operation isEqualToString:@"apps.launch"]) {rctl_launch_app(arguments[@"bundle"]);result=@"{\"ok\":true}";}
+                                else if ([operation isEqualToString:@"media.delete"]) result=rctl_delete_media_asset(arguments[@"uuid"]);
+                                else {
+                                    NSURL *url=[NSURL URLWithString:arguments[@"url"]];
+                                    Class cls=NSClassFromString(@"LSApplicationWorkspace");
+                                    id workspace=cls?((id(*)(id,SEL))objc_msgSend)(cls,NSSelectorFromString(@"defaultWorkspace")):nil;
+                                    BOOL ok=workspace&&url&&((BOOL(*)(id,SEL,id))objc_msgSend)(workspace,NSSelectorFromString(@"openURL:"),url);
+                                    result=ok?@"{\"ok\":true}":@"{\"error\":\"url_open_failed\"}";
+                                }
+                            }
+                            state->pending.fetch_sub(1);send_reply(reqid,result,guestGeneration);
+                        });free(buf);continue;
+                    }
+                    // All side effects occur in this guarded block. No unowned
+                    // dispatch_after or owner command helper is called here.
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        state->pending.fetch_sub(1);
+                        NSString *result = @"{\"ok\":true}";
+                        if (state->retired || guestNow() >= deadline) result = @"{\"error\":\"access_ended\"}";
+                        else if ([operation isEqualToString:@"clipboard.write"]) [UIPasteboard generalPasteboard].string = arguments[@"text"] ?: @"";
+                        else if ([operation isEqualToString:@"clipboard.read"]) {
+                            NSString *text=rctl_get_clipboard();
+                            if([text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]>4096){send_reply(reqid,@"{\"error\":\"clipboard_too_large\"}",guestGeneration);return;}
+                            NSData *out = [NSJSONSerialization dataWithJSONObject:@{@"text": text} options:0 error:nil];
+                            result = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];
+                        } else if ([operation isEqualToString:@"input.pointer"]) {
+                            unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(state->owner.data(),(CC_LONG)state->owner.size(),digest);
+                            char identity[33];for(unsigned i=0;i<16;i++)snprintf(identity+2*i,3,"%02x",digest[i]);
+                            NSMutableDictionary *request=[arguments mutableCopy];request[@"owner"]=@(identity);
+                            NSData *data=[NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
+                            result=rctl_game_pointer_request(data);
+                            if([arguments[@"action"] isEqualToString:@"acquire"] && [result containsString:@"\"ok\":true"])state->pointerOwner=@(identity);
+                            if([arguments[@"action"] isEqualToString:@"release"])state->pointerOwner=nil;
+                        }
+                        else if ([operation isEqualToString:@"audio.output"]) {
+                            id controller=rctl_av_system_controller();SEL set=NSSelectorFromString(@"setVolumeTo:forCategory:");
+                            if(state->savedOutput<0)state->savedOutput=rctl_get_output_volume();
+                            state->setOutput=[arguments[@"enabled"] boolValue] ? std::max(0.02,state->savedOutput) : 0;
+                            if(!controller||![controller respondsToSelector:set]||!((BOOL(*)(id,SEL,float,id))objc_msgSend)(controller,set,(float)state->setOutput,@"Audio/Video"))result=@"{\"error\":\"output_control_unavailable\"}";
+                        }
+                        else if ([operation isEqualToString:@"device.info"]) result = rctl_device_info();
+                        else if ([operation isEqualToString:@"apps.list"]) result = rctl_app_list();
+                        else if ([operation isEqualToString:@"device.orientation"]) result = rctl_orientation_action([arguments[@"orientation"] unsignedCharValue]);
+                        else if ([operation isEqualToString:@"device.brightness"]) rctl_set_brightness([arguments[@"value"] doubleValue], true);
+                        else if ([operation isEqualToString:@"screen.snapshot"]) result = (gSession ? rctl_session_snapshot_png(gSession, "/tmp/rctl-shot.png") : rctl_capture_one_png("/tmp/rctl-shot.png")) == 0 ? @"{\"ok\":true}" : @"{\"error\":\"capture_failed\"}";
+                        else result = @"{\"error\":\"unknown_operation\"}";
+                        send_reply(reqid, result ?: @"{}", guestGeneration);
+                    });
+                    free(buf); continue;
+                }
                 if (qtype == RCTL_Q_GUEST_END) {
                     if (len <= 5 || len >= 69) { send_reply(reqid, @""); free(buf); continue; }
                     auto closing = retireGuest(std::string((const char *)buf + 5, len - 5));
                     dispatch_async(dispatch_get_main_queue(), ^{
                         for (const auto &state : closing) releaseGuest(state);
-                        send_reply(reqid, @"ok", guestGeneration);
+                        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                            double until=guestNow()+0.8;
+                            bool pending;
+                            do {pending=false;for(const auto &state:closing)if(state->pending)pending=true;if(pending)usleep(5000);}while(pending&&guestNow()<until);
+                            if (!pending) {
+                                std::lock_guard<std::mutex> lock(guests->mutex);
+                                for (const auto &state : closing) { auto it = guests->retiring.find(state->owner); if (it != guests->retiring.end() && it->second == state) guests->retiring.erase(it); }
+                            }
+                            send_reply(reqid,pending?@"":@"ok",guestGeneration);
+                        });
                     });
                     free(buf); continue;
                 }

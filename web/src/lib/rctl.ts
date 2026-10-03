@@ -112,9 +112,9 @@ export function apiDo(path: string, init?: RequestInit): void {
 
 // WebSocket URL for the relay signaling / terminal channels (these are relay
 // routes, not rctld paths, so they don't go through rctlPath).
-export function signalWS(media: 'screen' | 'camera' = 'screen'): string {
+export function signalWS(media: 'screen' | 'camera' | 'operations' = 'screen'): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  if (GUEST_ACCESS) return `${proto}://${location.host}/api/guest/signal${media === 'camera' ? '?media=camera' : ''}`
+  if (GUEST_ACCESS) return `${proto}://${location.host}/api/guest/signal${media === 'screen' ? '' : `?media=${media}`}`
   const suffix = media === 'camera' ? '?media=camera' : ''
   return `${proto}://${location.host}/signal/devices/${DEVICE_ID}${suffix}`
 }

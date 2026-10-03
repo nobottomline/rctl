@@ -4,6 +4,23 @@ This document defines the enforced transition from a release candidate to a
 public immutable rctl release. It contains no production hostname, address,
 credential, device identifier, or private test result.
 
+## Owner deployment candidates
+
+`relay-candidate.yml` is a separate, manually dispatched path for an authorized
+owner deployment of a reviewed relay commit. It requires the exact workflow
+commit on `main`, runs protocol/browser/relay checks, and creates a draft
+prerelease containing the Linux amd64 relay, control client, source commit and
+SHA-256 checksums. All files receive repository-bound GitHub build provenance.
+It does not change public stable packages, update catalogs, APT or installer
+assets, and does not qualify native device builds.
+
+Before deployment, download that exact draft set privately and verify its
+checksums and `gh attestation verify` with the repository, signer workflow,
+`refs/heads/main`, source digest and hosted-runner policy. Then follow the
+unmanaged-host backup, atomic replacement, runtime acceptance and rollback
+procedure. A draft deployment candidate cannot enter the stable publication
+path below or substitute for a complete release qualification report.
+
 ## Security boundary
 
 `release-draft.yml` and `release-publish.yml` must both be dispatched with

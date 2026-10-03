@@ -34,7 +34,11 @@ int main() {
             "guest input rights are independent");
     require(!rctl::guestWebRTCPermissions({"screen.view", "device.control"}, guest), "native controller scope cannot widen guest policy");
     require(!rctl::guestWebRTCPermissions({"screen.view", "terminal"}, guest), "unsupported rights fail closed");
-    require(!rctl::guestWebRTCPermissions({"input.touch"}, guest), "screen negotiation required in current guest protocol");
+    require(rctl::guestWebRTCPermissions({"input.touch"}, guest) && !guest.screenView, "data-only guest sessions do not require screen exposure");
+    require(rctl::guestWebRTCPermissions({"audio.playback.listen"},guest) && guest.audioListen && !guest.roomMicListen && !guest.microphoneTalk && !guest.camera,"playback does not expose the room microphone, Talk or camera");
+    require(rctl::guestWebRTCPermissions({"audio.microphone.listen"},guest) && guest.roomMicListen && !guest.audioListen && !guest.microphoneTalk,"room microphone does not expose playback or Talk");
+    require(rctl::guestWebRTCPermissions({"talk.virtual_microphone"},guest) && guest.microphoneTalk && !guest.roomMicListen && !guest.audioListen,"Talk does not permit listening");
+    require(rctl::guestWebRTCPermissions({"input.text"},guest) && guest.inputText && !guest.inputKeyboard && !guest.inputTouch,"typed text does not authorize raw HID input");
     rctl::ControllerAuthorizationLease shortLease(2, 200);
     shortLease.challenge("expiry", 200);
     require(shortLease.renew(2, "expiry", 201, 2), "grant deadline shortens device lease");

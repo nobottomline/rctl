@@ -45,6 +45,8 @@ export class AudioPlayer {
   private ctx: AudioContext | null = null
   private gain: GainNode | null = null
   private enabled = false
+  private disposed = false
+  private sources = new Set<AudioBufferSourceNode>()
   private dec: AudioDecoder | null = null // WebCodecs (Safari 26+, Chrome, etc.)
   private wdec: OpusWasmDecoder | null = null // WASM fallback (iOS Safari < 26)
   private wdecInit: Promise<void> | null = null
@@ -119,6 +121,7 @@ export class AudioPlayer {
           .then(async (Ctor) => {
             const d = new Ctor({ channels: chn })
             await d.ready
+            if (this.disposed) { d.free(); return }
             this.wdec = d
             this.playTime = 0
           })
@@ -159,7 +162,7 @@ export class AudioPlayer {
   // buffer. Shared by both decode paths.
   private schedule(channels: Float32Array[], sampleRate: number, n: number) {
     const ctx = this.ctx
-    if (!ctx || n <= 0 || channels.length === 0) return
+    if (this.disposed || !this.enabled || !ctx || n <= 0 || channels.length === 0) return
     const ab = ctx.createBuffer(channels.length, n, sampleRate)
     for (let c = 0; c < channels.length; c++) ab.getChannelData(c).set(channels[c].subarray(0, n))
     const src = ctx.createBufferSource()
@@ -167,6 +170,8 @@ export class AudioPlayer {
     src.connect(this.gain || ctx.destination)
     const now = ctx.currentTime
     if (this.playTime < now + 0.02) this.playTime = now + 0.18 // ~180ms jitter buffer (re)prime on underrun
+    this.sources.add(src)
+    src.onended = () => { this.sources.delete(src); src.disconnect() }
     src.start(this.playTime)
     this.playTime += ab.duration
   }
@@ -174,6 +179,7 @@ export class AudioPlayer {
   // Create/resume the AudioContext and start playing. Must be called from a user
   // gesture (browsers block autoplay). Returns whether playback is live.
   async resume(): Promise<boolean> {
+    if (this.disposed) return false
     // iOS Safari silences Web Audio when the phone's ring/silent switch is on unless
     // the page claims a 'playback' audio session. No-op on browsers without the API.
     try {
@@ -201,6 +207,7 @@ export class AudioPlayer {
     } catch {
       /* ignore */
     }
+    if (this.disposed || !this.ctx) return false
     this.enabled = this.ctx.state === 'running' || (this.ctx.state as string) === 'interrupted'
     return this.enabled
   }
@@ -208,7 +215,14 @@ export class AudioPlayer {
   // Stop playing (keeps the context for a fast re-enable).
   mute() {
     this.enabled = false
+    for (const source of this.sources) { try { source.stop(); source.disconnect() } catch { /* already ended */ } }
+    this.sources.clear(); this.playTime = 0
     this.closeDecoder()
+  }
+
+  dispose() {
+    this.disposed = true; this.mute(); this.wdec?.free(); this.wdec = null
+    void this.ctx?.close().catch(() => {}); this.ctx = null; this.gain = null
   }
 
   private closeDecoder() {

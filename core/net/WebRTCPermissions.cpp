@@ -16,13 +16,20 @@ bool guestWebRTCPermissions(const std::vector<std::string> &permissions, WebRTCP
         if (permission == "screen.view") result.screenView = true;
         else if (permission == "input.touch") result.inputTouch = true;
         else if (permission == "input.keyboard") result.inputKeyboard = true;
+        else if (permission == "input.text") result.inputText = true;
         else if (permission == "input.button.home") result.buttonMask |= GuestInputState::homeButton;
         else if (permission == "input.button.lock") result.buttonMask |= GuestInputState::lockButton;
         else if (permission == "input.button.volume") result.buttonMask |= GuestInputState::volumeButtons;
         else if (permission == "input.button.system_ui") result.buttonMask |= GuestInputState::systemButtons;
     }
+    result.guestRights = permissions;
+    auto has = [&](const char *p) { return std::find(permissions.begin(), permissions.end(), p) != permissions.end(); };
+    result.camera = has("camera.live");
+    result.audioListen = has("audio.playback.listen");
+    result.roomMicListen = has("audio.microphone.listen");
+    result.microphoneTalk = has("talk.speaker") || has("talk.virtual_microphone");
     result.inputButtons = result.buttonMask != 0;
-    return result.screenView;
+    return true;
 }
 
 WebRTCPermissions legacyWebRTCPermissions() {

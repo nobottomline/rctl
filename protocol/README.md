@@ -40,3 +40,6 @@ vocabulary, staged rollout and qualification gates.
 Within one protocol major, receivers ignore unknown object fields so a newer
 minor can add metadata. Unknown message kinds and operations remain invalid and
 must fail locally without invoking device behavior.
+
+[Guest operations v1](guest-operations-v1.md) defines the protected guest
+DataChannel, owned transfer handles and cancellation contract.

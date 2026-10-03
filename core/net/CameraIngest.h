@@ -18,6 +18,8 @@ void rctl_camera_renew_lease(void);
 bool rctl_camera_is_enabled(void);
 char *rctl_camera_status_json(void);
 char *rctl_camera_agent_state_json(void);
+char *rctl_camera_agent_state_owned(const char *agent, uint64_t stopped_generation, int process_id);
+bool rctl_camera_generation_retired(uint64_t generation);
 bool rctl_camera_record_start(void);
 void rctl_camera_record_stop(void);
 void rctl_camera_record_discard(void);

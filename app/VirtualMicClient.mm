@@ -6,6 +6,8 @@
 #import <cstring>
 #import <netinet/in.h>
 #import <new>
+#import <mutex>
+#import <notify.h>
 #import <pthread.h>
 #import <sys/socket.h>
 #import <time.h>
@@ -22,6 +24,10 @@ static const uint64_t kRingSamples = 48000 * 2;
 // guard and can prevent later Substitute payloads from loading in SpringBoard.
 static std::atomic<int16_t> *g_ring = nullptr;
 static_assert(std::atomic<int16_t>::is_always_lock_free, "virtual mic samples must stay realtime-safe");
+static std::atomic<uint64_t> g_reset_epoch{0};
+static std::mutex g_socket_mutex;
+static std::mutex g_ring_producer_mutex;
+static int g_receiver_socket=-1;
 static std::atomic<uint64_t> g_write{0};
 static std::atomic<uint64_t> g_read{0};
 static std::atomic<uint64_t> g_last_render_ms{0};
@@ -92,6 +98,7 @@ static void *format_main(void *) {
 }
 
 static void ring_clear(void) {
+    std::lock_guard<std::mutex> lock(g_ring_producer_mutex);
     uint64_t write = g_write.load(std::memory_order_acquire);
     g_read.store(write, std::memory_order_release);
     g_last_packet_ms.store(0, std::memory_order_release);
@@ -145,8 +152,10 @@ static void *receiver_main(void *) {
         }
         timeval timeout = {.tv_sec = 1, .tv_usec = 0};
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        {std::lock_guard<std::mutex> lock(g_socket_mutex);g_receiver_socket=fd;}
         ring_clear();
         for (;;) {
+            uint64_t epoch=g_reset_epoch.load();
             uint32_t networkLength = 0;
             int headerResult = read_exact(fd, &networkLength, sizeof(networkLength));
             if (headerResult < 0) {
@@ -162,9 +171,11 @@ static void *receiver_main(void *) {
             if (!length || length > 5760 * sizeof(int16_t) || (length & 1)) break;
             int16_t samples[5760];
             if (read_exact(fd, samples, length) != 1) break;
-            ring_push(samples, length / sizeof(int16_t));
+            {std::lock_guard<std::mutex> lock(g_ring_producer_mutex);
+            if(epoch!=g_reset_epoch.load())break;
+            ring_push(samples, length / sizeof(int16_t));}
         }
-        close(fd);
+        {std::lock_guard<std::mutex> lock(g_socket_mutex);g_receiver_socket=-1;close(fd);}
         ring_clear();
         uint64_t lastRender = g_last_render_ms.load(std::memory_order_acquire);
         if (lastRender && monotonic_ms() - lastRender > 10000)
@@ -298,6 +309,11 @@ extern "C" void rctl_virtual_mic_activate(void) {
     dispatch_once(&once, ^{
         g_ring = new (std::nothrow) std::atomic<int16_t>[kRingSamples]();
         if (!g_ring) return;
+        int resetToken=0;
+        notify_register_dispatch("com.greatlove.rctl.vmic.reset",&resetToken,dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^(int){
+            g_reset_epoch.fetch_add(1);ring_clear();
+            std::lock_guard<std::mutex> lock(g_socket_mutex);if(g_receiver_socket>=0)shutdown(g_receiver_socket,SHUT_RDWR);
+        });
         pthread_t receiver;
         if (pthread_create(&receiver, nullptr, receiver_main, nullptr) == 0)
             pthread_detach(receiver);

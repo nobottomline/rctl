@@ -16,6 +16,7 @@
 #include "net/WebRTCPermissions.h"
 #include "net/ControllerAuthorizationLease.h"
 #include "net/GuestInputState.h"
+#include "net/GuestOperations.h"
 #include <mach/mach_time.h>
 #include <cstdlib>
 #include "net/VirtualMicServer.h"
@@ -56,6 +57,13 @@ static void (*g_key_cb)(int page, int usage, int down) = nullptr;
 static void (*g_guest_event_cb)(const char *, double, int, int, int, int, double, double) = nullptr;
 static bool (*g_guest_end_cb)(const char *, bool) = nullptr;
 static rctl_pointer_request g_pointer_cb = nullptr;
+static rctl_guest_request g_guest_request_cb = nullptr;
+static bool (*g_guest_operations_end)(const char *) = nullptr;
+static void (*g_guest_operations_renew)(const char *, double) = nullptr;
+extern "C" void rctl_webrtc_set_guest_operations(rctl_guest_request request,
+    bool (*end)(const char *), void (*renew)(const char *, double)) {
+    g_guest_request_cb = request; g_guest_operations_end = end; g_guest_operations_renew = renew;
+}
 static std::mutex g_mtx;
 
 static double authorization_now() {
@@ -91,6 +99,11 @@ struct Session {
     std::shared_ptr<rtc::DataChannel> pointer;
     std::shared_ptr<rtc::DataChannel> pointerMotion;
     std::shared_ptr<rtc::DataChannel> filesDc;
+    std::shared_ptr<rtc::DataChannel> guestOperations;
+    bool guest = false;
+    std::atomic<int> talkRoute{0};
+    bool talkSpeaker = false, talkVirtualMic = false;
+    bool inputText = false;
     std::shared_ptr<rtc::DataChannel> micIn;
     std::shared_ptr<rtc::DataChannel> roomMic;
     std::shared_ptr<rtc::DataChannel> stateDc;
@@ -98,6 +111,12 @@ struct Session {
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
 static std::string g_guestInputOwner;
 static std::set<std::string> g_guestRetiring;
+static std::set<std::string> g_guestOperationsRetiring;
+extern "C" bool rctl_webrtc_guest_operations_current(const char *owner) {
+    std::lock_guard<std::mutex> lock(g_mtx);
+    auto it=g_sessions.find(owner?owner:"");
+    return it!=g_sessions.end() && it->second->guest && it->second->lease && it->second->lease->authorized(authorization_now());
+}
 static double g_ownerInputBusyUntil = 0;
 static std::set<int> g_ownerContacts;
 static std::set<std::pair<int,int>> g_ownerKeys;
@@ -293,10 +312,15 @@ static void add_ice_servers(rtc::Configuration &config, const json &arr) {
 // (and the Track destructor's own triggerClosed() then invokes an empty callback).
 // MUST be called WITHOUT g_mtx held: an in-flight onClosed takes g_mtx, so holding
 // it here would deadlock resetCallbacks().
-static void mic_teardown();
+[[maybe_unused]] static void mic_teardown();
+static void mic_teardown_owner(const std::string &owner);
 static void destroy_session(std::shared_ptr<Session> dead) {
     if (!dead) return;
     { std::lock_guard<std::mutex> lk(g_mtx); release_guest_input_locked(dead); }
+    if (dead->guestOperations) dead->guestOperations->resetCallbacks();
+    if (dead->guest && g_guest_operations_end && !g_guest_operations_end(dead->id.c_str())) {
+        std::lock_guard<std::mutex> lk(g_mtx); g_guestOperationsRetiring.insert(dead->id);
+    }
     if (dead->control) dead->control->resetCallbacks();
     if (dead->pointer) dead->pointer->resetCallbacks();
     if (dead->pointerMotion) dead->pointerMotion->resetCallbacks();
@@ -344,7 +368,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     }
     auto viewerCb = dead->camera ? g_camera_viewer_cb : g_viewer_cb;
     if (lastGone && viewerCb) viewerCb(false);
-    if (dead->micIn) mic_teardown();   // its onClosed is detached above
+    if (dead->micIn) mic_teardown_owner(dead->id);   // its onClosed is detached above
     std::lock_guard<std::mutex> drain(dead->sendGate);
     if (dead->pc) dead->pc->close();  // revoke even while another worker holds a shared_ptr
     // `dead` drops at the caller: callbacks detached + none in flight -> safe.
@@ -382,6 +406,7 @@ extern "C" void rctl_audio_boost_end(void);         // defined in main.mm
 static std::mutex g_micMtx;
 static OpusDecoder *g_micDec = nullptr;
 static AudioQueueRef g_micAQ = nullptr;       // created once per process, never disposed
+static std::string g_micOwner;
 static bool g_micBoosted = false;             // inside a talk burst (volume raised)
 static bool g_micWatchStarted = false;
 static bool g_micSpeakerFailed = false;       // retry only after the next idle gap
@@ -440,7 +465,7 @@ static void mic_watchdog() {
     }
 }
 
-static void mic_play_opus(const uint8_t *opus, size_t len) {
+static void mic_play_opus(const uint8_t *opus, size_t len, int routeOverride = -1, const std::string &owner = "", bool guest = false) {
     std::lock_guard<std::mutex> lk(g_micMtx);
     if (!g_micDec) {
         int err = 0;
@@ -454,13 +479,16 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
         opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
         g_micSpeakerFailed = false;
     }
+    if (guest && !g_micOwner.empty() && g_micOwner != owner && !newBurst) return;
+    if (g_micOwner != owner) {mic_reset_queue();rctl_vmic_clear();}
+    g_micOwner = owner;
     g_micLast = now;
     int16_t pcm[5760];   // up to 120ms @ 48k mono
     int frames = opus_decode(g_micDec, opus, (opus_int32)len, pcm, 5760, 0);
     if (frames <= 0) return;
 
-    int route = rctl_vmic_route();
-    if (route == RCTL_TALK_VIRTUAL_MIC || route == RCTL_TALK_BOTH) rctl_vmic_push(pcm, frames);
+    int route = routeOverride < 0 ? rctl_vmic_route() : routeOverride;
+    if (route == RCTL_TALK_VIRTUAL_MIC || route == RCTL_TALK_BOTH) rctl_vmic_push_routed(pcm, frames);
     if (route == RCTL_TALK_VIRTUAL_MIC) {
         if (g_micBoosted) {
             rctl_audio_boost_end();
@@ -553,7 +581,7 @@ static void mic_play_opus(const uint8_t *opus, size_t len) {
 
 // Session/channel gone: restore the user's volume promptly and reset, but KEEP the
 // queue alive (disposing + recreating it later goes silent on iOS).
-static void mic_teardown() {
+[[maybe_unused]] static void mic_teardown() {
     std::lock_guard<std::mutex> lk(g_micMtx);
     if (g_micBoosted) {
         rctl_audio_boost_end();
@@ -563,13 +591,51 @@ static void mic_teardown() {
     }
 }
 
+static void mic_teardown_owner(const std::string &owner) {
+    std::lock_guard<std::mutex> lk(g_micMtx);
+    if (g_micOwner != owner) return;
+    if (g_micBoosted) { rctl_audio_boost_end(); mic_reset_queue(); g_micBoosted = false; }
+    if (g_micDec) opus_decoder_ctl(g_micDec, OPUS_RESET_STATE);
+    rctl_vmic_clear();g_micOwner.clear();
+}
+extern "C" bool rctl_webrtc_guest_text_key(const char *owner, int usage, int down) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    auto it=g_sessions.find(owner ? owner : "");
+    if(it==g_sessions.end() || !it->second->guest || !it->second->inputText || !it->second->guestInput) return false;
+    auto session=it->second;
+    if(!session->lease->authorized(authorization_now()) || g_ownerInputBusyUntil>authorization_now() ||
+       !g_ownerContacts.empty() || !g_ownerKeys.empty() || (!g_guestInputOwner.empty()&&g_guestInputOwner!=owner))return false;
+    if(!session->guestInput->key(7,usage,down,true,false))return false;
+    g_guestInputOwner=owner;
+    if(g_guest_event_cb)g_guest_event_cb(owner,session->lease->expiresAt,1,7,usage,down,0,0);
+    return true;
+}
+extern "C" bool rctl_webrtc_guest_talk_route(const char *owner, int route) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    auto it = g_sessions.find(owner ? owner : "");
+    if (it == g_sessions.end() || !it->second->guest || !it->second->lease->authorized(authorization_now())) return false;
+    auto &session = it->second;
+    if ((route != RCTL_TALK_SPEAKER && route != RCTL_TALK_VIRTUAL_MIC && route != RCTL_TALK_BOTH) ||
+        (route != RCTL_TALK_VIRTUAL_MIC && !session->talkSpeaker) || (route != RCTL_TALK_SPEAKER && !session->talkVirtualMic)) return false;
+    if(session->talkRoute.exchange(route)!=route) {
+        std::lock_guard<std::mutex> lock(g_micMtx);
+        if(g_micOwner==owner){mic_reset_queue();rctl_vmic_clear();}
+    }
+    return true;
+}
+
 static void start_session(const std::string &id, const json &ice, bool camera,
                           const rctl::WebRTCPermissions &permissions,
                           std::shared_ptr<rctl::ControllerAuthorizationLease> lease = nullptr) {
     auto sess = std::make_shared<Session>();
     sess->lease = lease;
     sess->id = id;
-    if (permissions.guest && (permissions.inputTouch || permissions.inputKeyboard || permissions.inputButtons))
+    sess->guest = permissions.guest;
+    sess->inputText = permissions.inputText;
+    sess->talkSpeaker = std::find(permissions.guestRights.begin(), permissions.guestRights.end(), "talk.speaker") != permissions.guestRights.end();
+    sess->talkVirtualMic = std::find(permissions.guestRights.begin(), permissions.guestRights.end(), "talk.virtual_microphone") != permissions.guestRights.end();
+    sess->talkRoute = sess->talkSpeaker ? RCTL_TALK_SPEAKER : RCTL_TALK_VIRTUAL_MIC;
+    if (permissions.guest && (permissions.inputTouch || permissions.inputKeyboard || permissions.inputText || permissions.inputButtons))
         sess->guestInput = std::make_shared<rctl::GuestInputState>();
     sess->camera = camera;
     rtc::Configuration config;
@@ -593,12 +659,21 @@ static void start_session(const std::string &id, const json &ice, bool camera,
         wlog("session " + id + " state " + std::to_string((int)s));
         if (s == rtc::PeerConnection::State::Disconnected ||
             s == rtc::PeerConnection::State::Failed ||
-            s == rtc::PeerConnection::State::Closed)
+            s == rtc::PeerConnection::State::Closed) {
+            // The authorization tick tears down outside this callback, so
+            // resetCallbacks never waits on the callback currently executing.
+            { std::lock_guard<std::mutex> lk(g_mtx);
+              auto it=g_sessions.find(id);
+              if(it!=g_sessions.end() && it->second->guest && it->second->lease)
+                  it->second->lease->retired=true;
+            }
             retire_track(id);
+        }
     });
 
     // Offer one send-only H.264 track (device -> browser). The browser answers
     // with a recvonly video m-line and attaches the track to a <video> element.
+    if (camera ? permissions.camera : permissions.screenView) {
     const rtc::SSRC ssrc = camera ? 43 : 42;
     const char *mediaName = camera ? "camera" : "video";
     const char *cname = camera ? "rctl-camera" : "rctl-video";
@@ -687,6 +762,34 @@ static void start_session(const std::string &id, const json &ice, bool camera,
         wlog("session " + id + (camera ? " camera" : " screen") + " track closed");
     });
 
+    }
+    if (permissions.guest && !camera) {
+        auto operations = pc->createDataChannel("guest-operations");
+        sess->guestOperations = operations;
+        std::weak_ptr<Session> weakSession = sess;
+        auto inFlight = std::make_shared<std::atomic<unsigned>>(0);
+        const auto rights = json(permissions.guestRights).dump();
+        operations->onMessage([weakSession, inFlight, rights, id, lease](rtc::message_variant message) {
+            if (!authorized(lease) || !g_guest_request_cb || !std::holds_alternative<std::string>(message)) return;
+            const auto &body = std::get<std::string>(message);
+            if (body.empty() || body.size() > 49152 || inFlight->fetch_add(1) >= 2) {
+                if (!body.empty() && body.size() <= 49152) inFlight->fetch_sub(1);
+                return;
+            }
+            struct Reply { std::weak_ptr<Session> session; std::shared_ptr<std::atomic<unsigned>> inFlight; };
+            auto *reply = new Reply{weakSession, inFlight};
+            double deadline;
+            { std::lock_guard<std::mutex> lk(g_mtx); deadline = lease->expiresAt; }
+            g_guest_request_cb(id.c_str(), deadline, rights.c_str(), body.data(), body.size(), [](void *raw, const char *body) {
+                std::unique_ptr<Reply> reply((Reply *)raw); reply->inFlight->fetch_sub(1);
+                auto session = reply->session.lock();
+                if (!session) return;
+                std::lock_guard<std::mutex> gate(session->sendGate);
+                if (!authorized(session->lease) || !session->guestOperations || !body || strlen(body) > 65536) return;
+                try { if (session->guestOperations->isOpen() && session->guestOperations->bufferedAmount() < 131072) session->guestOperations->send(std::string(body)); } catch (...) {}
+            }, reply);
+        });
+    }
     // Runtime state is separate from encoded media because this H.264 sender
     // works with fixed portrait buffers and RTP therefore reports rotation=0.
     // A small ordered channel makes orientation explicit for native clients and
@@ -760,7 +863,7 @@ static void start_session(const std::string &id, const json &ice, bool camera,
     // Room-mic channel (device -> browser): the iPad's own microphone, Opus over a
     // dedicated channel (separate encoder from the system-audio path so the two
     // sources don't share Opus state).
-    if (permissions.audioListen) {
+    if (permissions.guest ? permissions.roomMicListen : permissions.audioListen) {
         auto roomMic = pc->createDataChannel("room-mic");
         sess->roomMic = roomMic;
         rtc::DataChannel *rmptr = roomMic.get();
@@ -943,13 +1046,17 @@ static void start_session(const std::string &id, const json &ice, bool camera,
     if (permissions.microphoneTalk) {
         auto micIn = pc->createDataChannel("mic-in");
         sess->micIn = micIn;
-        micIn->onMessage([lease](rtc::message_variant msg) {
+        std::weak_ptr<Session> weakMic = sess;
+        micIn->onMessage([lease, weakMic, id](rtc::message_variant msg) {
             if (!authorized(lease)) return;
             if (!std::holds_alternative<rtc::binary>(msg)) return;
             const auto &b = std::get<rtc::binary>(msg);
-            mic_play_opus(reinterpret_cast<const uint8_t *>(b.data()), b.size());
+            auto session = weakMic.lock(); if (!session) return;
+            std::lock_guard<std::mutex> gate(session->sendGate);
+            if (!authorized(lease)) return;
+            mic_play_opus(reinterpret_cast<const uint8_t *>(b.data()), b.size(), session->guest ? session->talkRoute.load() : -1, id, session->guest);
         });
-        micIn->onClosed([]() { mic_teardown(); });
+        micIn->onClosed([id]() { mic_teardown_owner(id); });
     }
 
     std::shared_ptr<Session> prior;
@@ -1135,6 +1242,18 @@ static void authorization_tick(double now) {
         rctl_webrtc_unroute_session(entry.first.c_str());
     }
     for (auto &entry : challenges) send_signal(entry.first, "authorization_challenge", entry.second);
+    std::set<std::string> retiring;
+    {std::lock_guard<std::mutex> lock(g_mtx);retiring=g_guestRetiring;retiring.insert(g_guestOperationsRetiring.begin(),g_guestOperationsRetiring.end());}
+    for(const auto &id:retiring) {
+        bool operationsPending=false,inputPending=false;
+        {std::lock_guard<std::mutex> lock(g_mtx);operationsPending=g_guestOperationsRetiring.count(id);inputPending=g_guestRetiring.count(id);}
+        if(operationsPending) {
+            if(!g_guest_operations_end || !g_guest_operations_end(id.c_str()))continue;
+            std::lock_guard<std::mutex> lock(g_mtx);g_guestOperationsRetiring.erase(id);
+        }
+        if(inputPending && !guest_input_fence(id))continue;
+        send_signal(id,"closed",nullptr);
+    }
 }
 
 extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
@@ -1165,6 +1284,7 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
                 remaining=(double)ms/1000;
             }
             if (!lease->renew(p["authorization_revision"].get<int64_t>(), p["nonce"].get<std::string>(), authorization_now(),remaining)) return;
+            if (it->second.guest && g_guest_operations_renew) g_guest_operations_renew(id.c_str(), lease->expiresAt);
             if (it->second.guest && g_guestInputOwner == id && g_guest_event_cb) {
                 // Held input follows only protected device-issued lease replies,
                 // never a browser heartbeat or another session's renewal.
@@ -1178,8 +1298,8 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
                 if(!rctl::guestWebRTCPermissions(pending["permissions"].get<std::vector<std::string>>(),permissions))return;
             } else permissions = rctl::scopedWebRTCPermissions(pending["scopes"].get<std::vector<std::string>>());
             try {
-                if (permissions.guest && (permissions.inputTouch || permissions.inputKeyboard || permissions.inputButtons) &&
-                    !guest_input_fence(id)) {
+                if (permissions.guest && (permissions.inputTouch || permissions.inputKeyboard || permissions.inputText || permissions.inputButtons) &&
+                    !guest_input_fence("_guest_preflight")) {
                     throw std::runtime_error("SpringBoard guest input protocol unavailable");
                 }
                 start_session(id, pending.value("ice", json::array()), pending.value("role", std::string("screen")) == "camera", permissions, lease);
@@ -1200,7 +1320,7 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
         bool camera = false;
         rctl::WebRTCPermissions permissions = rctl::legacyWebRTCPermissions();
         if (payload.is_object()) {
-            if (payload.contains("role") && (!payload["role"].is_string() || (payload["role"]!="screen" && payload["role"]!="camera"))) return;
+            if (payload.contains("role") && (!payload["role"].is_string() || (payload["role"]!="screen" && payload["role"]!="camera" && payload["role"]!="operations"))) return;
             ice = payload.contains("ice") ? payload["ice"] : json::array();
             camera = payload.value("role", std::string("screen")) == "camera";
             if(payload.contains("access_mode")) {
@@ -1220,7 +1340,9 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
                 permissions = rctl::scopedWebRTCPermissions(scopes);
             }
         }
-        if ((camera && !permissions.camera) || (!camera && !permissions.screenView)) {
+        if (payload.is_object() && payload.value("role", std::string("screen")) == "operations" && !permissions.guest) return;
+        if (permissions.guest && payload.value("role", std::string("screen")) == "screen" && !permissions.screenView) return;
+        if ((camera && !permissions.camera) || (!camera && !permissions.screenView && !permissions.guest)) {
             wlog("session open rejected by scoped media permission " + id);
             return;
         }
@@ -1230,7 +1352,7 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
             if (revision < 1 || revision > 9007199254740991LL) return;
             {
                 std::lock_guard<std::mutex> lk(g_mtx);
-                if (!g_session_send.count(id) || g_authorizations.count(id) || g_sessions.count(id) || g_guestRetiring.count(id) || g_authorizations.size() + g_guestRetiring.size() >= 512) return;
+                if (!g_session_send.count(id) || g_authorizations.count(id) || g_sessions.count(id) || g_guestRetiring.count(id) || g_guestOperationsRetiring.count(id) || g_authorizations.size() + g_guestRetiring.size() + g_guestOperationsRetiring.size() >= 512) return;
                 g_authorizations.emplace(id, AuthorizedOpen{std::make_shared<rctl::ControllerAuthorizationLease>(revision, authorization_now()), payload, permissions.guest});
             }
             authorization_tick(authorization_now());
@@ -1257,7 +1379,12 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
         destroy_session(dead);
         bool needsFence = false;
         { std::lock_guard<std::mutex> lk(g_mtx); needsFence = g_guestRetiring.count(id) != 0; }
-        const bool released = !needsFence || guest_input_fence(id);
+        bool operationsReleased = true;
+        { std::lock_guard<std::mutex> lk(g_mtx); operationsReleased = !g_guestOperationsRetiring.count(id); }
+        if (!operationsReleased && g_guest_operations_end && g_guest_operations_end(id.c_str())) {
+            std::lock_guard<std::mutex> lk(g_mtx); g_guestOperationsRetiring.erase(id); operationsReleased = true;
+        }
+        const bool released = operationsReleased && (!needsFence || guest_input_fence(id));
         send_signal(id, released ? "closed" : "close", nullptr);
         return;
     }

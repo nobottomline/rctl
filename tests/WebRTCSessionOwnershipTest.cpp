@@ -6,8 +6,9 @@
 extern "C" bool rctl_audio_session_activate(void) { return true; }
 extern "C" void rctl_audio_boost_begin(void) {}
 extern "C" void rctl_audio_boost_end(void) {}
+extern "C" void rctl_vmic_clear(void) {}
 extern "C" int rctl_vmic_route(void) { return RCTL_TALK_SPEAKER; }
-extern "C" void rctl_vmic_push(const int16_t *, int) {}
+extern "C" void rctl_vmic_push_routed(const int16_t *, int) {}
 
 static void discard(void *, const char *) {}
 
@@ -170,7 +171,27 @@ static std::shared_ptr<rtc::PeerConnection> add(const char *id, void *owner) {
     return session->pc;
 }
 
+static bool operationsConfirmed=false;
+static bool operationsEnd(const char*) {return operationsConfirmed;}
+static void testGuestOperationsRetirement() {
+    int owner;
+    rctl_webrtc_set_guest_operations(nullptr,operationsEnd,nullptr);
+    const char *id="guest-data-only";
+    rctl_webrtc_route_session(id,captureChallenge,&owner);
+    rctl_webrtc_handle_signal(R"({"id":"guest-data-only","kind":"open","payload":{"role":"operations","access_mode":"guest-v1","allow_direct":true,"authorization_revision":1,"permissions":["files.list","audio.microphone.listen"],"ice":[]}})");
+    rctl_webrtc_handle_signal(json{{"id",id},{"kind","authorization_renew"},{"payload",{{"nonce",challengeNonce},{"authorization_revision",1},{"remaining_ms",20000}}}}.dump().c_str());
+    auto session=g_sessions.at(id);
+    assert(!session->track&&!session->audioDc&&!session->control&&!session->filesDc&&!session->micIn&&session->roomMic&&session->guestOperations);
+    assert(rctl_webrtc_guest_operations_current(id));
+    rctl_webrtc_handle_signal(json{{"id",id},{"kind","close"}}.dump().c_str());
+    assert(!rctl_webrtc_guest_operations_current(id)&&g_guestOperationsRetiring.count(id)&&lastSignalKind=="close");
+    operationsConfirmed=true;authorization_tick(authorization_now());
+    assert(!g_guestOperationsRetiring.count(id)&&lastSignalKind=="closed");
+    rctl_webrtc_unroute_session(id);rctl_webrtc_set_guest_operations(nullptr,nullptr,nullptr);
+}
+
 int main() {
+    testGuestOperationsRetirement();
     testVideoPacketBudget();
     testLeaseClock();
     testGuestPolicyAndRetirement();

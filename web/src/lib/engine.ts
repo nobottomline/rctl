@@ -76,6 +76,7 @@ export type EngineCallbacks = {
   onInputBlocked?: () => void
   onFrame?: () => void
   onOrient?: (o: number, manual: boolean) => void
+  onGuestOperations?: (ch: RTCDataChannel) => void
   onControlChannel?: (ch: RTCDataChannel) => void
   onPointerChannel?: (ch: RTCDataChannel) => void
   onAudioChannel?: (ch: RTCDataChannel) => void
@@ -144,7 +145,7 @@ export class ControlEngine {
   start() {
     if (GUEST_ACCESS && !WEBRTC_MODE) { this.endGuest(); return }
     if (WEBRTC_MODE) {
-      this.startWebRTC(signalWS())
+      this.startWebRTC(signalWS(GUEST_ACCESS && !guestHas('screen.view') ? 'operations' : 'screen'))
     } else if (RELAY_MODE) {
       // Relay with WebRTC disabled: use the authenticated stream tunnel as a
       // compatibility/debug fallback. Do not try local /ws/signal from a relay
@@ -878,13 +879,17 @@ export class ControlEngine {
     pc.ondatachannel = (e) => {
       if (this.stopped || this.pc !== pc) { e.channel.close(); return }
       const ch = e.channel
-      if (GUEST_ACCESS && (ch.label !== 'state' &&
-          (ch.label !== 'control' || !GUEST_ACCESS.permissions.some((p) => p.startsWith('input.'))))) {
-        ch.close()
-        this.endGuest()
-        return
+      if (GUEST_ACCESS) {
+        const permitted = ch.label === 'state' || ch.label === 'guest-operations' ||
+          (ch.label === 'control' && GUEST_ACCESS.permissions.some((p) => p.startsWith('input.'))) ||
+          (ch.label === 'audio' && guestHas('audio.playback.listen')) ||
+          (ch.label === 'room-mic' && guestHas('audio.microphone.listen')) ||
+          (ch.label === 'mic-in' && (guestHas('talk.speaker') || guestHas('talk.virtual_microphone')))
+        if (!permitted) { ch.close(); this.endGuest(); return }
       }
-      if (ch.label === 'state') {
+      if (ch.label === 'guest-operations') {
+        this.cb.onGuestOperations?.(ch)
+      } else if (ch.label === 'state') {
         ch.onmessage = (event) => {
           if (this.stopped || this.pc !== pc) return
           try {
@@ -935,6 +940,7 @@ export class ControlEngine {
               this.scheduleReconnect()
           }, 4000)
       } else if (st === 'connected') {
+        if (GUEST_ACCESS && !guestHas('screen.view')) this.status('Connected')
         if (this.disconnectGrace) {
           clearTimeout(this.disconnectGrace)
           this.disconnectGrace = 0
@@ -950,7 +956,7 @@ export class ControlEngine {
     // signaling but never delivers a new frame.
     const framesAtDial = this.frames
     this.rtcFallbackTimer = window.setTimeout(() => {
-      if (this.frames === framesAtDial) this.scheduleReconnect()
+      if ((!GUEST_ACCESS || guestHas('screen.view')) && this.frames === framesAtDial) this.scheduleReconnect()
     }, 7000)
     pc.onicecandidate = (e) => {
       if (e.candidate && ws.readyState === 1)

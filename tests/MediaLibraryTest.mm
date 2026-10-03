@@ -213,6 +213,7 @@ int main(void) {
         write_file(@"DCIM/100APPLE/NEW.JPG", @"new capture");
         write_file(@"DCIM/100APPLE/UNINDEXED.MOV", @"new video");
         write_file(@"DCIM/100APPLE/ANIMATED.GIF", @"animated image");
+        write_image([kRoot stringByAppendingPathComponent:@"DCIM/100APPLE/IMG_0001.JPG"],128,96,0.8);
         NSString *outside = [kWork stringByAppendingPathComponent:@"outside/ESCAPE.JPG"];
         [files createDirectoryAtPath:outside.stringByDeletingLastPathComponent
           withIntermediateDirectories:YES attributes:nil error:nil];
@@ -293,6 +294,12 @@ int main(void) {
         NSDictionary *asset = request(@"/v1/media_asset",
                                       [NSString stringWithFormat:@"id=%@", first[@"id"]], 200);
         require([asset[@"id"] isEqual:first[@"id"]], @"opaque asset lookup failed");
+        int guestFD=rctl_media_guest_open([first[@"id"] UTF8String],"original");
+        require(guestFD>=0,@"admitted guest original was unavailable");close(guestFD);
+        guestFD=rctl_media_guest_open([live[@"id"] UTF8String],"preview");
+        require(guestFD>=0,@"admitted guest preview was unavailable");close(guestFD);
+        require(rctl_media_guest_open("../../private","original")==-1,@"guest path became an asset id");
+        require(rctl_media_guest_open([first[@"id"] UTF8String],"../../original")==-1,@"unknown rendition was admitted");
         request(@"/v1/media_asset", @"id=ffffffffffffffff", 404);
         int unrelatedStatus = 200;
         int unrelatedLength = 0;

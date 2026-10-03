@@ -97,7 +97,7 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	if role == "" {
 		role = "screen"
 	}
-	if role != "screen" && role != "camera" {
+	if role != "screen" && role != "camera" && role != "operations" {
 		writeErr(w, http.StatusBadRequest, "invalid_media_role")
 		return
 	}
@@ -109,7 +109,7 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	guest, isGuest := guestFromContext(r.Context())
 	deviceID := r.PathValue("id")
 	if isGuest {
-		if role != "screen" || !guestHas(guest, "screen.view") {
+		if (role == "screen" && !guestHas(guest, "screen.view")) || (role == "camera" && !guestHas(guest, "camera.live")) {
 			writeErr(w, 403, "insufficient_permission")
 			return
 		}
@@ -119,6 +119,10 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if role == "operations" && !isGuest {
+		writeErr(w, 403, "insufficient_permission")
+		return
+	}
 	dc := s.getDevice(deviceID)
 	if dc == nil {
 		writeErr(w, http.StatusNotFound, "device_offline")
@@ -126,7 +130,7 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Validate the selected transport, not only an earlier availability lookup:
 	// a device connection may be replaced during an upgrade or downgrade.
-	if isGuest && !hasFeature(dc.features, guestCapability) {
+	if isGuest && (!hasFeature(dc.features, guestCapability) || ((role != "screen" || guestRequiresOperations(guest.Permissions)) && !hasFeature(dc.features, "guest.operations_v1"))) {
 		writeErr(w, http.StatusConflict, "device_guest_access_not_supported")
 		return
 	}

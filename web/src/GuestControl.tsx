@@ -3,10 +3,19 @@ import { ControlEngine, codeToUsage } from './lib/engine'
 import { GUEST_ACCESS, guestHas, guestButtonHas, type GuestAccess } from './lib/rctl'
 import { GUEST_PERMISSIONS } from './lib/guestPermissions.generated'
 import './guest.css'
+import GuestWorkspace from './components/GuestWorkspace'
+import { GuestOperations } from './lib/guestOperations'
+import { AudioPlayer } from './lib/audio'
+import { MicTalk } from './lib/mic'
 
 // This entry point does not mount owner panels or their privileged API effects.
 export default function GuestControl() {
   const access = GUEST_ACCESS!
+  const [operations] = useState(() => new GuestOperations())
+  const [audio] = useState(() => new AudioPlayer())
+  const [microphone] = useState(() => new AudioPlayer(2))
+  const [talk] = useState(() => new MicTalk())
+  const [toolsReady, setToolsReady] = useState(false)
   const stage = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const video = useRef<HTMLVideoElement>(null)
@@ -25,10 +34,15 @@ export default function GuestControl() {
     const touches = new Map<number, { finger: number; x: number; y: number }>()
     let stopped = false
     const control = new ControlEngine(stage.current!, canvas.current!, video.current!, {
+      onGuestOperations: (channel) => operations.attach(channel),
+      onAudioChannel: (channel) => audio.attach(channel),
+      onRoomMicChannel: (channel) => microphone.attach(channel),
+      onMicChannel: (channel) => talk.attach(channel),
       onStatus: (text) => setStatus(text || 'Connected'),
       onEnded: () => end(),
       onInputBlocked: () => { setInputBlocked(true); setKeyboard(false) },
     })
+    operations.onReady = setToolsReady
     engine.current = control
     const end = () => {
       if (stopped) return
@@ -36,6 +50,7 @@ export default function GuestControl() {
       abort.abort()
       clearTimeout(deadline)
       clearInterval(clock)
+      operations.stop(); audio.dispose(); microphone.dispose(); talk.dispose()
       control.stop()
       setEnded(true)
       setKeyboard(false)
@@ -100,7 +115,7 @@ export default function GuestControl() {
       stopped = true
       abort.abort()
       clearTimeout(deadline); clearInterval(clock)
-      release(); control.stop()
+      release(); operations.stop(); audio.mute(); microphone.mute(); talk.stop(); control.stop()
       surface.removeEventListener('pointerdown', down)
       surface.removeEventListener('pointermove', move)
       surface.removeEventListener('pointerup', up)
@@ -109,9 +124,10 @@ export default function GuestControl() {
       window.removeEventListener('blur', release)
       document.removeEventListener('visibilitychange', visibility)
       if (engine.current === control) engine.current = null
+      window.setTimeout(() => { if (!engine.current) { audio.dispose(); microphone.dispose(); talk.dispose() } }, 0)
       if (endSession.current === end) endSession.current = null
     }
-  }, [access])
+  }, [access, operations, audio, microphone, talk])
 
   useEffect(() => {
     if (!keyboard || ended || !guestHas('input.keyboard')) return
@@ -150,17 +166,17 @@ export default function GuestControl() {
     finally { clearTimeout(timeout); setLeaving(false) }
   }
   const seconds = Math.max(0, Math.ceil((access.expires_at * 1000 - now) / 1000))
-  return <main className="guest-control">
+  return <main className={`guest-control${guestHas('screen.view')?'':' guest-tools-only'}`}>
     <div ref={stage} className="guest-stage" aria-label="Device screen" tabIndex={guestHas('input.keyboard') ? 0 : undefined} style={{ touchAction: guestHas('input.touch') ? 'none' : 'auto' }}>
       <canvas ref={canvas} /><video ref={video} />
     </div>
     <aside className="guest-toolbar" aria-label="Temporary device access">
       <div><strong>{access.label}</strong><span role="status">{status} · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')} remaining</span></div>
-      <details><summary>{access.permissions.length > 1 ? 'Permitted actions' : 'View only'} · {access.permissions.length}</summary>
+      <details><summary>{access.permissions.length === 1 && guestHas('screen.view') ? 'View only' : 'Permitted actions'} · {access.permissions.length}</summary>
         <ul>{GUEST_PERMISSIONS.filter((p) => access.permissions.includes(p.id)).map((p) => <li key={p.id}>{p.label}</li>)}</ul>
       </details>
       {!ended && <div className="guest-actions">
-        <button onClick={() => engine.current?.rotate()}>Rotate view</button>
+        {guestHas('screen.view') && <button onClick={() => engine.current?.rotate()}>Rotate view</button>}
         {!inputBlocked && guestHas('input.keyboard') && <><button aria-pressed={keyboard} onClick={() => {
           setKeyboard(!keyboard)
           if (!keyboard) stage.current?.focus()
@@ -168,6 +184,7 @@ export default function GuestControl() {
         {!inputBlocked && <>{(['home', 'lock', 'volup', 'voldn'] as const).filter(guestButtonHas).map((key) => <button key={key} onClick={() => engine.current?.sysPress(key)}>{({ home: 'Home', lock: 'Lock', volup: 'Volume +', voldn: 'Volume −' })[key]}</button>)}
           {guestHas('input.button.system_ui') && <><button onClick={() => engine.current?.springboard(1)}>Control Center</button><button onClick={() => engine.current?.springboard(2)}>Notifications</button></>}</>}
       </div>}
+      {!ended && access.permissions.some(right => !['screen.view','input.touch','input.keyboard','input.button.home','input.button.lock','input.button.volume','input.button.system_ui'].includes(right)) && <GuestWorkspace engine={engine} operations={operations} ready={toolsReady} audio={audio} microphone={microphone} talk={talk} />}
       {ended && <p>The connection is closed. To continue with current permissions, <a href="/guest/control">connect again</a>.</p>}
       <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>
       {error && <p role="alert">{error}</p>}
