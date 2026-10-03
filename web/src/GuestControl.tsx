@@ -39,12 +39,12 @@ export default function GuestControl() {
       onRoomMicChannel: (channel) => microphone.attach(channel),
       onMicChannel: (channel) => talk.attach(channel),
       onStatus: (text) => setStatus(text || 'Connected'),
-      onEnded: () => end(),
+      onEnded: (reason) => end(reason),
       onInputBlocked: () => { setInputBlocked(true); setKeyboard(false) },
     })
     operations.onReady = setToolsReady
     engine.current = control
-    const end = () => {
+    const end = (reason?: string) => {
       if (stopped) return
       stopped = true
       abort.abort()
@@ -55,6 +55,7 @@ export default function GuestControl() {
       setEnded(true)
       setKeyboard(false)
       setStatus('Session disconnected')
+      if (reason) setError(reason)
     }
     const release = () => {
       for (const usage of held) control.key(usage, 0)

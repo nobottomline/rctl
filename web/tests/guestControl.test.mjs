@@ -7,7 +7,7 @@ let generation = 0
 const moduleURL = (source) => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
 
 async function environment(t, permissions = ['screen.view'], supported = true) {
-  const events = [], peers = [], sockets = []
+  const events = [], peers = [], sockets = [], reasons = []
   class Peer {
     constructor(config) { this.config = config; peers.push(this) }
     close() { events.push('peer-close') }
@@ -39,9 +39,9 @@ async function environment(t, permissions = ['screen.view'], supported = true) {
   const video = { style: {}, srcObject: { privatePixels: true }, pause() { events.push('pause') },
     removeAttribute() {}, load() { events.push('video-clear') } }
   const canvas = { style: {}, width: 10, height: 10, getContext: () => ({ clearRect() { events.push('canvas-clear') } }) }
-  const engine = new ControlEngine({}, canvas, video, { onEnded: () => events.push('ended') })
+  const engine = new ControlEngine({}, canvas, video, { onEnded: (reason) => { events.push('ended'); reasons.push(reason) } })
   t.after(() => engine.stop())
-  return { engine, routes, events, peers, sockets, video }
+  return { engine, routes, events, peers, sockets, video, reasons }
 }
 
 test('guest startup preserves relay-only ICE when ready supplies TURN and requests no owner APIs', async t => {
@@ -56,13 +56,22 @@ test('guest startup preserves relay-only ICE when ready supplies TURN and reques
 test('guest socket loss clears pixels, closes the peer and never starts an HTTP fallback', async t => {
   const { engine, peers, sockets, video, events } = await environment(t)
   engine.start()
-  sockets[0].onclose()
+  sockets[0].onclose({ code: 1000 })
   assert.equal(video.srcObject, null)
   assert.ok(events.includes('canvas-clear') && events.includes('peer-close') && events.includes('ended'))
   engine.scheduleReconnect()
   assert.equal(peers.length, 1)
   assert.equal(sockets.length, 1)
   peers[0].ontrack({ streams: [{ latePrivatePixels: true }] })
+  assert.equal(video.srcObject, null)
+})
+
+test('guest teardown retains a safe transport failure reason without signaling payloads', async t => {
+  const { engine, peers, reasons, video } = await environment(t)
+  engine.start()
+  peers[0].connectionState = 'failed'
+  peers[0].onconnectionstatechange()
+  assert.deepEqual(reasons, ['The WebRTC connection failed.'])
   assert.equal(video.srcObject, null)
 })
 

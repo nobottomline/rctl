@@ -72,7 +72,7 @@ export type DiagStats = {
 
 export type EngineCallbacks = {
   onStatus?: (text: string) => void
-  onEnded?: () => void
+  onEnded?: (reason?: string) => void
   onInputBlocked?: () => void
   onFrame?: () => void
   onOrient?: (o: number, manual: boolean) => void
@@ -143,7 +143,7 @@ export class ControlEngine {
 
   // ---- lifecycle ----------------------------------------------------------
   start() {
-    if (GUEST_ACCESS && !WEBRTC_MODE) { this.endGuest(); return }
+    if (GUEST_ACCESS && !WEBRTC_MODE) { this.endGuest('This browser cannot establish the required WebRTC connection.'); return }
     if (WEBRTC_MODE) {
       this.startWebRTC(signalWS(GUEST_ACCESS && !guestHas('screen.view') ? 'operations' : 'screen'))
     } else if (RELAY_MODE) {
@@ -208,8 +208,8 @@ export class ControlEngine {
   // reload after the daemon was briefly busy (e.g. a second viewer churning). On
   // the relay path, after a few WebRTC misses we drop to the stream tunnel; the
   // local path has no usable stream fallback, so it keeps re-dialing.
-  private scheduleReconnect() {
-    if (GUEST_ACCESS) { this.endGuest(); return }
+  private scheduleReconnect(reason = 'The device connection was lost.') {
+    if (GUEST_ACCESS) { this.endGuest(reason); return }
     if (this.stopped || this.fellBack || this.reconnectTimer) return
     if (this.rtcFallbackTimer) {
       clearTimeout(this.rtcFallbackTimer)
@@ -245,11 +245,11 @@ export class ControlEngine {
     }, backoff)
   }
 
-  private endGuest() {
+  private endGuest(reason?: string) {
     if (this.stopped) return
     this.stop()
     this.status('Session disconnected')
-    this.cb.onEnded?.()
+    this.cb.onEnded?.(reason)
   }
 
   stop() {
@@ -885,7 +885,7 @@ export class ControlEngine {
           (ch.label === 'audio' && guestHas('audio.playback.listen')) ||
           (ch.label === 'room-mic' && guestHas('audio.microphone.listen')) ||
           (ch.label === 'mic-in' && (guestHas('talk.speaker') || guestHas('talk.virtual_microphone')))
-        if (!permitted) { ch.close(); this.endGuest(); return }
+        if (!permitted) { ch.close(); this.endGuest('The device opened an unexpected channel. Access was closed.'); return }
       }
       if (ch.label === 'guest-operations') {
         this.cb.onGuestOperations?.(ch)
@@ -929,7 +929,7 @@ export class ControlEngine {
       if (this.stopped || this.pc !== pc) return
       const st = pc.connectionState
       if (st === 'failed') {
-        this.scheduleReconnect()
+        this.scheduleReconnect('The WebRTC connection failed.')
       } else if (st === 'disconnected') {
         // A 'disconnected' is often a transient blip that recovers on its own;
         // only re-dial if it hasn't healed within a short grace.
@@ -937,7 +937,7 @@ export class ControlEngine {
           this.disconnectGrace = window.setTimeout(() => {
             this.disconnectGrace = 0
             if (this.pc === pc && (pc.connectionState === 'disconnected' || pc.connectionState === 'failed'))
-              this.scheduleReconnect()
+              this.scheduleReconnect('The WebRTC connection did not recover.')
           }, 4000)
       } else if (st === 'connected') {
         if (GUEST_ACCESS && !guestHas('screen.view')) this.status('Connected')
@@ -956,7 +956,7 @@ export class ControlEngine {
     // signaling but never delivers a new frame.
     const framesAtDial = this.frames
     this.rtcFallbackTimer = window.setTimeout(() => {
-      if ((!GUEST_ACCESS || guestHas('screen.view')) && this.frames === framesAtDial) this.scheduleReconnect()
+      if ((!GUEST_ACCESS || guestHas('screen.view')) && this.frames === framesAtDial) this.scheduleReconnect('The device did not deliver a screen frame.')
     }, 7000)
     pc.onicecandidate = (e) => {
       // An empty candidate marks the end of gathering, not a routable ICE
@@ -1018,7 +1018,7 @@ export class ControlEngine {
     }
     ws.onerror = () => { if (!this.stopped) this.status('signal err') }
     if (GUEST_ACCESS) {
-      ws.onclose = () => this.endGuest()
+      ws.onclose = (event) => this.endGuest(`The signaling connection closed (${event.code}).`)
       return // Guests receive orientation through their authorized state channel.
     }
 
