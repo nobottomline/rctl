@@ -113,7 +113,7 @@ export class CameraTransport {
       this.callbacks.onState?.('live')
     }
     pc.onicecandidate = (event) => {
-      if (event.candidate && ws.readyState === WebSocket.OPEN)
+      if (event.candidate?.candidate && generation === this.generation && this.pc === pc && ws.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify({
           kind: 'candidate',
           payload: { candidate: event.candidate.candidate, mid: event.candidate.sdpMid || '0' },

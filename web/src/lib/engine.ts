@@ -959,7 +959,9 @@ export class ControlEngine {
       if ((!GUEST_ACCESS || guestHas('screen.view')) && this.frames === framesAtDial) this.scheduleReconnect()
     }, 7000)
     pc.onicecandidate = (e) => {
-      if (e.candidate && ws.readyState === 1)
+      // An empty candidate marks the end of gathering, not a routable ICE
+      // candidate. Our signaling contract carries candidates only.
+      if (e.candidate?.candidate && !this.stopped && this.pc === pc && ws.readyState === 1)
         ws.send(JSON.stringify({
           kind: 'candidate',
           payload: { candidate: e.candidate.candidate, mid: e.candidate.sdpMid || '0' },

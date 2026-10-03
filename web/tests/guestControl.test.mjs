@@ -17,6 +17,7 @@ async function environment(t, permissions = ['screen.view'], supported = true) {
     static OPEN = 1
     readyState = 1
     constructor(url) { this.url = url; sockets.push(this) }
+    send(value) { events.push(['signal', JSON.parse(value)]) }
     close() { events.push('socket-close') }
   }
   const window = { setTimeout, setInterval, RCTL_WEBRTC: 1,
@@ -63,6 +64,22 @@ test('guest socket loss clears pixels, closes the peer and never starts an HTTP 
   assert.equal(sockets.length, 1)
   peers[0].ontrack({ streams: [{ latePrivatePixels: true }] })
   assert.equal(video.srcObject, null)
+})
+
+test('ICE completion and stale candidate callbacks never send invalid signaling', async t => {
+  const { engine, peers, events } = await environment(t)
+  engine.start()
+  const candidate = peers[0].onicecandidate
+  candidate({ candidate: null })
+  candidate({ candidate: { candidate: '', sdpMid: null } })
+  assert.equal(events.filter(event => Array.isArray(event)).length, 0)
+  candidate({ candidate: { candidate: 'candidate:fixture', sdpMid: 'video' } })
+  assert.deepEqual(events.filter(event => Array.isArray(event)), [['signal', {
+    kind: 'candidate', payload: { candidate: 'candidate:fixture', mid: 'video' },
+  }]])
+  engine.stop()
+  candidate({ candidate: { candidate: 'candidate:late', sdpMid: 'video' } })
+  assert.equal(events.filter(event => Array.isArray(event)).length, 1)
 })
 
 test('unsupported guest WebRTC ends access without legacy streaming', async t => {
