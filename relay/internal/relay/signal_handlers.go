@@ -289,6 +289,13 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// ICE negotiation can be the browser's last application message for hours.
+	// Keep the revocation transport alive through idle network intermediaries;
+	// native authorization challenges are deliberately not sent to the browser.
+	// Ping waits must never block grant cancellation or device-event forwarding.
+	heartbeatContext, stopHeartbeat := context.WithCancel(sessionContext)
+	defer stopHeartbeat()
+	heartbeatDone := signalHeartbeat(heartbeatContext, ws, s.cfg.HeartbeatEvery, s.cfg.WriteTimeout)
 	for {
 		select {
 		case event, ok := <-eventCh:
@@ -338,6 +345,9 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-readDone:
 			return
+		case <-heartbeatDone:
+			_ = ws.CloseNow()
+			return
 		case <-sessionContext.Done():
 			if isGuest {
 				// Do not wait for a peer to cooperate with a closing handshake before
@@ -349,6 +359,37 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func signalHeartbeat(ctx context.Context, ws *websocket.Conn, interval, timeout time.Duration) <-chan struct{} {
+	if interval <= 0 {
+		return nil // Preserve the operator's explicit heartbeat-disable setting.
+	}
+	interval = min(interval, 25*time.Second)
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	timeout = min(timeout, 10*time.Second)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pingContext, cancel := context.WithTimeout(ctx, timeout)
+				err := ws.Ping(pingContext)
+				cancel()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return done
 }
 
 type authorizationChallenge struct {

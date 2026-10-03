@@ -10,7 +10,72 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	"nhooyr.io/websocket"
 )
+
+func TestSignalHeartbeatLifecycle(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		readClient       bool
+		cancelDuringPing bool
+	}{
+		{name: "idle peer responds without application messages", readClient: true},
+		{name: "unresponsive peer ends the transport"},
+		{name: "revoke cancels an in-flight ping", cancelDuringPing: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			started := make(chan (<-chan struct{}), 1)
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ws, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer ws.CloseNow()
+				go func() { _, _, _ = ws.Read(ctx) }()
+				timeout := 100 * time.Millisecond
+				if test.cancelDuringPing {
+					timeout = 10 * time.Second
+				}
+				done := signalHeartbeat(ctx, ws, 10*time.Millisecond, timeout)
+				started <- done
+				<-done
+			}))
+			defer ts.Close()
+			dialCtx, stopDial := context.WithTimeout(ctx, time.Second)
+			defer stopDial()
+			client, _, err := websocket.Dial(dialCtx, ts.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.CloseNow()
+			done := <-started
+			if test.readClient {
+				// Reading handles protocol ping/pong automatically; the client
+				// never sends an SDP, candidate, heartbeat JSON or grant renewal.
+				go func() { _, _, _ = client.Read(ctx) }()
+				select {
+				case <-done:
+					t.Fatal("responsive idle transport ended")
+				case <-time.After(250 * time.Millisecond):
+				}
+				cancel()
+			} else if test.cancelDuringPing {
+				time.Sleep(30 * time.Millisecond)
+				cancel()
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("heartbeat did not stop promptly")
+			}
+		})
+	}
+	if signalHeartbeat(context.Background(), nil, 0, 0) != nil {
+		t.Fatal("explicitly disabled heartbeat started work")
+	}
+}
 
 func TestControllerSignalScopes(t *testing.T) {
 	principal := controllerPrincipal{
