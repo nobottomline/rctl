@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 #include <vector>
 #include <string>
@@ -8,6 +9,11 @@ namespace rctl {
 
 struct WebRTCPermissions {
     bool scoped = false;
+    bool guest = false;
+    bool inputTouch = false;
+    bool inputKeyboard = false;
+    bool inputButtons = false;
+    uint32_t buttonMask = 0;
     bool screenView = false;
     bool camera = false;
     bool audioListen = false;
@@ -18,6 +24,7 @@ struct WebRTCPermissions {
 };
 
 WebRTCPermissions legacyWebRTCPermissions();
+bool guestWebRTCPermissions(const std::vector<std::string> &permissions, WebRTCPermissions &result);
 WebRTCPermissions scopedWebRTCPermissions(const std::vector<std::string> &scopes);
 bool webRTCFilesMessageAllowed(const WebRTCPermissions &permissions,
                                bool binary,

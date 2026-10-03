@@ -28,9 +28,10 @@ struct ControllerAuthorizationLease {
         return !expired(now) && nonce.empty() && (!confirmed || now >= issuedAt + renewalInterval);
     }
     void challenge(std::string value, double now) { nonce = std::move(value); issuedAt = now; }
-    bool renew(int64_t grantedRevision, const std::string &reply, double now) {
-        if (expired(now) || nonce.empty() || reply != nonce || grantedRevision != revision || now >= issuedAt + lifetime) return false;
-        expiresAt = issuedAt + lifetime;
+    bool renew(int64_t grantedRevision, const std::string &reply, double now, double remaining = lifetime) {
+        if (remaining <= 0 || remaining > lifetime || expired(now) || nonce.empty() || reply != nonce || grantedRevision != revision || now >= issuedAt + lifetime) return false;
+        expiresAt = issuedAt + remaining;
+        if (now >= expiresAt) return false;
         nonce.clear();
         confirmed = true;
         return true;

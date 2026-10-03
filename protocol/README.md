@@ -29,6 +29,14 @@ not a shipped authentication protocol.
 `controller-lifecycle-v1.md` defines signed controller self-revocation and
 foreground presence, independently of device enrollment and authorization status.
 
+`guest-permissions.json` owns the currently implemented browser guest vocabulary.
+The generator emits identifiers for Go, C++ and both browser clients. These are
+generated source contracts, not a shared authorization runtime. Unknown entries
+fail closed; adding an entry requires device message validation, UI, lifecycle
+and negative tests. Guest permissions are independent of native controller v1
+scopes. See [temporary browser access](../docs/GUEST-ACCESS.md) for the target
+vocabulary, staged rollout and qualification gates.
+
 Within one protocol major, receivers ignore unknown object fields so a newer
 minor can add metadata. Unknown message kinds and operations remain invalid and
 must fail locally without invoking device behavior.

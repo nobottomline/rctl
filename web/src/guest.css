@@ -1,0 +1,16 @@
+.guest-control { position: fixed; inset: 0; color: #e7eaf0; background: #000; font: 14px system-ui, sans-serif; }
+.guest-stage { position: absolute; inset: 0; overflow: hidden; }
+.guest-stage canvas, .guest-stage video { position: absolute; pointer-events: none; }
+.guest-toolbar { position: absolute; z-index: 20; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left)); max-width: min(360px, calc(100vw - 24px)); max-height: calc(100svh - 24px); overflow: auto; background: #11151cf0; border: 1px solid #303845; border-radius: 14px; padding: 14px; box-shadow: 0 8px 30px #0008; }
+.guest-toolbar strong { display: block; font-size: 16px; overflow-wrap: anywhere; }
+.guest-toolbar span { display: block; color: #a9b5c8; margin: 5px 0 10px; }
+.guest-toolbar details { margin: 10px 0; }
+.guest-toolbar summary { cursor: pointer; }
+.guest-toolbar ul { padding-left: 20px; margin: 8px 0; }
+.guest-toolbar p { margin: 10px 0; line-height: 1.5; }
+.guest-toolbar a { color: #b4dc78; text-decoration: underline; }
+.guest-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.guest-toolbar button { min-height: 40px; padding: 8px 12px; background: #242c38; border: 1px solid #445064; border-radius: 8px; color: inherit; cursor: pointer; }
+.guest-toolbar button[aria-pressed="true"] { background: #3b572c; }
+.guest-toolbar button:disabled { opacity: .5; cursor: default; }
+.guest-toolbar button:focus-visible, .guest-toolbar a:focus-visible, .guest-toolbar summary:focus-visible { outline: 2px solid #b4dc78; outline-offset: 3px; }

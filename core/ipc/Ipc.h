@@ -32,6 +32,8 @@ enum {
     RCTL_MSG_ACTIVE = 0x1A,  // daemon->SB: [1B screen capture][1B keep-awake]; legacy 1B sets both
     RCTL_MSG_FX     = 0x1B,  // daemon->SB: [1B subtype][data] fun FX (1=say,2=sound,3=flash,4=banner)
     RCTL_MSG_BITRATE= 0x1C,  // daemon->SB: int32 live encode bitrate (no session restart)
+    RCTL_MSG_GUEST_INPUT=0x1E, // daemon->SB: bounded session-owned input
+    RCTL_MSG_GUEST_END=0x1F, // daemon->SB: owner id; retires queued input
     RCTL_MSG_KEYFRAME=0x1D,  // daemon->SB: force the next encoded frame to an IDR
 };
 
@@ -45,12 +47,14 @@ enum {
     RCTL_Q_MEDIA_DELETE = 6,
     RCTL_Q_ORIENTATION = 7, // 1B: 255=status, 0=automatic, 1..4=locked interface orientation
     RCTL_Q_GAME_KEYBOARD = 8, // bounded JSON lease acquisition/state/release
+    RCTL_Q_GUEST_END = 10, // owner id; replies after held input is released
     RCTL_Q_GAME_POINTER = 9, // relative mouse movement and leased button state
 };
 
 #pragma pack(push, 1)
 typedef struct { int32_t phase; int32_t finger; double x; double y; } rctl_ipc_input;
 typedef struct { int32_t page;  int32_t usage;  int32_t down;        } rctl_ipc_key;
+typedef struct { char owner[64]; double deadline; int32_t kind, a, b, c; double x, y; } rctl_ipc_guest_input;
 typedef struct { int32_t fps;   double  scale;  int32_t bitrate;     } rctl_ipc_config;
 #pragma pack(pop)
 

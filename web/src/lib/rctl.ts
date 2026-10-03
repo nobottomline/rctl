@@ -5,17 +5,38 @@
 // The vanilla page monkey-patched window.fetch to rewrite paths; here it's an
 // explicit api()/wsURL() wrapper instead -- same behavior, no global patching.
 
+import type { GuestPermission } from './guestPermissions.generated'
+
+export interface GuestAccess {
+  session_id: string
+  grant_id: string
+  label: string
+  permissions: GuestPermission[]
+  authorization_revision: number
+  expires_at: number
+  allow_direct: boolean
+}
+
 const w = window as unknown as Record<string, unknown>
 
 export const PROXY_BASE = String(w.RCTL_PROXY_BASE || '').replace(/\/$/, '')
 export const STREAM_BASE = String(w.RCTL_STREAM_BASE || '').replace(/\/$/, '')
 export const TERM_WS_BASE = String(w.RCTL_TERM_WS_BASE || '').replace(/\/$/, '')
 export const DEVICE_ID = String(w.RCTL_RELAY_DEVICE_ID || '')
-export const RELAY_MODE = !!(PROXY_BASE || STREAM_BASE)
+export const GUEST_ACCESS = (w.RCTL_GUEST_BOOTSTRAP as GuestAccess | undefined) ?? null
+export const guestHas = (permission: GuestPermission) => !!GUEST_ACCESS?.permissions.includes(permission)
+export function guestButtonHas(name: string): boolean {
+  if (name === 'home') return guestHas('input.button.home')
+  if (name === 'lock') return guestHas('input.button.lock')
+  if (name === 'volup' || name === 'voldn') return guestHas('input.button.volume')
+  return false
+}
+export const RELAY_MODE = !!(GUEST_ACCESS || PROXY_BASE || STREAM_BASE)
 export const WEBRTC_MODE = RELAY_MODE && !!w.RCTL_WEBRTC && 'RTCPeerConnection' in window
 
 // Map an rctld path to the relay proxy when in relay mode (identity locally).
 export function rctlPath(path: string): string {
+  if (GUEST_ACCESS) throw new Error('This operation is unavailable in guest access')
   if (!RELAY_MODE || typeof path !== 'string' || path[0] !== '/') return path
   if (path === '/stream' || path.startsWith('/stream?')) {
     return STREAM_BASE ? STREAM_BASE + '/stream' + path.slice('/stream'.length) : path
@@ -25,6 +46,7 @@ export function rctlPath(path: string): string {
 }
 
 export function fileDownloadURL(path: string): string {
+  if (GUEST_ACCESS) throw new Error('This operation is unavailable in guest access')
   const endpoint = `/v1/pull_stream?path=${encodeURIComponent(path)}`
   return RELAY_MODE && STREAM_BASE ? STREAM_BASE + endpoint : endpoint
 }
@@ -92,6 +114,7 @@ export function apiDo(path: string, init?: RequestInit): void {
 // routes, not rctld paths, so they don't go through rctlPath).
 export function signalWS(media: 'screen' | 'camera' = 'screen'): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  if (GUEST_ACCESS) return `${proto}://${location.host}/api/guest/signal${media === 'camera' ? '?media=camera' : ''}`
   const suffix = media === 'camera' ? '?media=camera' : ''
   return `${proto}://${location.host}/signal/devices/${DEVICE_ID}${suffix}`
 }
@@ -100,6 +123,7 @@ export function signalWS(media: 'screen' | 'camera' = 'screen'): string {
 // the injected /term/devices/{id}; locally empty -> rctld's own /ws/term.
 export function termWS(cols: number, rows: number): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  if (GUEST_ACCESS) throw new Error('This operation is unavailable in guest access')
   const path = TERM_WS_BASE || '/ws/term'
   return `${proto}://${location.host}${path}?cols=${cols}&rows=${rows}`
 }

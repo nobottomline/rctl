@@ -318,6 +318,11 @@ static void do_touch(int finger, int phase, double nx, double ny) {
     else           do_touch_springboard(phase, nx, ny);
 }
 
+void rctl_input_touch_now(int finger, double nx, double ny, int phase) {
+    ensure_init();
+    do_touch(finger, phase, nx, ny);
+}
+
 void rctl_input_touch(int finger, double nx, double ny, int phase) {
     ensure_init();
     if (nx < 0) nx = 0; if (nx > 1) nx = 1;
@@ -369,6 +374,12 @@ static void post_key(int page, int usage, int down) {
 
 // down: 0=release, 1=press, 2=tap (press+release atomically, in order — used for
 // regular keys so a lost/late release can't cause auto-repeat duplicates).
+void rctl_input_key_now(int page, int usage, int down) {
+    ensure_init();
+    if (down == 2) { post_key(page, usage, 1); post_key(page, usage, 0); }
+    else post_key(page, usage, down);
+}
+
 void rctl_input_key(int page, int usage, int down) {
     ensure_init();
     dispatch_async(dispatch_get_main_queue(), ^{

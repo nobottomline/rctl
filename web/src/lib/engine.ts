@@ -8,7 +8,7 @@
 // /stream WebCodecs fallback path. Audio playback and the files DataChannel are
 // exposed via callbacks so those layers attach on top.
 
-import { WEBRTC_MODE, RELAY_MODE, api, signalWS } from './rctl'
+import { WEBRTC_MODE, RELAY_MODE, GUEST_ACCESS, guestHas, guestButtonHas, api, signalWS } from './rctl'
 
 // UIInterfaceOrientation -> CSS rotation (deg) that makes content upright.
 const DEG: Record<number, number> = { 1: 0, 2: 180, 3: -90, 4: 90 }
@@ -72,6 +72,8 @@ export type DiagStats = {
 
 export type EngineCallbacks = {
   onStatus?: (text: string) => void
+  onEnded?: () => void
+  onInputBlocked?: () => void
   onFrame?: () => void
   onOrient?: (o: number, manual: boolean) => void
   onControlChannel?: (ch: RTCDataChannel) => void
@@ -102,6 +104,7 @@ export class ControlEngine {
   private ws: WebSocket | null = null
   private orientTimer: number | undefined
   private stopped = false
+  private guestInputBlocked = false
   private statsPrev: { decoded: number; t: number } | null = null
   private rec: MacroEvent[] | null = null // input recording buffer (null = not recording)
   private recT0 = 0
@@ -139,6 +142,7 @@ export class ControlEngine {
 
   // ---- lifecycle ----------------------------------------------------------
   start() {
+    if (GUEST_ACCESS && !WEBRTC_MODE) { this.endGuest(); return }
     if (WEBRTC_MODE) {
       this.startWebRTC(signalWS())
     } else if (RELAY_MODE) {
@@ -167,6 +171,7 @@ export class ControlEngine {
   // Local WebRTC couldn't connect: fall back to the WebCodecs /stream path
   // (itself guarded if WebCodecs is unavailable). Idempotent.
   private fallbackToStream() {
+    if (GUEST_ACCESS) { this.endGuest(); return }
     if (this.fellBack) return
     this.fellBack = true
     if (this.rtcFallbackTimer) {
@@ -203,6 +208,7 @@ export class ControlEngine {
   // the relay path, after a few WebRTC misses we drop to the stream tunnel; the
   // local path has no usable stream fallback, so it keeps re-dialing.
   private scheduleReconnect() {
+    if (GUEST_ACCESS) { this.endGuest(); return }
     if (this.stopped || this.fellBack || this.reconnectTimer) return
     if (this.rtcFallbackTimer) {
       clearTimeout(this.rtcFallbackTimer)
@@ -238,9 +244,17 @@ export class ControlEngine {
     }, backoff)
   }
 
+  private endGuest() {
+    if (this.stopped) return
+    this.stop()
+    this.status('Session disconnected')
+    this.cb.onEnded?.()
+  }
+
   stop() {
     this.stopPlay()
     this.stopped = true
+    if (this.rtcFallbackTimer) clearTimeout(this.rtcFallbackTimer)
     if (this.orientTimer) clearInterval(this.orientTimer)
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     if (this.disconnectGrace) clearTimeout(this.disconnectGrace)
@@ -257,6 +271,14 @@ export class ControlEngine {
     if (this.rafId) cancelAnimationFrame(this.rafId)
     this.resetStream()
     this.control = null
+    this.inputQueue = []
+    if (GUEST_ACCESS) {
+      this.video.pause()
+      this.video.srcObject = null
+      this.video.removeAttribute('src')
+      this.video.load()
+      this.canvas.getContext('2d')?.clearRect(0, 0, this.canvas.width, this.canvas.height)
+    }
   }
 
   private status(t: string) {
@@ -340,15 +362,23 @@ export class ControlEngine {
   }
 
   // ---- input --------------------------------------------------------------
+  private guestInputReady() {
+    if (GUEST_ACCESS && this.control?.readyState === 'open' && this.control.bufferedAmount > 16384) {
+      this.endGuest()
+      return false
+    }
+    return true
+  }
   // Touch phase 0=down 1=move 2=up; finger 0..10.
   sendTouchAt(p: number, cx: number, cy: number, finger: number) {
     const [nx, ny] = this.clientToNorm(cx, cy)
-    this.sendTouchNorm(p, nx, ny, finger)
+    this.sendTouchNorm(p, GUEST_ACCESS ? Math.max(0, Math.min(1, nx)) : nx, GUEST_ACCESS ? Math.max(0, Math.min(1, ny)) : ny, finger)
   }
 
   // Send an already-normalized touch (the input map for live pointers, and the
   // replay path for recorded macros). Captures into the recording when active.
   private sendTouchNorm(p: number, nx: number, ny: number, finger: number) {
+    if (this.stopped || this.guestInputBlocked || (GUEST_ACCESS && !guestHas('input.touch')) || !this.guestInputReady()) return
     if (this.rec && !this.recPaused)
       this.rec.push({ t: performance.now() - this.recT0, k: 't', p, i: finger, x: +nx.toFixed(4), y: +ny.toFixed(4) })
     if (this.control && this.control.readyState === 'open') {
@@ -359,6 +389,7 @@ export class ControlEngine {
       }
       return
     }
+    if (GUEST_ACCESS) return
     this.queueInput({ p, f: finger, x: nx.toFixed(4), y: ny.toFixed(4) })
   }
 
@@ -387,6 +418,7 @@ export class ControlEngine {
   }
 
   key(usage: number, down: number) {
+    if (this.stopped || this.guestInputBlocked || (GUEST_ACCESS && !guestHas('input.keyboard')) || !this.guestInputReady()) return
     if (this.rec && !this.recPaused) this.rec.push({ t: performance.now() - this.recT0, k: 'k', u: usage, d: down })
     if (this.control && this.control.readyState === 'open') {
       try {
@@ -396,19 +428,23 @@ export class ControlEngine {
       }
       return
     }
+    if (GUEST_ACCESS) return
     api(`/key?p=7&u=${usage}&d=${down}`).catch(() => {})
   }
 
   // Hardware buttons (HID Consumer page 0x0C): a press+release tap.
   sysPress(name: string) {
+    if (this.stopped || this.guestInputBlocked || (GUEST_ACCESS && !guestButtonHas(name)) || !this.guestInputReady()) return
     const u = SYS[name]
     if (!u) return
     if (this.control && this.control.readyState === 'open') {
+      const channel = this.control
       try {
-        this.control.send(JSON.stringify({ t: 'k', pg: 12, u, d: 1 }))
+        channel.send(JSON.stringify({ t: 'k', pg: 12, u, d: 1 }))
         setTimeout(() => {
+          if (GUEST_ACCESS && (this.stopped || this.control !== channel || this.guestInputBlocked || !this.guestInputReady())) return
           try {
-            this.control?.send(JSON.stringify({ t: 'k', pg: 12, u, d: 0 }))
+            channel.send(JSON.stringify({ t: 'k', pg: 12, u, d: 0 }))
           } catch {
             /* ignore */
           }
@@ -418,19 +454,22 @@ export class ControlEngine {
       }
       return
     }
+    if (GUEST_ACCESS) return
     api(`/key?p=12&u=${u}&d=1`).then(() => setTimeout(() => api(`/key?p=12&u=${u}&d=0`).catch(() => {}), 70))
   }
 
   // SpringBoard actions (page 0xF0): 1=Control Center, 2=Cover Sheet.
   springboard(u: number) {
+    if (this.stopped || this.guestInputBlocked || (GUEST_ACCESS && !guestHas('input.button.system_ui')) || !this.guestInputReady()) return
     if (this.control && this.control.readyState === 'open') {
       try {
-        this.control.send(JSON.stringify({ t: 'k', pg: 240, u, d: 1 }))
+        this.control.send(JSON.stringify({ t: 'k', pg: 240, u, d: GUEST_ACCESS ? 2 : 1 }))
       } catch {
         /* ignore */
       }
       return
     }
+    if (GUEST_ACCESS) return
     api(`/key?p=240&u=${u}&d=1`).catch(() => {})
   }
 
@@ -500,6 +539,7 @@ export class ControlEngine {
   // Lets a weak viewer dial the stream down without touching other viewers'
   // clients — the device re-applies it to the single VTCompressionSession.
   setQuality(scale: number, fps: number, bitrate: number) {
+    if (GUEST_ACCESS) return
     api(`/config?scale=${scale}&fps=${fps}&bitrate=${bitrate}`).catch(() => {})
   }
 
@@ -793,12 +833,13 @@ export class ControlEngine {
     vid.muted = true
     vid.style.cssText = 'transform-origin:center center;pointer-events:none;background:#000'
 
-    const pc = new RTCPeerConnection({})
+    const pc = new RTCPeerConnection(GUEST_ACCESS && !GUEST_ACCESS.allow_direct ? { iceTransportPolicy: 'relay' } : {})
     this.pc = pc
     let remoteReady = false
     const pend: RTCIceCandidateInit[] = []
 
     pc.ontrack = (e) => {
+      if (this.stopped || this.pc !== pc) return
       vid.srcObject = e.streams[0] || new MediaStream([e.track])
       try {
         // Direct-LAN local sessions need a small playout buffer (~50ms) to ride out
@@ -814,6 +855,7 @@ export class ControlEngine {
       // Size the <video> to the stream's pixel size; applyOrient scales/rotates it
       // to fit (the canvas keeps the same width/height as the input-map reference).
       const fit = () => {
+        if (this.stopped || this.pc !== pc) return
         if (vid.videoWidth) {
           this.canvas.width = vid.videoWidth
           this.canvas.height = vid.videoHeight
@@ -834,8 +876,35 @@ export class ControlEngine {
     }
 
     pc.ondatachannel = (e) => {
+      if (this.stopped || this.pc !== pc) { e.channel.close(); return }
       const ch = e.channel
-      if (ch.label === 'control') {
+      if (GUEST_ACCESS && (ch.label !== 'state' &&
+          (ch.label !== 'control' || !GUEST_ACCESS.permissions.some((p) => p.startsWith('input.'))))) {
+        ch.close()
+        this.endGuest()
+        return
+      }
+      if (ch.label === 'state') {
+        ch.onmessage = (event) => {
+          if (this.stopped || this.pc !== pc) return
+          try {
+            const state = JSON.parse(event.data) as { orientation?: number; input_blocked?: boolean; input_busy?: boolean }
+            if (state.input_blocked) {
+              this.guestInputBlocked = true
+              this.cb.onInputBlocked?.()
+              this.status('Owner took control. Connect again to request input.')
+            }
+            if (state.input_busy === true) this.status('Input is in use by another session')
+            if (state.input_busy === false && !this.guestInputBlocked) this.status('Connected')
+            const o = state.orientation
+            if (typeof o === 'number' && o >= 1 && o <= 4 && o !== this.orient) {
+              this.orient = o
+              this.applyOrient()
+              this.cb.onOrient?.(o, false)
+            }
+          } catch { /* ignore malformed state */ }
+        }
+      } else if (ch.label === 'control') {
         this.control = ch
         this.cb.onControlChannel?.(ch)
       } else if (ch.label === 'pointer' || ch.label === 'pointer-motion') {
@@ -852,6 +921,7 @@ export class ControlEngine {
     }
 
     pc.onconnectionstatechange = () => {
+      if (this.stopped || this.pc !== pc) return
       const st = pc.connectionState
       if (st === 'failed') {
         this.scheduleReconnect()
@@ -890,6 +960,7 @@ export class ControlEngine {
         }))
     }
     ws.onmessage = async (ev) => {
+      if (this.stopped || this.pc !== pc) return
       let m: { kind?: string; payload?: unknown }
       try {
         m = JSON.parse(ev.data)
@@ -899,7 +970,8 @@ export class ControlEngine {
       if (m.kind === 'ready') {
         if (Array.isArray(m.payload) && m.payload.length) {
           try {
-            pc.setConfiguration({ iceServers: m.payload as RTCIceServer[] })
+            pc.setConfiguration({ iceServers: m.payload as RTCIceServer[],
+              ...(GUEST_ACCESS ? { iceTransportPolicy: GUEST_ACCESS.allow_direct ? 'all' as const : 'relay' as const } : {}) })
           } catch {
             /* ignore */
           }
@@ -908,6 +980,7 @@ export class ControlEngine {
         try {
           const p = m.payload as { sdp: string }
           await pc.setRemoteDescription({ type: 'offer', sdp: p.sdp })
+          if (this.stopped || this.pc !== pc) return
           remoteReady = true
           for (const c of pend.splice(0)) {
             try {
@@ -918,6 +991,7 @@ export class ControlEngine {
           }
           const a = await pc.createAnswer()
           await pc.setLocalDescription(a)
+          if (this.stopped || this.pc !== pc || ws.readyState !== WebSocket.OPEN) return
           ws.send(JSON.stringify({ kind: 'answer', payload: { sdp: pc.localDescription!.sdp } }))
         } catch {
           this.status('negotiate err')
@@ -934,7 +1008,11 @@ export class ControlEngine {
         } else pend.push(ic)
       }
     }
-    ws.onerror = () => this.status('signal err')
+    ws.onerror = () => { if (!this.stopped) this.status('signal err') }
+    if (GUEST_ACCESS) {
+      ws.onclose = () => this.endGuest()
+      return // Guests receive orientation through their authorized state channel.
+    }
 
     // Orientation: poll /orient (through the proxy) and re-apply on change.
     this.orientTimer = window.setInterval(async () => {

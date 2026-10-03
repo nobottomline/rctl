@@ -7,6 +7,9 @@ extern "C" {
 // Inject a touch. phase: 0 = down/begin, 1 = move, 2 = up/end.
 // (nx, ny) are normalized [0,1] in the framebuffer (panel-native) coordinate space.
 // `finger` distinguishes simultaneous touches (0..15).
+// Main-thread variants for authorization-checked, session-owned dispatch.
+void rctl_input_touch_now(int finger, double nx, double ny, int phase);
+void rctl_input_key_now(int page, int usage, int down);
 void rctl_input_touch(int finger, double nx, double ny, int phase);
 
 // Convenience: a quick tap (down then up) at a normalized point.

@@ -189,6 +189,22 @@ static char *sb_query(uint8_t qtype, const char *payload, uint32_t plen, double 
     return result;
 }
 
+static void on_guest_input(const char *owner, double deadline, int kind, int a, int b, int c, double x, double y) {
+    if (!owner || strlen(owner) >= 64) return;
+    rctl_ipc_guest_input input = {};
+    memcpy(input.owner, owner, strlen(owner));
+    input.deadline = deadline; input.kind = kind;
+    input.a = a; input.b = b; input.c = c; input.x = x; input.y = y;
+    send_to_sb(RCTL_MSG_GUEST_INPUT, &input, sizeof(input));
+}
+static bool on_guest_end(const char *owner, bool wait) {
+    if (!owner || strlen(owner) >= 64) return false;
+    if (!wait) { send_to_sb(RCTL_MSG_GUEST_END, owner, (uint32_t)strlen(owner)); return true; }
+    char *result = sb_query(RCTL_Q_GUEST_END, owner, (uint32_t)strlen(owner), 1.0);
+    bool confirmed = result && !strcmp(result, "ok");
+    free(result); return confirmed;
+}
+
 static char *delete_media_asset(const char *uuid) {
     if (!uuid) return NULL;
     return sb_query(RCTL_Q_MEDIA_DELETE, uuid, (uint32_t)strlen(uuid), 8.0);
@@ -197,6 +213,7 @@ static char *delete_media_asset(const char *uuid) {
 // Keep synchronous SB query waits off libdatachannel's callback threads. Bound
 // aggregate work as well as per-peer requests; never replay old queued motion.
 static void on_webrtc_pointer(const char *body, size_t len, rctl_pointer_reply reply, void *ctx) {
+    rctl_webrtc_owner_input_override();
     static std::atomic<unsigned> pending{0};
     static dispatch_queue_t queue;
     static dispatch_once_t once;
@@ -243,17 +260,23 @@ static void on_webrtc_pointer(const char *body, size_t len, rctl_pointer_reply r
 }
 
 static void on_input(void *ctx, int phase, int finger, double nx, double ny) {
+    rctl_webrtc_owner_input_event(0, phase, finger, 0);
     rctl_ipc_input m = { (int32_t)phase, (int32_t)finger, nx, ny };
     send_to_sb(RCTL_MSG_INPUT, &m, sizeof m);
 }
 
 static void on_key(void *ctx, int page, int usage, int down) {
+    rctl_webrtc_owner_input_event(1, page, usage, down);
     rctl_ipc_key m = { (int32_t)page, (int32_t)usage, (int32_t)down };
     send_to_sb(RCTL_MSG_KEY, &m, sizeof m);
 }
 // Adapters so the WebRTC control channel injects through the same path as /input.
-static void on_webrtc_touch(int phase, int finger, double x, double y) { on_input(NULL, phase, finger, x, y); }
-static void on_webrtc_key(int page, int usage, int down) { on_key(NULL, page, usage, down); }
+static void on_webrtc_touch(int phase, int finger, double x, double y) {
+    rctl_webrtc_owner_input_event(0, phase, finger, 0);    rctl_ipc_input m = { (int32_t)phase, (int32_t)finger, x, y }; send_to_sb(RCTL_MSG_INPUT, &m, sizeof m);
+}
+static void on_webrtc_key(int page, int usage, int down) {
+    rctl_webrtc_owner_input_event(1, page, usage, down);    rctl_ipc_key m = { (int32_t)page, (int32_t)usage, (int32_t)down }; send_to_sb(RCTL_MSG_KEY, &m, sizeof m);
+}
 
 // ---- File transfer over the WebRTC "files" DataChannel (P2P, bypasses the relay) ----
 // Wire format: JSON control strings + raw binary chunks. One transfer at a time.
@@ -356,9 +379,11 @@ static dispatch_queue_t gAuto;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((secs) * NSEC_PER_SEC)), gAuto, (blk))
 
 static void ipc_input(int phase, double x, double y) {
+    rctl_webrtc_owner_input_event(0, phase, 0, 0);
     rctl_ipc_input m = { (int32_t)phase, 0, x, y }; send_to_sb(RCTL_MSG_INPUT, &m, sizeof m);
 }
 static void ipc_key(int page, int usage, int down) {
+    rctl_webrtc_owner_input_event(1, page, usage, down);
     rctl_ipc_key m = { (int32_t)page, (int32_t)usage, (int32_t)down }; send_to_sb(RCTL_MSG_KEY, &m, sizeof m);
 }
 
@@ -942,7 +967,7 @@ static char *run_script(const char *body, int *status) {
         NSString *type = a[@"type"];
         if      ([type isEqual:@"wait"])  { t += [a[@"ms"] doubleValue] / 1000.0; }
         else if ([type isEqual:@"input"]) { rctl_ipc_input event = { [a[@"phase"] intValue], [a[@"id"] intValue], [a[@"x"] doubleValue], [a[@"y"] doubleValue] };
-                                            AFTER(t, ^{ send_to_sb(RCTL_MSG_INPUT, &event, sizeof event); }); }
+                                            AFTER(t, ^{ rctl_webrtc_owner_input_event(0, event.phase, event.finger, 0); send_to_sb(RCTL_MSG_INPUT, &event, sizeof event); }); }
         else if ([type isEqual:@"input_key"]) { int p = a[@"p"] ? [a[@"p"] intValue] : 7, u = [a[@"u"] intValue], dn = a[@"d"] ? [a[@"d"] intValue] : 2;
                                                 AFTER(t, ^{ ipc_key(p, u, dn); }); }
         else if ([type isEqual:@"tap"])   { schedule_tap([a[@"x"] doubleValue], [a[@"y"] doubleValue], t); t += 0.12; }
@@ -1535,6 +1560,7 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         if (!body || body_len <= 0 || body_len > 2048) {
             *status = 400; return strdup("{\"error\":\"invalid_keyboard_request\"}");
         }
+        rctl_webrtc_owner_input_override();
         char *result = sb_query(RCTL_Q_GAME_KEYBOARD, body, (uint32_t)body_len, 1.0);
         if (!result) { *status = 504; return strdup("{\"error\":\"keyboard_device_timeout\"}"); }
         if (strstr(result, "\"error\"")) *status = 409;
@@ -1972,6 +1998,7 @@ static void *ipc_thread(void *unused) {
         pthread_mutex_lock(&gSBLock);
         if (gSB == peer) gSB = NULL;
         pthread_mutex_unlock(&gSBLock);
+        rctl_webrtc_guest_input_unavailable();
         rctl_ipc_close(peer);
     }
 }
@@ -2339,6 +2366,7 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_camera_keyframe_cb(on_webrtc_camera_keyframe_request);
         rctl_webrtc_set_input_cb(on_webrtc_touch, on_webrtc_key);   // input over the control DataChannel
         rctl_webrtc_set_pointer_cb(on_webrtc_pointer);
+        rctl_webrtc_set_guest_input_cb(on_guest_input, on_guest_end);
         rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
         dlog(localAccessEnabled ? "http listening on LAN :8080" : "http listening on loopback :8080");
         rctl_camera_set_expired_cb(on_camera_lease_expired);

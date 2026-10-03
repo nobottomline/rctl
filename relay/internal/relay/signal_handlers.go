@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"time"
 
 	"nhooyr.io/websocket"
 )
@@ -28,6 +29,9 @@ type signalClientMessage struct {
 }
 
 type signalOpenPayload struct {
+	AccessMode            string          `json:"access_mode,omitempty"`
+	AllowDirect           *bool           `json:"allow_direct,omitempty"`
+	Permissions           []string        `json:"permissions,omitempty"`
 	AuthorizationRevision int64           `json:"authorization_revision,omitempty"`
 	Role                  string          `json:"role"`
 	ICE                   json.RawMessage `json:"ice"`
@@ -67,6 +71,9 @@ func validDeviceSignalMessage(message signalTunnelEvent) bool {
 		_, ok := parseAuthorizationChallenge(message.Payload)
 		return ok
 	}
+	if message.Kind == "closed" {
+		return len(message.Payload) == 0 || string(message.Payload) == "null"
+	}
 	if message.Kind == "close" {
 		return len(message.Payload) == 0 || string(message.Payload) == "null"
 	}
@@ -99,10 +106,28 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "insufficient_scope")
 		return
 	}
+	guest, isGuest := guestFromContext(r.Context())
 	deviceID := r.PathValue("id")
+	if isGuest {
+		if role != "screen" || !guestHas(guest, "screen.view") {
+			writeErr(w, 403, "insufficient_permission")
+			return
+		}
+		deviceID = guest.DeviceID
+		if reason := s.guestDeviceReady(deviceID, guest.AllowDirect); reason != "" {
+			writeErr(w, 409, reason)
+			return
+		}
+	}
 	dc := s.getDevice(deviceID)
 	if dc == nil {
 		writeErr(w, http.StatusNotFound, "device_offline")
+		return
+	}
+	// Validate the selected transport, not only an earlier availability lookup:
+	// a device connection may be replaced during an upgrade or downgrade.
+	if isGuest && !hasFeature(dc.features, guestCapability) {
+		writeErr(w, http.StatusConflict, "device_guest_access_not_supported")
 		return
 	}
 	if !s.deviceApproved(r.Context(), deviceID) {
@@ -128,6 +153,27 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := "sig_" + randomHex(12)
 	sessionContext := r.Context()
+	var guestConn *guestConnection
+	if isGuest {
+		var cancel context.CancelFunc
+		sessionContext, cancel = context.WithDeadline(r.Context(), time.Unix(guest.ExpiresAt, 0))
+		guestConn = &guestConnection{cancel: cancel, done: make(chan struct{}), device: dc, signalID: sessionID}
+		s.guestGrantsMu.Lock()
+		registered := s.registerGuestConnection(guest, sessionID, guestConn)
+		current := s.guestGrantCurrent(sessionContext, guest)
+		s.guestGrantsMu.Unlock()
+		defer func() {
+			cancel()
+			if registered {
+				s.unregisterGuestConnection(guest.GrantID, sessionID)
+			}
+			close(guestConn.done)
+		}()
+		if !registered || !current {
+			_ = ws.Close(websocket.StatusPolicyViolation, "guest access ended")
+			return
+		}
+	}
 	if controllerID != "" {
 		var cancelControllerSignal context.CancelFunc
 		sessionContext, cancelControllerSignal = context.WithCancel(r.Context())
@@ -152,9 +198,28 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	eventCh := make(chan signalTunnelEvent, 32)
 	dc.registerSignal(sessionID, eventCh)
 	defer func() {
-		dc.unregisterSignal(sessionID)
-		cancelCtx, cancel := context.WithTimeout(context.Background(), s.cfg.WriteTimeout)
+		defer dc.unregisterSignal(sessionID)
+		cancelCtx, cancel := context.WithTimeout(context.Background(), min(s.cfg.WriteTimeout, 2*time.Second))
 		err := dc.writeJSON(cancelCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "close"})
+		if err == nil && guestConn != nil {
+			// The device confirms retirement after input/channel teardown. Never mark a
+			// cancelled relay socket as proof that a P2P device session has closed.
+			for !guestConn.confirmed {
+				select {
+				case event, ok := <-eventCh:
+					if !ok {
+						err = context.Canceled
+					} else if event.Kind == "closed" {
+						guestConn.confirmed = true
+					}
+				case <-cancelCtx.Done():
+					err = cancelCtx.Err()
+				}
+				if err != nil {
+					break
+				}
+			}
+		}
 		cancel()
 		if err != nil {
 			// This exact transport can no longer deliver revocations. Disconnect
@@ -169,7 +234,15 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	ice := s.iceServersJSON(sessionID)
 
 	openCtx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
-	openPayload, _ := json.Marshal(signalOpenPayload{Role: role, ICE: ice, Scopes: scopes, AuthorizationRevision: principal.AuthorizationRevision})
+	open := signalOpenPayload{Role: role, ICE: ice, Scopes: scopes, AuthorizationRevision: principal.AuthorizationRevision}
+	if isGuest {
+		open.AccessMode = "guest-v1"
+		open.Permissions = guest.Permissions
+		open.AuthorizationRevision = guest.Revision
+		open.AllowDirect = &guest.AllowDirect
+		open.Scopes = nil
+	}
+	openPayload, _ := json.Marshal(open)
 	err = dc.writeJSON(openCtx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "open", Payload: openPayload})
 	cancel()
 	if err != nil {
@@ -180,6 +253,9 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 	auditFields := []any{"device_id", deviceID, "session_id", sessionID, "media", role}
 	if controllerID != "" {
 		auditFields = append(auditFields, "controller_id", controllerID, "scopes", scopes)
+	}
+	if isGuest {
+		auditFields = append(auditFields, "grant_id", guest.GrantID)
 	}
 	s.audit(r, "webrtc_signal_open", auditFields...)
 
@@ -215,19 +291,35 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			if event.Kind == "closed" {
+				if guestConn != nil {
+					guestConn.confirmed = true
+				}
+				return
+			}
 			if event.Kind == "close" {
 				return
 			}
 			if event.Kind == "authorization_challenge" {
 				challenge, valid := parseAuthorizationChallenge(event.Payload)
-				if !valid || controllerID == "" || challenge.Revision != principal.AuthorizationRevision ||
-					!s.controllerGrantCurrent(sessionContext, controllerID, principal.AuthorizationRevision) {
+				validGrant := false
+				renewal := event.Payload
+				if valid && isGuest && challenge.Revision == guest.Revision && s.guestGrantCurrent(sessionContext, guest) {
+					remaining := time.Until(time.Unix(guest.ExpiresAt, 0)).Milliseconds()
+					if remaining > 0 {
+						validGrant = true
+						renewal, _ = json.Marshal(map[string]any{"nonce": challenge.Nonce, "authorization_revision": challenge.Revision, "remaining_ms": min(remaining, 20000)})
+					}
+				} else if valid && !isGuest && controllerID != "" && challenge.Revision == principal.AuthorizationRevision {
+					validGrant = s.controllerGrantCurrent(sessionContext, controllerID, principal.AuthorizationRevision)
+				}
+				if !validGrant {
 					return
 				}
 				// Never forward challenges to a controller. Only this authenticated
 				// device transport can renew its session's current grant.
 				ctx, cancel := context.WithTimeout(sessionContext, s.cfg.WriteTimeout)
-				err := dc.writeJSON(ctx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "authorization_renew", Payload: event.Payload})
+				err := dc.writeJSON(ctx, signalTunnelEvent{Type: "webrtc_signal", ID: sessionID, Kind: "authorization_renew", Payload: renewal})
 				cancel()
 				if err != nil {
 					return
@@ -243,7 +335,13 @@ func (s *server) handleSignalWS(w http.ResponseWriter, r *http.Request) {
 		case <-readDone:
 			return
 		case <-sessionContext.Done():
-			_ = ws.Close(websocket.StatusPolicyViolation, "controller authorization changed")
+			if isGuest {
+				// Do not wait for a peer to cooperate with a closing handshake before
+				// delivering retirement to the device. The guest ends on any close.
+				_ = ws.CloseNow()
+			} else {
+				_ = ws.Close(websocket.StatusPolicyViolation, "authorization changed")
+			}
 			return
 		}
 	}

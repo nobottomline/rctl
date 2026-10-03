@@ -52,6 +52,23 @@ WHERE (revoked_at IS NOT NULL AND revoked_at<?)
 	} else if s.log != nil {
 		s.log.Warn("history retention: enrollments", "error", err)
 	}
+
+	// Guest grants have an absolute lifetime and single-use invitations. Retain
+	// only terminal history; sessions cascade with their owning grant.
+	s.guestGrantsMu.Lock()
+	result, guestErr := s.db.ExecContext(ctx, `DELETE FROM guest_grants WHERE
+	 (revoked_at IS NOT NULL AND revoked_at<?) OR expires_at<? OR
+	 (claimed_at IS NULL AND claim_deadline<?) OR
+	 EXISTS(SELECT 1 FROM guest_sessions x WHERE x.grant_id=guest_grants.id AND x.ended_at IS NOT NULL AND x.ended_at<?)`, cutoff, cutoff, cutoff, cutoff)
+	s.guestGrantsMu.Unlock()
+	if guestErr != nil && s.log != nil {
+		s.log.Warn("history retention: guest grants", "error", guestErr)
+	}
+	if guestErr == nil {
+		if n, _ := result.RowsAffected(); n > 0 {
+			s.auditSystem("guest_history_retention_applied", "grants", n)
+		}
+	}
 	if controllers > 0 || enrollments > 0 {
 		s.auditSystem("history_retention_applied", "controllers", controllers, "enrollments", enrollments,
 			"retention_seconds", int64(s.cfg.HistoryRetention.Seconds()))

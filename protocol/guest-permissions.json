@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "permissions": [
+    {
+      "id": "screen.view",
+      "label": "View screen",
+      "group": "Screen"
+    },
+    {
+      "id": "input.touch",
+      "label": "Touch and gestures",
+      "group": "Input"
+    },
+    {
+      "id": "input.keyboard",
+      "label": "Keyboard",
+      "group": "Input"
+    },
+    {
+      "id": "input.button.home",
+      "label": "Home button",
+      "group": "Device buttons"
+    },
+    {
+      "id": "input.button.lock",
+      "label": "Lock button",
+      "group": "Device buttons"
+    },
+    {
+      "id": "input.button.volume",
+      "label": "Volume buttons",
+      "group": "Device buttons"
+    },
+    {
+      "id": "input.button.system_ui",
+      "label": "Control Center and notifications",
+      "group": "Device buttons"
+    }
+  ]
+}

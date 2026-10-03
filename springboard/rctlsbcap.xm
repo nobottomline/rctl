@@ -22,6 +22,13 @@
 #import "input/GameKeyboard.h"
 #import "input/GamePointer.h"
 #include "input/PointerLease.h"
+#include "net/GuestInputState.h"
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+#include <mach/mach_time.h>
 #import "ipc/Ipc.h"
 #import <sys/sysctl.h>
 
@@ -31,8 +38,7 @@
 // code: 1=Control Center, 2=Cover Sheet / Notification Center. Each toggles.
 // (Native screenshots are done client-side instead — SBScreenshotManager's
 // save throws an async exception in its flash animation that aborts SpringBoard.)
-static void rctl_system_action(int code) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+static void rctl_system_action_now(int code) {
         if (code == 1) {
             id cc = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"SBControlCenterController"),
                                                     NSSelectorFromString(@"sharedInstance"));
@@ -48,7 +54,10 @@ static void rctl_system_action(int code) {
             ((void (*)(id, SEL, BOOL, BOOL, id))objc_msgSend)(cs,
                 NSSelectorFromString(@"setCoverSheetPresented:animated:withCompletion:"), !vis, YES, nil);
         }
-    });
+}
+
+static void rctl_system_action(int code) {
+    dispatch_async(dispatch_get_main_queue(), ^{ rctl_system_action_now(code); });
 }
 
 // Display brightness via BackBoardServices. backboardd owns the real backlight;
@@ -239,7 +248,7 @@ static void rctl_show_toast(NSString *text, double seconds) {
 }
 
 // ---- Fun FX / pranks: speak aloud, play a sound, strobe, fullscreen banner ----
-static void send_reply(uint32_t reqid, NSString *result);   // defined below; used by the QUERY handler
+static void send_reply(uint32_t reqid, NSString *result, uint64_t expectedGeneration = 0);   // defined below; used by the QUERY handler
 // We drive AVSpeechSynthesizer/AVAudioSession via the Objective-C runtime and
 // declare AudioServicesPlaySystemSound by prototype, to AVOID importing the
 // AVFoundation umbrella header — it drags in camera/simd headers that fail to
@@ -342,6 +351,7 @@ static rctl_session     *gSession = NULL;
 static dispatch_source_t gOrientTimer = NULL;
 static dispatch_source_t gAwakeTimer = NULL;
 static id                gOrientObserver = nil;   // FBSOrientationObserver
+static uint64_t         gIpcGeneration = 0;
 static rctl_ipc         *gIpc = NULL;             // connection to rctld
 static pthread_mutex_t   gIpcLock = PTHREAD_MUTEX_INITIALIZER;
 static bool              gCaptureActive = false;  // screen encoder state
@@ -382,14 +392,15 @@ static void send_orient(int o) {
 }
 
 // Reply to a daemon query: [4B BE reqid][UTF-8 payload].
-static void send_reply(uint32_t reqid, NSString *result) {
+static void send_reply(uint32_t reqid, NSString *result, uint64_t expectedGeneration) {
     NSData *d = [(result ?: @"") dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     uint32_t blen = 4 + (uint32_t)d.length;
     uint8_t *buf = (uint8_t *)malloc(blen);
     buf[0] = reqid >> 24; buf[1] = reqid >> 16; buf[2] = reqid >> 8; buf[3] = (uint8_t)reqid;
     memcpy(buf + 4, d.bytes, d.length);
     pthread_mutex_lock(&gIpcLock);
-    if (gIpc) (void)rctl_ipc_send(gIpc, RCTL_MSG_REPLY, buf, blen);
+    if (gIpc && (!expectedGeneration || expectedGeneration == gIpcGeneration))
+        (void)rctl_ipc_send(gIpc, RCTL_MSG_REPLY, buf, blen);
     pthread_mutex_unlock(&gIpcLock);
     free(buf);
 }
@@ -605,11 +616,88 @@ static void *ipc_manager(void *unused) {
         rctl_ipc *peer = rctl_ipc_connect(RCTL_IPC_SOCK_PATH);
         if (!peer) { usleep(500000); continue; }      // daemon not up yet
         NSLog(@"[rctl-sbcap] connected to rctld");
-        pthread_mutex_lock(&gIpcLock); gIpc = peer; pthread_mutex_unlock(&gIpcLock);
+        pthread_mutex_lock(&gIpcLock); gIpc = peer; const uint64_t guestGeneration = ++gIpcGeneration; pthread_mutex_unlock(&gIpcLock);
+
+        // IPC ownership survives daemon failure. Retirement marks queued events
+        // invalid before its main-queue release; the query reply is a real fence.
+        struct GuestState {
+            std::atomic<bool> retired{false};
+            std::atomic<double> deadline{0};
+            std::atomic<unsigned> pending{0};
+            rctl::GuestInputState input; // touched only on the main queue
+        };
+        struct GuestRegistry { std::mutex mutex; std::map<std::string, std::shared_ptr<GuestState>> states; };
+        auto guests = std::make_shared<GuestRegistry>();
+        auto releaseGuest = [](const std::shared_ptr<GuestState> &state) {
+            state->input.release([](int p, int f, double x, double y) { rctl_input_touch_now(f, x, y, p); },
+                                 [](int p, int u, int d) { rctl_input_key_now(p, u, d); });
+        };
+        auto guestNow = []() {
+            static const mach_timebase_info_data_t base = [] { mach_timebase_info_data_t b; mach_timebase_info(&b); return b; }();
+            return (double)mach_continuous_time() * base.numer / base.denom / 1e9;
+        };
+        auto retireGuest = [guests](const std::string &owner) {
+            std::vector<std::shared_ptr<GuestState>> closing;
+            std::lock_guard<std::mutex> lock(guests->mutex);
+            for (auto it = guests->states.begin(); it != guests->states.end();) {
+                if (owner.empty() || owner == it->first) {
+                    it->second->retired.store(true);
+                    closing.push_back(it->second);
+                    it = guests->states.erase(it);
+                } else ++it;
+            }
+            return closing;
+        };
+        dispatch_source_t guestTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+        dispatch_source_set_timer(guestTimer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 10);
+        dispatch_source_set_event_handler(guestTimer, ^{
+            std::vector<std::shared_ptr<GuestState>> expired;
+            {
+                std::lock_guard<std::mutex> lock(guests->mutex);
+                for (auto it = guests->states.begin(); it != guests->states.end();) {
+                    if (guestNow() >= it->second->deadline.load()) {
+                        it->second->retired.store(true); expired.push_back(it->second);
+                        it = guests->states.erase(it);
+                    } else ++it;
+                }
+            }
+            for (const auto &state : expired) releaseGuest(state);
+        });
+        dispatch_resume(guestTimer);
 
         uint8_t type; uint8_t *buf; uint32_t len;
         while (rctl_ipc_recv(peer, &type, &buf, &len)) {
-            if (type == RCTL_MSG_INPUT && len >= sizeof(rctl_ipc_input)) {
+            if (type == RCTL_MSG_GUEST_INPUT && len == sizeof(rctl_ipc_guest_input)) {
+                rctl_ipc_guest_input event; memcpy(&event, buf, sizeof(event));
+                const size_t ownerLength = strnlen(event.owner, sizeof(event.owner));
+                const double now = guestNow();
+                if (ownerLength == 0 || ownerLength == sizeof(event.owner) || !std::isfinite(event.deadline) ||
+                    event.deadline <= now || event.deadline > now + 20.1 || (event.kind < 0 || event.kind > 2)) { free(buf); continue; }
+                std::shared_ptr<GuestState> state;
+                {
+                    std::lock_guard<std::mutex> lock(guests->mutex);
+                    const std::string owner(event.owner, ownerLength);
+                    auto existing = guests->states.find(owner);
+                    if (existing != guests->states.end()) state = existing->second;
+                    else if (event.kind != 2 && guests->states.size() < 16) { state = std::make_shared<GuestState>(); guests->states.emplace(owner, state); }
+                    if (state) state->deadline.store(event.deadline);
+                }
+                if (event.kind == 2) { free(buf); continue; }
+                if (state && state->pending.fetch_add(1) >= 64) { state->pending.fetch_sub(1); state.reset(); }
+                if (state) dispatch_async(dispatch_get_main_queue(), ^{
+                    state->pending.fetch_sub(1);
+                    if (state->retired.load() || guestNow() >= event.deadline) return;
+                    if (event.kind == 0 && state->input.touch(event.a, event.b, event.x, event.y))
+                        rctl_input_touch_now(event.b, event.x, event.y, event.a);
+                    else if (event.kind == 1 && state->input.key(event.a, event.b, event.c, true, true)) {
+                        if (event.a == 0xf0) rctl_system_action_now(event.b);
+                        else rctl_input_key_now(event.a, event.b, event.c);
+                    }
+                });
+            } else if (type == RCTL_MSG_GUEST_END && len > 0 && len < 64) {
+                auto closing = retireGuest(std::string((const char *)buf, len));
+                dispatch_async(dispatch_get_main_queue(), ^{ for (const auto &state : closing) releaseGuest(state); });
+            } else if (type == RCTL_MSG_INPUT && len >= sizeof(rctl_ipc_input)) {
                 rctl_ipc_input m; memcpy(&m, buf, sizeof m);
                 rctl_input_touch(m.finger, m.x, m.y, m.phase);
             } else if (type == RCTL_MSG_KEY && len >= sizeof(rctl_ipc_key)) {
@@ -644,6 +732,15 @@ static void *ipc_manager(void *unused) {
             } else if (type == RCTL_MSG_QUERY && len >= 5) {
                 uint32_t reqid = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
                 uint8_t qtype = buf[4];
+                if (qtype == RCTL_Q_GUEST_END) {
+                    if (len <= 5 || len >= 69) { send_reply(reqid, @""); free(buf); continue; }
+                    auto closing = retireGuest(std::string((const char *)buf + 5, len - 5));
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        for (const auto &state : closing) releaseGuest(state);
+                        send_reply(reqid, @"ok", guestGeneration);
+                    });
+                    free(buf); continue;
+                }
                 if (qtype == RCTL_Q_GAME_POINTER) {
                     uint64_t deadline = 0;
                     NSData *request = nil;
@@ -723,6 +820,9 @@ static void *ipc_manager(void *unused) {
             free(buf);
         }
 
+        dispatch_source_cancel(guestTimer);
+        auto closingGuests = retireGuest("");
+        dispatch_async(dispatch_get_main_queue(), ^{ for (const auto &state : closingGuests) releaseGuest(state); });
         NSLog(@"[rctl-sbcap] rctld disconnected");
         dispatch_async(dispatch_get_main_queue(), ^{ rctl_game_keyboard_stop(); });
         dispatch_async(dispatch_get_main_queue(), ^{ rctl_game_pointer_stop(); });

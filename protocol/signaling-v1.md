@@ -1,5 +1,7 @@
 # Controller Signaling v1
 
+This contract also defines the separately negotiated browser guest mode below.
+
 Browser-admin relay endpoints are `/signal/devices/{id}` for screen and
 `/signal/devices/{id}?media=camera` for camera. Native controllers use the
 proof-authenticated `/api/controller/devices/{id}/signal` endpoint with the same
@@ -81,3 +83,47 @@ close the device sessions. If delivery fails, the lease bounds continued P2P
 access without trusting the phone to disconnect. The iOS client refreshes `/me`,
 keeps its pairing, stops automatic retry on 1008, and requires a new session in
 View. General network failures may retry with fresh authorization, also in View.
+
+## Browser Guest Authorization v1
+
+Guests connect to `/api/guest/signal` using their own host-only browser cookie
+and the configured HTTPS Origin. The relay resolves the device from that session;
+the guest supplies no device identifier, scopes or authorization envelope.
+Only devices advertising `guest.scoped_sessions_v1` are eligible. Guest mode
+currently permits the screen role only and requires `screen.view`.
+
+The protected relay-device `open` has `access_mode: "guest-v1"`, a positive
+`authorization_revision`, the explicit `permissions` from
+`guest-permissions.json`, and an explicit Boolean `allow_direct`. It omits native
+`scopes`. Missing/unknown permissions, malformed guest policy or an unsupported
+role reject the open, without falling through to full-trust mode. Session identity
+is the relay-created signal ID; it is never a guest-supplied input owner.
+
+The challenge/renewal exchange remains on the protected relay-device transport.
+The relay checks the current session, grant revision, approved device and absolute
+expiry on every challenge. A guest renewal includes `remaining_ms`, the lesser of
+20,000 and remaining absolute grant lifetime. The device starts that budget at
+local challenge issuance, never reply arrival. Missing/nonpositive/oversized
+budgets fail closed, and expired or retired leases cannot be revived. The
+`allow_direct: false` default configures relay-only ICE on both device and browser;
+absence of configured TURN rejects creation/claim. Explicit direct grants retain
+normal ICE. This configuration still needs SDP/candidate qualification before
+claiming address privacy.
+
+The device creates a video track and state channel for view-only. A `control`
+channel exists only when an input permission is present; each message rechecks
+lease, ownership, rate and the specific permission. Keyboard page 7 does not grant
+consumer/system HID access. Home, lock, volume and system panels have independent
+generated permissions. Guests receive no pointer, files, audio, Talk or camera
+channels. Native v1 mappings and owner/LAN opens are unchanged.
+
+Revoke, end and real rights changes retire all old guest generations. The relay
+does not wait for a browser close handshake. It sends device `close` and awaits
+device `closed` (with null/absent payload), emitted only after lease retirement,
+media send draining and, for interactive sessions, acknowledged SpringBoard
+input cleanup. Failed cleanup sends `close`, not `closed`; repeated close must
+retry the pending cleanup fence. The administrative result reports
+`disconnect_confirmed` separately from persisted authorization denial. Device
+transport failure uses the bounded lease fallback and cannot claim instant
+cross-partition revocation. Guest browser teardown clears video/canvas, cancels
+pending input and requires manual reconnect after an authorization change.

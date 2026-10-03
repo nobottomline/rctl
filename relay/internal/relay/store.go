@@ -49,6 +49,39 @@ CREATE TABLE IF NOT EXISTS audit_log (
 	detail TEXT
 );
 
+CREATE TABLE IF NOT EXISTS guest_grants (
+ id TEXT PRIMARY KEY,
+ device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+ label TEXT NOT NULL,
+ permissions_json TEXT NOT NULL,
+ authorization_revision INTEGER NOT NULL DEFAULT 1,
+ expires_at INTEGER NOT NULL,
+ created_at INTEGER NOT NULL,
+ revoked_at INTEGER,
+ invitation_hash TEXT NOT NULL,
+ claim_deadline INTEGER NOT NULL,
+ claimed_at INTEGER,
+ claim_binding_hash TEXT,
+ recovery_deadline INTEGER,
+ acknowledged INTEGER NOT NULL DEFAULT 0,
+ allow_direct INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS guest_sessions (
+ id TEXT PRIMARY KEY,
+ grant_id TEXT NOT NULL REFERENCES guest_grants(id) ON DELETE CASCADE,
+ secret_hash TEXT NOT NULL,
+ created_at INTEGER NOT NULL,
+ ended_at INTEGER,
+ UNIQUE(grant_id)
+);
+CREATE TABLE IF NOT EXISTS guest_claims (
+ id TEXT PRIMARY KEY,
+ secret_hash TEXT NOT NULL,
+ expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_guest_grants_expiry ON guest_grants(expires_at);
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_grant ON guest_sessions(grant_id);
+
 CREATE TABLE IF NOT EXISTS relay_metadata (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL

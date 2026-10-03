@@ -8,6 +8,7 @@ var relayFeatures = []string{
 	"device.terminal_tunnel",
 	"webrtc.signaling",
 	"controller.native_signaling",
+	"browser.guest_sessions_v1",
 	"admin.audit",
 	"capability.negotiation",
 	"update.orchestration",

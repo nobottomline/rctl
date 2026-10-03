@@ -5,6 +5,7 @@ import { LoginScreen } from './components/LoginScreen'
 import { Shell } from './components/Shell'
 import { DevicesPanel, type ActionKey } from './components/DevicesPanel'
 import { EnrollPanel } from './components/EnrollPanel'
+import { GuestAccessPanel } from './components/GuestAccessPanel'
 import { ControllersPanel } from './components/ControllersPanel'
 import { SessionsPanel } from './components/SessionsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
@@ -281,6 +282,7 @@ export default function App() {
           <ActivityPanel entries={audit} sessions={sessions} controllers={controllers} />
         </div>
         <div className="flex flex-col gap-5">
+          <GuestAccessPanel devices={devices} onChanged={() => void loadAll({ silent: true })} />
           <ControllersPanel
             controllers={controllers}
             audit={audit}

@@ -1,8 +1,18 @@
 # Temporary Browser Access
 
-Status: proposed architecture, reviewed against source at `f8e213e` on
-2026-10-03. No guest routes, permissions, migrations, or UI are implemented by
-this document. Native controller applications are outside this delivery scope.
+Status: initial browser sharing implementation, 2026-10-03. Invitation/session
+storage, the admin editor, guest screen/input UI, scoped signaling, device leases
+and acknowledged cancellation are implemented. Physical-device and production
+qualification remain open. Native controller applications are outside this scope.
+
+The enabled registry is `protocol/guest-permissions.json`: `screen.view`,
+`input.touch`, `input.keyboard`, `input.button.home`, `input.button.lock`,
+`input.button.volume`, and `input.button.system_ui`. View-only is the default;
+screen viewing is currently required. The broader vocabulary below is a delivery
+plan, not an available set of grants. Audio, camera, typed commands, media, files,
+automation and terminal remain disabled for guests until their execution and
+resource ownership are implemented. Admin and native-controller scopes do not
+silently authorize any of these operations.
 
 ## Decision
 
@@ -23,7 +33,13 @@ this feature. SQLite transactions and typed policy checks fit the current
 single-relay architecture. Horizontal relay scaling is a separate decision:
 multiple instances would require shared revocation and session routing.
 
-## Current Architecture And Gaps
+## Architecture Baseline And Remaining Gaps
+
+The table records the pre-implementation baseline reviewed at `f8e213e`.
+Guest screen/input now use a separate `/guest/control` entry and `/api/guest/signal`,
+with no device identifier in the invitation or browser bootstrap. Owner routes
+remain independently authenticated. The unrestricted proxy and process-global
+command/transfer paths in this baseline remain unavailable to guests.
 
 The root README describes installation and public support; it should not claim
 guest access until the complete path is qualified. There is no single runtime
@@ -114,8 +130,9 @@ GET must not consume an invitation: messaging previews and security scanners
 can fetch it. An explicit Join action sends a same-origin JSON POST containing
 the secret. Atomically check expiry, unused/revoked status, approved device,
 limits and constraints before consuming it and creating the guest session.
-Device offline can produce a waiting state after claim, but cannot extend the
-absolute grant deadline or authorize a different device.
+The current implementation rejects claims while the device is offline or lacks
+guest support; a retry can succeed before the original claim deadline. Device
+availability cannot extend the grant deadline or authorize a different device.
 
 The response sets a separate host-only Secure/HttpOnly/SameSite=Strict guest
 cookie, preferably `__Host-rctl_guest` (`Path=/`, no Domain). Guest endpoints
@@ -135,14 +152,15 @@ multiple invitations in one browser require explicit transactional tests.
 
 The control URL can then be `/guest/control`; resolve the device entirely from
 the session. v1 supports one active guest identity per browser cookie jar. Joining
-another invitation explicitly ends the previous guest session; multiple tabs of
+another invitation is rejected until the guest explicitly ends the previous
+session; multiple tabs of
 the same session can reconnect within bounded connection limits. Supporting
 simultaneous independent grants later needs an explicit session selector.
 
-Default to one claim, one active guest session, 30 minutes of absolute access,
+Use one claim, one active guest session, one hour of absolute access by default,
 and a claim deadline of at most 15 minutes or the grant end, whichever is sooner.
-Offer duration presets and custom duration capped at 24 hours for v1. These are
-proposed product defaults, not protocol constants. An owner can issue another
+The API accepts durations from one minute to 24 hours; the editor offers five
+minutes, 15 minutes, one hour, four hours and 24 hours. An owner can issue another
 invitation for another recipient. After claim, the original URL opens no new
 authority; the same authenticated browser can return to its guest control page.
 Offer End session, expiry countdown, allowed actions, offline/reconnecting and
@@ -157,14 +175,15 @@ binding, current revision, expiry, capability and resource constraints. Unknown
 operations or permissions fail closed. Do not imply touch, files, microphone,
 camera or clipboard access from `screen.view`.
 
-The following is the proposed v2 vocabulary. Rows marked future have no complete
-current implementation and must remain unavailable until qualified.
+The following is the target vocabulary. Only the seven registry entries listed
+above are currently grantable. All other permissions remain unavailable; adding
+a registry entry requires complete device enforcement and ownership first.
 
 | Group | Proposed permissions | Meaning and restrictions |
 | --- | --- | --- |
 | Device information | `device.info`, `device.diagnostics` | Minimal status versus reviewed diagnostics; exclude credentials, relay configuration, private endpoints and unnecessary identifiers |
 | Screen | `screen.view`, `screen.capture` | Live video versus device-created full-resolution snapshot; local screenshot/export controls are convenience restrictions only |
-| Input | `input.touch`, `input.pointer`, `input.keyboard`, `input.text`, `input.buttons` | Independent touch, relative pointer, validated keyboard usages, text insertion and named hardware/system buttons; optional allowed-button subset |
+| Input | `input.touch`, `input.pointer`, `input.keyboard`, `input.text`, `input.button.home`, `input.button.lock`, `input.button.volume`, `input.button.system_ui` | Independent touch, relative pointer, validated keyboard usages, text insertion and named button groups. Keyboard access does not imply consumer/system HID commands |
 | Device settings | `device.settings` | Explicit allowlist for brightness, orientation and device output volume/mute; viewer-local volume/zoom needs no device permission |
 | Clipboard | `clipboard.read`, `clipboard.write` | Separate read and overwrite; neither follows from text input |
 | Applications | `apps.list`, `apps.launch`, `apps.open_url` | Optional bundle-ID allowlist and URL scheme/host constraints; arbitrary custom URL schemes are elevated |
@@ -224,24 +243,27 @@ remain in their owning language. Do not build a shared policy runtime or map
 permissions only from an HTTP path prefix. Method, parsed parameters, body,
 HID page/usage, talk route and resource target all change authority.
 
-Proposed browser surfaces:
+Implemented browser surfaces:
 
 ```text
 POST /api/admin/guest-grants              create, return invitation once
 GET  /api/admin/guest-grants              sanitized history and active sessions
 POST /api/admin/guest-grants/{id}/permissions   compare-and-swap revision
 POST /api/admin/guest-grants/{id}/revoke
+POST /api/admin/guest-grants/revoke-all    revoke every grant and invitation
 POST /api/admin/guest-grants/{id}/delete   terminal grants only
 GET  /share/{invitation_id}              public shell, no claim on GET
+POST /api/guest/prepare                  short-lived claim binding
 POST /api/guest/claim                    explicit secret exchange
 POST /api/guest/claim/ack                 complete bounded recovery
 GET  /api/guest/session                  effective rights and capabilities
 POST /api/guest/session/end
-POST /api/guest/operations/{operation}    strict typed request, no raw proxy
-GET  /api/guest/artifacts/{id}           authorized streaming/range downloads
 GET  /api/guest/signal                   scoped WebSocket upgrade
-GET  /api/guest/terminal                 terminal.root upgrade
+GET  /guest/control                     guest-only screen/input client
 ```
+
+Typed operations, artifact streaming and terminal upgrades described below are
+future adapters; none is currently registered as a guest route.
 
 Guest reads that cannot mutate state may use a dedicated GET adapter (for
 thumbnails or artifacts). All mutations use JSON POST with strict Origin/CSRF
@@ -292,10 +314,12 @@ not accumulate full responses in relay memory or share process-global outputs.
 
 ## Resource Constraints And Lifecycle
 
-Use separate invitation, grant and session records. Invitation holds hash,
-claim deadline and consumption state; grant holds device, explicit permission
-set, constraints, absolute expiry, active/revoked status and monotonic revision;
-session holds its hashed cookie, grant binding and lifecycle. Consumption does
+The initial schema stores the one-to-one invitation and grant in `guest_grants`:
+hashed invitation, claim deadline/consumption, device, explicit permission set,
+absolute expiry, revocation and monotonic revision. `guest_sessions` holds the
+hashed cookie, grant binding and lifecycle; `guest_claims` holds short-lived
+recovery bindings. Multiple invitations per grant and resource constraints need
+an explicit additive migration when those consumers are introduced. Consumption does
 not end a grant. Revoke ends every associated session and unclaimed invitation.
 Delete is bookkeeping only after expiry/revoke. Audit retains a sanitized actor
 snapshot. Never store invitation secrets, cookie values, terminal contents,
@@ -334,6 +358,29 @@ must be tied to that ownership too; shell descendants can otherwise survive a
 socket closing. Do not promise cleanup of deliberately daemonized processes
 after granting root administration.
 
+The admin editor can revoke one grant or all grants, including unused invitations.
+A real permissions edit increments the revision and cancels all connections of
+the old revision; a no-op leaves them intact. The guest must reconnect manually
+with fresh rights. It cannot continue watching through an existing video track.
+
+The relay closes guest sockets without waiting for a cooperative browser and
+requests device teardown. `disconnect_confirmed: true` is returned only after
+the device has retired the lease, drained in-flight media sends and acknowledged
+SpringBoard input cleanup on its main queue. False is explicitly displayed as
+unconfirmed, with the bounded lease fallback; it is not a successful device ACK.
+Repeated close requests cannot convert an earlier unconfirmed cleanup into a
+confirmation without a successful cleanup fence. SpringBoard IPC generation
+changes reject stale acknowledgements. Loss of SpringBoard retires guest sessions.
+
+Input messages carry transport-owned identity and a monotonic deadline into
+SpringBoard. Queued work rechecks that deadline immediately before injection;
+END marks the owner retired before waiting on the main queue. The device releases
+only that owner's held contacts and HID usages. Owner input takes priority and
+blocks the current guest input session until manual reconnection. Guest queues,
+contact/key state, connection count and input rate are bounded. An older loaded
+SpringBoard payload without the cleanup-fence contract refuses guest input even
+when the updated daemon advertises screen sharing.
+
 Input cleanup synthesizes releases for keys, buttons and touch contacts owned
 by the ending session. Session identity comes from the transport, never a
 client-chosen owner token. Initially permit one interactive input owner per
@@ -369,7 +416,7 @@ canonical target and short expiry; check permission again when issuing and
 consuming. Keep protected-package/path validation and signed update verification.
 The existing global media confirmation state needs replacement for guests.
 
-## UI And Implementation Sequence
+## Target UI And Remaining Implementation Sequence
 
 The owner chooses device, label, duration, preset, individual permissions and
 resource constraints, then sees a readable summary and copies the link once.
@@ -407,6 +454,13 @@ Deliver coherent slices in this order:
    signed device updates and root terminal with documented consequences. Package
    installation and screen-video recording remain separate feature work.
 
+The current source completes the invitation/session and screen/input portions
+of steps 1–3. It intentionally exposes only fully wired registry entries. The
+next implementation boundary is the typed device dispatcher and owned command
+jobs, followed by independently owned media capture and HTTP transfers. It is
+not safe to unlock steps 4–5 by forwarding guest requests into the admin proxy.
+Physical screen/input qualification is required before releasing this first slice.
+
 The future controller migration can reuse this policy vocabulary but requires
 versioned mappings and capability negotiation. Never reinterpret existing
 `audio.listen`, `device.control` or other v1 grants as newly expanded authority.
@@ -426,18 +480,45 @@ it is not a prerequisite for v1.
 
 ## Verification And Release Gates
 
-Existing-source baseline on 2026-10-03:
+Implementation checks on 2026-10-03:
 
-- Focused relay control-page, scoped signaling, revocation, permission-revision
-  and authorization-challenge tests passed with `go test -race` on disposable
-  in-memory databases and localhost WebSockets. The restricted sandbox initially
-  denied localhost binding; the same tests passed with approved local execution.
-- `make test-webrtc-permissions test-script-validation` passed. The permission
-  test covers independent v1 scope mapping and lease expiry/replay; it does not
-  exercise physical capture or prove a guest implementation exists.
-- This review covers relevant source and contracts, not every unrelated feature
-  or a production security audit. No production login, deployment, physical
-  device mutation, browser guest journey or rootless runtime test was performed.
+- All relay packages passed `go test -race ./...` and `go vet ./...` using
+  disposable databases and local sockets. Guest tests cover one-winner claim,
+  binding-only recovery/rotation, acknowledgement, cross-principal denial,
+  revision conflict/no-op behavior, revoke/end/expiry and device teardown ACK.
+  A browser that does not read its close frame cannot delay device cancellation.
+  The single-file CSP test preserves script-like React string literals and
+  escapes untrusted bootstrap labels.
+- The protocol generator drift check and 34 existing contract fixtures passed.
+  C++ policy tests cover independent named buttons, denied keyboard Power/Volume
+  usages, lease replay/deadline budgets and owned input cleanup. Pinned-backend
+  host tests cover channel isolation, confirmed/unconfirmed/repeated close,
+  SpringBoard loss, owner/LAN preservation, RTP bounds and Talk queue regression.
+- Both web clients passed TypeScript production builds; admin lint passed. The
+  web suite passed 49 tests, including guest cancellation clearing pixels,
+  unsupported-WebRTC refusal, relay-only ICE preserved on TURN configuration,
+  denied routes/channels/buttons, input backpressure and stale button releases.
+- Isolated Chrome and a disposable HTTPS relay exercised anonymous Join, immediate
+  fragment removal, guest UI with only the selected Home action, admin rights
+  editing, mass revoke with subsequent HTTP 401, and the unsupported-device creation
+  state. The fake device supplied no
+  video/SDP; this is browser-shell evidence, not physical screen/input evidence.
+- Rootful iOS 14 arm64/arm64e compilation and staging passed. The standard package
+  command failed because the host's `fakeroot` could not allocate SYSV IPC.
+  Assembly from that staging with `dpkg-deb --root-owner-group` passed the public
+  package audit. Nothing was installed, deployed, pushed or published.
+
+The relay admin SPA must be rebuilt with `npm run build` in `relay/web-admin/`
+before building the deployment binary; see the [development guide](DEVELOPMENT.md).
+Generated protocol source is committed; newly generated
+SPA/package artifacts are not part of this source change. The device control
+client is rebuilt by the package staging task. Qualify exact relay/device builds
+together rather than deploying an old embedded SPA with new guest handlers.
+
+Still unqualified: physical input release and video cessation, real TURN SDP/ICE
+address behavior, relay partition/sleep scheduling, rootless runtime and production
+rollout. No physical device or production service was mutated. Unsupported future
+permissions have no qualification claim.
 
 Before releasing guest access, require:
 

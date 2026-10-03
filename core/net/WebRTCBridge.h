@@ -45,6 +45,11 @@ void rctl_webrtc_set_camera_keyframe_cb(void (*cb)(void));
 void rctl_webrtc_set_input_cb(void (*touch)(int phase, int finger, double x, double y),
                               void (*key)(int page, int usage, int down));
 
+// Guest input retains its identity/deadline across IPC into SpringBoard.
+void rctl_webrtc_set_guest_input_cb(
+    void (*event)(const char *owner, double deadline, int kind, int a, int b, int c, double x, double y),
+    bool (*end)(const char *owner, bool wait));
+
 // Pointer requests are bounded and asynchronous; the callback must invoke reply
 // exactly once (also on failure). ctx remains owned by the bridge until reply.
 typedef void (*rctl_pointer_reply)(void *ctx, const char *json);
@@ -70,6 +75,11 @@ void rctl_webrtc_route_session(const char *id, void (*send)(void *ctx, const cha
 void rctl_webrtc_unroute_session(const char *id);
 // Close only sessions routed to this transport owner; LAN/other relays survive.
 void rctl_webrtc_close_owner(void *ctx);
+// Owner HTTP/legacy input preempts guest held state before its own injection.
+void rctl_webrtc_owner_input_override(void);
+void rctl_webrtc_owner_input_event(int kind, int a, int b, int c);
+// SpringBoard loss retires guest screen/input contexts; owner paths reconnect.
+void rctl_webrtc_guest_input_unavailable(void);
 void rctl_webrtc_handle_local_signal(const char *id, const char *browser_json);
 
 #ifdef __cplusplus

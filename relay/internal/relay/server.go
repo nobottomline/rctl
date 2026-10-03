@@ -38,6 +38,10 @@ type server struct {
 	controllerGrantsMu  sync.Mutex
 	controllerSignals   map[string]map[string]context.CancelFunc
 
+	guestGrantsMu      sync.Mutex
+	guestConnectionsMu sync.Mutex
+	guestConnections   map[string]map[string]*guestConnection
+
 	packageMu           sync.Mutex
 	publicPackage       []byte
 	publicPackageInfo   deb.Info
@@ -133,6 +137,7 @@ func Run() {
 }
 
 func (s *server) routes(mux *http.ServeMux) {
+	s.guestRoutes(mux)
 	mux.HandleFunc("GET /", s.handleRoot)
 	mux.HandleFunc("GET /admin", s.handleAdminRoot)
 	mux.Handle("GET /admin/{path...}", s.handleAdminAssets())

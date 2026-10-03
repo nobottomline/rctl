@@ -15,6 +15,7 @@
 #include "net/WebRTCBridge.h"
 #include "net/WebRTCPermissions.h"
 #include "net/ControllerAuthorizationLease.h"
+#include "net/GuestInputState.h"
 #include <mach/mach_time.h>
 #include <cstdlib>
 #include "net/VirtualMicServer.h"
@@ -52,6 +53,8 @@ static void (*g_keyframe_cb)(void) = nullptr;
 static void (*g_camera_keyframe_cb)(void) = nullptr;
 static void (*g_touch_cb)(int phase, int finger, double x, double y) = nullptr;
 static void (*g_key_cb)(int page, int usage, int down) = nullptr;
+static void (*g_guest_event_cb)(const char *, double, int, int, int, int, double, double) = nullptr;
+static bool (*g_guest_end_cb)(const char *, bool) = nullptr;
 static rctl_pointer_request g_pointer_cb = nullptr;
 static std::mutex g_mtx;
 
@@ -62,6 +65,7 @@ static double authorization_now() {
 struct AuthorizedOpen {
     std::shared_ptr<rctl::ControllerAuthorizationLease> lease;
     json payload;
+    bool guest = false;
 };
 static std::map<std::string, AuthorizedOpen> g_authorizations;
 static void authorization_tick(double now);
@@ -73,10 +77,15 @@ static bool authorized(const std::shared_ptr<rctl::ControllerAuthorizationLease>
 }
 
 struct Session {
+    // Drains in-flight media sends before retirement is acknowledged. Never
+    // take this gate while holding g_mtx or while detaching callbacks.
+    std::mutex sendGate;
     std::shared_ptr<rctl::ControllerAuthorizationLease> lease;
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
     bool camera = false;
+    std::shared_ptr<rctl::GuestInputState> guestInput;
+    std::string id;
     std::shared_ptr<rtc::DataChannel> audioDc;
     std::shared_ptr<rtc::DataChannel> control;
     std::shared_ptr<rtc::DataChannel> pointer;
@@ -87,6 +96,53 @@ struct Session {
     std::shared_ptr<rtc::DataChannel> stateDc;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
+static std::string g_guestInputOwner;
+static std::set<std::string> g_guestRetiring;
+static double g_ownerInputBusyUntil = 0;
+static std::set<int> g_ownerContacts;
+static std::set<std::pair<int,int>> g_ownerKeys;
+static void release_guest_input_locked(const std::shared_ptr<Session> &session) {
+    if (!session || !session->guestInput) return;
+    g_guestRetiring.insert(session->id);
+    if (g_guest_end_cb) (void)g_guest_end_cb(session->id.c_str(), false);
+    session->guestInput->release([](int,int,double,double){}, [](int,int,int){});
+    if (g_guestInputOwner == session->id) g_guestInputOwner.clear();
+}
+// A successful exact-generation IPC fence also proves earlier queued guest
+// releases. Snapshot before issuing it: concurrent later retirements remain pending.
+static bool guest_input_fence(const std::string &id) {
+    std::vector<std::string> pending;
+    { std::lock_guard<std::mutex> lk(g_mtx); pending.assign(g_guestRetiring.begin(), g_guestRetiring.end()); }
+    if (!g_guest_end_cb || !g_guest_end_cb(id.c_str(), true)) return false;
+    { std::lock_guard<std::mutex> lk(g_mtx); for (const auto &owner : pending) g_guestRetiring.erase(owner); }
+    return true;
+}
+extern "C" void rctl_webrtc_owner_input_override(void) {
+    std::vector<std::shared_ptr<rtc::DataChannel>> feedback;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_ownerInputBusyUntil = authorization_now() + 2;
+        auto it = g_sessions.find(g_guestInputOwner);
+        if (it != g_sessions.end()) {
+            if (it->second->stateDc) feedback.push_back(it->second->stateDc);
+            release_guest_input_locked(it->second);
+        }
+    }
+    for (auto &channel : feedback) {
+        try { if (channel->isOpen() && channel->bufferedAmount() < 4096) channel->send(std::string("{\"input_blocked\":true}")); } catch (...) {}
+    }
+}
+extern "C" void rctl_webrtc_owner_input_event(int kind, int a, int b, int c) {
+    rctl_webrtc_owner_input_override();
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (kind == 0 && b >= 0 && b <= 10) {
+        if (a == 0) g_ownerContacts.insert(b); else if (a == 2) g_ownerContacts.erase(b);
+    } else if (kind == 1 && ((a == 7 && b >= 4 && b <= 231) ||
+                           (a == 12 && (b == 0x30 || b == 0x40 || b == 0xe9 || b == 0xea)))) {
+        if (c == 1) g_ownerKeys.insert({a,b}); else if (c == 0) g_ownerKeys.erase({a,b});
+    }
+}
+
 // Open send tracks across all sessions (one browser may watch per session).
 static std::vector<std::shared_ptr<rtc::Track>> g_tracks;
 static std::vector<std::shared_ptr<rtc::Track>> g_camera_tracks;
@@ -240,6 +296,7 @@ static void add_ice_servers(rtc::Configuration &config, const json &arr) {
 static void mic_teardown();
 static void destroy_session(std::shared_ptr<Session> dead) {
     if (!dead) return;
+    { std::lock_guard<std::mutex> lk(g_mtx); release_guest_input_locked(dead); }
     if (dead->control) dead->control->resetCallbacks();
     if (dead->pointer) dead->pointer->resetCallbacks();
     if (dead->pointerMotion) dead->pointerMotion->resetCallbacks();
@@ -288,8 +345,31 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     auto viewerCb = dead->camera ? g_camera_viewer_cb : g_viewer_cb;
     if (lastGone && viewerCb) viewerCb(false);
     if (dead->micIn) mic_teardown();   // its onClosed is detached above
+    std::lock_guard<std::mutex> drain(dead->sendGate);
     if (dead->pc) dead->pc->close();  // revoke even while another worker holds a shared_ptr
     // `dead` drops at the caller: callbacks detached + none in flight -> safe.
+}
+
+extern "C" void rctl_webrtc_guest_input_unavailable(void) {
+    std::vector<std::pair<std::string, std::shared_ptr<Session>>> closing;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_ownerContacts.clear(); g_ownerKeys.clear(); g_ownerInputBusyUntil = 0;
+        for (auto it = g_authorizations.begin(); it != g_authorizations.end();) {
+            if (!it->second.guest) { ++it; continue; }
+            it->second.lease->retired = true;
+            auto session = g_sessions.find(it->first);
+            std::shared_ptr<Session> dead;
+            if (session != g_sessions.end()) { dead = session->second; g_sessions.erase(session); }
+            closing.emplace_back(it->first, std::move(dead));
+            it = g_authorizations.erase(it);
+        }
+    }
+    for (auto &entry : closing) {
+        destroy_session(std::move(entry.second));
+        // Resource completion is not confirmed while its owner is unavailable.
+        send_signal(entry.first, "close", nullptr);
+    }
 }
 
 // ---- Mic intercom (Phase B.5) -------------------------------------------------
@@ -488,9 +568,18 @@ static void start_session(const std::string &id, const json &ice, bool camera,
                           std::shared_ptr<rctl::ControllerAuthorizationLease> lease = nullptr) {
     auto sess = std::make_shared<Session>();
     sess->lease = lease;
+    sess->id = id;
+    if (permissions.guest && (permissions.inputTouch || permissions.inputKeyboard || permissions.inputButtons))
+        sess->guestInput = std::make_shared<rctl::GuestInputState>();
     sess->camera = camera;
     rtc::Configuration config;
     add_ice_servers(config, ice);
+    if (permissions.guest) {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        auto it=g_authorizations.find(id);
+        if(it==g_authorizations.end()) return;
+        if(!it->second.payload.value("allow_direct",false)) config.iceTransportPolicy=rtc::TransportPolicy::Relay;
+    }
     auto pc = std::make_shared<rtc::PeerConnection>(config);
     sess->pc = pc;
 
@@ -746,14 +835,56 @@ static void start_session(const std::string &id, const json &ice, bool camera,
                 }
             }, context);
         });
+    }
+    if (permissions.deviceControl || permissions.inputTouch || permissions.inputKeyboard || permissions.inputButtons) {
         auto control = pc->createDataChannel("control");
         sess->control = control;
-        control->onMessage([lease](rtc::message_variant msg) {
+        control->onMessage([lease, permissions, id, input=sess->guestInput](rtc::message_variant msg) {
             if (!authorized(lease)) return;
-            if (!std::holds_alternative<std::string>(msg)) return;
+            if (!std::holds_alternative<std::string>(msg) || std::get<std::string>(msg).size()>1024) return;
             try {
                 json e = json::parse(std::get<std::string>(msg));
                 const std::string t = e.value("t", "");
+                if(permissions.guest) {
+                    std::unique_lock<std::mutex> lk(g_mtx);
+                    const double now = authorization_now();
+                    if (!lease || !lease->authorized(now) || !input || !g_sessions.count(id)) return;
+                    auto number=[&e](const char *key)->bool {return e.contains(key)&&e[key].is_number_integer()&&e[key]>=0&&e[key]<=1024;};
+                    // A motion flood must not strand a held key/contact. Valid
+                    // releases consume already bounded held state exactly once.
+                    const bool ownedRelease =
+                        (t == "t" && number("p") && number("i") && e["p"] == 2 && input->contacts.count(e["i"].get<int>())) ||
+                        (t == "k" && number("pg") && number("u") && number("d") && e["d"] == 0 &&
+                         input->keys.count({e["pg"].get<int>(), e["u"].get<int>()}));
+                    if (!input->admit(now) && !ownedRelease) return;
+                    if (now < g_ownerInputBusyUntil || !g_ownerContacts.empty() || !g_ownerKeys.empty() ||
+                        (!g_guestInputOwner.empty() && g_guestInputOwner != id)) {
+                        auto feedback = g_sessions.at(id)->stateDc;
+                        const bool notify = now - input->feedbackAt >= 1;
+                        if (notify) input->feedbackAt = now;
+                        lk.unlock();
+                        if (notify && feedback) {
+                            try { if (feedback->isOpen() && feedback->bufferedAmount() < 4096) feedback->send(std::string("{\"input_busy\":true}")); } catch (...) {}
+                        }
+                        return;
+                    }
+                    bool injected = false;
+                    if(t=="t" && permissions.inputTouch && number("p") && number("i") && e.contains("x") && e["x"].is_number() && e.contains("y") && e["y"].is_number()) {
+                        int p=e["p"].get<int>(),f=e["i"].get<int>();double x=e["x"].get<double>(),y=e["y"].get<double>();
+                        if(input->touch(p,f,x,y)) {injected=true;g_guestInputOwner=id;if(g_guest_event_cb)g_guest_event_cb(id.c_str(),lease->expiresAt,0,p,f,0,x,y);}
+                    } else if(t=="k" && number("pg") && number("u") && number("d")) {
+                        int pg=e["pg"].get<int>(),u=e["u"].get<int>(),d=e["d"].get<int>();
+                        if(input->key(pg,u,d,permissions.inputKeyboard,permissions.inputButtons,permissions.buttonMask)) {injected=true;g_guestInputOwner=id;if(g_guest_event_cb)g_guest_event_cb(id.c_str(),lease->expiresAt,1,pg,u,d,0,0);}
+                    }
+                    if (injected && input->feedbackAt > 0) {
+                        input->feedbackAt = 0;
+                        auto feedback = g_sessions.at(id)->stateDc;
+                        lk.unlock();
+                        try { if (feedback && feedback->isOpen()) feedback->send(std::string("{\"input_busy\":false}")); } catch (...) {}
+                    }
+                    return;
+                }
+                rctl_webrtc_owner_input_override();
                 if (t == "t" && g_touch_cb)
                     g_touch_cb(e.value("p", 0), e.value("i", 0), e.value("x", 0.0), e.value("y", 0.0));
                 else if (t == "k" && g_key_cb)
@@ -916,6 +1047,10 @@ extern "C" void rctl_webrtc_set_camera_keyframe_cb(void (*cb)(void)) {
     g_camera_keyframe_cb = cb;
 }
 
+extern "C" void rctl_webrtc_set_guest_input_cb(
+    void (*event)(const char *, double, int, int, int, int, double, double),
+    bool (*end)(const char *, bool)) { g_guest_event_cb = event; g_guest_end_cb = end; }
+
 extern "C" void rctl_webrtc_set_input_cb(void (*touch)(int, int, double, double),
                                          void (*key)(int, int, int)) {
     g_touch_cb = touch;
@@ -1023,13 +1158,30 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
             auto it = g_authorizations.find(id);
             if (it == g_authorizations.end()) return;
             lease = it->second.lease;
-            if (!lease->renew(p["authorization_revision"].get<int64_t>(), p["nonce"].get<std::string>(), authorization_now())) return;
-            pending = std::move(it->second.payload);
-            it->second.payload = nullptr;
+            double remaining=rctl::ControllerAuthorizationLease::lifetime;
+            if(it->second.guest) {
+                if(!p.contains("remaining_ms") || !p["remaining_ms"].is_number_integer())return;
+                int64_t ms=p["remaining_ms"].get<int64_t>();if(ms<1 || ms>20000)return;
+                remaining=(double)ms/1000;
+            }
+            if (!lease->renew(p["authorization_revision"].get<int64_t>(), p["nonce"].get<std::string>(), authorization_now(),remaining)) return;
+            if (it->second.guest && g_guestInputOwner == id && g_guest_event_cb) {
+                // Held input follows only protected device-issued lease replies,
+                // never a browser heartbeat or another session's renewal.
+                g_guest_event_cb(id.c_str(), lease->expiresAt, 2, 0, 0, 0, 0, 0);
+            }
+            if (!it->second.payload.value("opened",false)) {pending=it->second.payload;it->second.payload["opened"]=true;}
         }
         if (pending.is_object()) {
-            auto permissions = rctl::scopedWebRTCPermissions(pending["scopes"].get<std::vector<std::string>>());
+            rctl::WebRTCPermissions permissions;
+            if(pending.value("access_mode",std::string())=="guest-v1") {
+                if(!rctl::guestWebRTCPermissions(pending["permissions"].get<std::vector<std::string>>(),permissions))return;
+            } else permissions = rctl::scopedWebRTCPermissions(pending["scopes"].get<std::vector<std::string>>());
             try {
+                if (permissions.guest && (permissions.inputTouch || permissions.inputKeyboard || permissions.inputButtons) &&
+                    !guest_input_fence(id)) {
+                    throw std::runtime_error("SpringBoard guest input protocol unavailable");
+                }
                 start_session(id, pending.value("ice", json::array()), pending.value("role", std::string("screen")) == "camera", permissions, lease);
             } catch (...) {
                 rctl_webrtc_handle_signal(json{{"id", id}, {"kind", "close"}}.dump().c_str());
@@ -1048,10 +1200,17 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
         bool camera = false;
         rctl::WebRTCPermissions permissions = rctl::legacyWebRTCPermissions();
         if (payload.is_object()) {
-            if (payload.contains("role") && !payload["role"].is_string()) return;
+            if (payload.contains("role") && (!payload["role"].is_string() || (payload["role"]!="screen" && payload["role"]!="camera"))) return;
             ice = payload.contains("ice") ? payload["ice"] : json::array();
             camera = payload.value("role", std::string("screen")) == "camera";
-            if (payload.contains("scopes")) {
+            if(payload.contains("access_mode")) {
+                if(!payload["access_mode"].is_string() || payload["access_mode"]!="guest-v1" ||
+                   !payload.contains("permissions") || !payload["permissions"].is_array() ||
+                   !payload.contains("authorization_revision") || !payload.contains("allow_direct") || !payload["allow_direct"].is_boolean())return;
+                std::vector<std::string> rights;
+                for(const auto &right:payload["permissions"]) {if(!right.is_string())return;rights.push_back(right.get<std::string>());}
+                if(!rctl::guestWebRTCPermissions(rights,permissions))return;
+            } else if (payload.contains("scopes")) {
                 std::vector<std::string> scopes;
                 if (!payload["scopes"].is_array()) return;
                 for (const auto &scope : payload["scopes"]) {
@@ -1071,8 +1230,8 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
             if (revision < 1 || revision > 9007199254740991LL) return;
             {
                 std::lock_guard<std::mutex> lk(g_mtx);
-                if (!g_session_send.count(id) || g_authorizations.count(id) || g_sessions.count(id) || g_authorizations.size() >= 512) return;
-                g_authorizations.emplace(id, AuthorizedOpen{std::make_shared<rctl::ControllerAuthorizationLease>(revision, authorization_now()), payload});
+                if (!g_session_send.count(id) || g_authorizations.count(id) || g_sessions.count(id) || g_guestRetiring.count(id) || g_authorizations.size() + g_guestRetiring.size() >= 512) return;
+                g_authorizations.emplace(id, AuthorizedOpen{std::make_shared<rctl::ControllerAuthorizationLease>(revision, authorization_now()), payload, permissions.guest});
             }
             authorization_tick(authorization_now());
             return; // No SDP, media or input before a current-grant challenge reply.
@@ -1096,6 +1255,10 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
             if (it != g_sessions.end()) { dead = it->second; g_sessions.erase(it); }
         }
         destroy_session(dead);
+        bool needsFence = false;
+        { std::lock_guard<std::mutex> lk(g_mtx); needsFence = g_guestRetiring.count(id) != 0; }
+        const bool released = !needsFence || guest_input_fence(id);
+        send_signal(id, released ? "closed" : "close", nullptr);
         return;
     }
 
@@ -1128,11 +1291,12 @@ extern "C" void rctl_webrtc_handle_signal(const char *jsonStr) {
 extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us) {
     if (!data || len == 0) return;
 
-    std::vector<std::shared_ptr<rtc::Track>> tracks;
+    std::vector<std::shared_ptr<Session>> sessions;
     {
         std::lock_guard<std::mutex> lk(g_mtx);
         if (g_tracks.empty()) return;
-        tracks = g_tracks;  // snapshot; send outside the lock
+        for (const auto &entry : g_sessions)
+            if (!entry.second->camera && entry.second->track) sessions.push_back(entry.second);
     }
 
     rtc::binary au(reinterpret_cast<const std::byte *>(data),
@@ -1140,35 +1304,40 @@ extern "C" void rctl_webrtc_push_au(const uint8_t *data, size_t len, bool keyfra
     rtc::FrameInfo info(duration<double>((double)pts_us / 1e6));
     info.isKeyFrame = keyframe;
 
-    for (auto &t : tracks) {
-        if (!t->isOpen()) continue;
+    for (auto &session : sessions) {
+        auto &t = session->track;
+        std::lock_guard<std::mutex> send(session->sendGate);
+        if (!authorized(session->lease) || !t->isOpen()) continue;
         try { t->sendFrame(au, info); } catch (...) {}
     }
 
     if (keyframe)
-        wlog("keyframe " + std::to_string(len) + "B -> " + std::to_string(tracks.size()) + " track(s)");
+        wlog("keyframe " + std::to_string(len) + "B -> " + std::to_string(sessions.size()) + " track(s)");
 }
 
 extern "C" void rctl_webrtc_push_camera_au(const uint8_t *data, size_t len, bool keyframe, uint64_t pts_us) {
     if (!data || len == 0) return;
 
-    std::vector<std::shared_ptr<rtc::Track>> tracks;
+    std::vector<std::shared_ptr<Session>> sessions;
     {
         std::lock_guard<std::mutex> lk(g_mtx);
         if (g_camera_tracks.empty()) return;
-        tracks = g_camera_tracks;
+        for (const auto &entry : g_sessions)
+            if (entry.second->camera && entry.second->track) sessions.push_back(entry.second);
     }
 
     rtc::binary au(reinterpret_cast<const std::byte *>(data),
                    reinterpret_cast<const std::byte *>(data + len));
     rtc::FrameInfo info(duration<double>((double)pts_us / 1e6));
     info.isKeyFrame = keyframe;
-    for (auto &t : tracks) {
-        if (!t->isOpen()) continue;
+    for (auto &session : sessions) {
+        auto &t = session->track;
+        std::lock_guard<std::mutex> send(session->sendGate);
+        if (!authorized(session->lease) || !t->isOpen()) continue;
         try { t->sendFrame(au, info); } catch (...) {}
     }
     if (keyframe)
-        wlog("camera keyframe " + std::to_string(len) + "B -> " + std::to_string(tracks.size()) + " track(s)");
+        wlog("camera keyframe " + std::to_string(len) + "B -> " + std::to_string(sessions.size()) + " track(s)");
 }
 
 // Encode captured 48kHz PCM to Opus and send every open audio DataChannel. Opus

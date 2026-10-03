@@ -35,6 +35,9 @@ func (s *server) audit(r *http.Request, event string, args ...any) {
 func (s *server) auditAs(r *http.Request, actor auditActor, event string, args ...any) {
 	ip := s.clientIP(r)
 	sessionID, _, _ := parseSessionCookie(r) // empty for device/system events (no admin cookie)
+	if actor.Kind == "guest" {
+		sessionID = ""
+	}
 	if s.log != nil {
 		fields := []any{
 			"event", event,
@@ -55,6 +58,9 @@ func (s *server) auditAs(r *http.Request, actor auditActor, event string, args .
 // authenticated controller, then explicit ids in the event fields (a controller
 // finishing a pairing claim, a device on its own socket).
 func (s *server) actorFor(r *http.Request, args []any) auditActor {
+	if p, ok := guestFromContext(r.Context()); ok {
+		return auditActor{Kind: "guest", ID: p.SessionID, Label: p.Label}
+	}
 	if sessionID, _, ok := parseSessionCookie(r); ok {
 		return adminActor(r, sessionID)
 	}
