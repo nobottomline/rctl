@@ -559,6 +559,14 @@ local bind is deployment reconfiguration, not an implicit upgrade option.
 The direct-public-IPv4 profile has live acceptance; 1:1 NAT rendering and input
 validation have host tests but still require a separate NAT-host acceptance run.
 
+The unmanaged `relay/deploy/setup-coturn.sh` helper follows the same rule:
+`RELAYIP` defaults to `EXTIP` and must match an assigned local IPv4 before
+installation changes begin. Wildcard listening addresses remain valid; wildcard
+relay addresses do not. For an existing deployment, back up its configuration
+and correct only the relay bind and external mapping. Preserve its peer ACLs,
+credentials, certificates, ports and unrelated services. Verify a two-peer
+relay-only exchange; successful allocation alone does not prove data delivery.
+
 Only Caddy and the required TURN listeners are publicly reachable. Relay port
 8080 stays on a private container network and is never published publicly.
 

@@ -10,6 +10,7 @@
 # ports in the provider firewall too (ufw is often inactive on managed VPSes).
 #
 #   REALM=relay.example.com EXTIP=203.0.113.10 ./setup-coturn.sh
+# Behind 1:1 NAT, also set RELAYIP to the assigned local IPv4 and preserve ports.
 #
 # TLS (turns://) reuses the relay's Let's Encrypt cert if present so browsers
 # trust it on networks that block UDP. UDP 3478 is the standard STUN/TURN port;
@@ -17,14 +18,25 @@
 # pick — clients only know what the relay tells them).
 set -euo pipefail
 
-REALM="${REALM:?set REALM to the relay's public hostname}"
+REALM="${REALM:?set REALM to the public relay hostname}"
 EXTIP="${EXTIP:?set EXTIP to the VPS public IPv4}"
+RELAYIP="${RELAYIP:-$EXTIP}"
 PORT="${PORT:-3478}"
 TLS_PORT="${TLS_PORT:-5349}"
 MINP="${MINP:-49160}"
 MAXP="${MAXP:-49200}"
 CERT="/etc/letsencrypt/live/$REALM/fullchain.pem"
 PKEY="/etc/letsencrypt/live/$REALM/privkey.pem"
+
+# Keep wildcard listeners separate from the concrete relay socket bind. Otherwise
+# reverse external-address mapping can reject same-server relay-only peers.
+case "$RELAYIP" in
+  0.*|127.*|169.254.*) echo "RELAYIP must be an assigned non-loopback IPv4" >&2; exit 1 ;;
+esac
+if ! ip -o -4 address show | awk '{sub(/\/.*$/, "", $4); print $4}' | grep -Fx -- "$RELAYIP" >/dev/null; then
+  echo "RELAYIP must be assigned to a local IPv4 interface" >&2
+  exit 1
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -50,7 +62,8 @@ listening-port=$PORT
 tls-listening-port=$TLS_PORT
 listening-ip=0.0.0.0
 listening-ip=::
-external-ip=$EXTIP
+relay-ip=$RELAYIP
+external-ip=$EXTIP/$RELAYIP
 realm=$REALM
 server-name=$REALM
 fingerprint
