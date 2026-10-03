@@ -10,6 +10,22 @@ void rctl_webrtc_set_guest_operations(rctl_guest_request, bool (*)(const char *)
 static void denied(Context &context, const std::string &operation, json arguments) {
     bool rejected=false;try {run(context,operation,arguments);}catch (...) {rejected=true;}assert(rejected);
 }
+static json response(const char *owner, const std::string &body) {
+    struct Reply {
+        std::mutex mutex;
+        std::condition_variable ready;
+        std::string value;
+    } reply;
+    request(owner, now()+20, "[\"files.list\"]", body.data(), body.size(),
+        [](void *raw, const char *value) {
+            auto &reply=*static_cast<Reply *>(raw);
+            std::lock_guard<std::mutex> lock(reply.mutex);
+            reply.value=value;reply.ready.notify_one();
+        }, &reply);
+    std::unique_lock<std::mutex> lock(reply.mutex);
+    assert(reply.ready.wait_for(lock, std::chrono::seconds(5), [&] {return !reply.value.empty();}));
+    return json::parse(reply.value);
+}
 int main() {
     @autoreleasepool {
         char directory[]="/tmp/rctl-guest-dispatcher.XXXXXX";assert(mkdtemp(directory));
@@ -82,6 +98,28 @@ int main() {
         auto recording=run(recorder,"capture.status",json::object());
         assert(recording["microphone"]==true&&!recording.contains("camera"));
         deviceAction=nullptr;
+        // Native metadata that is not UTF-8 must not escape the reply boundary.
+        auto unencodable=json{{"id",71},{"result",{{"name",std::string("invalid-\xff",9)}}}};
+        bool strictEncodingFailed=false;
+        try { (void)unencodable.dump(); } catch(const json::exception &) {strictEncodingFailed=true;}
+        assert(strictEncodingFailed);
+        auto failed=json::parse(serializeResponse(unencodable,71));
+        assert(failed["id"]==71&&failed["error"]=="response_unavailable");
+        assert(json::parse(serializeResponse({{"result",std::string(65536,'x')}},71))["error"]=="response_too_large");
+        // Exercise the public asynchronous path, then a valid request to prove
+        // a malformed payload cannot strand pending work or expose its bytes.
+        auto malformed=std::make_shared<Context>();
+        malformed->owner="malformed-file-owner";malformed->deadline=now()+20;
+        malformed->rights={"files.list"};
+        malformed->exchange=std::make_unique<rctl::GuestFiles>(open(directory,O_RDONLY|O_DIRECTORY));
+        contexts[malformed->owner]=malformed;
+        auto invalid=response(malformed->owner.c_str(), R"({"id":71,"op":"files.list","args":{"path":"private-fixture)");
+        assert(invalid["error"]=="invalid_request");
+        assert(malformed->pending==0);
+        auto recovered=response(malformed->owner.c_str(), R"({"id":72,"op":"files.list","args":{}})");
+        assert(recovered["id"]==72&&recovered["result"].contains("items"));
+        assert(response(malformed->owner.c_str(), R"({"id":73,"op":"files.list","args":null})")["error"]=="invalid_request");
+        assert(end(malformed->owner.c_str()));
         std::filesystem::remove_all(root);
     }
 }

@@ -41,6 +41,22 @@ test('uploads commit only exact bounded chunks; cancellation removes partial wor
   assert.deepEqual(calls.map(c=>c.op),['files.upload.begin','files.upload.chunk','files.upload.cancel'])
   assert.equal(calls[1].args.offset,0)
 })
+test('failure to create a browser writer closes its admitted device transfer',async t=>{
+  const calls=[]
+  const {operations}=setup(t,message=>{calls.push(message);return {ok:true}})
+  await assert.rejects(operations.save({transfer:'owned-read',size:4,name:'test'},async()=>{throw new Error('Destination is unavailable')}),/Destination is unavailable/)
+  assert.deepEqual(calls.map(c=>[c.op,c.args]),[['transfer.close',{transfer:'owned-read'}]])
+  await operations.call('device.info')
+  assert.equal(calls.at(-1).op,'device.info')
+})
+test('cancellation before opening the destination releases the device transfer',async t=>{
+  const calls=[];let opened=false
+  const {operations}=setup(t,message=>{calls.push(message);return {ok:true}})
+  const abort=new AbortController();abort.abort()
+  await assert.rejects(operations.save({transfer:'cancelled-read',size:0,name:'empty'},async()=>{opened=true;assert.fail('Cancelled destination was opened')},abort.signal))
+  assert.equal(opened,false)
+  assert.deepEqual(calls.map(c=>[c.op,c.args]),[['transfer.close',{transfer:'cancelled-read'}]])
+})
 test('destructive confirmation carries the exact target to its issued token',async t=>{
   const calls=[]
   const {operations}=setup(t,message=>{calls.push(message);return message.op==='confirmation.issue'?{token:'owned-confirmation'}:{ok:true}})

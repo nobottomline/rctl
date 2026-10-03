@@ -174,7 +174,7 @@ export default function GuestWorkspace({ operations, ready, audio, microphone, t
     // Invoke the picker in the original user gesture, before any network await.
     const handle = !display && picker ? await picker({ suggestedName: 'device-download' }) : null
     const transfer = await operations.call<GuestTransfer>(op, args)
-    if (handle) { await operations.save(transfer, await handle.createWritable(), abort.current.signal, setProgress); return }
+    if (handle) { await operations.save(transfer, () => handle.createWritable(), abort.current.signal, setProgress); return }
     const blob = await operations.read(transfer, display ? 64 * 1024 * 1024 : 256 * 1024 * 1024, abort.current.signal)
     if (!mounted.current) return
     const objectURL = URL.createObjectURL(blob); urls.current.add(objectURL)

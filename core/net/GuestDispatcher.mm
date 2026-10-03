@@ -333,6 +333,17 @@ json run(Context &context,const std::string &op,const json &args) {
     // exporting it is a separate UI action (a viewer can always retain pixels).
     return readMetadata(context,file,right,contentType&&std::string(contentType)=="image/png"?"capture.png":"capture.jpg");
 }
+std::string serializeResponse(const json &result, uint64_t id) {
+    try {
+        auto value=result.dump();
+        if(value.size()>65536)return json{{"id",id},{"error","response_too_large"}}.dump();
+        return value;
+    } catch(const json::exception &) {
+        // Never let unencodable native metadata terminate the daemon or echo
+        // raw exception payloads. The caller still releases pending work.
+        return json{{"id",id},{"error","response_unavailable"}}.dump();
+    }
+}
 void request(const char *owner,double deadline,const char *rights,const char *body,size_t length,rctl_guest_reply reply,void *raw) {
     std::shared_ptr<Context> context;
     try {
@@ -362,10 +373,11 @@ void request(const char *owner,double deadline,const char *rights,const char *bo
                     if(now()-context->lastRequest>1){context->lastRequest=now();context->requests=0;}
                     if(++context->requests>100)throw std::runtime_error("rate_limited");
                     result={{"id",id},{"result",run(*context,operation,message["args"])}};
-                } catch(const std::exception &error) {result={{"id",id},{"error",error.what()}};}
+                } catch(const json::exception &) {result={{"id",id},{"error","invalid_request"}};}
+                  catch(const std::exception &error) {result={{"id",id},{"error",error.what()}};}
             }
             context->pending.fetch_sub(1);context->drained.notify_all();
-            auto value=result.dump();if(value.size()>65536)value=json{{"id",id},{"error","response_too_large"}}.dump();
+            auto value=serializeResponse(result,id);
             reply(raw,value.c_str());
         }
     });

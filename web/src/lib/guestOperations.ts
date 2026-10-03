@@ -1,5 +1,6 @@
 export type GuestResult = Record<string, unknown>
 export interface GuestTransfer { transfer: string; size: number; name: string }
+export interface GuestWriter { write: (data: Uint8Array<ArrayBuffer>) => Promise<void>; close: () => Promise<void>; abort: () => Promise<void> }
 export const guestEncode = (bytes: Uint8Array) => btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
 export const guestDecode = (value: string) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
 
@@ -76,9 +77,14 @@ export class GuestOperations {
       return new Blob(chunks)
     } finally { await this.call('transfer.close', { transfer: transfer.transfer }).catch(() => {}) }
   }
-  async save(transfer: GuestTransfer, writer: { write: (data: Uint8Array<ArrayBuffer>) => Promise<void>; close: () => Promise<void>; abort: () => Promise<void> }, signal?: AbortSignal, progress?: (fraction: number) => void) {
+  async save(transfer: GuestTransfer, destination: GuestWriter | (() => Promise<GuestWriter>), signal?: AbortSignal, progress?: (fraction: number) => void) {
     let offset = 0
+    let writer: GuestWriter | undefined
     try {
+      signal?.throwIfAborted()
+      // Opening the destination is part of transfer ownership: a rejected
+      // picker writer must still release the admitted device descriptor.
+      writer = typeof destination === 'function' ? await destination() : destination
       while (offset < transfer.size) {
         signal?.throwIfAborted()
         const result = await this.call<{ data: string; offset: number }>('transfer.read', { transfer: transfer.transfer, offset })
@@ -88,7 +94,7 @@ export class GuestOperations {
         await writer.write(bytes); offset += bytes.length; progress?.(transfer.size ? offset / transfer.size : 1)
       }
       signal?.throwIfAborted(); await writer.close()
-    } catch (error) { await writer.abort().catch(() => {}); throw error }
+    } catch (error) { await writer?.abort().catch(() => {}); throw error }
     finally { await this.call('transfer.close', { transfer: transfer.transfer }).catch(() => {}) }
   }
   async upload(file: File, path: string, overwrite: boolean, signal?: AbortSignal, progress?: (fraction: number) => void) {
