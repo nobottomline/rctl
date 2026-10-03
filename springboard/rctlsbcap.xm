@@ -25,7 +25,7 @@
 #include "input/PointerLease.h"
 #include "net/GuestInputState.h"
 #include <atomic>
-#include <memory>
+#include "net/RetainedState.h"
 #include <mutex>
 #include <string>
 #include <vector>
@@ -631,9 +631,9 @@ static void *ipc_manager(void *unused) {
             std::atomic<unsigned> pending{0};
             rctl::GuestInputState input; // touched only on the main queue
         };
-        struct GuestRegistry { std::mutex mutex; std::map<std::string, std::shared_ptr<GuestState>> states; std::map<std::string, std::shared_ptr<GuestState>> retiring; std::map<std::string, double> cancelled; };
-        auto guests = std::make_shared<GuestRegistry>();
-        auto releaseGuest = [](const std::shared_ptr<GuestState> &state) {
+        struct GuestRegistry { std::mutex mutex; std::map<std::string, rctl::RetainedState<GuestState>> states; std::map<std::string, rctl::RetainedState<GuestState>> retiring; std::map<std::string, double> cancelled; };
+        auto guests = rctl::RetainedState<GuestRegistry>::create();
+        auto releaseGuest = [](const rctl::RetainedState<GuestState> &state) {
             if(state->savedOutput >= 0 && std::fabs(rctl_get_output_volume() - state->setOutput) < 0.03) {
                 id controller=rctl_av_system_controller();SEL set=NSSelectorFromString(@"setVolumeTo:forCategory:");
                 if(controller&&[controller respondsToSelector:set])((BOOL(*)(id,SEL,float,id))objc_msgSend)(controller,set,(float)state->savedOutput,@"Audio/Video");
@@ -651,7 +651,7 @@ static void *ipc_manager(void *unused) {
             return (double)mach_continuous_time() * base.numer / base.denom / 1e9;
         };
         auto retireGuest = [guests, guestNow](const std::string &owner) {
-            std::vector<std::shared_ptr<GuestState>> closing;
+            std::vector<rctl::RetainedState<GuestState>> closing;
             std::lock_guard<std::mutex> lock(guests->mutex);
             if(!owner.empty() && owner != "_guest_preflight")guests->cancelled[owner]=guestNow()+20.1;
             for (auto it = guests->states.begin(); it != guests->states.end();) {
@@ -667,7 +667,7 @@ static void *ipc_manager(void *unused) {
         dispatch_source_t guestTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
         dispatch_source_set_timer(guestTimer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 10);
         dispatch_source_set_event_handler(guestTimer, ^{
-            std::vector<std::shared_ptr<GuestState>> expired;
+            std::vector<rctl::RetainedState<GuestState>> expired;
             {
                 std::lock_guard<std::mutex> lock(guests->mutex);
                 for (auto it = guests->states.begin(); it != guests->states.end();) {
@@ -696,13 +696,13 @@ static void *ipc_manager(void *unused) {
                 const double now = guestNow();
                 if (ownerLength == 0 || ownerLength == sizeof(event.owner) || !std::isfinite(event.deadline) ||
                     event.deadline <= now || event.deadline > now + 20.1 || (event.kind < 0 || event.kind > 2)) { free(buf); continue; }
-                std::shared_ptr<GuestState> state;
+                rctl::RetainedState<GuestState> state;
                 {
                     std::lock_guard<std::mutex> lock(guests->mutex);
                     const std::string owner(event.owner, ownerLength);
                     auto existing = guests->states.find(owner);
                     if (existing != guests->states.end()) state = existing->second;
-                    else if (event.kind != 2 && !guests->cancelled.count(owner) && guests->states.size() < 16 && guests->cancelled.size() < 512) { state = std::make_shared<GuestState>(); state->owner = owner; guests->states.emplace(owner, state); }
+                    else if (event.kind != 2 && !guests->cancelled.count(owner) && guests->states.size() < 16 && guests->cancelled.size() < 512) { state = rctl::RetainedState<GuestState>::create(); state->owner = owner; guests->states.emplace(owner, state); }
                     if (state) state->deadline.store(event.deadline);
                 }
                 if (event.kind == 2) { free(buf); continue; }
@@ -762,12 +762,12 @@ static void *ipc_manager(void *unused) {
                     NSString *operation = [command[@"operation"] isKindOfClass:[NSString class]] ? command[@"operation"] : nil;
                     NSDictionary *arguments = [command[@"args"] isKindOfClass:[NSDictionary class]] ? command[@"args"] : nil;
                     double deadline = [command[@"deadline"] doubleValue];
-                    std::shared_ptr<GuestState> state;
+                    rctl::RetainedState<GuestState> state;
                     if (owner.length && owner.length < 64 && operation && arguments && std::isfinite(deadline) && deadline > guestNow() && deadline <= guestNow() + 20.1) {
                         std::lock_guard<std::mutex> lock(guests->mutex);
                         auto it = guests->states.find(owner.UTF8String);
                         if (it != guests->states.end()) state = it->second;
-                        else if (!guests->cancelled.count(owner.UTF8String) && guests->states.size() < 16 && guests->cancelled.size() < 512) { state = std::make_shared<GuestState>(); state->owner = owner.UTF8String; guests->states.emplace(owner.UTF8String, state); }
+                        else if (!guests->cancelled.count(owner.UTF8String) && guests->states.size() < 16 && guests->cancelled.size() < 512) { state = rctl::RetainedState<GuestState>::create(); state->owner = owner.UTF8String; guests->states.emplace(owner.UTF8String, state); }
                         if (state) state->deadline = deadline;
                     }
                     if (!state || state->pending.fetch_add(1) >= 64) {

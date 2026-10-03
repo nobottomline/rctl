@@ -34,6 +34,23 @@ package and maintainer scripts use the standard `/var/jb` installation alias;
 runtime library resolution also supports libroot's relocated prefix. This does
 not qualify other bootstrap variants such as RootHide.
 
+### Cross-queue C++ ownership in SpringBoard
+
+The current toolchain's arm64e `std::shared_ptr` control block is incompatible
+with the tested iOS 14 libc++ runtime: final weak-count destruction fails pointer
+authentication. A standalone nested-block retirement fixture reproduced the
+same failure without input injection; switching libc++ headers alone did not
+resolve it. This surfaced during guest-session retirement in SpringBoard.
+
+Private guest state and its registry use `RetainedState`, a non-polymorphic,
+atomic strong-reference handle whose final destruction stays in the payload.
+There is no weak-reference, aliasing or external-deleter API. This preserves
+queued-work ownership without disabling pointer authentication or changing the
+process/IPC boundary. `tests/RetainedStateTest.mm` exercises 10,000 nested queue
+handoffs, registry retirement and exact-once destruction; run it on the affected
+arm64e device as well as the host sanitizer lane. A host pass cannot detect the
+old system runtime's authentication failure.
+
 ## Path ownership
 
 Paths fall into three groups and must not be prefixed indiscriminately:

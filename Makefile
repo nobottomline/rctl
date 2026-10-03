@@ -125,7 +125,12 @@ test-webrtc-permissions:
 	@/tmp/rctl-webrtc-permissions-test
 
 .PHONY: test
-test: test-guest-dispatcher
+test: test-guest-dispatcher test-retained-state
+.PHONY: test-retained-state
+test-retained-state:
+	@xcrun --sdk macosx clang++ -std=c++17 -fobjc-arc -Icore \
+		tests/RetainedStateTest.mm -framework Foundation -o /tmp/rctl-retained-state-test
+	@/tmp/rctl-retained-state-test
 .PHONY: test-guest-dispatcher
 test-guest-dispatcher:
 	@xcrun --sdk macosx clang++ -std=c++17 -Icore tests/VirtualMicOwnershipTest.mm \
