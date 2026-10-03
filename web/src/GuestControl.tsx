@@ -54,7 +54,9 @@ export default function GuestControl() {
       control.stop()
       setEnded(true)
       setKeyboard(false)
-      setStatus('Session disconnected')
+      const endedAt = Date.now()
+      setNow(endedAt)
+      setStatus(endedAt >= access.expires_at * 1000 ? 'Access expired' : 'Session disconnected')
       if (reason) setError(reason)
     }
     const release = () => {
@@ -172,7 +174,7 @@ export default function GuestControl() {
       <canvas ref={canvas} /><video ref={video} />
     </div>
     <aside className="guest-toolbar" aria-label="Temporary device access">
-      <div><strong>{access.label}</strong><span role="status">{status} · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')} remaining</span></div>
+      <div><strong>{access.label}</strong><span role="status">{status}{!ended && <> · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')} remaining</>}</span></div>
       <details><summary>{access.permissions.length === 1 && guestHas('screen.view') ? 'View only' : 'Permitted actions'} · {access.permissions.length}</summary>
         <ul>{GUEST_PERMISSIONS.filter((p) => access.permissions.includes(p.id)).map((p) => <li key={p.id}>{p.label}</li>)}</ul>
       </details>
@@ -186,7 +188,7 @@ export default function GuestControl() {
           {guestHas('input.button.system_ui') && <><button onClick={() => engine.current?.springboard(1)}>Control Center</button><button onClick={() => engine.current?.springboard(2)}>Notifications</button></>}</>}
       </div>}
       {!ended && access.permissions.some(right => !['screen.view','input.touch','input.keyboard','input.button.home','input.button.lock','input.button.volume','input.button.system_ui'].includes(right)) && <GuestWorkspace engine={engine} operations={operations} ready={toolsReady} audio={audio} microphone={microphone} talk={talk} />}
-      {ended && <p>The connection is closed. To continue with current permissions, <a href="/guest/control">connect again</a>.</p>}
+      {ended && (seconds === 0 ? <p>Access expired. Ask the owner for a new invitation.</p> : <p>The connection is closed. To continue with current permissions, <a href="/guest/control">connect again</a>.</p>)}
       <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>
       {error && <p role="alert">{error}</p>}
     </aside>
