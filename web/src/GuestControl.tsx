@@ -29,6 +29,18 @@ export default function GuestControl() {
   const [leaving, setLeaving] = useState(false)
   const [keyboard, setKeyboard] = useState(false)
 
+  // Keep expiry presentation current after transport teardown without polling
+  // the network or retaining a per-second clock for a disconnected session.
+  useEffect(() => {
+    const refresh = () => setNow(Date.now())
+    if (ended) {
+      const deadline = window.setTimeout(refresh, Math.max(0, access.expires_at * 1000 - Date.now()) + 1)
+      return () => clearTimeout(deadline)
+    }
+    const clock = window.setInterval(refresh, 1000)
+    return () => clearInterval(clock)
+  }, [ended, access.expires_at])
+
   useEffect(() => {
     const held = new Set<number>()
     const touches = new Map<number, { finger: number; x: number; y: number }>()
@@ -100,7 +112,6 @@ export default function GuestControl() {
     const abort = new AbortController()
     let pending = false
     const clock = window.setInterval(async () => {
-      setNow(Date.now())
       if (stopped || pending) return
       pending = true
       const timeout = window.setTimeout(end, 4000)
@@ -174,7 +185,7 @@ export default function GuestControl() {
       <canvas ref={canvas} /><video ref={video} />
     </div>
     <aside className="guest-toolbar" aria-label="Temporary device access">
-      <div><strong>{access.label}</strong><span role="status">{status}{!ended && <> · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')} remaining</>}</span></div>
+      <div><strong>{access.label}</strong><span role="status">{seconds === 0 ? 'Access expired' : status}{!ended && <> · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')} remaining</>}</span></div>
       <details><summary>{access.permissions.length === 1 && guestHas('screen.view') ? 'View only' : 'Permitted actions'} · {access.permissions.length}</summary>
         <ul>{GUEST_PERMISSIONS.filter((p) => access.permissions.includes(p.id)).map((p) => <li key={p.id}>{p.label}</li>)}</ul>
       </details>
@@ -190,7 +201,7 @@ export default function GuestControl() {
       {!ended && access.permissions.some(right => !['screen.view','input.touch','input.keyboard','input.button.home','input.button.lock','input.button.volume','input.button.system_ui'].includes(right)) && <GuestWorkspace engine={engine} operations={operations} ready={toolsReady} audio={audio} microphone={microphone} talk={talk} />}
       {ended && (seconds === 0 ? <p>Access expired. Ask the owner for a new invitation.</p> : <p>The connection is closed. To continue with current permissions, <a href="/guest/control">connect again</a>.</p>)}
       <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>
-      {error && <p role="alert">{error}</p>}
+      {error && seconds > 0 && <p role="alert">{error}</p>}
     </aside>
   </main>
 }
