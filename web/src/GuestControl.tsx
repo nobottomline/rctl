@@ -28,6 +28,7 @@ export default function GuestControl() {
   const [error, setError] = useState('')
   const [leaving, setLeaving] = useState(false)
   const [keyboard, setKeyboard] = useState(false)
+  const [controlsExpanded, setControlsExpanded] = useState(true)
 
   // Keep expiry presentation current after transport teardown without polling
   // the network or retaining a per-second clock for a disconnected session.
@@ -186,6 +187,8 @@ export default function GuestControl() {
     </div>
     <aside className="guest-toolbar" aria-label="Temporary device access">
       <div><strong>{access.label}</strong><span role="status">{seconds === 0 ? 'Access expired' : status}{!ended && <> · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')} remaining</>}</span></div>
+      {!ended && guestHas('screen.view') && <button aria-expanded={controlsExpanded} aria-controls="guest-controls" onClick={() => setControlsExpanded(!controlsExpanded)}>{controlsExpanded ? 'Hide controls' : 'Show controls'}</button>}
+      <div id="guest-controls" hidden={!controlsExpanded && !ended}>
       <details><summary>{access.permissions.length === 1 && guestHas('screen.view') ? 'View only' : 'Permitted actions'} · {access.permissions.length}</summary>
         <ul>{GUEST_PERMISSIONS.filter((p) => access.permissions.includes(p.id)).map((p) => <li key={p.id}>{p.label}</li>)}</ul>
       </details>
@@ -202,6 +205,7 @@ export default function GuestControl() {
       {ended && (seconds === 0 ? <p>Access expired. Ask the owner for a new invitation.</p> : <p>The connection is closed. To continue with current permissions, <a href="/guest/control">connect again</a>.</p>)}
       <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>
       {error && seconds > 0 && <p role="alert">{error}</p>}
+      </div>
     </aside>
   </main>
 }
