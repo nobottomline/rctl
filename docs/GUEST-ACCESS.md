@@ -254,10 +254,28 @@ RTC checked files without screen authority, bounded text preview, revocation
 removing tools/data, playback-only visibility and mobile layout. These browser
 fixtures do not qualify physical media or input.
 
+Physical rootful installation of commit `08fcf842138a` passed on 2026-10-03
+with package `0.4.4~test.20261003175600.08fcf842138a`: dpkg reported
+`install ok installed`, the deployment watchdog confirmed SpringBoard IPC,
+and the device reconnected to its configured relay. Independent SSH remained
+available. The native API advertises both guest contracts. A real Chrome
+connection through an independent loopback SSH tunnel decoded an 834 × 1112
+WebRTC screen; the active SpringBoard snapshot returned a valid PNG. No screen
+content was retained in qualification evidence. A second clean installation
+with the corrected deployment script confirmed IPC after seven seconds. A
+device-local Foundation comparison against a separate temporary pre-install
+copy confirmed unchanged DeviceID and all established relay credentials;
+the helper and temporary copy were removed. Missing, empty and populated log
+counter checks and shell syntax validation passed. These checks establish owner
+LAN compatibility on this rootful artifact; guest authorization and retirement
+still require the matching relay candidate and real guest sessions.
+
 The configured rootless test device is reachable as an ordinary user, but the
-independent SSH install requires operator sudo authentication. No device
-installation or physical expanded-feature acceptance is recorded here yet.
-Relay deployment remains a separate exact-artifact acceptance gate.
+independent SSH install requires operator sudo authentication. Rootless
+expanded-feature runtime acceptance is not recorded. The existing VPS passed
+trusted HTTPS, SQLite and authenticated device-tunnel preflight; the expanded
+relay candidate has not been deployed. Exact-artifact deployment remains a
+separate acceptance gate.
 
 Expanded operations require exact-build verification of: independent channels,
 forged/denied requests, cross-session confirmations/transfers, path and symlink

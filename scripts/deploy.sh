@@ -62,6 +62,13 @@ probe_sb_ipc() {
     curl -fsS --max-time 3 http://127.0.0.1:8080/v1/deviceinfo >/dev/null 2>&1
 }
 
+connection_count() {
+  local count
+  count=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || true)
+  # grep emits nothing when the log does not exist yet.
+  printf '%s\n' "${count:-0}"
+}
+
 # 1) Remove any existing install (clean respring clears the codesign cache).
 # Foundation may rewrite this plist in binary form after enrollment. Do not
 # inspect it with grep: binary plists can contain a valid DeviceSecret without a
@@ -73,12 +80,19 @@ fi
 if dpkg -l | grep -q "$PKG"; then dpkg -r "$PKG" >/dev/null 2>&1 || true; sleep 8; fi
 
 # 2) Fresh install, watched.
-# grep -c already prints a clean "0" when nothing matches (and exits 1, which we
-# swallow with || true). The old `|| echo 0` APPENDED a second 0 -> "0\n0" ->
-# every later `[ "$N" -gt ... ]` died with "integer expression expected".
 BEFORE=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || true)
-CONN0=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || true)
-dpkg -i /tmp/rctl.deb 2>&1 | grep -iE "Setting up|error" || true
+CONN0=$(connection_count)
+INSTALL_LOG=$(mktemp /tmp/rctl-install.XXXXXX)
+chmod 0600 "$INSTALL_LOG"
+if dpkg -i /tmp/rctl.deb >"$INSTALL_LOG" 2>&1; then
+  grep -iE "Setting up|error" "$INSTALL_LOG" || true
+  rm -f "$INSTALL_LOG"
+else
+  grep -iE "Setting up|error" "$INSTALL_LOG" || true
+  rm -f "$INSTALL_LOG"
+  echo "DEPLOY=FAILED — package installation failed; IPC is not acceptance of an old install"
+  exit 1
+fi
 if [ -s "$RELAY_PREF_BACKUP" ]; then
   # A personalized package may intentionally install a replacement config. It
   # wins when non-empty; a public package installs none, so restore the backup.
@@ -95,7 +109,7 @@ i=0
 while [ "$i" -lt 30 ]; do
   i=$((i+1)); sleep 1
   NOW=$(ls "$CRDIR" 2>/dev/null | grep -c SpringBoard || true)
-  CONN=$(grep -c "SB connected" /tmp/rctld.log 2>/dev/null || true)
+  CONN=$(connection_count)
   if [ "$NOW" -gt "$BEFORE" ]; then
     # SpringBoard left a fresh crash report: a tweak crash. Disable the dylib and
     # respring so the device comes up clean instead of crash-looping.
