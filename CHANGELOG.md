@@ -5,6 +5,41 @@ determined by GitHub Releases, not by the presence of a changelog entry.
 
 ## Unreleased
 
+## 0.4.5
+
+Release candidate pending version-scoped device and fresh-host qualification.
+Changes since stable `0.4.4`:
+
+### Added
+
+- Temporary browser invitations for one device, with expiry, view-only presets,
+  and 46 explicit permissions for input, audio, camera, files, media, terminal,
+  and supported system operations. The relay and device enforce each operation.
+- Admin management of guest grants and sessions. Permission changes, revocation,
+  and expiry retire device authority and guest-owned resources; the admin shows
+  whether device retirement has been confirmed.
+- Automatic invitation entry into the themed device workspace, with compact
+  permission-specific tools, responsive layouts, and clear reconnect, expiry,
+  and owner-revocation states.
+- Separate experimental tailnet qualification probes with authenticated HTTPS
+  browser enrollment and terminal transport. These are opt-in engineering tools.
+
+### Fixed
+
+- An arm64e SpringBoard crash during asynchronous guest-resource retirement.
+- Idle signaling disconnects, stale ICE events, and handling of rejected
+  downloads and failed guest replies.
+- Guest tool state and focus across panel changes, plus accurate expiry and
+  permission-change presentation after connection teardown.
+- Unmanaged TURN socket binding and deployment installation/log diagnostics.
+- GitHub Actions workflow lint for relay candidate release notes.
+
+Physical guest camera, input retirement, Talk audibility, partition recovery, and
+rootless runtime qualification remain open; see `docs/GUEST-ACCESS.md`. Screen
+video recording and guest package installation are not implemented product
+features. Native controllers remain in development and are not distributed in
+the device packages. Candidate builds do not advance stable catalogs or APT.
+
 ## 0.4.4
 
 Consolidates the unpublished candidates and qualification prereleases below.
