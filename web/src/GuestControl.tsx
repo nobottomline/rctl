@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Boxes, Camera, ChevronDown, Clock3, FolderOpen, House, Images, Keyboard, Lock, LogOut, Moon, RotateCw, Settings2, ShieldCheck, SlidersHorizontal, SquareTerminal, Sun, Volume1, Volume2, Wand2, Headphones } from 'lucide-react'
 import { Sheet } from './components/Sheet'
 import { applyTheme, getStoredTheme, type Theme } from './lib/theme'
-import { guestTime, guestTools, type GuestTool } from './lib/guestNavigation'
+import { guestEndState, guestTime, guestTools, type GuestTool } from './lib/guestNavigation'
 import { ControlEngine, codeToUsage } from './lib/engine'
 import { GUEST_ACCESS, guestHas, guestButtonHas, type GuestAccess } from './lib/rctl'
 import { GUEST_PERMISSIONS } from './lib/guestPermissions.generated'
@@ -84,6 +84,7 @@ export default function GuestControl() {
   useEffect(() => {
     const held = new Set<number>()
     const touches = new Map<number, { finger: number; x: number; y: number }>()
+    const closedCheck = new AbortController()
     let stopped = false
     const control = new ControlEngine(stage.current!, canvas.current!, video.current!, {
       onGuestOperations: (channel) => operations.attach(channel),
@@ -96,7 +97,8 @@ export default function GuestControl() {
     })
     operations.onReady = setToolsReady
     engine.current = control
-    const end = (reason?: string) => {
+    const end = (reason?: string, kind?: 'Access ended' | 'Permissions changed') => {
+      if (!reason && !kind) closedCheck.abort()
       if (stopped) return
       stopped = true
       abort.abort()
@@ -108,8 +110,22 @@ export default function GuestControl() {
       setKeyboard(false)
       const endedAt = Date.now()
       setNow(endedAt)
-      setStatus(endedAt >= access.expires_at * 1000 ? 'Access expired' : 'Session disconnected')
-      if (reason) setError(reason)
+      setStatus(endedAt >= access.expires_at * 1000 ? 'Access expired' : kind ?? 'Session disconnected')
+      if (kind) setError('')
+      else if (reason) setError(reason.includes('signaling connection') ? 'The relay connection was interrupted.' : reason)
+      // Authority and resources are already retired. This bounded, read-only
+      // check only explains the closure; it never renews or resumes a lease.
+      if (reason && !kind && endedAt < access.expires_at * 1000) {
+        const timeout = window.setTimeout(() => closedCheck.abort(), 4000)
+        void fetch('/api/guest/session', { cache: 'no-store', signal: closedCheck.signal }).then(async response => {
+          if (!response.ok && response.status !== 401 && response.status !== 403) return
+          const current = response.ok ? await response.json() as GuestAccess : null
+          if (closedCheck.signal.aborted) return
+          const next = guestEndState(access, current)
+          setStatus(next)
+          if (next !== 'Session disconnected') setError('')
+        }).catch(() => {}).finally(() => clearTimeout(timeout))
+      }
     }
     const release = () => {
       for (const usage of held) control.key(usage, 0)
@@ -158,9 +174,9 @@ export default function GuestControl() {
       const timeout = window.setTimeout(end, 4000)
       try {
         const response = await fetch('/api/guest/session', { cache: 'no-store', signal: abort.signal })
-        if (!response.ok) { end(); return }
+        if (!response.ok) { end(undefined, response.status === 401 || response.status === 403 ? 'Access ended' : undefined); return }
         const current = await response.json() as GuestAccess
-        if (current.session_id !== access.session_id || current.authorization_revision !== access.authorization_revision) end()
+        if (current.session_id !== access.session_id || current.authorization_revision !== access.authorization_revision) end(undefined, current.session_id !== access.session_id ? 'Access ended' : 'Permissions changed')
       } catch { if (!abort.signal.aborted) end() }
       finally { clearTimeout(timeout); pending = false }
     }, 5000)
@@ -168,6 +184,7 @@ export default function GuestControl() {
     control.start()
     return () => {
       stopped = true
+      closedCheck.abort()
       abort.abort()
       clearTimeout(deadline); clearInterval(clock)
       release(); operations.stop(); audio.mute(); microphone.mute(); talk.stop(); control.stop()
@@ -273,6 +290,6 @@ export default function GuestControl() {
         </Sheet>
       </div>
     </>}
-    {ended && <section className="guest-ended" aria-labelledby="guest-ended-title"><ShieldCheck size={28} /><p className="guest-eyebrow">Temporary access</p><h1 id="guest-ended-title">{seconds === 0 ? 'Access expired' : status === 'Access ended' ? 'Access ended' : 'Connection closed'}</h1><p>{seconds === 0 || status === 'Access ended' ? 'Ask the owner for a new invitation to connect again.' : 'Your screen and device tools have been disconnected. You can reconnect if the owner still allows access.'}</p>{error && seconds > 0 && <p className="guest-error" role="alert">{error}</p>}<div className="guest-ended-actions">{seconds > 0 && status !== 'Access ended' && <a className="guest-primary" href="/guest/control">Reconnect</a>}{seconds > 0 && status !== 'Access ended' && <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>}</div></section>}
+    {ended && <section className="guest-ended" aria-labelledby="guest-ended-title"><ShieldCheck size={28} /><p className="guest-eyebrow">Temporary access</p><h1 id="guest-ended-title">{seconds === 0 ? 'Access expired' : status === 'Access ended' ? 'Access ended' : status === 'Permissions changed' ? 'Permissions changed' : 'Connection closed'}</h1><p>{seconds === 0 || status === 'Access ended' ? 'Ask the owner for a new invitation to connect again.' : status === 'Permissions changed' ? 'The owner changed your permissions. Reconnect to continue with the updated access.' : 'Your screen and device tools have been disconnected. You can reconnect if the owner still allows access.'}</p>{error && seconds > 0 && <p className="guest-error" role="alert">{error}</p>}<div className="guest-ended-actions">{seconds > 0 && status !== 'Access ended' && <button className="guest-primary" onClick={() => window.location.reload()}>Reconnect</button>}{seconds > 0 && status !== 'Access ended' && <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>}</div></section>}
   </main>
 }

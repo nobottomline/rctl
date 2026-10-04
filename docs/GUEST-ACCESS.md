@@ -84,6 +84,14 @@ focus is contained and restored; Escape closes the sheet without injecting a
 device key. Grant changes, expiry, revoke and transport teardown still retire
 authority and clear the device screen. UI grouping never changes device policy.
 
+After transport closure, a bounded read-only session check distinguishes a
+revised grant from ended access and an ordinary connection loss. It runs only
+after local resource retirement and cannot renew authority. Revised grants
+offer a full document reload so that bootstrap permissions and transports are
+fresh, including browsers that suppress same-URL link navigation. Ended grants
+offer no reconnect action. Technical WebSocket close codes are not presented
+as the explanation for an administrator's permission change.
+
 On 2026-10-04 the redesigned client passed the web suite and production build,
 the relay race suite and vet. Computer-use checks with an isolated neutral
 screen/operations fixture cover desktop and mobile layouts, both themes,

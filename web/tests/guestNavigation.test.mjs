@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 const source = stripTypeScriptTypes(await readFile(new URL('../src/lib/guestNavigation.ts', import.meta.url), 'utf8'))
-const { guestTools, guestTime } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
+const { guestTools, guestTime, guestEndState } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 
 test('guest navigation shows only the tools supported by the exact granted rights', () => {
   assert.deepEqual(guestTools(['screen.view', 'input.keyboard', 'input.button.home']), [])
@@ -17,4 +17,12 @@ test('guest navigation shows only the tools supported by the exact granted right
 test('guest countdown is bounded and displays hours for long grants', () => {
   assert.equal(guestTime(-1), '0:00'); assert.equal(guestTime(59.2), '1:00')
   assert.equal(guestTime(3600), '1:00:00'); assert.equal(guestTime(86400), '24:00:00')
+})
+
+test('closed guests distinguish revoked, revised and temporarily disconnected sessions', () => {
+  const previous = { session_id: 'disposable-session', authorization_revision: 1 }
+  assert.equal(guestEndState(previous, null), 'Access ended')
+  assert.equal(guestEndState(previous, { ...previous, session_id: 'another-session' }), 'Access ended')
+  assert.equal(guestEndState(previous, { ...previous, authorization_revision: 2 }), 'Permissions changed')
+  assert.equal(guestEndState(previous, previous), 'Session disconnected')
 })

@@ -10,6 +10,13 @@ export const GUEST_TOOLS = [
 
 export type GuestTool = typeof GUEST_TOOLS[number]['id']
 
+type SessionIdentity = { session_id: string; authorization_revision: number }
+export function guestEndState(previous: SessionIdentity, current: SessionIdentity | null) {
+  if (!current || current.session_id !== previous.session_id) return 'Access ended'
+  if (current.authorization_revision !== previous.authorization_revision) return 'Permissions changed'
+  return 'Session disconnected'
+}
+
 // Navigation describes existing scoped tools; it never adds authority. A lone
 // capture.download right has no source to export without a recording right.
 export function guestTools(permissions: readonly string[]) {
