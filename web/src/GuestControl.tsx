@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { Boxes, Camera, ChevronDown, Clock3, FolderOpen, House, Images, Keyboard, Lock, LogOut, Moon, RotateCw, Settings2, ShieldCheck, SlidersHorizontal, SquareTerminal, Sun, Volume1, Volume2, Wand2, Headphones } from 'lucide-react'
+import { Sheet } from './components/Sheet'
+import { applyTheme, getStoredTheme, type Theme } from './lib/theme'
+import { guestTime, guestTools, type GuestTool } from './lib/guestNavigation'
 import { ControlEngine, codeToUsage } from './lib/engine'
 import { GUEST_ACCESS, guestHas, guestButtonHas, type GuestAccess } from './lib/rctl'
 import { GUEST_PERMISSIONS } from './lib/guestPermissions.generated'
@@ -28,7 +32,42 @@ export default function GuestControl() {
   const [error, setError] = useState('')
   const [leaving, setLeaving] = useState(false)
   const [keyboard, setKeyboard] = useState(false)
-  const [controlsExpanded, setControlsExpanded] = useState(true)
+  const tools = guestTools(access.permissions)
+  const [controlsExpanded, setControlsExpanded] = useState(false)
+  const [view, setView] = useState<GuestTool | 'access' | null>(() => guestHas('screen.view') ? null : tools[0]?.id ?? 'access')
+  const [theme, setTheme] = useState<Theme>(getStoredTheme)
+  const [activities, setActivities] = useState<string[]>([])
+  const panel = useRef<HTMLDivElement>(null)
+  const controlsButton = useRef<HTMLButtonElement>(null)
+  const activeTool = tools.find(tool => tool.id === view)
+
+  useEffect(() => {
+    const nav = panel.current?.querySelector<HTMLElement>('.guest-tool-nav')
+    if (!view || !nav || ended) return
+    const reveal = () => nav.querySelector<HTMLElement>('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'center' })
+    reveal()
+    const observer = new ResizeObserver(reveal)
+    observer.observe(nav)
+    return () => observer.disconnect()
+  }, [view, ended])
+
+  useEffect(() => {
+    if (!view || ended) return
+    setKeyboard(false)
+    const previous = document.activeElement
+    panel.current?.querySelector<HTMLElement>('[data-panel-title]')?.focus()
+    return () => {
+      if (previous instanceof HTMLElement && previous !== document.body && previous.isConnected && previous.getClientRects().length) previous.focus()
+      else controlsButton.current?.focus()
+    }
+  }, [view, ended])
+
+  const show = (next: GuestTool | 'access') => { setView(next); setControlsExpanded(false) }
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'warm' : 'dark'
+    applyTheme(next); setTheme(next)
+  }
+
 
   // Keep expiry presentation current after transport teardown without polling
   // the network or retaining a per-second clock for a disconnected session.
@@ -80,6 +119,7 @@ export default function GuestControl() {
     }
     const surface = stage.current!
     const down = (event: PointerEvent) => {
+      setControlsExpanded(false)
       if (!guestHas('input.touch') || stopped || touches.size >= 10 || touches.has(event.pointerId)) return
       const finger = Array.from({ length: 10 }, (_, i) => i).find((i) => ![...touches.values()].some((p) => p.finger === i))!
       const contact = { finger, x: event.clientX, y: event.clientY }
@@ -181,31 +221,58 @@ export default function GuestControl() {
     finally { clearTimeout(timeout); setLeaving(false) }
   }
   const seconds = Math.max(0, Math.ceil((access.expires_at * 1000 - now) / 1000))
-  return <main className={`guest-control${guestHas('screen.view')?'':' guest-tools-only'}`}>
+  const toolIcons = { console: Wand2, sound: Headphones, camera: Camera, media: Images, files: FolderOpen, system: Boxes, terminal: SquareTerminal }
+  const screen = guestHas('screen.view')
+  const viewOnly = access.permissions.length === 1 && screen
+  const closePanel = () => setView(null)
+  const trapPanel = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePanel(); return }
+    if (event.key !== 'Tab') return
+    const elements = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')].filter(element => element.getClientRects().length > 0)
+    if (!elements.length) return
+    const first = elements[0], last = elements[elements.length - 1]
+    if (event.shiftKey && (document.activeElement === first || !elements.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last.focus() }
+    else if (!event.shiftKey && (document.activeElement === last || !elements.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus() }
+  }
+  const panelTitle = <h2 id="guest-panel-title" data-panel-title tabIndex={-1}>{view === 'access' ? 'Your access' : activeTool?.label}</h2>
+  return <main className={`guest-control${screen ? '' : ' guest-tools-only'}`}>
     <div ref={stage} className="guest-stage" aria-label="Device screen" tabIndex={guestHas('input.keyboard') ? 0 : undefined} style={{ touchAction: guestHas('input.touch') ? 'none' : 'auto' }}>
       <canvas ref={canvas} /><video ref={video} />
     </div>
-    <aside className="guest-toolbar" aria-label="Temporary device access">
-      <div><strong>{access.label}</strong><span role="status">{seconds === 0 ? 'Access expired' : status}{!ended && <> · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')} remaining</>}</span></div>
-      {!ended && guestHas('screen.view') && <button aria-expanded={controlsExpanded} aria-controls="guest-controls" onClick={() => setControlsExpanded(!controlsExpanded)}>{controlsExpanded ? 'Hide controls' : 'Show controls'}</button>}
-      <div id="guest-controls" hidden={!controlsExpanded && !ended}>
-      <details><summary>{access.permissions.length === 1 && guestHas('screen.view') ? 'View only' : 'Permitted actions'} · {access.permissions.length}</summary>
-        <ul>{GUEST_PERMISSIONS.filter((p) => access.permissions.includes(p.id)).map((p) => <li key={p.id}>{p.label}</li>)}</ul>
-      </details>
-      {!ended && <div className="guest-actions">
-        {guestHas('screen.view') && <button onClick={() => engine.current?.rotate()}>Rotate view</button>}
-        {!inputBlocked && guestHas('input.keyboard') && <><button aria-pressed={keyboard} onClick={() => {
-          setKeyboard(!keyboard)
-          if (!keyboard) stage.current?.focus()
-        }}>{keyboard ? 'Release keyboard (Esc)' : 'Use keyboard'}</button><button onClick={() => engine.current?.key(0x29, 2)}>Send Escape</button></>}
-        {!inputBlocked && <>{(['home', 'lock', 'volup', 'voldn'] as const).filter(guestButtonHas).map((key) => <button key={key} onClick={() => engine.current?.sysPress(key)}>{({ home: 'Home', lock: 'Lock', volup: 'Volume +', voldn: 'Volume −' })[key]}</button>)}
-          {guestHas('input.button.system_ui') && <><button onClick={() => engine.current?.springboard(1)}>Control Center</button><button onClick={() => engine.current?.springboard(2)}>Notifications</button></>}</>}
-      </div>}
-      {!ended && access.permissions.some(right => !['screen.view','input.touch','input.keyboard','input.button.home','input.button.lock','input.button.volume','input.button.system_ui'].includes(right)) && <GuestWorkspace engine={engine} operations={operations} ready={toolsReady} audio={audio} microphone={microphone} talk={talk} />}
-      {ended && (seconds === 0 ? <p>Access expired. Ask the owner for a new invitation.</p> : <p>The connection is closed. To continue with current permissions, <a href="/guest/control">connect again</a>.</p>)}
-      <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>
-      {error && seconds > 0 && <p role="alert">{error}</p>}
+    <header className="guest-hud">
+      <button className="guest-session" onClick={() => !ended && show('access')} disabled={ended} aria-label="View access permissions">
+        <ShieldCheck size={16} aria-hidden="true" />
+        <span className="guest-session-name">{access.label}</span>
+        {viewOnly && <span className="guest-mode">View only</span>}
+      </button>
+      <div className="guest-connection" role="status"><i className={ended ? 'is-ended' : status === 'Connected' ? 'is-live' : ''} />{seconds === 0 ? 'Access expired' : status}</div>
+      {!ended && <div className="guest-clock" title="Access time remaining"><Clock3 size={13} aria-hidden="true" /><span>{guestTime(seconds)}</span></div>}
+      {!ended && keyboard && <span className="guest-mode">Keyboard captured · Esc to release</span>}
+      {!ended && activities.length > 0 && <span className="guest-activity" title={activities.join(' · ')}>{activities.join(' · ')}</span>}
+    </header>
+
+    {!ended && !screen && !view && <section className="guest-empty"><ShieldCheck size={28} /><h1>Shared device tools</h1><p>The owner has shared {tools.length ? 'the tools below' : 'limited access'}. Choose an available tool to continue.</p><div className="guest-launchers">{tools.map(tool => { const Icon = toolIcons[tool.id]; return <button key={tool.id} onClick={() => show(tool.id)}><Icon size={20} />{tool.label}</button> })}</div><button onClick={() => show('access')}>View permissions</button></section>}
+
+    {!ended && <>
+      <button ref={controlsButton} className={`guest-controls-button${controlsExpanded ? ' is-active' : ''}`} aria-label="Controls" aria-expanded={controlsExpanded} aria-controls="guest-controls" onClick={() => { setView(null); setControlsExpanded(!controlsExpanded) }}><Settings2 size={20} /></button>
+      <aside id="guest-controls" className="guest-control-center" hidden={!controlsExpanded} aria-label="Guest controls">
+        <header><strong>Control</strong><button className="guest-icon-button" onClick={toggleTheme} aria-label="Change theme">{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button></header>
+        {!inputBlocked && access.permissions.some(right => right.startsWith('input.button.')) && <section><h3>Device</h3><div className="guest-quick-grid">
+          {(['home', 'lock', 'volup', 'voldn'] as const).filter(guestButtonHas).map(key => { const Icon = { home: House, lock: Lock, volup: Volume2, voldn: Volume1 }[key]; return <button key={key} onClick={() => engine.current?.sysPress(key)}><Icon size={15} />{({ home: 'Home', lock: 'Lock', volup: 'Volume +', voldn: 'Volume −' })[key]}</button> })}
+          {guestHas('input.button.system_ui') && <><button onClick={() => engine.current?.springboard(1)}><SlidersHorizontal size={15} />Control Center</button><button onClick={() => engine.current?.springboard(2)}><ChevronDown size={15} />Notifications</button></>}
+        </div></section>}
+        {!inputBlocked && guestHas('input.keyboard') && <section><h3>Keyboard</h3><div className="guest-quick-grid"><button aria-pressed={keyboard} onClick={() => { setKeyboard(!keyboard); if (!keyboard) stage.current?.focus() }}><Keyboard size={15} />{keyboard ? 'Release · Esc' : 'Use keyboard'}</button><button onClick={() => engine.current?.key(0x29, 2)}>Send Escape</button></div></section>}
+        {screen && <section><h3>Display</h3><button className="guest-wide-action" onClick={() => engine.current?.rotate()}><RotateCw size={15} />Rotate view</button></section>}
+        {tools.length > 0 && <section><h3>Tools</h3><div className="guest-launchers">{tools.map(tool => { const Icon = toolIcons[tool.id]; return <button key={tool.id} title={tool.description} onClick={() => show(tool.id)}><Icon size={19} />{tool.label}</button> })}</div></section>}
+        <footer><button onClick={() => show('access')}><ShieldCheck size={14} />Permissions</button><button className="guest-end-button" disabled={leaving} onClick={() => void leave()}><LogOut size={14} />End access</button></footer>
+      </aside>
+      <div ref={panel} hidden={!view} role="dialog" aria-modal={view ? true : undefined} aria-labelledby="guest-panel-title" onKeyDown={trapPanel}>
+        <Sheet title={panelTitle} onClose={closePanel} wide={view !== 'access'} toolbar={view !== 'access' && <nav className="guest-tool-nav" aria-label="Permitted tools">{tools.map(tool => { const Icon = toolIcons[tool.id]; return <button key={tool.id} aria-current={view === tool.id ? 'page' : undefined} onClick={() => show(tool.id)}><Icon size={15} />{tool.label}</button> })}</nav>}>
+          {view === 'access' && <section className="guest-access-panel"><div className="guest-access-heading"><ShieldCheck size={24} /><div><h3>{access.label}</h3><p>Temporary device access</p></div></div><p>The owner can change permissions or end this session at any time.</p><div className="guest-access-time"><Clock3 size={16} />{guestTime(seconds)} remaining</div>{[...new Set(GUEST_PERMISSIONS.filter(p => access.permissions.includes(p.id)).map(p => p.group))].map(group => <section key={group}><h4>{group}</h4><ul>{GUEST_PERMISSIONS.filter(p => p.group === group && access.permissions.includes(p.id)).map(p => <li key={p.id}>{p.label}</li>)}</ul></section>)}<button className="guest-end-button" disabled={leaving} onClick={() => void leave()}><LogOut size={16} />{leaving ? 'Ending access…' : 'End my access'}</button></section>}
+          {tools.length > 0 && <div hidden={view === 'access'}><GuestWorkspace visible={Boolean(activeTool)} section={activeTool?.id ?? tools[0].id} engine={engine} operations={operations} ready={toolsReady} audio={audio} microphone={microphone} talk={talk} onActivity={setActivities} /></div>}
+        </Sheet>
       </div>
-    </aside>
+    </>}
+    {ended && <section className="guest-ended" aria-labelledby="guest-ended-title"><ShieldCheck size={28} /><p className="guest-eyebrow">Temporary access</p><h1 id="guest-ended-title">{seconds === 0 ? 'Access expired' : status === 'Access ended' ? 'Access ended' : 'Connection closed'}</h1><p>{seconds === 0 || status === 'Access ended' ? 'Ask the owner for a new invitation to connect again.' : 'Your screen and device tools have been disconnected. You can reconnect if the owner still allows access.'}</p>{error && seconds > 0 && <p className="guest-error" role="alert">{error}</p>}<div className="guest-ended-actions">{seconds > 0 && status !== 'Access ended' && <a className="guest-primary" href="/guest/control">Reconnect</a>}{seconds > 0 && status !== 'Access ended' && <button disabled={leaving} onClick={() => void leave()}>{leaving ? 'Ending access…' : 'End my access'}</button>}</div></section>}
   </main>
 }

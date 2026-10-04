@@ -8,9 +8,11 @@ import { AudioPlayer } from '../lib/audio'
 import { MicTalk } from '../lib/mic'
 import type { ControlEngine, MacroEvent } from '../lib/engine'
 import { CameraTransport } from '../lib/camera'
+import type { GuestTool } from '../lib/guestNavigation'
 
-function GuestPointer({ operations, onError }: { operations: GuestOperations; onError: (message: string) => void }) {
+function GuestPointer({ operations, onError, visible }: { operations: GuestOperations; onError: (message: string) => void; visible: boolean }) {
   const [active,setActive]=useState(false)
+  useEffect(() => { if (!visible) setActive(false) }, [visible])
   const sequence=useRef(0), pending=useRef({dx:0,dy:0,wheel:0}), position=useRef<{x:number;y:number}|null>(null)
   const inFlight=useRef(false)
   useEffect(() => {
@@ -62,6 +64,7 @@ function GuestTerminal({ operations, onError }: { operations: GuestOperations; o
     })
     const observer = new ResizeObserver(() => {
       if (!alive) return
+      if (!container.current?.clientWidth) return
       fit.fit(); void operations.call('terminal.resize', size()).catch(() => {})
     }); observer.observe(container.current!)
     return () => { alive = false; clearTimeout(timer); observer.disconnect(); input.dispose(); terminal.clear(); terminal.dispose(); void operations.call('terminal.close').catch(() => {}) }
@@ -69,25 +72,30 @@ function GuestTerminal({ operations, onError }: { operations: GuestOperations; o
   return <div ref={container} className="guest-terminal" aria-label="Root terminal" />
 }
 
-function GuestCamera({ operations }: { operations: GuestOperations }) {
+function GuestCamera({ operations, ready, onLive }: { operations: GuestOperations; ready: boolean; onLive: (active: boolean) => void }) {
   const video = useRef<HTMLVideoElement>(null)
   const transport = useRef<CameraTransport | null>(null)
   const [status, setStatus] = useState('Camera off')
   const [live, setLive] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [position, setPosition] = useState('back')
   useEffect(() => {
     const camera = new CameraTransport(video.current!, { onState: setStatus }); transport.current = camera
     return () => { camera.stop(); transport.current = null; void operations.call('camera.live', { on: false }).catch(() => {}) }
   }, [operations])
+  useEffect(() => { onLive(live) }, [live, onLive])
   const toggle = async () => {
+    if (busy || !ready) return
+    setBusy(true)
     try {
       await operations.call('camera.live', { on: !live, position })
       if (live) transport.current?.stop(); else { transport.current?.start(); transport.current?.setExpectedLive(true) }
       setLive(!live)
     } catch (error) { setStatus(String(error)) }
+    finally { setBusy(false) }
   }
-  return <section><h3>Camera</h3><label>Position <select value={position} disabled={live} onChange={(event) => setPosition(event.target.value)}><option value="back">Back</option><option value="front">Front</option></select></label>
-    <button onClick={() => void toggle()}>{live ? 'Stop camera' : 'Start camera'}</button><p role="status">{status}</p><video ref={video} muted playsInline className="guest-camera" /></section>
+  return <section className="guest-camera-panel"><h3>Live camera</h3><label>Position <select value={position} disabled={live || busy} onChange={(event) => setPosition(event.target.value)}><option value="back">Back</option><option value="front">Front</option></select></label>
+    <button disabled={busy || !ready} onClick={() => void toggle()}>{busy ? 'Working…' : live ? 'Stop camera' : 'Start camera'}</button><p role="status">{status}</p><video ref={video} muted playsInline className="guest-camera" /></section>
 }
 
 type FileItem = { name: string; directory: boolean; size: number }
@@ -102,12 +110,18 @@ function GuestResult({value}:{value:string}) {
   }
   return <div className="guest-result">{render(parsed)}</div>
 }
-export default function GuestWorkspace({ operations, ready, audio, microphone, talk, engine }: {
+export default function GuestWorkspace({ operations, ready, audio, microphone, talk, engine, section, onActivity, visible }: {
+  section: GuestTool; visible: boolean; onActivity: (activities: string[]) => void;
   engine: React.RefObject<ControlEngine | null>; operations: GuestOperations; ready: boolean; audio: AudioPlayer; microphone: AudioPlayer; talk: MicTalk
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [output, setOutput] = useState('')
+  const [outputTool, setOutputTool] = useState(section)
+  const [previewTool, setPreviewTool] = useState(section)
+  const [liveCamera, setLiveCamera] = useState(false)
+  const [filesLoaded, setFilesLoaded] = useState(false)
+  const [mediaLoaded, setMediaLoaded] = useState(false)
   const [text, setText] = useState('')
   const [bundle, setBundle] = useState('')
   const [url, setURL] = useState('https://')
@@ -154,9 +168,18 @@ export default function GuestWorkspace({ operations, ready, audio, microphone, t
     }, 1000)
     return () => { alive = false; clearInterval(timer) }
   }, [operations, ready, recordingMic, recordingCamera])
+  useEffect(() => {
+    onActivity([
+      ...(liveCamera ? ['Camera on'] : []), ...(recordingCamera ? ['Camera recording'] : []),
+      ...(recordingMic ? ['Microphone recording'] : []), ...(listening ? ['Listening to playback'] : []),
+      ...(room ? ['Listening to microphone'] : []), ...(talking ? ['Talking'] : []),
+      ...(recordingMacro ? ['Recording input'] : []), ...(playingMacro ? ['Playing input'] : []),
+      ...(terminal ? ['Terminal open'] : []),
+    ])
+  }, [liveCamera, recordingCamera, recordingMic, listening, room, talking, recordingMacro, playingMacro, terminal, onActivity])
   async function action(work: () => Promise<unknown>) {
     if (busy || !ready) return
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setOutputTool(section)
     try { await work() } catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : String(error)) }
     finally { if (mounted.current) { setBusy(false); setProgress(null) } }
   }
@@ -178,16 +201,16 @@ export default function GuestWorkspace({ operations, ready, audio, microphone, t
     const blob = await operations.read(transfer, display ? 64 * 1024 * 1024 : 256 * 1024 * 1024, abort.current.signal)
     if (!mounted.current) return
     const objectURL = URL.createObjectURL(blob); urls.current.add(objectURL)
-    if (display) { if (preview) { URL.revokeObjectURL(preview); urls.current.delete(preview) } setPreviewVideo(video);setPreviewCapture(op==='screen.snapshot'||op==='camera.snapshot');setPreviewName(transfer.name);setPreview(objectURL) }
+    if (display) { if (preview) { URL.revokeObjectURL(preview); urls.current.delete(preview) } setPreviewTool(section);setPreviewVideo(video);setPreviewCapture(op==='screen.snapshot'||op==='camera.snapshot');setPreviewName(transfer.name);setPreview(objectURL) }
     else { const anchor = document.createElement('a'); anchor.href = objectURL; anchor.download = transfer.name; anchor.click(); window.setTimeout(() => { URL.revokeObjectURL(objectURL); urls.current.delete(objectURL) }, 10000) }
   }
   async function loadFiles(next = path) {
     const result = await operations.call<{ items: FileItem[] }>('files.list', { path: next })
-    if (mounted.current) { setPath(next); setFiles(result.items) }
+    if (mounted.current) { setPath(next); setFiles(result.items); setFilesLoaded(true) }
   }
   async function loadMedia(next: number) {
     const result = await operations.call<{ items: MediaItem[]; next: number | null }>('media.browse', { cursor: next })
-    if (mounted.current) { setMedia(result.items); setCursor(result.next) }
+    if (mounted.current) { setMedia(result.items); setMediaLoaded(true); setCursor(result.next) }
   }
   async function loadInventory(kind:string,cursor=0) {
     const result=await operations.call<{items:unknown[];next:number|null;total:number}>('system.inventory',{kind,cursor})
@@ -195,25 +218,25 @@ export default function GuestWorkspace({ operations, ready, audio, microphone, t
   }
   const childPath = (name: string) => path ? `${path}/${name}` : name
   const command = (op: string, args: Record<string, unknown> = {}) => () => void action(() => inspect(op, args))
-  return <div className="guest-workspace" aria-label="Permitted device tools">
-    <p role="status">{ready ? 'Device tools connected' : 'Waiting for device tools…'}</p>
+  return <div className="guest-workspace" data-tool={section} aria-label="Permitted device tools">
+    <p className="guest-tools-status" role="status"><i className={ready ? 'is-live' : ''} />{ready ? 'Device tools connected' : 'Connecting device tools…'}</p>
     <fieldset disabled={busy || !ready}>
-      {(guestHas('device.info') || guestHas('device.diagnostics') || guestHas('device.brightness') || guestHas('device.orientation') || guestHas('screen.snapshot')) && <details><summary>Device</summary><div className="guest-actions">
+      {(guestHas('device.info') || guestHas('device.diagnostics') || guestHas('device.brightness') || guestHas('device.orientation') || guestHas('screen.snapshot')) && <details open data-tool="console"><summary>Device</summary><div className="guest-actions">
         {guestHas('device.info') && <button onClick={command('device.info')}>Information</button>}
         {guestHas('device.diagnostics') && <button onClick={command('device.diagnostics')}>Diagnostics</button>}
         {guestHas('device.brightness') && <label>Brightness <input aria-label="Device brightness" type="range" min="0" max="1" step="0.05" defaultValue="0.5" onPointerUp={(event) => void action(() => inspect('device.brightness', { value: Number(event.currentTarget.value) }))} /></label>}
         {guestHas('device.orientation') && <label>Orientation <select defaultValue="0" onChange={(event) => void action(() => inspect('device.orientation', { orientation: Number(event.target.value) }))}>{['Automatic', 'Portrait', 'Portrait upside down', 'Landscape left', 'Landscape right'].map((name, index) => <option key={name} value={index}>{name}</option>)}</select></label>}
         {guestHas('screen.snapshot') && <button onClick={() => void action(() => file('screen.snapshot', {}, true))}>Capture screen</button>}
       </div></details>}
-      {(guestHas('clipboard.read') || guestHas('clipboard.write')) && <details><summary>Clipboard</summary><textarea value={text} maxLength={4096} aria-label="Device clipboard text" onChange={(event) => setText(event.target.value)} />
+      {(guestHas('clipboard.read') || guestHas('clipboard.write')) && <details open data-tool="console"><summary>Clipboard</summary><textarea value={text} maxLength={4096} aria-label="Device clipboard text" onChange={(event) => setText(event.target.value)} />
         {guestHas('clipboard.read') && <button onClick={() => void action(async () => { const result = await operations.call<{ text: string }>('clipboard.read'); if (mounted.current) setText(result.text) })}>Read clipboard</button>}
         {guestHas('clipboard.write') && <button onClick={command('clipboard.write', { text })}>Write clipboard</button>}</details>}
-      {(guestHas('apps.list') || guestHas('apps.launch') || guestHas('apps.open_url')) && <details><summary>Applications</summary>
+      {(guestHas('apps.list') || guestHas('apps.launch') || guestHas('apps.open_url')) && <details open data-tool="console"><summary>Applications</summary>
         {guestHas('apps.list') && <button onClick={command('apps.list')}>List applications</button>}
         {guestHas('apps.launch') && <><label>Bundle ID <input value={bundle} onChange={(event) => setBundle(event.target.value)} /></label><button onClick={command('apps.launch', { bundle })}>Launch</button></>}
         {guestHas('apps.open_url') && <><label>Web link <input type="url" value={url} onChange={(event) => setURL(event.target.value)} /></label><button onClick={command('apps.open_url', { url })}>Open link</button></>}
       </details>}
-      {(guestHas('audio.playback.listen') || guestHas('audio.microphone.listen') || guestHas('talk.speaker') || guestHas('talk.virtual_microphone') || guestHas('audio.microphone.record') || guestHas('audio.output')) && <details><summary>Sound</summary>
+      {(guestHas('audio.playback.listen') || guestHas('audio.microphone.listen') || guestHas('talk.speaker') || guestHas('talk.virtual_microphone') || guestHas('audio.microphone.record') || guestHas('audio.output')) && <details open data-tool="sound"><summary>Sound</summary>
         {guestHas('audio.playback.listen') && <button aria-pressed={listening} onClick={() => void action(() => listen(audio, 'audio.playback', listening, setListening))}>{listening ? 'Stop playback audio' : 'Listen to playback'}</button>}
         {guestHas('audio.microphone.listen') && <button aria-pressed={room} onClick={() => void action(() => listen(microphone, 'audio.microphone', room, setRoom))}>{room ? 'Stop microphone' : 'Listen to room microphone'}</button>}
         {guestHas('audio.output') && <><button onClick={command('audio.output', { enabled: false })}>Mute device output</button><button onClick={command('audio.output', { enabled: true })}>Restore device output</button></>}
@@ -223,26 +246,26 @@ export default function GuestWorkspace({ operations, ready, audio, microphone, t
           {guestHas('talk.speaker') && <option value="speaker">Device speaker</option>}{guestHas('talk.virtual_microphone') && <option value="mic">App microphone</option>}{guestHas('talk.speaker') && guestHas('talk.virtual_microphone') && <option value="both">Both</option>}
         </select></label><button aria-pressed={talking} onClick={() => { if (talking) talk.stop(); else void talk.start() }}>{talking ? 'Stop talking' : 'Talk'}</button></>}
       </details>}
-      {(guestHas('camera.snapshot') || guestHas('camera.record')) && <details><summary>Camera captures</summary>
+      {(guestHas('camera.snapshot') || guestHas('camera.record')) && <details open data-tool="camera"><summary>Camera captures</summary>
         {guestHas('camera.snapshot') && <><label>Photo camera <select value={snapshotPosition} onChange={(event) => setSnapshotPosition(event.target.value)}><option value="back">Back</option><option value="front">Front</option></select></label><button onClick={() => void action(() => file('camera.snapshot', { position: snapshotPosition }, true))}>Take photo</button></>}
         {guestHas('camera.record') && <button aria-pressed={recordingCamera} onClick={() => void action(async () => { await operations.call('camera.record', { on: !recordingCamera }); setRecordingCamera(!recordingCamera) })}>{recordingCamera ? 'Stop camera recording' : 'Record camera (live view first, up to 5 minutes)'}</button>}
         {guestHas('capture.download') && guestHas('camera.record') && <button onClick={() => void action(() => file('capture.download', { kind: 'camera' }))}>Download camera recording</button>}
       </details>}
-      {guestHas('input.text') && <details><summary>Type text</summary><label>Text (US keyboard, up to 256 characters)<textarea value={text} maxLength={256} onChange={(event) => setText(event.target.value)} /></label><button onClick={command('input.text', { text })}>Type on device</button></details>}
-      {guestHas('automation.macros') && <details><summary>Input macros</summary><p>Playback uses only the touch and keyboard rights granted to this session.</p>
+      {guestHas('input.text') && <details open data-tool="console"><summary>Type text</summary><label>Text (US keyboard, up to 256 characters)<textarea value={text} maxLength={256} onChange={(event) => setText(event.target.value)} /></label><button onClick={command('input.text', { text })}>Type on device</button></details>}
+      {guestHas('automation.macros') && <details open data-tool="console"><summary>Input macros</summary><p>Playback uses only the touch and keyboard rights granted to this session.</p>
         <button onClick={() => { if (recordingMacro) { setMacro(engine.current?.recordStop() || []); setRecordingMacro(false) } else { engine.current?.recordStart(); setRecordingMacro(true) } }}>{recordingMacro ? 'Stop recording' : 'Record permitted input'}</button>
         <button disabled={!macro.length || recordingMacro} onClick={() => { if (playingMacro) { engine.current?.stopPlay(); setPlayingMacro(false) } else { setPlayingMacro(true); void engine.current?.play(macro, (state) => { if (mounted.current) setPlayingMacro(state !== 'idle') }) } }}>{playingMacro ? 'Stop playback' : `Play ${macro.length} events`}</button>
       </details>}
-      {guestHas('media.browse') && <details><summary>Photos and videos</summary><button onClick={() => void action(() => loadMedia(0))}>Open library</button>
-        <div className="guest-file-list">{media.map((item) => <div key={item.id}><span>{item.name} · {item.type}</span>
+      {guestHas('media.browse') && <details open data-tool="media"><summary>Photos and videos</summary><button onClick={() => void action(() => loadMedia(0))}>Open library</button>
+        {mediaLoaded && media.length === 0 && <p className="guest-empty-list">No photos or videos are available.</p>}<div className="guest-file-list">{media.map((item) => <div key={item.id}><span>{item.name} · {item.type}</span>
           {guestHas('media.preview') && <button onClick={() => void action(() => file('media.preview', { id: item.id }, true))}>Preview</button>}
           {guestHas('media.download') && <button onClick={() => void action(() => file('media.original', { id: item.id }))}>Download original</button>}
           {guestHas('media.download') && item.type==='video' && <button onClick={()=>void action(()=>file('media.original',{id:item.id},true,true))}>Play original video</button>}
           {guestHas('media.delete') && item.deletable && <button onClick={() => { if (confirm(`Move ${item.name} to Recently Deleted?`)) void action(async () => { await operations.confirmed('media.delete', { id: item.id }); await loadMedia(0) }) }}>Delete</button>}
         </div>)}</div>{cursor !== null && media.length > 0 && <button onClick={() => void action(() => loadMedia(cursor))}>Next page</button>}</details>}
-      {(guestHas('files.list') || guestHas('files.upload')) && <details><summary>Exchange files</summary><p>Only the device’s exchange folder is available.</p>
+      {(guestHas('files.list') || guestHas('files.upload')) && <details open data-tool="files"><summary>Exchange files</summary><p>Only the device’s exchange folder is available.</p>
         {guestHas('files.list') && <><button onClick={() => void action(() => loadFiles(''))}>Open folder</button>{path && <button onClick={() => void action(() => loadFiles(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''))}>Parent folder</button>}<p>{path || '/'}</p>
-          <div className="guest-file-list">{files.map((item) => <div key={item.name}><span>{item.name}{item.directory ? '/' : ` · ${item.size} bytes`}</span>
+          {filesLoaded && files.length === 0 && <p className="guest-empty-list">This folder is empty.</p>}<div className="guest-file-list">{files.map((item) => <div key={item.name}><span>{item.name}{item.directory ? '/' : ` · ${item.size} bytes`}</span>
             {item.directory ? <button onClick={() => void action(() => loadFiles(childPath(item.name)))}>Open</button> : <>
               {guestHas('files.preview') && <button onClick={() => void action(async () => { const transfer = await operations.call<GuestTransfer>('files.preview', { path: childPath(item.name) }); const blob = await operations.read(transfer, 2 * 1024 * 1024, abort.current.signal); if (mounted.current) setOutput(await blob.text()) })}>Preview text</button>}
               {guestHas('files.download') && <button onClick={() => void action(() => file('files.open', { path: childPath(item.name) }))}>Download</button>}
@@ -252,8 +275,8 @@ export default function GuestWorkspace({ operations, ready, audio, microphone, t
         {guestHas('files.upload') && <><label>Upload to this folder <input type="file" onChange={(event) => { const upload = event.target.files?.[0]; event.target.value = ''; if (upload) void action(async () => { await operations.upload(upload, childPath(upload.name), overwrite, abort.current.signal, setProgress); if (guestHas('files.list')) await loadFiles() }) }} /></label>
           {guestHas('files.overwrite') && <label><input type="checkbox" checked={overwrite} onChange={(event) => setOverwrite(event.target.checked)} />Replace an existing file</label>}</>}
       </details>}
-      {guestHas('system.inventory') && <details><summary>Packages and tweaks</summary><button onClick={()=>void action(()=>loadInventory('packages'))}>Packages</button><button onClick={()=>void action(()=>loadInventory('tweaks'))}>Tweaks</button>{inventory?.next!==null&&inventory&&<button onClick={()=>void action(()=>loadInventory(inventory.kind,inventory.next!))}>Next {inventory.kind}</button>}</details>}
-      {(guestHas('system.tweak_toggle') || guestHas('system.package_download') || guestHas('system.package_remove') || guestHas('system.respring')) && <details><summary>System actions</summary>
+      {guestHas('system.inventory') && <details open data-tool="system"><summary>Packages and tweaks</summary><button onClick={()=>void action(()=>loadInventory('packages'))}>Packages</button><button onClick={()=>void action(()=>loadInventory('tweaks'))}>Tweaks</button>{inventory?.next!==null&&inventory&&<button onClick={()=>void action(()=>loadInventory(inventory.kind,inventory.next!))}>Next {inventory.kind}</button>}</details>}
+      {(guestHas('system.tweak_toggle') || guestHas('system.package_download') || guestHas('system.package_remove') || guestHas('system.respring')) && <details open data-tool="system"><summary>System actions</summary>
         {(guestHas('system.tweak_toggle') || guestHas('system.package_download')) && <><label>Tweak name <input value={bundle} onChange={(event) => setBundle(event.target.value)} /></label>
           {guestHas('system.package_download') && <button onClick={() => void action(() => file('system.package_download', { name: bundle }))}>Download tweak library</button>}
           {guestHas('system.tweak_toggle') && <>{[true, false].map((enabled) => <button key={String(enabled)} onClick={() => { if (confirm(`${enabled ? 'Enable' : 'Disable'} ${bundle}?`)) void action(() => operations.confirmed('system.tweak_toggle', { name: bundle, enabled })) }}>{enabled ? 'Enable tweak' : 'Disable tweak'}</button>)}</>}
@@ -261,15 +284,15 @@ export default function GuestWorkspace({ operations, ready, audio, microphone, t
         {guestHas('system.package_remove') && <><label>Installed package ID <input value={bundle} onChange={(event) => setBundle(event.target.value)} /></label><button onClick={() => { if (confirm(`Remove installed package ${bundle}?`)) void action(() => operations.confirmed('system.package_remove', { id: bundle })) }}>Remove package</button></>}
         {guestHas('system.respring') && <button onClick={() => { if (confirm('Restart SpringBoard? This disconnects device control.')) void action(() => operations.confirmed('system.respring')) }}>Restart SpringBoard</button>}
       </details>}
-      {guestHas('terminal.root') && <details><summary>Root terminal</summary><p>This grants full device authority. Commands may create persistent changes.</p><button onClick={() => setTerminal(!terminal)}>{terminal ? 'Close terminal' : 'Open terminal'}</button></details>}
+      {guestHas('terminal.root') && <details open data-tool="terminal"><summary>Root terminal</summary><p>This grants full device authority. Commands may create persistent changes.</p><button onClick={() => setTerminal(!terminal)}>{terminal ? 'Close terminal' : 'Open terminal'}</button></details>}
     </fieldset>
     {progress !== null && <progress value={progress} max="1" aria-label="Upload progress" />}
     {busy && <button onClick={() => { abort.current.abort(); abort.current = new AbortController() }}>Cancel transfer</button>}
     {error && <p role="alert">{error}</p>}
-    {output && <details open><summary>Result</summary><GuestResult value={output}/></details>}
-    {preview && <div><button onClick={() => { URL.revokeObjectURL(preview); urls.current.delete(preview); setPreview('') }}>Close preview</button>{(previewCapture?guestHas('capture.download'):guestHas('media.download'))&&<a href={preview} download={previewName}>Save displayed capture</a>}{previewVideo?<video src={preview} controls playsInline className="guest-preview"/>:<img src={preview} alt="Device capture or media preview" className="guest-preview" />}</div>}
-    {guestHas('input.pointer')&&ready&&<GuestPointer operations={operations} onError={setError}/>}
-    {guestHas('camera.live') && <GuestCamera operations={operations} />}
-    {terminal && <GuestTerminal operations={operations} onError={setError} />}
+    {output && outputTool === section && <details open className="guest-output"><summary>Result</summary><GuestResult value={output}/></details>}
+    {preview && previewTool === section && <div className="guest-preview-panel"><button onClick={() => { URL.revokeObjectURL(preview); urls.current.delete(preview); setPreview('') }}>Close preview</button>{(previewCapture?guestHas('capture.download'):guestHas('media.download'))&&<a href={preview} download={previewName}>Save displayed capture</a>}{previewVideo?<video src={preview} controls playsInline className="guest-preview"/>:<img src={preview} alt="Device capture or media preview" className="guest-preview" />}</div>}
+    {guestHas('input.pointer')&&ready&&<div hidden={section !== 'console'}><GuestPointer visible={visible && section === 'console'} operations={operations} onError={setError}/></div>}
+    {guestHas('camera.live') && <div hidden={section !== 'camera'}><GuestCamera operations={operations} ready={ready} onLive={setLiveCamera} /></div>}
+    {terminal && <div hidden={section !== 'terminal'}><GuestTerminal operations={operations} onError={setError} /></div>}
   </div>
 }

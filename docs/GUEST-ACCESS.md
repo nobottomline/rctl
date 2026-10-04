@@ -40,17 +40,57 @@ resources. Use no-store, no-referrer, frame blocking and a restrictive CSP.
 A fragment stays visible to browser extensions and the application carrying the
 link; it is not intrinsically leak-proof.
 
-An explicit Join uses same-origin JSON POST. A transaction validates the unused,
+The shell enters automatically when its document becomes visible and is no
+longer prerendering. There is no extra Join step; a retry button appears only
+after a recoverable failure. An existing session for this invitation resumes
+without claiming again. A session for another invitation is preserved and must
+be ended before claiming the new one. Ordinary HTTP previews never claim, but
+a preview that executes JavaScript in a visible browser and receives the
+fragment can consume the link. Automatic entry deliberately accepts this
+tradeoff; visibility is a usability guard, not a bot authorization boundary.
+
+Entry uses same-origin JSON POST. A transaction validates the unused,
 unrevoked invitation, approved device, capabilities, limits and deadline before
 creating the session. Lost claim responses recover only with the same short-lived
 claim binding. Recovery rotates the credential and is bounded/acknowledged.
 It cannot create a second guest or extend expiry.
+
+Prepare, claim and acknowledgement requests have bounded timeouts. Retrying
+after a lost claim response retains the original binding; an acknowledged or
+already-issued browser credential resumes the same session. An acknowledgement
+failure retries acknowledgement instead of spending another invitation.
 
 Guest credentials use a separate host-only Secure/HttpOnly/SameSite=Strict cookie.
 Guest endpoints ignore admin cookies; admin endpoints never accept guest cookies.
 Origin validation protects mutations and WebSocket handshakes independently of
 SameSite. Session credentials are bearer credentials, unlike native-controller
 P-256 proofs. XSS or a stolen active cookie remains a relevant threat.
+
+## Guest Control Interface
+
+The guest client shares the owner's theme tokens and sheet component. Screen
+access opens directly onto the device with a compact connection/deadline HUD
+and a bottom-right control button. Its control center includes only granted
+buttons and tool launchers. Screenless grants open their first permitted tool.
+Console, sound, camera, media, files, system and terminal have separate sheets;
+the horizontal tool navigation keeps the current item visible on small screens.
+The access sheet lists the exact granted rights and provides an end-session
+action. Dark and warm themes follow the existing control client preference.
+
+Switching or closing a sheet retains owned media, transfers and PTY state;
+active operations remain visible in the HUD. Relative pointer capture stops
+when its panel hides, and opening a sheet releases keyboard capture. Dialog
+focus is contained and restored; Escape closes the sheet without injecting a
+device key. Grant changes, expiry, revoke and transport teardown still retire
+authority and clear the device screen. UI grouping never changes device policy.
+
+On 2026-10-04 the redesigned client passed the web suite and production build,
+the relay race suite and vet. Computer-use checks with an isolated neutral
+screen/operations fixture cover desktop and mobile layouts, both themes,
+file listing/preview, panel state preservation, permitted-only controls,
+keyboard navigation and ended/expiry presentation. These UI checks do not
+qualify physical camera, audio or input delivery; the remaining gates below
+continue to apply.
 
 ## Permissions
 
