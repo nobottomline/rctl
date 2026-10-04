@@ -85,6 +85,6 @@ jobs:
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             test "$(git rev-parse "$TAG^{commit}")" = "$SOURCE_SHA"
           fi
-          printf 'Reviewed relay deployment candidate from commit `%s`.\n\nDraft only. No stable package, update catalog, APT feed or public installer is changed. Physical device qualification remains separate.\n' "$SOURCE_SHA" > candidate-notes.md
+          printf 'Reviewed relay deployment candidate from commit %s.\n\nDraft only. No stable package, update catalog, APT feed or public installer is changed. Physical device qualification remains separate.\n' "$SOURCE_SHA" > candidate-notes.md
           gh release create "$TAG" candidate/* --target "$SOURCE_SHA" --draft --prerelease \
             --title "Relay candidate $VERSION" --notes-file candidate-notes.md
