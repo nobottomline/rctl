@@ -1,6 +1,46 @@
 # Rootless Release Readiness
 
-## Latest Publication (2026-09-19)
+## 0.4.5 Preview (2026-10-05)
+
+[`v0.4.5`](https://github.com/nobottomline/rctl/releases/tag/v0.4.5) is a public,
+immutable prerelease for opt-in testing. Stable/latest and APT remain `0.4.4`.
+Source: `0c636304da7d5169741a1f208cec9bf7affc10c3`.
+
+- [Exact-source CI](https://github.com/nobottomline/rctl/actions/runs/37240440366)
+  passed all six jobs; all three CodeQL analyses passed. Local `make test`
+  passed, including guest dispatcher and 10,000 retirement-ownership handoffs.
+- The [tag-bound build](https://github.com/nobottomline/rctl/actions/runs/37241165628)
+  passed all eight jobs, producing Linux amd64/arm64 artifacts, both public DEBs,
+  signed rootful/rootless catalogs and the signed host catalog. Protected signing
+  followed successful exact-source CI and independent audits of both built DEBs.
+- Independent verification passed all eleven asset sizes/checksums and
+  repository/workflow/tag/source-bound hosted-runner build attestations. Both
+  public-package audits and all catalog signatures passed; both device catalogs
+  include verified immutable `0.4.4` rollback packages.
+- Anonymous OCI digest access, linked amd64/arm64 SPDX SBOMs and tag/source-bound
+  OCI provenance passed. The candidate image is
+  `ghcr.io/nobottomline/rctl-relay@sha256:24cc8d2aba4755012469d57538b0cfc70303b7dcd6147b54c5142a79dc576043`.
+  The checksum-set SHA-256 is
+  `89bfc341847b0a37bb0fddc1b07f8f456bf3c837f700bf52dc0cda98c2380078`.
+- GitHub immutable-release attestation passed after publication. The release is
+  excluded from latest, and the release-event APT workflow was skipped by its
+  prerelease guard. No stable OCI version tag was promoted.
+
+The owner explicitly deferred final rootless physical acceptance and clean-VPS
+qualification for this preview. Neither device lane was installed or a VPS
+redeployed during publication. Earlier device/host tests do not qualify the new
+artifact bytes. Guest touch/keyboard retirement, foreground live camera, Talk
+audibility, macro interruption and partition recovery remain open in
+[GUEST-ACCESS.md](GUEST-ACCESS.md). There is no all-passed schema-5 report; later
+stable publication requires a new version and fresh qualification.
+
+Protocol/admin dependency advisories were patched. Device web tooling retains
+the unpatched `braces` advisory `GHSA-vfj7-8cjw-p6xm` through
+`vite-plugin-singlefile`; its pattern matcher is not called with the current
+empty `inlinePattern`, and runtime dependency audit is clean. This is recorded
+as a build-tool limitation, not a claim that the advisory disappeared.
+
+## Latest Stable Publication (2026-09-19)
 
 `v0.4.4` is a public, non-prerelease, immutable GitHub release marked latest.
 The full schema-5 qualification matrix is not yet complete, and the release

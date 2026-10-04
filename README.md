@@ -26,12 +26,19 @@ trusted local network or through an authenticated relay hosted on your own VPS.
 
 ## Project Status
 
-As of 2026-09-19, **GitHub latest is `0.4.4`**, with separate rootful and
+As of 2026-10-05, **GitHub latest is `0.4.4`**, with separate rootful and
 ordinary Dopamine rootless packages, also distributed through the **APT feed**.
 The full qualification matrix is not yet complete;
 [release notes](https://github.com/nobottomline/rctl/releases/tag/v0.4.4) identify
 the outstanding checks. Back up and retain independent recovery access before
 upgrading. Native controller work in current source is not a released app.
+
+[`0.4.5`](https://github.com/nobottomline/rctl/releases/tag/v0.4.5) is an immutable
+**pre-release for opt-in testing**, adding temporary guest invitations and the
+scoped control workspace. Its exact-source CI, release builds, signatures and
+artifact provenance passed. Physical guest scenarios, final rootless installation
+and clean-VPS requalification remain open; see the release notes and
+[guest acceptance](docs/GUEST-ACCESS.md). It does not advance latest or APT.
 
 Physical testing covers an iPad Air 3 (`iPad11,3`) on iPadOS 14.4 with rootful
 unc0ver/Substitute and an iPad Pro on iPadOS 15.5 with Dopamine/ElleKit. Both

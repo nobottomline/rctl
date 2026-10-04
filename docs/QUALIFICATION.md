@@ -1,7 +1,7 @@
 # Release Qualification and Publication
 
 This document defines the enforced transition from a release candidate to a
-public immutable rctl release. It contains no production hostname, address,
+public immutable stable rctl release. It contains no production hostname, address,
 credential, device identifier, or private test result.
 
 ## Owner deployment candidates
@@ -20,6 +20,35 @@ checksums and `gh attestation verify` with the repository, signer workflow,
 unmanaged-host backup, atomic replacement, runtime acceptance and rollback
 procedure. A draft deployment candidate cannot enter the stable publication
 path below or substitute for a complete release qualification report.
+
+## Owner-authorized preview releases
+
+When the owner explicitly defers runtime qualification, a complete tagged draft
+may be published as a GitHub prerelease for opt-in testing. This is separate from
+stable promotion and requires all of the artifact checks first: exact-source CI,
+version-matched release files, checksums, clean public-package audits, signed
+device/host catalogs, tag/source/workflow-bound build attestations, anonymous OCI
+digest access, and linked SBOMs for both image architectures.
+
+Release notes must identify the exact source and artifact set and disclose the
+unqualified device and host scenarios. Missing runtime evidence must remain
+missing; do not create an all-passed report or relabel old evidence. Keep the
+GitHub release marked prerelease, explicitly exclude it from latest, retain the
+candidate image digest, and leave stable OCI tags, catalogs and APT selection
+unchanged. The catalog filenames retain the release-set contract; they do not
+make a preview eligible for the default stable update channel.
+
+After the checks and owner authorization, publish the inspected draft with:
+
+```sh
+gh release edit "$TAG" --verify-tag --prerelease --latest=false \
+  --draft=false --notes-file "$NOTES"
+```
+
+Verify immutable-release attestation and anonymous asset downloads afterward.
+A public preview is immutable: later stable publication
+requires a new version and its own complete qualification report, rather than
+changing the preview flag or replacing its artifacts.
 
 ## Security boundary
 
