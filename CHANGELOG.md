@@ -33,6 +33,8 @@ Changes since stable `0.4.4`:
   permission-change presentation after connection teardown.
 - Unmanaged TURN socket binding and deployment installation/log diagnostics.
 - GitHub Actions workflow lint for relay candidate release notes.
+- Vulnerable `fast-uri` and `brace-expansion` development dependencies in the
+  protocol validator and admin lint toolchain.
 
 Physical guest camera, input retirement, Talk audibility, partition recovery, and
 rootless runtime qualification remain open; see `docs/GUEST-ACCESS.md`. Screen
