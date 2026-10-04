@@ -1,6 +1,6 @@
 # Temporary Browser Access
 
-Status: scoped guest implementation, 2026-10-03. Invitations, the admin editor,
+Status: scoped guest implementation, 2026-10-04. Invitations, the admin editor,
 revision-bound WebRTC, typed device operations, exchange files, media, capture
 ownership and root PTYs are implemented in source. Runtime qualification and
 production deployment are separate gates; see the verification section.
@@ -92,13 +92,31 @@ fresh, including browsers that suppress same-URL link navigation. Ended grants
 offer no reconnect action. Technical WebSocket close codes are not presented
 as the explanation for an administrator's permission change.
 
-On 2026-10-04 the redesigned client passed the web suite and production build,
+On 2026-10-04 the redesigned client passed 68 web tests and the production build,
 the relay race suite and vet. Computer-use checks with an isolated neutral
 screen/operations fixture cover desktop and mobile layouts, both themes,
 file listing/preview, panel state preservation, permitted-only controls,
 keyboard navigation and ended/expiry presentation. These UI checks do not
 qualify physical camera, audio or input delivery; the remaining gates below
 continue to apply.
+
+The final relay candidate `0.4.4-guest.60f3627803a6` passed exact-source CI
+(protocol generation/fixtures, both SPA builds, admin lint, Go race/vet), checksum
+verification and four repository/workflow/source-bound GitHub attestations.
+The unmanaged VPS deployment retained timestamped backups and passed external
+trusted HTTPS version/protocol checks, SQLite integrity, admin assets,
+relay/proxy/TURN and preserved-service checks, and the configured iPad's
+authenticated capabilities tunnel. The device package was unchanged.
+
+Computer use against that deployed candidate confirmed automatic invitation
+entry and fragment removal, scoped file tools connected to the physical iPad,
+permission-change retirement, the explanatory closure state, full reload through
+Reconnect and the reduced rights (no upload control). Final revoke returned
+confirmed device retirement; the browser removed all controls/tools and offered
+no reconnect action. Both grants created for this redesign acceptance were
+revoked with confirmed retirement. No personal file contents or media were
+captured. This qualifies the tested browser/file lifecycle, not the unresolved
+foreground-camera, audio, input or rootless runtime gates below.
 
 ## Permissions
 
