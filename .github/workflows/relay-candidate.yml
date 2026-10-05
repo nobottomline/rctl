@@ -21,7 +21,7 @@ jobs:
   candidate:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: source
@@ -37,11 +37,11 @@ jobs:
           printf '%s\n' "$base" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
           echo "version=$base-guest.${SOURCE_SHA:0:12}" >> "$GITHUB_OUTPUT"
           echo "tag=relay-candidate-${SOURCE_SHA:0:12}" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.6
           cache-dependency-path: relay/go.sum
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -71,7 +71,7 @@ jobs:
           install -m 0644 web/dist/index.html candidate/control.html
           printf '%s\n' "$SOURCE_SHA" > candidate/SOURCE_COMMIT
           (cd candidate && sha256sum rctl-relay_linux_amd64 control.html SOURCE_COMMIT > SHA256SUMS)
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: candidate/*
       - name: Create immutable draft deployment candidate
