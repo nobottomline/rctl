@@ -81,6 +81,10 @@ failed `setConfiguration`: browsers can reject it even before negotiation,
 leaving TURN-only sessions with no usable browser candidate. Screen, operations
 and camera use the same initialization rule. Device-local signaling may send an
 offer without `ready`; that owner path still constructs a host-only peer.
+ICE setup has a bounded 30-second window; the screen's seven-second first-frame
+watchdog starts after the transport connects. Camera likewise separates its
+connection window from the connected-stream watchdog. These deadlines do not
+extend guest authority or replace the device authorization lease.
 
 The pinned iOS build uses libjuice (`USE_NICE=0`). Its libdatachannel ICE backend
 accepts TURN/UDP but explicitly skips TURN/TCP and TURN/TLS servers. Browser-side

@@ -9,7 +9,7 @@ const moduleURL = (source) => `data:text/javascript;base64,${Buffer.from(source)
 async function environment(t, permissions = ['screen.view'], supported = true) {
   let cleanup = () => {}
   t.after(() => cleanup())
-  const events = [], peers = [], sockets = [], reasons = []
+  const events = [], peers = [], sockets = [], reasons = [], timers = []
   class Peer {
     constructor(config) { this.config = config; peers.push(this) }
     close() { events.push('peer-close') }
@@ -26,7 +26,9 @@ async function environment(t, permissions = ['screen.view'], supported = true) {
     send(value) { events.push(['signal', JSON.parse(value)]) }
     close() { events.push('socket-close') }
   }
-  const window = { setTimeout, setInterval, clearTimeout, clearInterval, RCTL_WEBRTC: 1,
+  const window = { setTimeout: (callback, delay) => {
+    const id = setTimeout(callback, delay); timers.push({ id, callback, delay }); return id
+  }, setInterval, clearTimeout, clearInterval, RCTL_WEBRTC: 1,
     RCTL_GUEST_BOOTSTRAP: permissions ? { permissions, allow_direct: false } : null }
   if (supported) window.RTCPeerConnection = Peer
   const globals = { window, location: { protocol: 'https:', host: 'relay.example.invalid' },
@@ -53,7 +55,7 @@ async function environment(t, permissions = ['screen.view'], supported = true) {
   const ice = [{ urls: ['turn:turn.example.invalid:3478?transport=udp'], username: 'synthetic', credential: 'fixture' }]
   const ready = () => sockets.at(-1).onmessage({ data: JSON.stringify({ kind: 'ready', payload: ice }) })
   const start = async () => { engine.start(); if (supported) await ready() }
-  return { engine, start, ready, ice, camera, routes, events, peers, sockets, video, reasons }
+  return { engine, start, ready, ice, camera, routes, events, peers, sockets, video, reasons, timers }
 }
 
 test('guest startup preserves relay-only ICE when ready supplies TURN and requests no owner APIs', async t => {
@@ -209,4 +211,50 @@ test('guest camera cannot negotiate before receiving ICE policy', async t => {
   await sockets[0].onmessage({ data: JSON.stringify({ kind: 'offer', payload: { sdp: 'synthetic-camera-offer' } }) })
   assert.equal(peers.length, 0)
   assert.equal(video.srcObject, null)
+})
+
+
+test('connection timeout is independent of the first screen frame deadline', async t => {
+  const { start, peers, timers, reasons, video } = await environment(t)
+  await start()
+  assert.equal(timers.at(-1).delay, 30000)
+  peers[0].connectionState = 'connected'
+  peers[0].onconnectionstatechange()
+  assert.equal(timers.at(-1).delay, 7000)
+  timers.at(-1).callback()
+  assert.deepEqual(reasons, ['The device did not deliver a screen frame.'])
+  assert.equal(video.srcObject, null)
+})
+
+test('an unconnected screenless guest has a bounded transport deadline', async t => {
+  const { start, timers, reasons } = await environment(t, ['device.info'])
+  await start()
+  timers.at(-1).callback()
+  assert.deepEqual(reasons, ['The WebRTC connection timed out.'])
+})
+
+test('screenless connection does not start a screen frame watchdog', async t => {
+  const { start, peers, timers, reasons } = await environment(t, ['device.info'])
+  await start()
+  const count = timers.length
+  peers[0].connectionState = 'connected'
+  peers[0].onconnectionstatechange()
+  assert.equal(timers.length, count)
+  assert.deepEqual(reasons, [])
+})
+
+test('camera allows ICE setup time before starting its frame watchdog', async t => {
+  const { camera, ready, peers, events } = await environment(t)
+  camera.start(); camera.setExpectedLive(true); await ready()
+  peers[0].connectionState = 'connecting'
+  camera.lastFrameAt = performance.now() - 11000
+  camera.checkFrames()
+  assert.ok(!events.includes('peer-close'))
+  peers[0].connectionState = 'connected'
+  peers[0].onconnectionstatechange()
+  camera.checkFrames()
+  assert.ok(!events.includes('peer-close'))
+  camera.lastFrameAt = performance.now() - 9000
+  camera.checkFrames()
+  assert.ok(events.includes('peer-close'))
 })

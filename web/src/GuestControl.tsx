@@ -171,13 +171,13 @@ export default function GuestControl() {
     const clock = window.setInterval(async () => {
       if (stopped || pending) return
       pending = true
-      const timeout = window.setTimeout(end, 4000)
+      const timeout = window.setTimeout(() => end('The relay access check timed out. Reconnect when the connection is available.'), 4000)
       try {
         const response = await fetch('/api/guest/session', { cache: 'no-store', signal: abort.signal })
         if (!response.ok) { end(undefined, response.status === 401 || response.status === 403 ? 'Access ended' : undefined); return }
         const current = await response.json() as GuestAccess
         if (current.session_id !== access.session_id || current.authorization_revision !== access.authorization_revision) end(undefined, current.session_id !== access.session_id ? 'Access ended' : 'Permissions changed')
-      } catch { if (!abort.signal.aborted) end() }
+      } catch { if (!abort.signal.aborted) end('The relay access check failed. Reconnect when the connection is available.') }
       finally { clearTimeout(timeout); pending = false }
     }, 5000)
     endSession.current = end

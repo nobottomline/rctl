@@ -80,7 +80,7 @@ export class CameraTransport {
     const state = this.pc?.connectionState
     if (state === 'connected' && now - this.lastFrameAt > 8000)
       this.scheduleReconnect()
-    else if ((!state || state === 'new' || state === 'connecting') && now - this.lastFrameAt > 10000)
+    else if ((!state || state === 'new' || state === 'connecting') && now - this.lastFrameAt > 30000)
       this.scheduleReconnect()
   }
 
@@ -137,6 +137,7 @@ export class CameraTransport {
             }, 4000)
           }
         } else if (pc.connectionState === 'connected') {
+          this.lastFrameAt = performance.now()
           if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
           this.disconnectGrace = 0
           this.callbacks.onState?.('connected')

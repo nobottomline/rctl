@@ -834,6 +834,12 @@ export class ControlEngine {
     vid.muted = true
     vid.style.cssText = 'transform-origin:center center;pointer-events:none;background:#000'
 
+    const framesAtDial = this.frames
+    const needsVideo = !GUEST_ACCESS || guestHas('screen.view')
+    const deadline = (milliseconds: number, reason: string) => {
+      if (this.rtcFallbackTimer) clearTimeout(this.rtcFallbackTimer)
+      this.rtcFallbackTimer = window.setTimeout(() => this.scheduleReconnect(reason), milliseconds)
+    }
     let remoteReady = false
     const pend: RTCIceCandidateInit[] = []
     // Relay signaling supplies ICE in ready; construct once with those servers.
@@ -943,6 +949,8 @@ export class ControlEngine {
                 this.scheduleReconnect('The WebRTC connection did not recover.')
             }, 4000)
         } else if (st === 'connected') {
+          if (this.rtcFallbackTimer) { clearTimeout(this.rtcFallbackTimer); this.rtcFallbackTimer = 0 }
+          if (needsVideo && this.frames === framesAtDial) deadline(7000, 'The device did not deliver a screen frame.')
           if (GUEST_ACCESS && !guestHas('screen.view')) this.status('Connected')
           if (this.disconnectGrace) {
             clearTimeout(this.disconnectGrace)
@@ -965,14 +973,10 @@ export class ControlEngine {
 
     const ws = new WebSocket(wsUrl)
     this.ws = ws
-    // If no video renders within the grace window the link is wedged (daemon busy,
-    // a peer churning, ICE lost a race) -- re-dial rather than sit on a dead view.
-    // Baseline the frame count so this also catches a reconnect that re-establishes
-    // signaling but never delivers a new frame.
-    const framesAtDial = this.frames
-    this.rtcFallbackTimer = window.setTimeout(() => {
-      if ((!GUEST_ACCESS || guestHas('screen.view')) && this.frames === framesAtDial) this.scheduleReconnect('The device did not deliver a screen frame.')
-    }, 7000)
+    // TURN/TCP allocation and ICE need their own bounded connection window.
+    // The first-frame deadline starts only after transport connection, so a
+    // valid slow handshake is not misclassified as a broken screen encoder.
+    deadline(30000, 'The WebRTC connection timed out.')
     ws.onmessage = async (ev) => {
       if (this.stopped || this.ws !== ws) return
       let m: { kind?: string; payload?: unknown }
