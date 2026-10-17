@@ -2,8 +2,9 @@
 
 The tested rootless target is an iPad Pro on iPadOS 15.5 with ordinary Dopamine
 and ElleKit. GitHub latest and the public APT source offer rootless `0.4.4`;
-remaining qualification checks are recorded separately. RootHide and other
-bootstrap variants are not covered by this evidence. Compilation alone does
+the opt-in `0.4.5` preview has also been installed on the configured test iPad.
+Version-scoped acceptance and remaining checks are recorded separately. RootHide
+and other bootstrap variants are not covered by this evidence. Compilation alone does
 not qualify another device.
 
 For the current release-preparation status, including the existing wizard,

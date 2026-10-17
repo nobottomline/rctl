@@ -1,5 +1,81 @@
 # Rootless Release Readiness
 
+## Rootless 0.4.5 Acceptance (2026-10-17)
+
+The configured iPad Pro on iPadOS 15.5, ordinary Dopamine and ElleKit 1.2 was
+upgraded from `0.4.4` to the exact immutable `0.4.5` rootless public package.
+Checksums, the package audit, tag/source/workflow-bound build provenance and
+the signed rootless catalog were verified first. The catalog includes the
+verified `0.4.4` rollback artifact. Independent operator SSH remained available.
+
+The existing signed transactional updater completed with `Update verified`;
+no passwordless-sudo workaround, rootful installer or personalized package was
+used. dpkg reported `0.4.5 install ok installed` for `iphoneos-arm64`, the live
+capabilities advertised both guest contracts, SpringBoard IPC responded, and
+the established relay reconnected. A private semantic comparison of the entire
+relay preference dictionary confirmed that identity, bindings and policy were
+preserved. This was a successful upgrade, not an exercised rollback or fresh
+installation.
+
+Initial computer-use acceptance on the previous relay client found a browser
+transport defect: `setConfiguration` raised `InvalidModificationError` and the
+client ignored it, leaving TURN-only guests without usable browser candidates.
+An isolated synthetic browser pair reproduced the failure; constructor-supplied
+TURN servers delivered all five synthetic messages. The screen, operations and
+camera answerers now construct the peer after signaling `ready`, with the full
+ICE configuration and unchanged guest relay policy. Owner LAN offers without
+`ready` remain supported. The fix has browser regression coverage for both
+clients, cancellation, queued candidates and missing guest readiness.
+
+A direct-enabled disposable guest on this physical rootless package received
+live 1024 x 1366 video. View-only exposed no input tools. Editing its rights
+closed the old session and removed the video stream; reconnect exposed the
+newly granted Home and device-information tools, and a device-information
+request completed through the native guest dispatcher. Revoke removed the
+stream and all controls with no reconnect action. Native capture and wake
+assertions returned to zero. This direct-path result does not qualify TURN.
+
+The corrected relay and control client from `f55a6e003559` were deployed from
+checksum- and GitHub-attestation-verified draft artifacts. External HTTPS
+health, protocol negotiation and the authenticated device proxy passed. The
+public `0.4.5` device package was not replaced by this web/relay deployment.
+
+A disposable TURN-only guest received live video on that deployment. During a
+70-second observation, the video clock advanced from 20.6 to 90.3 seconds and
+the browser retained decoded frames. Removing screen permission closed the
+connection and cleared the video element's stream. A separate anonymous HTTP
+client verified invitation claim, rejection of invitation reuse, denial of
+admin/device-owner endpoints and denial of guest requests after revocation.
+
+Repeated connections were not consistently successful: some attempts reached
+the connection deadline or lost relay signaling, and the device intermittently
+disconnected from the relay. A final direct-enabled attempt also failed to
+establish a usable stream. Home and touch therefore remain unqualified on this
+rootless device. No cause has been established for these interruptions; this
+record does not qualify sustained WAN availability or successful reconnect.
+VPN, routing and the default guest TURN policy were not changed.
+All disposable acceptance grants were revoked. The final guest reload denied
+access, the admin listed zero available grants/connections, and no guest video
+stream remained. Disposable invitation cookies and owned SSH tunnels were
+removed. The final device reachability check failed; its current capture/power
+state could not be independently inspected after that interruption.
+
+A fresh CI scan also found reachable standard-library advisories in the pinned
+Go `1.26.6`. Active build, CI, container and probe pins were updated to
+[`1.26.9`](https://go.dev/doc/devel/release#go1.26.9), including a verified official
+container digest. Local relay/probe tests, vet and reachable-vulnerability scans
+passed; the standalone probe still builds with an iOS 15.0 deployment target
+(not installed or executed on the device). The source-map-js build dependency
+was patched to `1.2.2` in both web clients. All six jobs of the deployed source's
+[CI run](https://github.com/nobottomline/rctl/actions/runs/39038714287), all three
+CodeQL analyses and its
+[draft candidate build](https://github.com/nobottomline/rctl/actions/runs/39038718444)
+passed. The web suite passed 79 tests. Existing unrelated build-tool dependency
+advisories remain; runtime dependency audits passed. These changes do not replace
+immutable preview or stable release assets. Rootful behavior, other rootless
+bootstraps, camera/audio/keyboard and fresh-install/rollback behavior were not
+requalified by this acceptance.
+
 ## 0.4.5 Preview (2026-10-05)
 
 [`v0.4.5`](https://github.com/nobottomline/rctl/releases/tag/v0.4.5) is a public,
