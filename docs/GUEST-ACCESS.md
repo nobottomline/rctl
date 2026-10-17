@@ -68,6 +68,16 @@ P-256 proofs. XSS or a stolen active cookie remains a relevant threat.
 
 ## Guest Control Interface
 
+The relay admin editor uses the shared dialog, fields, Radix Select and checkbox
+components. Access details and permissions sit side by side on wide screens and
+stack on small screens. The dialog body is the sole scrolling region; its header,
+save/cancel actions and save errors stay visible. Permission categories show
+selected/total counts, search covers every category, and Review selected lists
+the exact pending grant. View only replaces the selection with `screen.view`.
+Unsupported operations remain disabled, existing selected rights remain removable,
+and polling cannot clear a form error or overwrite the pending selection. These
+controls do not alter the generated permission contract or server authority.
+
 The guest client shares the owner's theme tokens and sheet component. Screen
 access opens directly onto the device with a compact connection/deadline HUD
 and a bottom-right control button. Its control center includes only granted

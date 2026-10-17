@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Ban, Check, Copy, Link, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Ban, Check, Copy, Link, Pencil, Plus, Trash2, Clock3, ShieldCheck, Tablet } from 'lucide-react'
 import { toast } from 'sonner'
 import { guestAPI, type GuestGrant, type GuestInvitation, type GuestDisconnectResult } from '../lib/guestAccess'
-import { GUEST_PERMISSIONS, type GuestPermission } from '../lib/guestPermissions.generated'
+import type { GuestPermission } from '../lib/guestPermissions.generated'
 import { ApiError } from '../lib/api'
 import { fmtUntil } from '../lib/format'
 import type { Device } from '../types'
@@ -10,6 +10,9 @@ import { Panel } from './Shell'
 import { Button } from './ui/Button'
 import { Field } from './ui/Field'
 import { Modal } from './ui/Modal'
+import { Checkbox } from './ui/Checkbox'
+import { SelectField } from './ui/SelectField'
+import { GuestPermissionPicker } from './GuestPermissionPicker'
 
 const live = (grant: GuestGrant) => grant.status === 'active' || grant.status === 'invited'
 function reportDisconnect(result: GuestDisconnectResult, message: string) {
@@ -20,6 +23,7 @@ function reportDisconnect(result: GuestDisconnectResult, message: string) {
 export function GuestAccessPanel({ devices, onChanged }: { devices: Device[]; onChanged: () => void }) {
   const [grants, setGrants] = useState<GuestGrant[]>([])
   const [error, setError] = useState('')
+  const [formError, setFormError] = useState('')
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState<GuestGrant | 'create' | null>(null)
   const [invitation, setInvitation] = useState<GuestInvitation | null>(null)
@@ -56,11 +60,11 @@ export function GuestAccessPanel({ devices, onChanged }: { devices: Device[]; on
     setLabel(grant === 'create' ? 'Guest' : grant.label)
     setPermissions(grant === 'create' ? ['screen.view'] : grant.permissions)
     setDirect(grant === 'create' ? false : grant.allow_direct)
-    setError('')
+    setFormError('')
   }
   async function save() {
     if (!form || busy) return
-    setBusy('form'); setError('')
+    setBusy('form'); setFormError('')
     try {
       if (form === 'create') {
         setInvitation(await guestAPI.create({ device_id: device, label, permissions, ttl_seconds: ttl, allow_direct: direct }))
@@ -73,9 +77,9 @@ export function GuestAccessPanel({ devices, onChanged }: { devices: Device[]; on
       await reload(); onChanged()
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && form !== 'create') {
-        setError('Access changed in another session. Close this dialog and open it again to reload permissions.')
+        setFormError('Access changed in another session. Close this dialog and open it again to reload permissions.')
         await reload()
-      } else setError(e instanceof Error ? e.message : 'Could not save temporary access')
+      } else setFormError(e instanceof Error ? e.message : 'Could not save temporary access')
     } finally { setBusy('') }
   }
   async function revoke(grant?: GuestGrant) {
@@ -117,26 +121,52 @@ export function GuestAccessPanel({ devices, onChanged }: { devices: Device[]; on
             <Button size="icon" variant="ghost" aria-label={`Delete ${g.label} from history`} loading={busy === g.id} disabled={!!busy} onClick={() => void remove(g)}><Trash2 className="size-4" /></Button>}
         </div>)}</div>}
     </Panel>
-    <Modal open={!!form} onOpenChange={(open) => { if (!open && !busy) { setForm(null); setInvitation(null); setError('') } }} title={invitation ? 'Invitation ready' : form === 'create' ? 'Create temporary access' : 'Change guest permissions'}
-      description={invitation ? 'Copy this link now. It is shown only once and can be claimed by one browser before the claim deadline.' : form === 'create' ? 'Choose exactly what your guest can do and when access ends.' : 'Saving a change disconnects every open connection. The guest must connect again with the updated rights.'}>
-      {invitation ? <div className="space-y-4">
-        <textarea aria-label="Invitation link" readOnly value={invitation.invitation_url} className="w-full rounded-lg bg-bg p-3 font-mono text-xs text-fg" rows={4} />
-        <p className="text-xs text-muted">Claim before {fmtUntil(invitation.claim_deadline)}. Access expires {fmtUntil(invitation.expires_at)}.</p>
-        <div className="flex justify-end gap-2"><Button onClick={() => void copy()}>{copied ? <Check className="size-4" /> : <Copy className="size-4" />}Copy link</Button><Button variant="primary" onClick={() => { setInvitation(null); setForm(null) }}>Done</Button></div>
-      </div> : <div className="space-y-4">
-        {form === 'create' && <><Field label="Guest label" value={label} maxLength={80} onChange={(e) => setLabel(e.target.value)} />
-          <label className="block text-sm text-muted">Device<select className="mt-2 block w-full rounded-lg bg-bg p-3 text-fg" value={device} onChange={(e) => setDevice(e.target.value)}>{eligible.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label></>}
-        <p className="text-xs leading-relaxed text-muted">Root terminal grants full device authority, including persistent changes. Touch and keyboard can operate other apps and their settings. Direct LAN control remains unrestricted unless you enabled the device’s Relay-only policy.</p>
-        <div><div className="mb-3 flex items-center justify-between"><p className="text-sm text-muted">Permissions · {permissions.length} selected</p><Button size="sm" onClick={() => setPermissions(['screen.view'])}>View only</Button></div>
-          <div className="max-h-72 space-y-4 overflow-y-auto pr-2">{Array.from(new Set(GUEST_PERMISSIONS.map((p) => p.group))).map((group) => <fieldset key={group}><legend className="mb-2 text-xs font-medium text-muted">{group}</legend><div className="space-y-2">{GUEST_PERMISSIONS.filter((p) => p.group === group).map((p) => {
-            const initial = ['screen.view', 'input.touch', 'input.keyboard', 'input.button.home', 'input.button.lock', 'input.button.volume', 'input.button.system_ui'].includes(p.id)
-            const supported = initial || devices.find((d) => d.id === device)?.features.includes('guest.operations_v1')
-            return <label key={p.id} className="flex min-h-10 items-center gap-3 rounded-lg bg-surface-2 px-3 text-sm"><input type="checkbox" checked={permissions.includes(p.id)} disabled={!supported && !permissions.includes(p.id)} onChange={(e) => setPermissions(e.target.checked ? [...permissions, p.id] : permissions.filter((id) => id !== p.id))} />{p.label}{!supported && <span className="text-xs text-muted">Device update required</span>}</label>
-          })}</div></fieldset>)}</div></div>
-        {form === 'create' && <><label className="block text-sm text-muted">Access lifetime<select className="mt-2 block w-full rounded-lg bg-bg p-3 text-fg" value={ttl} onChange={(e) => setTTL(Number(e.target.value))}>{[300, 900, 3600, 14400, 86400].map((s) => <option key={s} value={s}>{s < 3600 ? `${s / 60} minutes` : `${s / 3600} hours`}</option>)}</select></label>
-          <label className="flex items-start gap-3 text-sm text-muted"><input type="checkbox" checked={direct} onChange={(e) => setDirect(e.target.checked)} />Allow a direct connection. This may reveal network addresses to the guest. Off uses TURN only.</label></>}
-        {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-        <div className="flex justify-end gap-2"><Button disabled={!!busy} onClick={() => { setForm(null); setError('') }}>Cancel</Button><Button variant="primary" loading={busy === 'form'} disabled={!permissions.length || (form === 'create' && !device)} onClick={() => void save()}>{form === 'create' ? 'Create link' : 'Save permissions'}</Button></div>
+    <Modal open={!!form} autoFocusContent onOpenChange={(open) => { if (!open && !busy) { setForm(null); setInvitation(null); setFormError('') } }}
+      className={invitation ? 'max-w-lg' : 'max-w-4xl'}
+      title={invitation ? 'Invitation ready' : form === 'create' ? 'Create temporary access' : 'Change guest permissions'}
+      description={invitation ? 'A one-time link for one browser. Copy it before closing this window.' : form === 'create' ? 'Choose a device, set an expiry, and allow only what your guest needs.' : 'Saving changes closes all guest connections. The guest can reconnect with the updated permissions.'}
+      footer={<div className="space-y-3">
+        {formError && !invitation && <p role="alert" className="text-sm text-danger">{formError}</p>}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-muted">{invitation ? 'The link is shown only once.' : `${permissions.length} permission${permissions.length === 1 ? '' : 's'} selected`}</p>
+          <div className="ml-auto flex gap-2">
+            {invitation ? <><Button onClick={() => void copy()}>{copied ? <Check className="size-4" /> : <Copy className="size-4" />}{copied ? 'Copied' : 'Copy link'}</Button><Button variant="primary" onClick={() => { setInvitation(null); setForm(null) }}>Done</Button></> : <>
+              <Button disabled={!!busy} onClick={() => { setForm(null); setFormError('') }}>Cancel</Button>
+              <Button variant="primary" loading={busy === 'form'} disabled={!!busy || !permissions.length || (form === 'create' && !device)} onClick={() => void save()}>{form === 'create' ? 'Create link' : 'Save permissions'}</Button>
+            </>}
+          </div>
+        </div>
+      </div>}>
+      {invitation ? <div className="space-y-5">
+        <div className="flex items-center gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-online/10 text-online"><Check className="size-5" /></span><div><p className="text-sm font-medium text-fg">{label}</p><p className="text-xs text-muted">Share privately with your guest</p></div></div>
+        <textarea aria-label="Invitation link" readOnly value={invitation.invitation_url} className="w-full resize-none rounded-xl border border-line bg-bg/55 p-3.5 font-mono text-xs leading-relaxed text-fg" rows={4} />
+        <div className="space-y-2 text-xs text-muted"><p>Claim before {fmtUntil(invitation.claim_deadline)}.</p><p>Access expires {fmtUntil(invitation.expires_at)}. You can revoke it at any time.</p></div>
+      </div> : <div className="grid min-w-0 gap-6 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-8">
+        <fieldset disabled={!!busy} className="min-w-0 space-y-5 disabled:opacity-70">
+          <legend className="sr-only">Access settings</legend>
+          {form === 'create' ? <>
+            <div className="flex items-center gap-2 text-sm font-semibold"><Link className="size-4 text-muted" />Access details</div>
+            <Field label="Guest label" value={label} maxLength={80} onChange={(e) => setLabel(e.target.value)} />
+            <SelectField label="Device" value={device} onValueChange={setDevice} disabled={!!busy} options={eligible.map((d) => ({ value: d.id, label: d.name }))} placeholder="Choose a device" />
+            <SelectField label="Access lifetime" value={String(ttl)} onValueChange={(value) => setTTL(Number(value))} disabled={!!busy} options={[{ value: '300', label: '5 minutes' }, { value: '900', label: '15 minutes' }, { value: '3600', label: '1 hour' }, { value: '14400', label: '4 hours' }, { value: '86400', label: '24 hours' }]} />
+          </> : <>
+            <div className="flex items-center gap-2 text-sm font-semibold"><Link className="size-4 text-muted" />{label}</div>
+            <div className="space-y-3 rounded-xl border border-line bg-bg/25 p-4 text-sm">
+              <p className="flex items-start gap-2"><Tablet className="mt-0.5 size-4 shrink-0 text-muted" /><span className="break-words">{form && form.device_name}</span></p>
+              <p className="flex items-start gap-2 text-xs leading-relaxed text-muted"><Clock3 className="size-4 shrink-0" />Expires {form && fmtUntil(form.expires_at)}</p>
+            </div>
+          </>}
+          <div className="border-t border-line pt-5">
+            {form === 'create' ? <label className="flex cursor-pointer items-start gap-3">
+              <Checkbox checked={direct} disabled={!!busy} onCheckedChange={(checked) => setDirect(checked === true)} className="mt-0.5" />
+              <span><span className="block text-[13px] font-medium text-fg-dim">Allow direct connection</span><span className="mt-1.5 block text-xs leading-relaxed text-muted">Off uses TURN only. Direct connections may reveal network addresses to the guest.</span></span>
+            </label> : <p className="text-xs leading-relaxed text-muted">{direct ? 'Direct connections are allowed.' : 'Connections use TURN only.'}</p>}
+          </div>
+          <div className="flex items-start gap-2.5 text-xs leading-relaxed text-muted"><ShieldCheck className="mt-0.5 size-4 shrink-0" /><p>You can change permissions or revoke access at any time. These permissions apply to guest access; local control follows the device’s Relay-only policy.</p></div>
+        </fieldset>
+        <div className="min-w-0 border-t border-line pt-6 lg:border-t-0 lg:border-l lg:pl-8 lg:pt-0">
+          <GuestPermissionPicker key={form === 'create' ? 'create' : form?.id} value={permissions} onChange={setPermissions} operationsSupported={!!devices.find((d) => d.id === device)?.features.includes('guest.operations_v1')} disabled={!!busy} />
+        </div>
       </div>}
     </Modal>
     <Modal open={confirmAll} onOpenChange={(open) => !busy && setConfirmAll(open)} title="Revoke all guest access?" description="Every guest connection will close and every outstanding invitation will stop working.">

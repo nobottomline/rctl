@@ -12,6 +12,7 @@ export type ModalProps = {
   children?: ReactNode
   className?: string
   autoFocusContent?: boolean
+  footer?: ReactNode
 }
 
 // A nested Radix popper (a dropdown menu, select, etc.) portals its content
@@ -33,7 +34,12 @@ export function Modal({
   children,
   className,
   autoFocusContent = false,
+  footer,
 }: ModalProps) {
+  const heading = <>
+    {title && <Dialog.Title className="pr-8 text-lg font-semibold tracking-tight text-fg">{title}</Dialog.Title>}
+    {description && <Dialog.Description className="mt-1.5 pr-4 text-sm leading-relaxed text-muted">{description}</Dialog.Description>}
+  </>
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <AnimatePresence>
@@ -68,20 +74,13 @@ export function Modal({
                   )}
                 >
                   <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-signal/50 to-transparent" />
-                  <div className="overflow-y-auto overscroll-contain p-6">
-                    {title && (
-                      <Dialog.Title className="text-lg font-semibold tracking-tight text-fg">
-                        {title}
-                      </Dialog.Title>
-                    )}
-                    {description && (
-                      <Dialog.Description className="mt-1.5 text-sm leading-relaxed text-muted">
-                        {description}
-                      </Dialog.Description>
-                    )}
-                    <div className={cn(title && 'mt-5')}>{children}</div>
+                  {footer && <div className="shrink-0 border-b border-line p-5 sm:px-6">{heading}</div>}
+                  <div className="min-h-0 overflow-y-auto overscroll-contain p-6">
+                    {!footer && heading}
+                    <div className={cn(!footer && title && 'mt-5')}>{children}</div>
                   </div>
-                  <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-fg">
+                  {footer && <div className="shrink-0 border-t border-line bg-surface px-6 py-4">{footer}</div>}
+                  <Dialog.Close aria-label="Close dialog" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-fg">
                     <X className="size-4" />
                   </Dialog.Close>
                 </motion.div>
