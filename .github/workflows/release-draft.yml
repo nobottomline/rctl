@@ -126,7 +126,7 @@ jobs:
           ref: ${{ needs.validate.outputs.source_sha }}
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: 1.26.6
+          go-version: 1.26.9
           cache-dependency-path: relay/go.sum
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -223,7 +223,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: 1.26.6
+          go-version: 1.26.9
           cache-dependency-path: relay/go.sum
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -308,7 +308,7 @@ jobs:
           ref: ${{ needs.validate.outputs.source_sha }}
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: 1.26.6
+          go-version: 1.26.9
           cache-dependency-path: relay/go.sum
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

@@ -21,7 +21,7 @@ go run . --check
 sh build-ios.sh /tmp/tailnet-probe
 ```
 
-The iOS build requires macOS, Xcode's iPhoneOS SDK and `ldid`. It pins Go 1.26.6
+The iOS build requires macOS, Xcode's iPhoneOS SDK and `ldid`. It pins Go 1.26.9
 because a future host toolchain can drop support for the iOS 15 target. It
 creates an ad-hoc signed arm64 executable with an iOS 15.0 deployment target;
 it neither transfers nor installs it. Jailbreak execution/trust requirements
