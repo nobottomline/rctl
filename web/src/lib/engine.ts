@@ -834,118 +834,133 @@ export class ControlEngine {
     vid.muted = true
     vid.style.cssText = 'transform-origin:center center;pointer-events:none;background:#000'
 
-    const pc = new RTCPeerConnection(GUEST_ACCESS && !GUEST_ACCESS.allow_direct ? { iceTransportPolicy: 'relay' } : {})
-    this.pc = pc
     let remoteReady = false
     const pend: RTCIceCandidateInit[] = []
-
-    pc.ontrack = (e) => {
-      if (this.stopped || this.pc !== pc) return
-      vid.srcObject = e.streams[0] || new MediaStream([e.track])
-      try {
-        // Direct-LAN local sessions need a small playout buffer (~50ms) to ride out
-        // bursty delivery; the relay path stays at 0 (its RTT already buffers).
-        ;(e.receiver as RTCRtpReceiver & { playoutDelayHint?: number }).playoutDelayHint = this.localMode ? 0.05 : 0
-      } catch {
-        /* ignore */
-      }
-      this.canvas.style.display = 'none'
-      if (!vid.parentElement) this.stage.appendChild(vid)
-      this.dispEl = vid
-      vid.play().catch(() => {})
-      // Size the <video> to the stream's pixel size; applyOrient scales/rotates it
-      // to fit (the canvas keeps the same width/height as the input-map reference).
-      const fit = () => {
+    // Relay signaling supplies ICE in ready; construct once with those servers.
+    // Some browsers reject setConfiguration even before negotiation. Silently
+    // ignoring that failure leaves relay-only guests with no usable candidate.
+    const createPeer = (iceServers: RTCIceServer[] = []) => {
+      const pc = new RTCPeerConnection({ iceServers, ...(GUEST_ACCESS && !GUEST_ACCESS.allow_direct ? { iceTransportPolicy: 'relay' as const } : {}) })
+      this.pc = pc
+      pc.ontrack = (e) => {
         if (this.stopped || this.pc !== pc) return
-        if (vid.videoWidth) {
-          this.canvas.width = vid.videoWidth
-          this.canvas.height = vid.videoHeight
-          this.applyOrient()
-          this.frames++
-          if (this.rtcFallbackTimer) {
-            clearTimeout(this.rtcFallbackTimer)
-            this.rtcFallbackTimer = 0
-          }
-          this.rtcAttempts = 0 // a healthy link; let the next drop retry from scratch
-          this.status('')
-          this.cb.onFrame?.()
+        vid.srcObject = e.streams[0] || new MediaStream([e.track])
+        try {
+          // Direct-LAN local sessions need a small playout buffer (~50ms) to ride out
+          // bursty delivery; the relay path stays at 0 (its RTT already buffers).
+          ;(e.receiver as RTCRtpReceiver & { playoutDelayHint?: number }).playoutDelayHint = this.localMode ? 0.05 : 0
+        } catch {
+          /* ignore */
         }
-      }
-      vid.addEventListener('loadedmetadata', fit)
-      vid.addEventListener('resize', fit)
-      fit()
-    }
-
-    pc.ondatachannel = (e) => {
-      if (this.stopped || this.pc !== pc) { e.channel.close(); return }
-      const ch = e.channel
-      if (GUEST_ACCESS) {
-        const permitted = ch.label === 'state' || ch.label === 'guest-operations' ||
-          (ch.label === 'control' && GUEST_ACCESS.permissions.some((p) => p.startsWith('input.'))) ||
-          (ch.label === 'audio' && guestHas('audio.playback.listen')) ||
-          (ch.label === 'room-mic' && guestHas('audio.microphone.listen')) ||
-          (ch.label === 'mic-in' && (guestHas('talk.speaker') || guestHas('talk.virtual_microphone')))
-        if (!permitted) { ch.close(); this.endGuest('The device opened an unexpected channel. Access was closed.'); return }
-      }
-      if (ch.label === 'guest-operations') {
-        this.cb.onGuestOperations?.(ch)
-      } else if (ch.label === 'state') {
-        ch.onmessage = (event) => {
+        this.canvas.style.display = 'none'
+        if (!vid.parentElement) this.stage.appendChild(vid)
+        this.dispEl = vid
+        vid.play().catch(() => {})
+        // Size the <video> to the stream's pixel size; applyOrient scales/rotates it
+        // to fit (the canvas keeps the same width/height as the input-map reference).
+        const fit = () => {
           if (this.stopped || this.pc !== pc) return
-          try {
-            const state = JSON.parse(event.data) as { orientation?: number; input_blocked?: boolean; input_busy?: boolean }
-            if (state.input_blocked) {
-              this.guestInputBlocked = true
-              this.cb.onInputBlocked?.()
-              this.status('Owner took control. Connect again to request input.')
+          if (vid.videoWidth) {
+            this.canvas.width = vid.videoWidth
+            this.canvas.height = vid.videoHeight
+            this.applyOrient()
+            this.frames++
+            if (this.rtcFallbackTimer) {
+              clearTimeout(this.rtcFallbackTimer)
+              this.rtcFallbackTimer = 0
             }
-            if (state.input_busy === true) this.status('Input is in use by another session')
-            if (state.input_busy === false && !this.guestInputBlocked) this.status('Connected')
-            const o = state.orientation
-            if (typeof o === 'number' && o >= 1 && o <= 4 && o !== this.orient) {
-              this.orient = o
-              this.applyOrient()
-              this.cb.onOrient?.(o, false)
-            }
-          } catch { /* ignore malformed state */ }
+            this.rtcAttempts = 0 // a healthy link; let the next drop retry from scratch
+            this.status('')
+            this.cb.onFrame?.()
+          }
         }
-      } else if (ch.label === 'control') {
-        this.control = ch
-        this.cb.onControlChannel?.(ch)
-      } else if (ch.label === 'pointer' || ch.label === 'pointer-motion') {
-        this.cb.onPointerChannel?.(ch)
-      } else if (ch.label === 'audio') {
-        this.cb.onAudioChannel?.(ch)
-      } else if (ch.label === 'files') {
-        this.cb.onFilesChannel?.(ch)
-      } else if (ch.label === 'mic-in') {
-        this.cb.onMicChannel?.(ch)
-      } else if (ch.label === 'room-mic') {
-        this.cb.onRoomMicChannel?.(ch)
+        vid.addEventListener('loadedmetadata', fit)
+        vid.addEventListener('resize', fit)
+        fit()
       }
-    }
 
-    pc.onconnectionstatechange = () => {
-      if (this.stopped || this.pc !== pc) return
-      const st = pc.connectionState
-      if (st === 'failed') {
-        this.scheduleReconnect('The WebRTC connection failed.')
-      } else if (st === 'disconnected') {
-        // A 'disconnected' is often a transient blip that recovers on its own;
-        // only re-dial if it hasn't healed within a short grace.
-        if (!this.disconnectGrace)
-          this.disconnectGrace = window.setTimeout(() => {
-            this.disconnectGrace = 0
-            if (this.pc === pc && (pc.connectionState === 'disconnected' || pc.connectionState === 'failed'))
-              this.scheduleReconnect('The WebRTC connection did not recover.')
-          }, 4000)
-      } else if (st === 'connected') {
-        if (GUEST_ACCESS && !guestHas('screen.view')) this.status('Connected')
-        if (this.disconnectGrace) {
-          clearTimeout(this.disconnectGrace)
-          this.disconnectGrace = 0
+      pc.ondatachannel = (e) => {
+        if (this.stopped || this.pc !== pc) { e.channel.close(); return }
+        const ch = e.channel
+        if (GUEST_ACCESS) {
+          const permitted = ch.label === 'state' || ch.label === 'guest-operations' ||
+            (ch.label === 'control' && GUEST_ACCESS.permissions.some((p) => p.startsWith('input.'))) ||
+            (ch.label === 'audio' && guestHas('audio.playback.listen')) ||
+            (ch.label === 'room-mic' && guestHas('audio.microphone.listen')) ||
+            (ch.label === 'mic-in' && (guestHas('talk.speaker') || guestHas('talk.virtual_microphone')))
+          if (!permitted) { ch.close(); this.endGuest('The device opened an unexpected channel. Access was closed.'); return }
+        }
+        if (ch.label === 'guest-operations') {
+          this.cb.onGuestOperations?.(ch)
+        } else if (ch.label === 'state') {
+          ch.onmessage = (event) => {
+            if (this.stopped || this.pc !== pc) return
+            try {
+              const state = JSON.parse(event.data) as { orientation?: number; input_blocked?: boolean; input_busy?: boolean }
+              if (state.input_blocked) {
+                this.guestInputBlocked = true
+                this.cb.onInputBlocked?.()
+                this.status('Owner took control. Connect again to request input.')
+              }
+              if (state.input_busy === true) this.status('Input is in use by another session')
+              if (state.input_busy === false && !this.guestInputBlocked) this.status('Connected')
+              const o = state.orientation
+              if (typeof o === 'number' && o >= 1 && o <= 4 && o !== this.orient) {
+                this.orient = o
+                this.applyOrient()
+                this.cb.onOrient?.(o, false)
+              }
+            } catch { /* ignore malformed state */ }
+          }
+        } else if (ch.label === 'control') {
+          this.control = ch
+          this.cb.onControlChannel?.(ch)
+        } else if (ch.label === 'pointer' || ch.label === 'pointer-motion') {
+          this.cb.onPointerChannel?.(ch)
+        } else if (ch.label === 'audio') {
+          this.cb.onAudioChannel?.(ch)
+        } else if (ch.label === 'files') {
+          this.cb.onFilesChannel?.(ch)
+        } else if (ch.label === 'mic-in') {
+          this.cb.onMicChannel?.(ch)
+        } else if (ch.label === 'room-mic') {
+          this.cb.onRoomMicChannel?.(ch)
         }
       }
+
+      pc.onconnectionstatechange = () => {
+        if (this.stopped || this.pc !== pc) return
+        const st = pc.connectionState
+        if (st === 'failed') {
+          this.scheduleReconnect('The WebRTC connection failed.')
+        } else if (st === 'disconnected') {
+          // A 'disconnected' is often a transient blip that recovers on its own;
+          // only re-dial if it hasn't healed within a short grace.
+          if (!this.disconnectGrace)
+            this.disconnectGrace = window.setTimeout(() => {
+              this.disconnectGrace = 0
+              if (this.pc === pc && (pc.connectionState === 'disconnected' || pc.connectionState === 'failed'))
+                this.scheduleReconnect('The WebRTC connection did not recover.')
+            }, 4000)
+        } else if (st === 'connected') {
+          if (GUEST_ACCESS && !guestHas('screen.view')) this.status('Connected')
+          if (this.disconnectGrace) {
+            clearTimeout(this.disconnectGrace)
+            this.disconnectGrace = 0
+          }
+        }
+      }
+
+      pc.onicecandidate = (e) => {
+        // An empty candidate marks the end of gathering, not a routable ICE
+        // candidate. Our signaling contract carries candidates only.
+        if (e.candidate?.candidate && !this.stopped && this.pc === pc && ws.readyState === 1)
+          ws.send(JSON.stringify({
+            kind: 'candidate',
+            payload: { candidate: e.candidate.candidate, mid: e.candidate.sdpMid || '0' },
+          }))
+      }
+      return pc
     }
 
     const ws = new WebSocket(wsUrl)
@@ -958,17 +973,8 @@ export class ControlEngine {
     this.rtcFallbackTimer = window.setTimeout(() => {
       if ((!GUEST_ACCESS || guestHas('screen.view')) && this.frames === framesAtDial) this.scheduleReconnect('The device did not deliver a screen frame.')
     }, 7000)
-    pc.onicecandidate = (e) => {
-      // An empty candidate marks the end of gathering, not a routable ICE
-      // candidate. Our signaling contract carries candidates only.
-      if (e.candidate?.candidate && !this.stopped && this.pc === pc && ws.readyState === 1)
-        ws.send(JSON.stringify({
-          kind: 'candidate',
-          payload: { candidate: e.candidate.candidate, mid: e.candidate.sdpMid || '0' },
-        }))
-    }
     ws.onmessage = async (ev) => {
-      if (this.stopped || this.pc !== pc) return
+      if (this.stopped || this.ws !== ws) return
       let m: { kind?: string; payload?: unknown }
       try {
         m = JSON.parse(ev.data)
@@ -976,16 +982,17 @@ export class ControlEngine {
         return
       }
       if (m.kind === 'ready') {
-        if (Array.isArray(m.payload) && m.payload.length) {
-          try {
-            pc.setConfiguration({ iceServers: m.payload as RTCIceServer[],
-              ...(GUEST_ACCESS ? { iceTransportPolicy: GUEST_ACCESS.allow_direct ? 'all' as const : 'relay' as const } : {}) })
-          } catch {
-            /* ignore */
-          }
+        if (this.pc) return // ICE is fixed for this signaling generation.
+        try {
+          createPeer(Array.isArray(m.payload) ? m.payload as RTCIceServer[] : [])
+        } catch {
+          this.scheduleReconnect('The browser could not configure the device connection.')
         }
       } else if (m.kind === 'offer') {
         try {
+          // Direct LAN peers may send the offer without a relay ready message.
+          if (GUEST_ACCESS && !this.pc) { this.endGuest('The signaling service did not configure the device connection.'); return }
+          const pc = this.pc || createPeer()
           const p = m.payload as { sdp: string }
           await pc.setRemoteDescription({ type: 'offer', sdp: p.sdp })
           if (this.stopped || this.pc !== pc) return
@@ -1009,7 +1016,7 @@ export class ControlEngine {
         const ic = { candidate: (p.candidate || '').replace(/^a=/, ''), sdpMid: p.mid || '0' }
         if (remoteReady) {
           try {
-            await pc.addIceCandidate(ic)
+            await this.pc?.addIceCandidate(ic)
           } catch {
             /* ignore */
           }
@@ -1018,7 +1025,7 @@ export class ControlEngine {
     }
     ws.onerror = () => { if (!this.stopped) this.status('signal err') }
     if (GUEST_ACCESS) {
-      ws.onclose = (event) => this.endGuest(`The signaling connection closed (${event.code}).`)
+      ws.onclose = (event) => { if (this.ws === ws) this.endGuest(`The signaling connection closed (${event.code}).`) }
       return // Guests receive orientation through their authorized state channel.
     }
 

@@ -75,6 +75,13 @@ Realtime media/control is WebRTC:
 - Control/audio/bounded file operations: reliable DataChannels.
 - Large downloads: bounded HTTP stream, tunneled through the relay when remote.
 
+Browser answerers wait for the relay's `ready` message and construct their
+PeerConnection with the complete ICE configuration. Do not silently ignore a
+failed `setConfiguration`: browsers can reject it even before negotiation,
+leaving TURN-only sessions with no usable browser candidate. Screen, operations
+and camera use the same initialization rule. Device-local signaling may send an
+offer without `ready`; that owner path still constructs a host-only peer.
+
 The pinned iOS build uses libjuice (`USE_NICE=0`). Its libdatachannel ICE backend
 accepts TURN/UDP but explicitly skips TURN/TCP and TURN/TLS servers. Browser-side
 TURN/TCP support is a separate capability: a successful browser allocation does

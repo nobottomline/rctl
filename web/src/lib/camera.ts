@@ -80,7 +80,7 @@ export class CameraTransport {
     const state = this.pc?.connectionState
     if (state === 'connected' && now - this.lastFrameAt > 8000)
       this.scheduleReconnect()
-    else if ((state === 'new' || state === 'connecting') && now - this.lastFrameAt > 10000)
+    else if ((!state || state === 'new' || state === 'connecting') && now - this.lastFrameAt > 10000)
       this.scheduleReconnect()
   }
 
@@ -91,12 +91,11 @@ export class CameraTransport {
     this.disconnectGrace = 0
     this.ws?.close()
     this.pc?.close()
+    this.pc = null
     this.lastVideoTime = this.video.currentTime
     this.lastFrameAt = performance.now()
     this.callbacks.onState?.('connecting')
 
-    const pc = new RTCPeerConnection(GUEST_ACCESS ? { iceTransportPolicy: GUEST_ACCESS.allow_direct ? 'all' : 'relay' } : {})
-    this.pc = pc
     let remoteReady = false
     const pending: RTCIceCandidateInit[] = []
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -104,41 +103,47 @@ export class CameraTransport {
     const ws = new WebSocket(url)
     this.ws = ws
 
-    pc.ontrack = (event) => {
-      if (generation !== this.generation) return
-      this.video.srcObject = event.streams[0] || new MediaStream([event.track])
-      this.lastVideoTime = this.video.currentTime
-      this.lastFrameAt = performance.now()
-      this.video.play().catch(() => {})
-      this.callbacks.onState?.('live')
-    }
-    pc.onicecandidate = (event) => {
-      if (event.candidate?.candidate && generation === this.generation && this.pc === pc && ws.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({
-          kind: 'candidate',
-          payload: { candidate: event.candidate.candidate, mid: event.candidate.sdpMid || '0' },
-        }))
-    }
-    pc.onconnectionstatechange = () => {
-      if (generation !== this.generation) return
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
-        this.disconnectGrace = 0
-        this.scheduleReconnect()
-      } else if (pc.connectionState === 'disconnected') {
-        if (!this.disconnectGrace) {
-          this.callbacks.onState?.('reconnecting')
-          this.disconnectGrace = window.setTimeout(() => {
-            this.disconnectGrace = 0
-            if (generation === this.generation && pc.connectionState === 'disconnected')
-              this.scheduleReconnect()
-          }, 4000)
-        }
-      } else if (pc.connectionState === 'connected') {
-        if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
-        this.disconnectGrace = 0
-        this.callbacks.onState?.('connected')
+    const createPeer = (iceServers: RTCIceServer[] = []) => {
+      const pc = new RTCPeerConnection({ iceServers, ...(GUEST_ACCESS ? { iceTransportPolicy: GUEST_ACCESS.allow_direct ? 'all' as const : 'relay' as const } : {}) })
+      this.pc = pc
+      pc.ontrack = (event) => {
+        if (generation !== this.generation) return
+        this.video.srcObject = event.streams[0] || new MediaStream([event.track])
+        this.lastVideoTime = this.video.currentTime
+        this.lastFrameAt = performance.now()
+        this.video.play().catch(() => {})
+        this.callbacks.onState?.('live')
       }
+      pc.onicecandidate = (event) => {
+        if (event.candidate?.candidate && generation === this.generation && this.pc === pc && ws.readyState === WebSocket.OPEN)
+          ws.send(JSON.stringify({
+            kind: 'candidate',
+            payload: { candidate: event.candidate.candidate, mid: event.candidate.sdpMid || '0' },
+          }))
+      }
+      pc.onconnectionstatechange = () => {
+        if (generation !== this.generation) return
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
+          this.disconnectGrace = 0
+          this.scheduleReconnect()
+        } else if (pc.connectionState === 'disconnected') {
+          if (!this.disconnectGrace) {
+            this.callbacks.onState?.('reconnecting')
+            this.disconnectGrace = window.setTimeout(() => {
+              this.disconnectGrace = 0
+              if (generation === this.generation && pc.connectionState === 'disconnected')
+                this.scheduleReconnect()
+            }, 4000)
+          }
+        } else if (pc.connectionState === 'connected') {
+          if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
+          this.disconnectGrace = 0
+          this.callbacks.onState?.('connected')
+        }
+      }
+
+      return pc
     }
 
     ws.onmessage = async (event) => {
@@ -150,15 +155,16 @@ export class CameraTransport {
         return
       }
       if (message.kind === 'ready') {
-        if (Array.isArray(message.payload) && message.payload.length) {
-          try {
-            pc.setConfiguration({ iceServers: message.payload as RTCIceServer[], ...(GUEST_ACCESS ? { iceTransportPolicy: GUEST_ACCESS.allow_direct ? 'all' as const : 'relay' as const } : {}) })
-          } catch {
-            // Host candidates remain available.
-          }
+        if (this.pc) return
+        try {
+          createPeer(Array.isArray(message.payload) ? message.payload as RTCIceServer[] : [])
+        } catch {
+          this.scheduleReconnect()
         }
       } else if (message.kind === 'offer') {
         try {
+          if (GUEST_ACCESS && !this.pc) { this.scheduleReconnect(); return }
+          const pc = this.pc || createPeer()
           const payload = message.payload as { sdp: string }
           await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp })
           if (this.stopped || generation !== this.generation) return
@@ -177,11 +183,11 @@ export class CameraTransport {
           candidate: (payload.candidate || '').replace(/^a=/, ''),
           sdpMid: payload.mid || '0',
         }
-        if (remoteReady) await pc.addIceCandidate(candidate).catch(() => {})
+        if (remoteReady) await this.pc?.addIceCandidate(candidate).catch(() => {})
         else pending.push(candidate)
       }
     }
-    ws.onerror = () => this.scheduleReconnect()
+    ws.onerror = () => { if (generation === this.generation) this.scheduleReconnect() }
     ws.onclose = () => {
       if (generation === this.generation) this.scheduleReconnect()
     }
