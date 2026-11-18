@@ -182,6 +182,14 @@ static char *sb_query(uint8_t qtype, const char *payload, uint32_t plen, double 
 
     uint32_t blen = 5 + plen;
     uint8_t *buf = (uint8_t *)malloc(blen);
+    if (!buf) {
+        // The slot was reserved before the allocation; release it so the
+        // query path stays usable after the allocation pressure passes.
+        pthread_mutex_lock(&gPendLock);
+        gPending[slot].used = false; gPending[slot].result = NULL; gPending[slot].sem = NULL;
+        pthread_mutex_unlock(&gPendLock);
+        return NULL;
+    }
     buf[0] = reqid >> 24; buf[1] = reqid >> 16; buf[2] = reqid >> 8; buf[3] = (uint8_t)reqid; buf[4] = qtype;
     if (plen) memcpy(buf + 5, payload, plen);
     send_to_sb(RCTL_MSG_QUERY, buf, blen);
@@ -1582,7 +1590,9 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
             NSString *s = clip ? ([NSString stringWithUTF8String:clip] ?: @"") : @"";
             free(clip);
             NSData *jd = [NSJSONSerialization dataWithJSONObject:@{@"text": s} options:0 error:nil];
-            char *out = (char *)malloc(jd.length + 1); memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
+            char *out = (char *)malloc(jd.length + 1);
+            if (!out) { *status = 500; return strdup("{\"error\":\"out_of_memory\"}"); }
+            memcpy(out, jd.bytes, jd.length); out[jd.length] = 0;
             return out;
         }
     } else if (!strcmp(path, "/v1/keyboard")) {

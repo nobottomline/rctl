@@ -97,6 +97,7 @@ rctl_ipc_server *rctl_ipc_listen(const char *path) {
     chmod(path, 0777);                 // SpringBoard runs as mobile; let it connect
     if (listen(fd, 4) < 0) { close(fd); return NULL; }
     rctl_ipc_server *s = (rctl_ipc_server *)calloc(1, sizeof(*s));
+    if (!s) { close(fd); return NULL; }
     s->fd = fd;
     return s;
 }
@@ -106,6 +107,7 @@ rctl_ipc *rctl_ipc_accept(rctl_ipc_server *s) {
     int fd = accept(s->fd, NULL, NULL);
     if (fd < 0) return NULL;
     rctl_ipc *c = (rctl_ipc *)calloc(1, sizeof(*c));
+    if (!c) { close(fd); return NULL; }
     c->fd = fd;
     return c;
 }
@@ -116,6 +118,10 @@ rctl_ipc *rctl_ipc_connect(const char *path) {
     struct sockaddr_un a; fill_addr(&a, path);
     if (connect(fd, (struct sockaddr *)&a, sizeof(a)) < 0) { close(fd); return NULL; }
     rctl_ipc *c = (rctl_ipc *)calloc(1, sizeof(*c));
+    // SpringBoard reconnects to rctld through this path; a failed allocation
+    // must close the socket and return so the existing retry loop reconnects,
+    // not crash the tweak.
+    if (!c) { close(fd); return NULL; }
     c->fd = fd;
     return c;
 }

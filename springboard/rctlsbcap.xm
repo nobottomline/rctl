@@ -398,6 +398,9 @@ static void send_reply(uint32_t reqid, NSString *result, uint64_t expectedGenera
     NSData *d = [(result ?: @"") dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     uint32_t blen = 4 + (uint32_t)d.length;
     uint8_t *buf = (uint8_t *)malloc(blen);
+    // SpringBoard runs under tight jetsam limits; a failed reply allocation
+    // must be dropped, not dereferenced — a crash here resprings the system.
+    if (!buf) return;
     buf[0] = reqid >> 24; buf[1] = reqid >> 16; buf[2] = reqid >> 8; buf[3] = (uint8_t)reqid;
     memcpy(buf + 4, d.bytes, d.length);
     pthread_mutex_lock(&gIpcLock);

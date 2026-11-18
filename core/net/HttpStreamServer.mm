@@ -607,9 +607,16 @@ static void handle_client(rctl_http_server *s, int fd) {
                 char *bstart = hdr_end + 4;
                 int have = (int)(n - (bstart - req)), got = have > clen ? clen : have;
                 bodybuf = (char *)malloc(clen + 1);
-                if (have > 0) memcpy(bodybuf, bstart, got);
-                while (got < clen) { ssize_t k = recv(fd, bodybuf + got, clen - got, 0); if (k <= 0) break; got += (int)k; }
-                bodybuf[got] = 0; body = bodybuf; body_len = got;
+                if (bodybuf) {
+                    if (have > 0) memcpy(bodybuf, bstart, got);
+                    while (got < clen) { ssize_t k = recv(fd, bodybuf + got, clen - got, 0); if (k <= 0) break; got += (int)k; }
+                    bodybuf[got] = 0; body = bodybuf; body_len = got;
+                } else {
+                    // Under memory pressure, hand the REST handler a NULL body
+                    // so it answers with its own error instead of crashing the
+                    // connection thread.
+                    got = clen;
+                }
             }
         }
 
@@ -692,6 +699,12 @@ static void *accept_loop(void *arg) {
         if (fd < 0) { if (!s->running) break; continue; }
         int one = 1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         struct rctl_conn *c = (struct rctl_conn *)malloc(sizeof *c);
+        if (!c) {
+            // Under pressure, refuse this connection instead of crashing the
+            // accept loop (which would take the whole LAN control plane down).
+            close(fd);
+            continue;
+        }
         c->s = s; c->fd = fd;
         pthread_t t;
         if (pthread_create(&t, NULL, conn_thread, c) == 0) pthread_detach(t);
