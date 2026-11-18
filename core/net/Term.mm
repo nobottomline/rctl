@@ -185,29 +185,67 @@ static void *term_pty_loop(void *arg) {
 }
 
 static bool spawn_term(struct term_session *t, uint16_t cols, uint16_t rows) {
-    // Resolve jailbreak paths in the parent, before forking the threaded daemon.
+    // Resolve jailbreak paths, and build the child's environment and argv in
+    // the parent, before forking the threaded daemon: after fork only
+    // async-signal-safe calls may run here (a malloc in the child can deadlock
+    // on the heap lock held by another daemon thread and leave a forked daemon
+    // twin behind), so the child only closes fds, chdirs, and execve's.
+    // Mirrors the guest terminal.open path in GuestDispatcher. The PATH
+    // replicates the one rctld sets at startup (including /usr/local/bin
+    // first); the explicit environment also drops the inherited daemon
+    // variables that the old unsetenv("ENV") guarded against (no login
+    // profiles, no inherited shell startup hooks).
     const char *shell = RCTL_ROOT_PATH("/bin/sh");
     if (!shell || access(shell, X_OK) != 0) return false;
     struct winsize ws;
     memset(&ws, 0, sizeof(ws));
     ws.ws_col = cols ? cols : 100;
     ws.ws_row = rows ? rows : 30;
+    const char *bins[] = {
+        RCTL_ROOT_PATH("/usr/local/bin"), RCTL_ROOT_PATH("/usr/bin"),
+        RCTL_ROOT_PATH("/bin"), RCTL_ROOT_PATH("/usr/sbin"), RCTL_ROOT_PATH("/sbin"),
+        "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+    };
+    size_t path_len = sizeof("PATH=");
+    for (size_t i = 0; i < sizeof(bins) / sizeof(bins[0]); i++) {
+        path_len += strlen(bins[i]) + 1; // entry + ':' (or NUL for the last)
+    }
+    char *path_kv = (char *)malloc(path_len);
+    size_t shell_kv_len = strlen(shell) + sizeof("SHELL=");
+    char *shell_kv = (char *)malloc(shell_kv_len);
+    if (!path_kv || !shell_kv) {
+        free(path_kv);
+        free(shell_kv);
+        return false;
+    }
+    snprintf(path_kv, path_len, "PATH=");
+    size_t off = strlen(path_kv);
+    for (size_t i = 0; i < sizeof(bins) / sizeof(bins[0]); i++) {
+        off += (size_t)snprintf(path_kv + off, path_len - off, "%s%s", i ? ":" : "", bins[i]);
+    }
+    snprintf(shell_kv, shell_kv_len, "SHELL=%s", shell);
+    const char *env_kv[] = {
+        "TERM=xterm-256color", "HOME=/var/root", "USER=root", "LOGNAME=root",
+        shell_kv, path_kv, "PS1=${PWD} # ", NULL,
+    };
+    char *argv[] = { (char *)"sh", (char *)"-i", NULL };
+    // getdtablesize in the parent keeps the child strictly async-signal-safe.
+    int maxFD = getdtablesize();
     pid_t pid = forkpty(&t->pty_fd, NULL, NULL, &ws);
-    if (pid < 0) return false;
+    if (pid < 0) {
+        free(path_kv);
+        free(shell_kv);
+        return false;
+    }
     if (pid == 0) {
-        setenv("TERM", "xterm-256color", 1);
-        setenv("HOME", "/var/root", 1);
-        setenv("USER", "root", 1);
-        setenv("LOGNAME", "root", 1);
-        setenv("SHELL", shell, 1);
-        // POSIX sh may be dash, which does not expand bash-style prompt escapes.
-        // Keep the daemon's jailbreak-aware PATH; do not load login profiles.
-        setenv("PS1", "${PWD} # ", 1);
-        unsetenv("ENV");
+        // Only async-signal-safe calls after fork in this multithreaded daemon.
+        for (int i = 3; i < maxFD; i++) close(i);
         chdir("/var/root");
-        execl(shell, "sh", "-i", NULL);
+        execve(shell, argv, (char *const *)env_kv);
         _exit(127);
     }
+    free(path_kv);
+    free(shell_kv);
     t->child = pid;
     return true;
 }
