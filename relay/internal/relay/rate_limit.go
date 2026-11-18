@@ -18,6 +18,7 @@ type rateLimiter struct {
 	mu      sync.Mutex
 	entries map[string]rateEntry
 	ttl     time.Duration
+	lastGC  time.Time
 }
 
 type rateEntry struct {
@@ -62,10 +63,20 @@ func (l *rateLimiter) allow(key string, cfg rateLimitConfig, now time.Time) (boo
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.gcLocked(now)
+	// Sweeping on every request turned the limiter itself into an O(entries)
+	// cost per request — an amplifier exactly when a flood of unique keys grows
+	// the map. Sweep at most once per quarter-TTL instead: between sweeps the
+	// map grows by at most one entry per request, and TTL-expired entries are
+	// retired by the next sweep. A key's own budget is never carried past its
+	// ttl — the per-key expiry check below treats a stale entry as fresh, so
+	// windows longer than the ttl cannot stay throttled between sweeps.
+	if l.lastGC.IsZero() || now.Sub(l.lastGC) >= l.ttl/4 {
+		l.gcLocked(now)
+		l.lastGC = now
+	}
 
 	entry := l.entries[key]
-	if entry.ResetAt.IsZero() || now.After(entry.ResetAt) {
+	if entry.ResetAt.IsZero() || now.After(entry.ResetAt) || now.Sub(entry.UpdatedAt) > l.ttl {
 		entry = rateEntry{ResetAt: now.Add(cfg.Window)}
 	}
 	entry.Count++
@@ -73,7 +84,7 @@ func (l *rateLimiter) allow(key string, cfg rateLimitConfig, now time.Time) (boo
 	l.entries[key] = entry
 
 	if entry.Count > cfg.Max {
-		return false, time.Until(entry.ResetAt)
+		return false, entry.ResetAt.Sub(now)
 	}
 	return true, 0
 }
