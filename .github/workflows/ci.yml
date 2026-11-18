@@ -124,6 +124,45 @@ jobs:
         timeout-minutes: 15
         run: bash scripts/test-mobile-ios.sh
 
+  native-host-tests:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install pinned Theos and host toolchain
+        env:
+          THEOS_COMMIT: 5280bd038207e14f8bd76f5417aa2fe641c03228
+        run: |
+          brew install dpkg
+          git clone --filter=blob:none --no-checkout https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+          git -C "$RUNNER_TEMP/theos" checkout "$THEOS_COMMIT"
+          git -C "$RUNNER_TEMP/theos" submodule update --init --recursive
+          echo "THEOS=$RUNNER_TEMP/theos" >> "$GITHUB_ENV"
+          python3 -m venv "$RUNNER_TEMP/rctl-venv"
+          . "$RUNNER_TEMP/rctl-venv/bin/activate"
+          pip install --disable-pip-version-check jsonschema jinja2
+          echo PATH="$RUNNER_TEMP/rctl-venv/bin:$PATH" >> "$GITHUB_ENV"
+      - name: Build native dependencies
+        run: make deps
+      - name: Run the host test suite
+        run: make test
+
+  mobile-ios-uikit:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Build the UIKit controller (debug simulator + release device)
+        run: |
+          xcodebuild -project mobile/ios/UIKitController/RctlUIKit.xcodeproj -scheme RctlUIKit \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath mobile/ios/UIKitController/.derivedData CODE_SIGNING_ALLOWED=NO build
+          xcodebuild -project mobile/ios/UIKitController/RctlUIKit.xcodeproj -scheme RctlUIKit \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath mobile/ios/UIKitController/.derivedData CODE_SIGNING_ALLOWED=NO build
+      - name: Test the UIKit controller on an isolated simulator
+        timeout-minutes: 20
+        run: bash scripts/test-mobile-ios-uikit.sh
+
   container:
     runs-on: ubuntu-24.04
     steps:
