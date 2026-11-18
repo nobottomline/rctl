@@ -27,6 +27,8 @@
 #import <time.h>
 
 #define RCTL_MAX_CLIENTS 8
+#define RCTL_MAX_CONNS 32        // concurrent remote connection threads (each ~0.5-1 MB stack)
+#define RCTL_MAX_CONNS_TOTAL 64  // including loopback, so Relay-only mode stays bounded too
 #define RCTL_SUB_QUEUE_MAX 24      // per-subscriber queued frames before drop-to-latest
 #define RCTL_AUDIO_TEST_RATE 48000
 #define RCTL_AUDIO_TEST_FRAMES 960
@@ -83,7 +85,19 @@ struct rctl_http_server {
     bool was_active;               // last-notified state (a /stream client present)
     time_t control_client_log_at;  // rate-limit missing-package diagnostics
     volatile bool running;
+    int live_conns;    // concurrent connection threads, total (atomic)
+    int live_remote;   // non-loopback connection threads (atomic)
+    int live_loopback; // loopback connection threads (atomic)
+    bool loopback_only; // Relay-only binding: loopback owns the whole budget
 };
+
+// Monotonic seconds for phase deadlines: wall-clock jumps (NTP, manual) must
+// not extend or truncate request timeouts.
+static double monotonic_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
 
 // Number of live /stream subscribers (caller holds the mutex).
 static int count_clients_locked(rctl_http_server *s) {
@@ -467,12 +481,85 @@ static void log_control_client_unavailable(rctl_http_server *s) {
     }
 }
 
-static void handle_client(rctl_http_server *s, int fd) {
-    char req[2048];
-    ssize_t n = recv(fd, req, sizeof(req) - 1, 0);
-    if (n <= 0) { close(fd); return; }
-    req[n] = 0;
+// One connection per thread so a slow request (e.g. /v1/camera waiting for the
+// in-app capturer to POST its photo back) can't block other requests.
+static void route_request(rctl_http_server *s, int fd, char *req, ssize_t n, char *hdr_end);
 
+// Total buffered POST body bytes across all connection threads: two near-64MB
+// uploads would already approach the daemon's jetsam budget.
+static long g_body_buffered;
+#define RCTL_MAX_BODY_BUFFERED (96 << 20)
+
+static void handle_client(rctl_http_server *s, int fd) {
+    // Accumulate the request until the header block terminates (\r\n\r\n):
+    // TCP may deliver headers across segments, and the previous single-recv
+    // read broke segmented requests and dropped long POST bodies. A monotonic
+    // phase deadline bounds how long one connection can hold its thread no
+    // matter how slowly the client drips bytes; the receive timeout is
+    // cleared after the headers because the terminal and signaling handlers
+    // recv() on this fd for their session lifetime.
+    static const size_t kMaxHeader = 16 * 1024;
+    char *req = (char *)malloc(kMaxHeader + 1);
+    if (!req) { close(fd); return; }
+    struct timeval tv = { 1, 0 };
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) {
+        // The phase deadline relies on short receive windows; without them a
+        // stalled header could block a recv indefinitely.
+        free(req);
+        close(fd);
+        return;
+    }
+    const double deadline = monotonic_seconds() + 10;
+    ssize_t n = 0;
+    char *hdr_end = NULL;
+    bool complete = false;
+    while (n < (ssize_t)kMaxHeader) {
+        if (monotonic_seconds() > deadline) break;
+        ssize_t k = recv(fd, req + n, kMaxHeader - n, 0);
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // Receive timeout: keep waiting unless the phase deadline passed.
+            if (monotonic_seconds() > deadline) break;
+            continue;
+        }
+        if (k <= 0) break;   // EOF or error with a partial request
+        n += k;
+        req[n] = 0;
+        hdr_end = strstr(req, "\r\n\r\n");
+        if (hdr_end) { complete = true; break; }
+    }
+    if (!complete || monotonic_seconds() > deadline) {
+        // A stalled or oversized header phase: a partial request gets no
+        // response (it never became a request); a full 16 KB block without a
+        // terminator answers 431. Either way the thread is freed for the
+        // next connection. A request whose final read arrived after the
+        // deadline is treated as stalled too.
+        if (!complete && n >= (ssize_t)kMaxHeader)
+            send_text(fd, "431 Request Header Fields Too Large", "text/plain", "headers too large");
+        free(req);
+        close(fd);
+        return;
+    }
+    // Terminate the header block inside the buffer so strstr-based parameter
+    // parsing cannot cross into the body or a pipelined follow-up request;
+    // hdr_end + 4 still points at the first body byte.
+    hdr_end[2] = 0;
+    hdr_end[3] = 0;
+    // The timeout bounds only the header phase: the terminal and signaling
+    // handlers recv() on this fd for the lifetime of the session and must
+    // not inherit a per-second ceiling. A failed reset would strand the
+    // session with it, so the upgrade is refused instead.
+    memset(&tv, 0, sizeof(tv));
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) {
+        free(req);
+        close(fd);
+        return;
+    }
+    route_request(s, fd, req, n, hdr_end);
+    free(req);
+}
+
+static void route_request(rctl_http_server *s, int fd, char *req, ssize_t n, char *hdr_end) {
     if (strncmp(req, "GET /v1/pull_stream?", 20) == 0) {
         stream_file_download(fd, req);
         close(fd);
@@ -589,7 +676,7 @@ static void handle_client(rctl_http_server *s, int fd) {
         // Read the POST body (best-effort up to Content-Length beyond the first recv).
         // Cap at 64 MB — large enough for file uploads, bounded against abuse.
         char *bodybuf = NULL; const char *body = ""; int body_len = 0;
-        char *hdr_end = strstr(req, "\r\n\r\n");
+        long body_charge = 0;  // buffered-body bytes charged against g_body_buffered
         char content_type[96] = {0};
         const char *ct = rctl_http_header(req, hdr_end, "Content-Type");
         if (ct) {
@@ -601,15 +688,134 @@ static void handle_client(rctl_http_server *s, int fd) {
             content_type[ci] = 0;
         }
         if (isPost && hdr_end) {
+            // Reject obsolete/malformed field syntax before trusting any
+            // framing field: whitespace before the colon or a line without a
+            // colon makes the request invalid (RFC 9112 §5.1) and could
+            // otherwise smuggle an unrecognized Content-Length past the
+            // checks below, reaching /v1/push as an empty body. The scan
+            // shares the CRLF line boundaries of the field lookup, so it can
+            // never accept a field the lookup would miss; the last field
+            // line is terminated by the block terminator's own first CRLF.
+            if (!rctl_http_fields_valid(req, hdr_end)) {
+                send_text(fd, "400 Bad Request", "text/plain", "malformed header field");
+                close(fd);
+                return;
+            }
             const char *cl = rctl_http_header(req, hdr_end, "Content-Length");
-            int clen = cl ? atoi(cl) : 0;
-            if (clen > 0 && clen < (64 << 20)) {
+            const int cl_count = rctl_http_header_count(req, hdr_end, "Content-Length");
+            // Chunked bodies are not supported: without Content-Length they
+            // would reach /v1/push as an empty body and truncate the target
+            // file with a success response (RFC 9112 §6.3).
+            if (rctl_http_header_count(req, hdr_end, "Transfer-Encoding") > 0) {
+                send_text(fd, "400 Bad Request", "text/plain", "transfer-encoding unsupported");
+                close(fd);
+                return;
+            }
+            // A POST without Content-Length carries no body. A duplicated
+            // field, a malformed value, or a length beyond the 64 MB cap must
+            // be rejected before the REST layer: /v1/push opens its target
+            // with "wb" and would report success after truncating the file
+            // with an empty or truncated body.
+            if (cl_count > 1) {
+                send_text(fd, "400 Bad Request", "text/plain", "duplicate content-length");
+                close(fd);
+                return;
+            }
+            long clen_l = 0;
+            if (cl_count == 1) {
+                // Strict parse: digits only (strtol would accept "+0" and
+                // numeric prefixes), and the value must end at the header
+                // line's CRLF, not any stray CR.
+                char *endp = NULL;
+                errno = 0;
+                if (!cl || cl[0] < '0' || cl[0] > '9') {
+                    send_text(fd, "400 Bad Request", "text/plain", "invalid content-length");
+                    close(fd);
+                    return;
+                }
+                clen_l = strtol(cl, &endp, 10);
+                if (errno == ERANGE || endp == cl || clen_l < 0) {
+                    send_text(fd, "400 Bad Request", "text/plain", "invalid content-length");
+                    close(fd);
+                    return;
+                }
+                while (*endp == ' ' || *endp == '\t') endp++;
+                if (endp[0] != '\r' || endp[1] != '\n') {
+                    send_text(fd, "400 Bad Request", "text/plain", "invalid content-length");
+                    close(fd);
+                    return;
+                }
+                if (clen_l >= (64 << 20)) {
+                    send_text(fd, "413 Payload Too Large", "text/plain", "body too large");
+                    close(fd);
+                    return;
+                }
+            }
+            int clen = (int)clen_l;
+            if (clen > 0) {
+                long buffered = __atomic_add_fetch(&g_body_buffered, clen, __ATOMIC_RELAXED);
+                if (buffered > RCTL_MAX_BODY_BUFFERED) {
+                    __atomic_sub_fetch(&g_body_buffered, clen, __ATOMIC_RELAXED);
+                    send_text(fd, "503 Service Unavailable", "text/plain", "upload budget busy");
+                    close(fd);
+                    return;
+                }
                 char *bstart = hdr_end + 4;
                 int have = (int)(n - (bstart - req)), got = have > clen ? clen : have;
                 bodybuf = (char *)malloc(clen + 1);
+                if (!bodybuf) {
+                    __atomic_sub_fetch(&g_body_buffered, clen, __ATOMIC_RELAXED);
+                    send_text(fd, "500 Internal Server Error", "text/plain", "out of memory");
+                    close(fd);
+                    return;
+                }
                 if (have > 0) memcpy(bodybuf, bstart, got);
-                while (got < clen) { ssize_t k = recv(fd, bodybuf + got, clen - got, 0); if (k <= 0) break; got += (int)k; }
+                // Bound the upload read like the header phase: a stalled
+                // upload cannot hold its connection thread forever. A short
+                // receive timeout alone would abort a healthy but paused
+                // upload, so a timeout only ends the read once the phase
+                // deadline passed.
+                struct timeval btv = { 1, 0 };
+                if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &btv, sizeof(btv)) != 0) {
+                    // Without bounded receives the held upload budget could
+                    // block a recv indefinitely; fail this request closed.
+                    __atomic_sub_fetch(&g_body_buffered, clen, __ATOMIC_RELAXED);
+                    free(bodybuf);
+                    send_text(fd, "500 Internal Server Error", "text/plain", "unbounded receive");
+                    close(fd);
+                    return;
+                }
+                const double body_deadline = monotonic_seconds() + 60;
+                while (got < clen) {
+                    if (monotonic_seconds() > body_deadline) break;
+                    ssize_t k = recv(fd, bodybuf + got, clen - got, 0);
+                    if (k < 0 && errno == EINTR) continue;
+                    if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                        if (monotonic_seconds() > body_deadline) break;
+                        continue;
+                    }
+                    if (k <= 0) break;
+                    got += (int)k;
+                }
+                memset(&btv, 0, sizeof(btv));
+                setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &btv, sizeof(btv));
+                if (got < clen || monotonic_seconds() > body_deadline) {
+                    // A stalled, truncated, or over-deadline upload must not
+                    // reach the REST layer: /v1/push would happily write a
+                    // partial file and report success. Release the buffer and
+                    // its budget charge together before answering.
+                    free(bodybuf);
+                    __atomic_sub_fetch(&g_body_buffered, clen, __ATOMIC_RELAXED);
+                    send_text(fd, "400 Bad Request", "text/plain", "incomplete body");
+                    close(fd);
+                    return;
+                }
                 bodybuf[got] = 0; body = bodybuf; body_len = got;
+                // The charge stays held while the REST handler owns the
+                // buffer and is released right after the handler returns,
+                // before the response is written — a concurrent upload can
+                // only claim the budget for memory that is actually live.
+                body_charge = clen;
             }
         }
 
@@ -619,6 +825,21 @@ static void handle_client(rctl_http_server *s, int fd) {
         int status = 200, out_len = 0; const char *out_ctype = NULL;
         char *resp = cb ? cb(cx, method, content_type, path, query, body, body_len,
                              &status, &out_len, &out_ctype) : NULL;
+        // The request body and its budget charge end with the handler; the
+        // response stays live until it has been written. A stalled client
+        // must not hold its connection slot forever, so the reply write runs
+        // under a send timeout (cleared afterwards; WS handlers rely on
+        // unbounded sends on the same fd only in their own sessions).
+        free(bodybuf);
+        if (body_charge) __atomic_sub_fetch(&g_body_buffered, body_charge, __ATOMIC_RELAXED);
+        struct timeval stv = { 10, 0 };
+        if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv)) != 0) {
+            // An unbounded reply write could hold the connection slot (and a
+            // possibly large response buffer) forever; refuse this request.
+            free(resp);
+            close(fd);
+            return;
+        }
         const char *line = status == 202 ? "202 Accepted" :
                            status == 400 ? "400 Bad Request" :
                            status == 403 ? "403 Forbidden" :
@@ -634,7 +855,9 @@ static void handle_client(rctl_http_server *s, int fd) {
             send_data(fd, line, out_ctype, resp ? resp : "", out_len);
         else             // default: treat resp as a NUL-terminated JSON string
             send_data(fd, line, "application/json", resp ? resp : "{}", resp ? strlen(resp) : 2);
-        free(resp); free(bodybuf);
+        free(resp);
+        memset(&stv, 0, sizeof(stv));
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
         close(fd);
     } else if (strncmp(req, "GET /vendor/", 12) == 0) {
         const char *target = req + 4;
@@ -675,13 +898,25 @@ static void handle_client(rctl_http_server *s, int fd) {
 
 // One connection per thread so a slow request (e.g. /v1/camera waiting for the
 // in-app capturer to POST its photo back) can't block other requests.
-struct rctl_conn { rctl_http_server *s; int fd; };
+struct rctl_conn { rctl_http_server *s; int fd; bool loopback; };
+static void release_conn_slot(rctl_http_server *s, bool loopback) {
+    // The peer-kind counter is released first: the total decrement is the
+    // worker's final access to the server, so a stop() that observes zero
+    // can free it without a worker touching freed memory afterwards. The
+    // release ordering pairs with the acquire load in stop().
+    if (loopback) __atomic_sub_fetch(&s->live_loopback, 1, __ATOMIC_RELAXED);
+    else __atomic_sub_fetch(&s->live_remote, 1, __ATOMIC_RELAXED);
+    __atomic_sub_fetch(&s->live_conns, 1, __ATOMIC_RELEASE);
+}
 static void *conn_thread(void *arg) {
     struct rctl_conn *c = (struct rctl_conn *)arg;
+    rctl_http_server *s = c->s;
+    const bool loopback = c->loopback;
     @autoreleasepool {
-        handle_client(c->s, c->fd);
+        handle_client(s, c->fd);
     }
     free(c);
+    release_conn_slot(s, loopback);
     return NULL;
 }
 static void *accept_loop(void *arg) {
@@ -691,15 +926,47 @@ static void *accept_loop(void *arg) {
         int fd = accept(s->listen_fd, (struct sockaddr *)&ca, &cl);
         if (fd < 0) { if (!s->running) break; continue; }
         int one = 1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        // Bound concurrent connection threads: each holds a ~0.5-1 MB stack
+        // under the daemon's jetsam ceiling, so an unbounded connection flood
+        // could OOM rctld and disconnect every real client. Refuse the excess
+        // instead of falling over. Loopback connections (the relay's local
+        // tunnel and the daemon's own round-trips) get a higher total cap so
+        // long-lived LAN terminal and signaling sessions cannot starve them,
+        // but never an unbounded one.
+        const bool loopback = ca.sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+        const int live = __atomic_add_fetch(&s->live_conns, 1, __ATOMIC_RELAXED);
+        const int peer = loopback
+            ? __atomic_add_fetch(&s->live_loopback, 1, __ATOMIC_RELAXED)
+            : __atomic_add_fetch(&s->live_remote, 1, __ATOMIC_RELAXED);
+        // LAN mode reserves the remote cap for LAN peers: loopback may grow
+        // only into the unreserved remainder, so local sessions can never
+        // shut LAN peers out. In Relay-only mode loopback owns the whole
+        // budget. Each cap reads its own counter, so a slot freed by one
+        // peer kind is never miscounted against the other.
+        const int peer_cap = s->loopback_only ? RCTL_MAX_CONNS_TOTAL
+                                              : RCTL_MAX_CONNS_TOTAL - RCTL_MAX_CONNS;
+        if (live > RCTL_MAX_CONNS_TOTAL || peer > (loopback ? peer_cap : RCTL_MAX_CONNS)) {
+            release_conn_slot(s, loopback);
+            send_text(fd, "503 Service Unavailable", "text/plain", "too many connections");
+            close(fd);
+            continue;
+        }
         struct rctl_conn *c = (struct rctl_conn *)malloc(sizeof *c);
-        c->s = s; c->fd = fd;
+        if (!c) {
+            release_conn_slot(s, loopback);
+            close(fd);
+            continue;
+        }
+        c->s = s; c->fd = fd; c->loopback = loopback;
         pthread_t t;
         if (pthread_create(&t, NULL, conn_thread, c) == 0) pthread_detach(t);
         else {
-            @autoreleasepool {
-                handle_client(s, fd);
-            }
-            free(c);   // fall back to inline on failure
+            // Handling inline could occupy the single accept loop for the
+            // lifetime of a WebSocket session; refuse the connection instead.
+            send_text(fd, "503 Service Unavailable", "text/plain", "thread unavailable");
+            free(c);
+            release_conn_slot(s, loopback);
+            close(fd);
         }
     }
     return NULL;
@@ -723,6 +990,7 @@ rctl_http_server *rctl_http_start(int port, bool loopback_only) {
 
     rctl_http_server *s = (rctl_http_server *)calloc(1, sizeof(rctl_http_server));
     s->listen_fd = lfd; s->port = port; s->running = true; s->orientation = 1;
+    s->loopback_only = loopback_only;
     s->audio_test_hz = 440;
     for (int i = 0; i < RCTL_MAX_CLIENTS; i++) s->subs[i].fd = -1;
     pthread_mutex_init(&s->mtx, NULL);
@@ -899,6 +1167,21 @@ void rctl_http_stop(rctl_http_server *s) {
     s->running = false;
     close(s->listen_fd);
     if (s->audio_thread_started) pthread_join(s->audio_thread, NULL);
+    // Join the accept loop first: a thread that just returned from accept()
+    // increments the counters below, so draining before it exits would free
+    // the server under it.
+    pthread_join(s->thread, NULL);
+    // Detached connection threads touch the server (live_conns, keyframe,
+    // subscriber slots) until their handler returns; wait for them to drain
+    // before freeing anything. If a handler does not drain in time, leave the
+    // struct allocated rather than hand freed memory to a live thread.
+    const double give_up = monotonic_seconds() + 10;
+    // Acquire pairs with the workers' release decrement: once zero is
+    // observed, no worker will touch the server again.
+    while (__atomic_load_n(&s->live_conns, __ATOMIC_ACQUIRE) > 0) {
+        if (monotonic_seconds() > give_up) return;  // leak instead of a use-after-free
+        usleep(20000);
+    }
     pthread_mutex_lock(&s->mtx);
     for (int i = 0; i < RCTL_MAX_CLIENTS; i++) if (s->subs[i].fd >= 0) sub_close(&s->subs[i]);
     free(s->keyframe);
