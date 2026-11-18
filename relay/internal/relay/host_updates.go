@@ -21,9 +21,10 @@ func (s *server) handleHostUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 	path := "/status"
 	if r.Method == http.MethodPost {
-		// SameSite cookies alone do not protect against a sibling-origin form.
+		// The same-origin check (sibling-origin CSRF) runs in the route
+		// middleware; this handler only validates the forwarded body's type.
 		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || mediaType != "application/json" || (r.Header.Get("Origin") != "" && r.Header.Get("Origin") != strings.TrimSuffix(s.cfg.PublicURL, "/")) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		if err != nil || mediaType != "application/json" {
 			writeErr(w, http.StatusForbidden, "invalid_update_origin")
 			return
 		}

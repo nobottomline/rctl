@@ -613,6 +613,11 @@ using an untrusted network. See [recovery for both package lanes](SECURITY.md#lo
 - Do not use URL query parameters for browser secrets.
 - Enrollment tokens should be short-lived and single-use.
 - Browser auth should use an admin login and `HttpOnly Secure SameSite` cookies.
+- SameSite does not stop sibling-subdomain requests: admin routes enforce the
+  same-origin check — an `Origin` header, when a browser supplies one, must
+  equal `PublicURL` (default ports canonicalized), and Origin-less API clients
+  are unaffected. Device tunnels additionally reject same-site fetches, since
+  a sibling no-cors GET carries no Origin.
 - The relay must support revoking browser sessions and devices.
 - Rate-limit login, enrollment, and device claim attempts.
 - Leave `RCTL_RELAY_TRUST_PROXY_HEADERS=0` unless the relay is reachable only
