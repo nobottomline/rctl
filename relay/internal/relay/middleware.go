@@ -17,6 +17,80 @@ func (s *server) withAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// withAdminOrigin rejects browser-borne cross-site and sibling-origin requests
+// on admin-authenticated routes. SameSite=Strict cookies still ride along when
+// a related subdomain drives a form, fetch, or WebSocket handshake against the
+// relay, so any Origin a browser supplies must equal PublicURL. API clients
+// that send no Origin (curl, the setup wizard) are unaffected. Mutating device
+// GETs through the tunnels are additionally guarded by withTunnelOrigin,
+// because a no-cors cross-site GET carries neither header.
+func (s *server) withAdminOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return s.guardOrigin(false, next)
+}
+
+func (s *server) withTunnelOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return s.guardOrigin(true, next)
+}
+
+// guardOrigin rejects browser-borne cross-site and sibling-origin requests.
+// Mutating device GETs through the tunnels are reachable by a no-cors fetch
+// that sends no Origin header — only Fetch Metadata marks it as not
+// same-origin — so tunnel routes run in strict mode, which also rejects
+// "Sec-Fetch-Site: same-site". Browsers without Fetch Metadata (pre-16.4
+// Safari) keep working for same-origin use but stay outside this check; that
+// residual risk is accepted because such browsers cannot be distinguished
+// from the Origin-less API clients the setup wizard and release scripts need.
+func (s *server) guardOrigin(strict bool, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		site := r.Header.Get("Sec-Fetch-Site")
+		if site == "cross-site" || (strict && site == "same-site") {
+			writeErr(w, http.StatusForbidden, "origin_rejected")
+			return
+		}
+		if !s.requestOriginAllowed(r) {
+			writeErr(w, http.StatusForbidden, "origin_rejected")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requestOriginAllowed reports whether an Origin-bearing browser request
+// matches the configured public origin. An absent header means a non-browser
+// client; an explicit empty value or a repeated header is not a state any
+// browser produces and fails closed. The canonical form of the configured URL
+// is accepted alongside its literal value, so a "https://rctl.example.com:443"
+// deployment matches the port-less Origin browsers send even when the server
+// was built without loadConfig.
+func (s *server) requestOriginAllowed(r *http.Request) bool {
+	origins := r.Header.Values("Origin")
+	switch {
+	case len(origins) > 1:
+		return false
+	case len(origins) == 1:
+		if origins[0] == "" {
+			return false
+		}
+		expected := strings.TrimSuffix(s.cfg.PublicURL, "/")
+		return origins[0] == expected || origins[0] == canonicalPublicURL(expected)
+	default:
+		return true
+	}
+}
+
+// adminWrite wraps a state-changing admin route with the same-origin CSRF
+// check, the admin session check, and the admin rate limit.
+func (s *server) adminWrite(next http.HandlerFunc) http.HandlerFunc {
+	return s.withAdminOrigin(s.withAdmin(s.withRateLimit("admin", s.cfg.AdminLimit, next)))
+}
+
+// adminTunnel wraps an admin-authenticated tunneling route (HTTP proxy, media
+// stream, terminal, signal, or client WebSocket) with the strict CSRF origin
+// check, the admin session check, and the tunnel rate limit.
+func (s *server) adminTunnel(next http.HandlerFunc) http.HandlerFunc {
+	return s.withTunnelOrigin(s.withAdmin(s.withRateLimit("tunnel", s.cfg.TunnelLimit, next)))
+}
+
 func (s *server) validSession(r *http.Request) bool {
 	sessionID, secret, ok := parseSessionCookie(r)
 	if !ok {

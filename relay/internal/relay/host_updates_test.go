@@ -47,7 +47,9 @@ func TestHostUpdateAdminBoundary(t *testing.T) {
 		if tc.auth {
 			req.AddCookie(session.cookie)
 		}
-		req.Header.Set("Origin", tc.origin)
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
 		req.Header.Set("Content-Type", tc.content)
 		resp, err := ts.client.Do(req)
 		if err != nil {

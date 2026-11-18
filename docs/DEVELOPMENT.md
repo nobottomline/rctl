@@ -54,6 +54,11 @@ page alone does not provide a device or relay backend. Use a configured test
 backend or explicit test fixtures; do not present a mock session as device proof.
 Track and stop only the processes started for your test.
 
+Admin dev pages proxy `/api` to a relay backend, but the browser's Origin is the
+Vite address, so set the backend's `RCTL_RELAY_PUBLIC_URL` to the Vite origin
+(for example `http://localhost:5173`); the same-origin check rejects login
+attempts whose Origin does not match the configured public URL.
+
 The two web builds are different artifacts: `web/dist/index.html` is the device
 control client; the admin client is embedded from `relay/internal/relay/webdist`.
 Build the admin client before compiling a standalone Go relay binary. See the

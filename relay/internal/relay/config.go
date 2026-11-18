@@ -3,6 +3,7 @@ package relay
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -56,7 +57,7 @@ func loadConfig() (config, error) {
 	cfg := config{
 		HostUpdateSocket:  os.Getenv("RCTL_RELAY_HOST_UPDATE_SOCKET"),
 		ListenAddr:        getenv("RCTL_RELAY_LISTEN", ":8080"),
-		PublicURL:         getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080"),
+		PublicURL:         canonicalPublicURL(getenv("RCTL_RELAY_PUBLIC_URL", "http://localhost:8080")),
 		DatabasePath:      getenv("RCTL_RELAY_DB", "./data/rctl-relay.db"),
 		WebDir:            getenv("RCTL_RELAY_WEB_DIR", "../web/dist"),
 		AdminSecret:       os.Getenv("RCTL_RELAY_ADMIN_SECRET"),
@@ -145,6 +146,36 @@ func loadConfig() (config, error) {
 		return cfg, errors.New("RCTL_RELAY_ROOTLESS_PACKAGE must be an absolute container path")
 	}
 	return cfg, nil
+}
+
+// canonicalPublicURL normalizes the configured public origin into the form a
+// browser sends in the Origin header: lowercase scheme and host, no trailing
+// slash, and no default port (browsers omit :443 on https and :80 on http, so
+// an explicit "https://rctl.example.com:443" must compare equal to the Origin
+// "https://rctl.example.com" or every admin login would fail the same-origin
+// check). Unparseable values are returned unchanged; the https validation in
+// loadConfig still rejects them. Origin never carries a path, so deployments
+// that put one in PublicURL already cannot match; the scheme://authority form
+// keeps that behavior consistent rather than silently changing it.
+func canonicalPublicURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Host)
+	// Compare the port numerically: a browser serializes ":0443" as the
+	// default https port and drops it from the Origin header, so "0443" must
+	// canonicalize like "443".
+	port, portErr := strconv.Atoi(u.Port())
+	defaultPort := (scheme == "https" && port == 443 && portErr == nil) ||
+		(scheme == "http" && port == 80 && portErr == nil)
+	if defaultPort {
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+	}
+	return scheme + "://" + host
 }
 
 func getenv(key, fallback string) string {
