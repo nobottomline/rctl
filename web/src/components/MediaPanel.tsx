@@ -17,7 +17,7 @@ import {
 import { apiJSON, downloadFile, rctlPath } from '../lib/rctl'
 import { fmtSize, type FileTransfer } from '../lib/files'
 import { cn } from '../lib/cn'
-import { Sheet } from './Sheet'
+import { Sheet, DialogOverlay } from './Sheet'
 
 type Kind = 'all' | 'photo' | 'video'
 type Asset = {
@@ -101,15 +101,24 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<Asset[]>([])
   const [total, setTotal] = useState(0)
-  const [next, setNext] = useState<number | null>(null)
+  // The cursor belongs to the (kind, query) pair that produced it: a Load
+  // more click must never append a page fetched for an older filter onto the
+  // current results.
+  const [next, setNext] = useState<{ cursor: number; q: string; kind: Kind } | null>(null)
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<Asset | null>(null)
   const [generation, setGeneration] = useState(0)
   const [menu, setMenu] = useState<Menu | null>(null)
   const [note, setNote] = useState('')
-  const [confirmDelete, setConfirmDelete] = useState<Asset | null>(null)
+  // Each confirmation opening gets a sequence number: the same Asset object
+  // can be re-confirmed while an earlier delete request is still running, so
+  // object identity alone cannot tell the stale completion from the new one.
+  const [confirmDelete, setConfirmDelete] = useState<{ asset: Asset; seq: number } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const requestSequence = useRef(0)
+  const confirmSequence = useRef(0)
+  const loadRef = useRef<(cursor?: number, refresh?: boolean) => Promise<void>>(async () => {})
+  useEffect(() => { loadRef.current = load })
 
   const notify = (message: string) => {
     setNote(message)
@@ -159,13 +168,14 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
 
   const askDelete = (asset: Asset) => {
     setMenu(null)
-    if (asset.deletable) setConfirmDelete(asset)
+    if (asset.deletable) setConfirmDelete({ asset, seq: ++confirmSequence.current })
   }
 
   const remove = async () => {
     if (!confirmDelete || deleting) return
+    const target = confirmDelete
     setDeleting(true)
-    const id = encodeURIComponent(confirmDelete.id)
+    const id = encodeURIComponent(target.asset.id)
     const request = { method: 'POST', headers: { 'Content-Type': 'application/json' } }
     const authorization = await apiJSON<{ token: string }>(`/v1/media_delete_token?id=${id}`, {
       ...request,
@@ -182,11 +192,16 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
       notify('The item could not be moved to Recently Deleted.')
       return
     }
-    const removedID = confirmDelete.id
-    setConfirmDelete(null)
-    if (selected?.id === removedID) setSelected(null)
+    const removedID = target.asset.id
+    // Only dismiss the confirmation this request started for; a newer one —
+    // even for the same asset object — carries a new sequence and stays open.
+    setConfirmDelete((current) => current?.seq === target.seq ? null : current)
+    // Functional update: the user may have opened a different preview while
+    // the delete request ran.
+    setSelected((current) => current?.id === removedID ? null : current)
     notify('Moved to Recently Deleted')
-    await load(0, true)
+    // The latest loader: an old closure would refresh with a stale filter.
+    await loadRef.current(0, true)
   }
 
   const load = async (cursor = 0, refresh = false) => {
@@ -200,7 +215,7 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
     if (page) {
       setItems((old) => (cursor ? [...old, ...page.items] : page.items))
       setTotal(page.total)
-      setNext(page.next)
+      setNext(page.next == null ? null : { cursor: page.next, q: query.trim(), kind })
       if (refresh) setGeneration((v) => v + 1)
     } else if (!cursor) {
       setItems([])
@@ -318,8 +333,11 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
         {next !== null && (
           <div className="flex justify-center border-t border-line p-3">
             <button
-              disabled={busy}
-              onClick={() => load(next)}
+              // A pending search debounce or kind switch keeps its old
+              // cursor; the click must not fetch the old cursor under new
+              // filters.
+              disabled={busy || next.q !== query.trim() || next.kind !== kind}
+              onClick={() => load(next.cursor)}
               className="rounded-lg bg-fg/8 px-4 py-2 text-[12px] font-medium text-fg disabled:opacity-50"
             >
               {busy ? 'Loading…' : `Load more · ${items.length} of ${total}`}
@@ -350,9 +368,9 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
       )}
       {confirmDelete && (
         <ConfirmMediaDelete
-          asset={confirmDelete}
+          asset={confirmDelete.asset}
           busy={deleting}
-          onCancel={() => setConfirmDelete(null)}
+          onCancel={() => !deleting && setConfirmDelete(null)}
           onConfirm={remove}
         />
       )}
@@ -395,8 +413,8 @@ function MediaMenu({
   const left = Math.max(8, Math.min(menu.x - width, window.innerWidth - width - 8))
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - 172))
   return (
-    <>
-      <button className="fixed inset-0 z-[55] cursor-default" aria-label="Close actions" onClick={onClose} />
+    <DialogOverlay onClose={onClose} aria-label="Actions">
+      <button tabIndex={-1} className="fixed inset-0 z-[55] cursor-default bg-transparent" aria-label="Close actions" onClick={onClose} />
       <div
         className="fixed z-[56] w-[13.5rem] overflow-hidden rounded-lg bg-elevated p-1 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2"
         style={{ left, top }}
@@ -408,7 +426,7 @@ function MediaMenu({
           <MediaMenuItem icon={Trash2} label="Delete…" danger onClick={() => onDelete(menu.asset)} />
         )}
       </div>
-    </>
+    </DialogOverlay>
   )
 }
 
@@ -485,7 +503,7 @@ function MediaViewer({
   const cannotLoad = previewTooLarge || animationTooLarge || (asset.live && playableSize > MAX_VIDEO_PREVIEW)
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black text-white">
+    <DialogOverlay onClose={onClose} className="fixed inset-0 z-50 flex flex-col bg-black text-white" aria-label={`Preview of ${asset.name}`}>
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/10 bg-black/85 px-3 backdrop-blur-xl">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium">{asset.name}</div>
@@ -555,7 +573,7 @@ function MediaViewer({
         )}
         {error && <div className="absolute bottom-5 max-w-md rounded-lg bg-danger/90 px-3 py-2 text-center text-[12px] text-white">{error}</div>}
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 
@@ -571,8 +589,8 @@ function ConfirmMediaDelete({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[65] flex items-center justify-center p-5">
-      <button className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel delete" onClick={onCancel} />
+    <DialogOverlay onClose={onCancel} guardClose={() => !busy} className="fixed inset-0 z-[65] flex items-center justify-center p-5" aria-label="Delete confirmation">
+      <button tabIndex={-1} className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel delete" onClick={onCancel} />
       <div className="relative z-10 w-full max-w-sm rounded-lg bg-elevated p-4 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2">
         <div className="mb-1 flex items-center gap-2">
           <Trash2 className="size-4 text-red-500" />
@@ -598,7 +616,7 @@ function ConfirmMediaDelete({
           </button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 

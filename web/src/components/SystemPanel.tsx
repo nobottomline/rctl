@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import {
   Check,
   ChevronDown,
@@ -21,7 +21,7 @@ import {
   type LucideProps,
 } from 'lucide-react'
 import { apiJSON, destructivePost, downloadFile } from '../lib/rctl'
-import { Sheet } from './Sheet'
+import { Sheet, DialogOverlay } from './Sheet'
 import { cn } from '../lib/cn'
 
 // System Inspector + manager: browse dpkg packages, MobileSubstrate tweaks (with
@@ -145,7 +145,13 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>('packages')
   const [q, setQ] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  // Per-tab busy: tabs load in parallel; a shared flag would end the
+  // spinner when only one of the requests settles.
+  const [busy, setBusy] = useState<Record<Tab, boolean>>({ packages: false, tweaks: false, dylibs: false })
+  const [loadErrors, setLoadErrors] = useState<Record<Tab, boolean>>({ packages: false, tweaks: false, dylibs: false })
+  // Per-tab sequence: tabs load in parallel after an uninstall, and a shared
+  // counter would let the second call invalidate the first's response.
+  const loadSequence = useRef<Record<Tab, number>>({ packages: 0, tweaks: 0, dylibs: 0 })
   const [pkgs, setPkgs] = useState<Pkg[] | null>(null)
   const [tweaks, setTweaks] = useState<Tweak[] | null>(null)
   const [dylibs, setDylibs] = useState<Dylib[] | null>(null)
@@ -162,11 +168,30 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
 
   const load = async (t: Tab, force = false) => {
     if (!force && ((t === 'packages' && pkgs) || (t === 'tweaks' && tweaks) || (t === 'dylibs' && dylibs))) return
-    setBusy(true)
-    if (t === 'packages') setPkgs((await apiJSON<{ packages: Pkg[] }>('/v1/packages'))?.packages ?? [])
-    else if (t === 'tweaks') setTweaks((await apiJSON<{ tweaks: Tweak[] }>('/v1/tweaks'))?.tweaks ?? [])
-    else setDylibs((await apiJSON<{ dylibs: Dylib[] }>('/v1/dylibs'))?.dylibs ?? [])
-    setBusy(false)
+    const request = ++loadSequence.current[t]
+    setBusy((prev) => ({ ...prev, [t]: true }))
+    // A failed fetch used to render as an empty list; track the failure on
+    // its own tab so a slow success from another tab cannot mask it, and a
+    // force-refresh failure stays visible above a cached list. A stale
+    // response (an older request finishing late) never overrides newer state.
+    const apply = (error: boolean) => {
+      if (request !== loadSequence.current[t]) return
+      setLoadErrors((prev) => ({ ...prev, [t]: error }))
+      setBusy((prev) => ({ ...prev, [t]: false }))
+    }
+    if (t === 'packages') {
+      const j = await apiJSON<{ packages: Pkg[] }>('/v1/packages')
+      if (j && request === loadSequence.current[t]) setPkgs(j.packages ?? [])
+      apply(!j)
+    } else if (t === 'tweaks') {
+      const j = await apiJSON<{ tweaks: Tweak[] }>('/v1/tweaks')
+      if (j && request === loadSequence.current[t]) setTweaks(j.tweaks ?? [])
+      apply(!j)
+    } else {
+      const j = await apiJSON<{ dylibs: Dylib[] }>('/v1/dylibs')
+      if (j && request === loadSequence.current[t]) setDylibs(j.dylibs ?? [])
+      apply(!j)
+    }
   }
 
   useEffect(() => {
@@ -225,12 +250,17 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
     setNote('Copied')
     window.setTimeout(() => setNote(null), 1500)
   }
+  const ownerSequence = useRef(0)
   const askUninstallTweak = async (t: Tweak) => {
     setMenu(null)
+    const request = ++ownerSequence.current
     setNote('Finding owning package…')
     const j = await apiJSON<{ package: string }>(`/v1/owner?path=${enc(t.path)}`)
+    if (request !== ownerSequence.current) return // a newer lookup superseded this one
     setNote(null)
-    if (j?.package) setConfirm({ id: j.package, name: j.package })
+    // Never replace an already-open confirmation (e.g. one opened from the
+    // package list while this lookup was running).
+    if (j?.package) setConfirm((current) => current ?? { id: j.package, name: j.package })
     else setNote(`No package owns ${t.name.trim()}`)
   }
   const doUninstall = async () => {
@@ -244,7 +274,8 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
     }
     setRemoving(false)
     const target = confirm
-    setConfirm(null)
+    // Only dismiss the confirmation this request started for.
+    setConfirm((current) => current === target ? null : current)
     await Promise.all([load('packages', true), load('tweaks', true)])
     if (j && !j.ok) setNote(j.output?.trim() || `Could not remove ${target.name}`)
     else setNeedRespring(true)
@@ -336,7 +367,7 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
           aria-label="Refresh"
           className="grid size-9 shrink-0 place-items-center rounded-lg bg-fg/8 text-fg-dim transition-colors hover:bg-fg/12 active:bg-fg/15"
         >
-          <RotateCw className={cn('size-4', busy && 'animate-spin')} />
+          <RotateCw className={cn('size-4', busy[tab] && 'animate-spin')} />
         </button>
       </div>
     </div>
@@ -360,10 +391,16 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
         </div>
       )}
       <div className="p-2">
+        {loadErrors[tab] && (
+          <Hint>
+            Couldn't load the list.{' '}
+            <button className="underline" onClick={() => load(tab, true)}>Retry</button>
+          </Hint>
+        )}
         {filtered == null ? (
-          <Hint>{busy ? 'Loading…' : ''}</Hint>
+          <Hint>{busy[tab] ? 'Loading…' : ''}</Hint>
         ) : filtered.length === 0 ? (
-          <Hint>{q ? 'No matches' : 'Nothing here'}</Hint>
+          !loadErrors[tab] && <Hint>{q ? 'No matches' : 'Nothing here'}</Hint>
         ) : (
           <ul className="space-y-1">
             {filtered.map((it) => {
@@ -407,7 +444,7 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
         <ConfirmUninstall
           name={confirm.name}
           busy={removing}
-          onCancel={() => setConfirm(null)}
+          onCancel={() => !removing && setConfirm(null)}
           onConfirm={doUninstall}
         />
       )}
@@ -533,8 +570,8 @@ function RowMenu({
   const left = Math.max(8, Math.min(menu.x - W, window.innerWidth - W - 8))
   const top = Math.min(menu.y, window.innerHeight - 220)
   return (
-    <>
-      <button className="fixed inset-0 z-50 cursor-default" aria-label="Close menu" onClick={onClose} />
+    <DialogOverlay onClose={onClose} aria-label="Actions">
+      <button tabIndex={-1} className="fixed inset-0 z-50 cursor-default" aria-label="Close menu" onClick={onClose} />
       <div
         className="fixed z-50 w-52 overflow-hidden rounded-xl bg-elevated p-1 shadow-2xl shadow-black/50 ring-1 ring-line-2"
         style={{ left, top }}
@@ -573,7 +610,7 @@ function RowMenu({
             )
           })()}
       </div>
-    </>
+    </DialogOverlay>
   )
 }
 
@@ -614,8 +651,8 @@ function ConfirmUninstall({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[55] flex items-center justify-center p-5">
-      <button className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel" onClick={onCancel} />
+    <DialogOverlay onClose={onCancel} guardClose={() => !busy} className="fixed inset-0 z-[55] flex items-center justify-center p-5" aria-label="Uninstall confirmation">
+      <button tabIndex={-1} className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel" onClick={onCancel} />
       <div className="relative z-10 w-full max-w-sm rounded-2xl bg-elevated p-4 text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2">
         <div className="mb-1 flex items-center gap-2">
           <Trash2 className="size-4 text-red-500" />
@@ -642,7 +679,7 @@ function ConfirmUninstall({
           </button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 
@@ -652,8 +689,8 @@ function FilesOverlay({ pkg, onClose }: { pkg: { id: string; name: string }; onC
     apiJSON<{ files: string[] }>(`/v1/pkg_files?id=${enc(pkg.id)}`).then((j) => setFiles(j?.files ?? []))
   }, [pkg.id])
   return (
-    <div className="fixed inset-0 z-[55] flex items-center justify-center p-5">
-      <button className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Close" onClick={onClose} />
+    <DialogOverlay onClose={onClose} className="fixed inset-0 z-[55] flex items-center justify-center p-5" aria-label={`Files of ${pkg.name}`}>
+      <button tabIndex={-1} className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Close" onClick={onClose} />
       <div className="relative z-10 flex max-h-[70dvh] w-full max-w-lg flex-col rounded-2xl bg-elevated text-fg shadow-2xl shadow-black/50 ring-1 ring-line-2">
         <header className="flex items-center gap-2 border-b border-line px-3.5 py-2.5">
           <FileText className="size-4 text-fg-dim" />
@@ -674,7 +711,7 @@ function FilesOverlay({ pkg, onClose }: { pkg: { id: string; name: string }; onC
           )}
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 
@@ -798,8 +835,8 @@ function FilterDropdown({
         <ChevronDown className={cn('size-3.5 text-faint transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <>
-          <button className="fixed inset-0 z-40 cursor-default" aria-label="Close" onClick={() => setOpen(false)} />
+        <DialogOverlay onClose={() => setOpen(false)} aria-label="Filter options">
+          <button tabIndex={-1} className="fixed inset-0 z-40 cursor-default" aria-label="Close" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full z-50 mt-1 w-36 overflow-hidden rounded-xl bg-elevated p-1 shadow-2xl shadow-black/50 ring-1 ring-line-2">
             {options.map(([v, label]) => (
               <button
@@ -818,7 +855,7 @@ function FilterDropdown({
               </button>
             ))}
           </div>
-        </>
+        </DialogOverlay>
       )}
     </div>
   )

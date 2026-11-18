@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Camera, Check, Circle, Copy, Download, SwitchCamera, X } from 'lucide-react'
 import { api, apiDo, apiJSON, destructivePost } from '../lib/rctl'
 import type { FileTransfer } from '../lib/files'
-import { Sheet } from './Sheet'
+import { Sheet, DialogOverlay } from './Sheet'
 import { OptionMenu } from './OptionMenu'
 import { copyText } from '../lib/clipboard'
 import { cn } from '../lib/cn'
@@ -638,7 +638,7 @@ function CameraLiveView({
       : transportState
 
   return (
-    <div className="fixed inset-0 z-[70] flex flex-col bg-black text-white">
+    <DialogOverlay onClose={onClose} className="fixed inset-0 z-[70] flex flex-col bg-black text-white" aria-label="Live camera">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-white/10 px-3">
         <Camera className="size-4" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{stateLabel}</span>
@@ -690,7 +690,7 @@ function CameraLiveView({
           <Download className="size-5" />
         </button>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 
