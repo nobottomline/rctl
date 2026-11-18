@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, Download, File as FileIcon, Folder, RefreshCw, Trash2, Upload } from 'lucide-react'
 import { api, apiJSON, destructivePost, downloadFile } from '../lib/rctl'
 import { fmtSize, type FileTransfer, type TransferStatus } from '../lib/files'
-import { Sheet } from './Sheet'
+import { Sheet, DialogOverlay } from './Sheet'
 import { cn } from '../lib/cn'
 
 // Filesystem browser backed by rctld (root): /v1/ls to list, /v1/rm to delete,
@@ -18,29 +18,61 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<TransferStatus>({ text: '', kind: 'idle' })
+  const [loadError, setLoadError] = useState(false)
+  const [failedPath, setFailedPath] = useState('/') // the listing Retry should re-request
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const pathRef = useRef('/')
   const fileInput = useRef<HTMLInputElement>(null)
+  const loadSequence = useRef(0)
+  // The folder the user last asked for, plus the busy mirror and a pending
+  // flag for background refreshes that must not outrun a navigation.
+  const viewedRef = useRef('/')
+  const busyRef = useRef(false)
+  const pendingRefresh = useRef(false)
+
+  // A background refresh (transfer completion, finished delete or upload)
+  // must never outrun the user's navigation: while a listing is in flight the
+  // request is queued behind it and re-targets the folder being viewed then.
+  const refreshInBackground = () => {
+    if (busyRef.current) pendingRefresh.current = true
+    else void load(viewedRef.current)
+  }
 
   const load = async (dir: string) => {
+    const request = ++loadSequence.current
+    viewedRef.current = dir
+    busyRef.current = true
     setBusy(true)
     const j = await apiJSON<{ path?: string; entries?: Entry[]; error?: string }>(`/v1/ls?path=${enc(dir)}`)
+    if (request !== loadSequence.current) return // a newer listing superseded this one
+    busyRef.current = false
     setBusy(false)
+    // A failed listing used to render as an empty folder; say so and offer a
+    // retry of the exact folder that failed (path only advances on success).
     if (!j || j.error) {
+      setLoadError(true)
+      setFailedPath(dir)
       setEntries([])
-      return
+    } else {
+      setLoadError(false)
+      const resolved = j.path || dir
+      pathRef.current = resolved
+      setPath(resolved)
+      setEntries(j.entries || [])
     }
-    const resolved = j.path || dir
-    pathRef.current = resolved
-    setPath(resolved)
-    setEntries(j.entries || [])
+    // A file transfer finished while this listing ran: refresh the folder the
+    // user is viewing now, never the one the transfer happened to target.
+    if (pendingRefresh.current) {
+      pendingRefresh.current = false
+      void load(viewedRef.current)
+    }
   }
 
   useEffect(() => {
     transfer.onStatus = setStatus
-    transfer.onDone = () => load(pathRef.current)
+    transfer.onDone = refreshInBackground
     load('/')
     return () => {
       transfer.onStatus = () => {}
@@ -58,7 +90,7 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
     try {
       await destructivePost<{ ok?: boolean }>('/v1/rm', 'file_delete', deleteTarget, { path: deleteTarget })
       setDeleteTarget(null)
-      await load(pathRef.current)
+      refreshInBackground()
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : 'delete_failed')
     } finally {
@@ -77,7 +109,9 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
     } catch {
       /* ignore */
     }
-    load(path)
+    // The upload target was captured at pick time; refresh whatever folder
+    // the user is viewing now.
+    refreshInBackground()
   }
 
   const sorted = entries
@@ -109,7 +143,11 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
           {status.text}
         </div>
       )}
-      {sorted === null ? (
+      {loadError ? (
+        <Note>
+          Couldn't load the folder. <button className="underline" onClick={() => load(failedPath)}>Retry</button>
+        </Note>
+      ) : sorted === null ? (
         <Note>…</Note>
       ) : sorted.length === 0 ? (
         <Note>empty</Note>
@@ -176,8 +214,8 @@ function DeleteDialog({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-5" role="dialog" aria-modal="true">
-      <button className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel" onClick={onCancel} />
+    <DialogOverlay onClose={onCancel} guardClose={() => !busy} className="fixed inset-0 z-[70] flex items-center justify-center p-5" aria-label="Delete confirmation">
+      <button tabIndex={-1} className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" aria-label="Cancel" onClick={onCancel} />
       <div className="relative z-10 w-full max-w-md rounded-lg bg-elevated p-4 text-fg shadow-2xl ring-1 ring-line-2">
         <div className="mb-2 flex items-center gap-2">
           <Trash2 className="size-4 shrink-0 text-danger" />
@@ -205,7 +243,7 @@ function DeleteDialog({
           </button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 
