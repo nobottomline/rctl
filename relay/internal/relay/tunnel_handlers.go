@@ -57,7 +57,10 @@ func (s *server) handleTunnelHTTP(w http.ResponseWriter, r *http.Request) {
 
 	requestID := "http_" + randomHex(12)
 	responseCh := make(chan httpTunnelResponse, 1)
-	dc.registerHTTP(requestID, responseCh)
+	if !dc.registerHTTP(requestID, responseCh) {
+		writeErr(w, http.StatusServiceUnavailable, "device_busy")
+		return
+	}
 	defer dc.unregisterHTTP(requestID)
 
 	msg := httpTunnelRequest{
@@ -82,6 +85,14 @@ func (s *server) handleTunnelHTTP(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case response := <-responseCh:
+		// Bound the client write before any reply leaves the handler —
+		// including error replies, which a device can size in the megabytes: a
+		// client that stops reading would otherwise hold its admission slot
+		// and byte charge (released by the deferred unregisterHTTP)
+		// indefinitely, starving the device's tunnel budget. The server's own
+		// WriteTimeout stays off so WebSocket and stream tunnels keep their
+		// long-lived connections.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.cfg.TunnelTimeout))
 		if response.Error != "" {
 			writeErr(w, http.StatusBadGateway, response.Error)
 			return

@@ -11,10 +11,15 @@ import (
 	debversion "github.com/knqyf263/go-deb-version"
 )
 
-func (s *server) deviceHTTP(ctx context.Context, dc *deviceConn, method, path string, body []byte) (httpTunnelResponse, error) {
+func (s *server) deviceHTTP(ctx context.Context, dc *deviceConn, method, path string, body []byte, dst any) error {
 	requestID := "http_" + randomHex(12)
 	responseCh := make(chan httpTunnelResponse, 1)
-	dc.registerHTTP(requestID, responseCh)
+	if !dc.registerHTTP(requestID, responseCh) {
+		return errors.New("device busy")
+	}
+	// The byte charge is held until this defer runs: the response is decoded
+	// below while the handler still owns it, so the connection budget covers
+	// the body for as long as it is live.
 	defer dc.unregisterHTTP(requestID)
 	request := httpTunnelRequest{
 		Type: "http_request", ID: requestID, Method: method, Path: path,
@@ -25,18 +30,21 @@ func (s *server) deviceHTTP(ctx context.Context, dc *deviceConn, method, path st
 	err := dc.writeJSON(writeCtx, request)
 	cancel()
 	if err != nil {
-		return httpTunnelResponse{}, err
+		return err
 	}
 	select {
 	case response := <-responseCh:
 		if response.Error != "" {
-			return response, errors.New(response.Error)
+			return errors.New(response.Error)
 		}
-		return response, nil
+		if dst != nil && decodeDeviceJSON(response, dst) != nil {
+			return errors.New("device reply was not valid JSON")
+		}
+		return nil
 	case <-time.After(s.cfg.TunnelTimeout):
-		return httpTunnelResponse{}, errors.New("device timeout")
+		return errors.New("device timeout")
 	case <-ctx.Done():
-		return httpTunnelResponse{}, ctx.Err()
+		return ctx.Err()
 	}
 }
 
@@ -93,20 +101,18 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 	confirmationBody, _ := json.Marshal(map[string]string{
 		"action": "device_update", "target": manifestURL,
 	})
-	confirmationResponse, err := s.deviceHTTP(r.Context(), dc, http.MethodPost, "/v1/confirmation", confirmationBody)
 	var confirmation struct {
 		Token string `json:"token"`
 	}
-	if err != nil || decodeDeviceJSON(confirmationResponse, &confirmation) != nil || confirmation.Token == "" {
+	if err := s.deviceHTTP(r.Context(), dc, http.MethodPost, "/v1/confirmation", confirmationBody, &confirmation); err != nil || confirmation.Token == "" {
 		writeErr(w, http.StatusBadGateway, "device_confirmation_failed")
 		return
 	}
 	updateBody, _ := json.Marshal(map[string]string{
 		"token": confirmation.Token, "manifest_url": manifestURL,
 	})
-	updateResponse, err := s.deviceHTTP(r.Context(), dc, http.MethodPost, "/v1/update", updateBody)
 	var result map[string]any
-	if err != nil || decodeDeviceJSON(updateResponse, &result) != nil {
+	if err := s.deviceHTTP(r.Context(), dc, http.MethodPost, "/v1/update", updateBody, &result); err != nil {
 		writeErr(w, http.StatusBadGateway, "device_update_start_failed")
 		return
 	}

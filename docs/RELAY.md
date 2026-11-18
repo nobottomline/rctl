@@ -385,6 +385,13 @@ normal REST/control requests first. Long-lived streaming endpoints such as
 `/stream` need a separate streaming tunnel so one large response cannot block the
 control plane.
 
+Chunked responses are reassembled per request id up to a 128 MB backstop, and
+one device connection holds at most 128 concurrent tunnel requests and 256 MB
+of accumulated response bytes in total. A response or connection that crosses
+its limit fails with `502 device_response_too_large` instead of delivering a
+truncated body; further concurrent tunnel requests are answered with
+`503 device_busy`. Large downloads belong on the stream tunnel, not this one.
+
 ## Stream Tunnel
 
 Long-lived streams use a separate authenticated endpoint:

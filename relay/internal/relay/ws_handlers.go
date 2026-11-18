@@ -13,6 +13,34 @@ import (
 	"nhooyr.io/websocket"
 )
 
+// maxTunnelResponseBody bounds the accumulated base64 body of one chunked
+// tunnel response. The device's own REST surface stays far below this
+// (/v1/pull accepts 64 MB raw files, about 85 MB base64); the backstop exists
+// so an unbounded response cannot grow relay memory without limit. A response
+// that crosses the cap fails the request with an explicit error instead of
+// delivering a silently truncated body. A var so the overflow path is
+// testable without a 128 MB fixture.
+var maxTunnelResponseBody int64 = 128 << 20
+
+// maxPendingHTTPPerDevice bounds in-flight tunnel requests on one device
+// connection, so a flood of issued-but-unfinished requests cannot accumulate
+// unbounded buffers on a single connection. A var so the admission path is
+// testable without 128 fixtures.
+var maxPendingHTTPPerDevice = 128
+
+// maxDeviceBufferedBytes bounds the total accumulated response bytes across
+// all in-flight requests on one device connection, so the per-request
+// backstop cannot be multiplied out by many concurrent oversized responses.
+// A var so the budget path is testable without a 256 MB fixture.
+var maxDeviceBufferedBytes int64 = 256 << 20
+
+// httpBodyBuf accumulates one chunked tunnel response body and remembers
+// whether the size backstop was crossed, so the request can fail closed.
+type httpBodyBuf struct {
+	builder  strings.Builder
+	overflow bool
+}
+
 type deviceConn struct {
 	id             string
 	name           string
@@ -29,7 +57,9 @@ type deviceConn struct {
 	viewer         *websocket.Conn
 	lastRecvAt     time.Time // last time any frame arrived from the device (liveness)
 	pendingHTTP    map[string]chan httpTunnelResponse
-	pendingHTTPBuf map[string]*strings.Builder // accumulates a chunked http response body (base64) by request id
+	pendingHTTPBuf map[string]*httpBodyBuf // accumulates a chunked http response body (base64) by request id
+	bodyHeld       map[string]int64        // assembled bytes delivered to a handler but not yet consumed
+	bufBytes       int64                   // live bytes across pendingHTTPBuf and bodyHeld, charged against maxDeviceBufferedBytes
 	pendingStream  map[string]chan streamTunnelEvent
 	pendingTerm    map[string]chan termTunnelEvent
 	pendingSignal  map[string]chan signalTunnelEvent
@@ -133,7 +163,8 @@ WHERE id=?`, hello.DaemonVersion, hello.BrowserVersion, hello.Protocol.Major,
 		ws:             ws,
 		lastRecvAt:     time.Now(),
 		pendingHTTP:    make(map[string]chan httpTunnelResponse),
-		pendingHTTPBuf: make(map[string]*strings.Builder),
+		pendingHTTPBuf: make(map[string]*httpBodyBuf),
+		bodyHeld:       make(map[string]int64),
 		pendingStream:  make(map[string]chan streamTunnelEvent),
 		pendingTerm:    make(map[string]chan termTunnelEvent),
 		pendingSignal:  make(map[string]chan signalTunnelEvent),
@@ -459,13 +490,58 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 		if ch != nil {
 			delete(dc.pendingHTTP, envelope.ID)
 		}
-		dc.mu.Unlock()
+		// The device settles a request with either one reply or chunk+end,
+		// never both. A single reply after accumulated chunks (or an overflow)
+		// still releases the buffer; an overflowed request fails closed even
+		// when a well-formed single reply follows the oversized chunks.
+		if b := dc.pendingHTTPBuf[envelope.ID]; b != nil {
+			delete(dc.pendingHTTPBuf, envelope.ID)
+			dc.bufBytes -= int64(b.builder.Len())
+			if b.overflow {
+				response.Error = "device_response_too_large"
+				response.Body = ""
+			}
+		}
+		// Settlement is atomic with cleanup: the reply body is charged here,
+		// under the same lock that removed the waiter, so a racing
+		// unregisterHTTP either finds the charge and releases it, or ran
+		// first — a missing waiter means no charge, never a leaked one. The
+		// budget covers delivered-but-unread bodies too, and the request
+		// slot is held until the handler finishes even for empty or error
+		// replies, so admission cannot overshoot while handlers are running.
 		if ch != nil {
-			ch <- response
+			if response.Error != "" {
+				// An error reply carries no usable body; clearing it keeps
+				// every delivered body inside the accounting.
+				response.Body = ""
+			}
+			if len(response.Body) > 0 && dc.bufBytes+int64(len(response.Body)) > maxDeviceBufferedBytes {
+				response.Error = "device_response_too_large"
+				response.Body = ""
+			}
+			if dc.bodyHeld == nil {
+				dc.bodyHeld = make(map[string]int64)
+			}
+			dc.bodyHeld[envelope.ID] = int64(len(response.Body))
+			dc.bufBytes += int64(len(response.Body))
+		}
+		dc.mu.Unlock()
+		// The map entry was removed before the send; a dropped reply fails the
+		// tunnel by its own timeout instead of wedging the read loop.
+		if ch != nil {
+			select {
+			case ch <- response:
+			default:
+			}
 		}
 	case "http_response_chunk":
 		// A large response body is split across messages -- a single multi-MB WS
-		// message drops the device's connection on iOS. Accumulate the base64 parts.
+		// message drops the device's connection on iOS. Accumulate the base64
+		// parts, but only for a request the relay actually issued: buffers for
+		// unknown ids would let a device grow relay memory without bound. A
+		// response that crosses the backstop stops accumulating, frees the
+		// buffer, and fails the request with an explicit error instead of
+		// delivering a silently truncated body.
 		var c struct {
 			Data string `json:"data"`
 		}
@@ -473,15 +549,29 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 			return true
 		}
 		dc.mu.Lock()
+		if dc.pendingHTTP[envelope.ID] == nil {
+			dc.mu.Unlock()
+			return true
+		}
 		if dc.pendingHTTPBuf == nil {
-			dc.pendingHTTPBuf = make(map[string]*strings.Builder)
+			dc.pendingHTTPBuf = make(map[string]*httpBodyBuf)
 		}
 		b := dc.pendingHTTPBuf[envelope.ID]
 		if b == nil {
-			b = &strings.Builder{}
+			b = &httpBodyBuf{}
 			dc.pendingHTTPBuf[envelope.ID] = b
 		}
-		b.WriteString(c.Data)
+		// Both the per-request backstop and the per-connection budget charge
+		// the incoming chunk; overflow stops accumulating, frees the buffer,
+		// and lets the end message fail the request closed.
+		if b.overflow || int64(b.builder.Len())+int64(len(c.Data)) > maxTunnelResponseBody || dc.bufBytes+int64(len(c.Data)) > maxDeviceBufferedBytes {
+			b.overflow = true
+			dc.bufBytes -= int64(b.builder.Len())
+			b.builder.Reset()
+		} else {
+			b.builder.WriteString(c.Data)
+			dc.bufBytes += int64(len(c.Data))
+		}
 		dc.mu.Unlock()
 	case "http_response_end":
 		var response httpTunnelResponse
@@ -489,17 +579,50 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 			return true
 		}
 		dc.mu.Lock()
-		if b := dc.pendingHTTPBuf[envelope.ID]; b != nil {
-			response.Body = b.String()
+		b := dc.pendingHTTPBuf[envelope.ID]
+		if b != nil {
 			delete(dc.pendingHTTPBuf, envelope.ID)
+			if b.overflow {
+				response.Error = "device_response_too_large"
+				response.Body = ""
+			} else {
+				response.Body = b.builder.String()
+			}
+			// The builder's charge is released either way; the settlement
+			// block below re-charges the delivered body — the same bytes,
+			// counted exactly once.
+			dc.bufBytes -= int64(b.builder.Len())
 		}
 		ch := dc.pendingHTTP[envelope.ID]
 		if ch != nil {
 			delete(dc.pendingHTTP, envelope.ID)
 		}
-		dc.mu.Unlock()
+		// Same settlement as http_response: the slot is held until the handler
+		// finishes, an error reply carries no body, and the budget covers a
+		// body that arrived without an accumulator (it was never charged
+		// during accumulation).
 		if ch != nil {
-			ch <- response
+			if response.Error != "" {
+				response.Body = ""
+			}
+			if len(response.Body) > 0 && dc.bufBytes+int64(len(response.Body)) > maxDeviceBufferedBytes {
+				response.Error = "device_response_too_large"
+				response.Body = ""
+			}
+			if dc.bodyHeld == nil {
+				dc.bodyHeld = make(map[string]int64)
+			}
+			dc.bodyHeld[envelope.ID] = int64(len(response.Body))
+			dc.bufBytes += int64(len(response.Body))
+		}
+		dc.mu.Unlock()
+		// Same atomic settlement as http_response above: the entry was removed
+		// under the lock that placed the charge.
+		if ch != nil {
+			select {
+			case ch <- response:
+			default:
+			}
 		}
 	case "stream_start", "stream_chunk", "stream_end":
 		var event streamTunnelEvent
@@ -553,16 +676,31 @@ func (dc *deviceConn) handleControlMessage(payload []byte) bool {
 	return true
 }
 
-func (dc *deviceConn) registerHTTP(id string, ch chan httpTunnelResponse) {
+// registerHTTP bounds in-flight tunnel requests per connection: admission
+// counts both waiting requests and delivered-but-unconsumed bodies, so a
+// slot is only freed when the handler finishes (unregisterHTTP), not when
+// its response merely arrives.
+func (dc *deviceConn) registerHTTP(id string, ch chan httpTunnelResponse) bool {
 	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	if len(dc.pendingHTTP)+len(dc.bodyHeld) >= maxPendingHTTPPerDevice {
+		return false
+	}
 	dc.pendingHTTP[id] = ch
-	dc.mu.Unlock()
+	return true
 }
 
 func (dc *deviceConn) unregisterHTTP(id string) {
 	dc.mu.Lock()
 	delete(dc.pendingHTTP, id)
-	delete(dc.pendingHTTPBuf, id)
+	if b := dc.pendingHTTPBuf[id]; b != nil {
+		delete(dc.pendingHTTPBuf, id)
+		dc.bufBytes -= int64(b.builder.Len())
+	}
+	if n, ok := dc.bodyHeld[id]; ok {
+		delete(dc.bodyHeld, id)
+		dc.bufBytes -= n
+	}
 	dc.mu.Unlock()
 }
 
