@@ -39,39 +39,49 @@ static const uint8_t kStartCode[4] = { 0, 0, 0, 1 };
 
 // Growable byte buffer.
 typedef struct { uint8_t *p; size_t len, cap; } buf_t;
-static void buf_append(buf_t *b, const void *data, size_t n) {
-    if (b->len + n > b->cap) { b->cap = (b->len + n) * 2 + 1024; b->p = (uint8_t *)realloc(b->p, b->cap); }
+// Returns false when an allocation failed; the buffer keeps its previous
+// contents and the caller must drop the frame instead of emitting a partial
+// one. The encoder runs inside SpringBoard, where jetsam limits are tight:
+// a NULL write here would respring the whole system under memory pressure.
+static bool buf_append(buf_t *b, const void *data, size_t n) {
+    if (b->len + n > b->cap) {
+        size_t cap = (b->len + n) * 2 + 1024;
+        uint8_t *p = (uint8_t *)realloc(b->p, cap);
+        if (!p) return false;
+        b->p = p; b->cap = cap;
+    }
     memcpy(b->p + b->len, data, n);
     b->len += n;
+    return true;
 }
 
 static void emit_annexb(rctl_encoder *e, CMSampleBufferRef sb, bool keyframe) {
     buf_t out = {0};
+    bool ok = true;
 
     if (keyframe) {
         CMFormatDescriptionRef fmt = CMSampleBufferGetFormatDescription(sb);
         size_t count = 0;
         CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, 0, NULL, NULL, &count, NULL);
-        for (size_t i = 0; i < count; i++) {
+        for (size_t i = 0; i < count && ok; i++) {
             const uint8_t *ps = NULL; size_t psSize = 0;
             if (CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, i, &ps, &psSize, NULL, NULL) == noErr) {
-                buf_append(&out, kStartCode, 4);
-                buf_append(&out, ps, psSize);
+                ok = buf_append(&out, kStartCode, 4) && buf_append(&out, ps, psSize);
             }
         }
     }
 
     CMBlockBufferRef bb = CMSampleBufferGetDataBuffer(sb);
     size_t total = 0; char *data = NULL;
-    if (CMBlockBufferGetDataPointer(bb, 0, NULL, &total, &data) == noErr) {
+    if (ok && CMBlockBufferGetDataPointer(bb, 0, NULL, &total, &data) == noErr) {
         size_t off = 0;
         while (off + 4 <= total) {
             uint32_t nalLen = ((uint8_t)data[off] << 24) | ((uint8_t)data[off+1] << 16) |
                               ((uint8_t)data[off+2] << 8) | (uint8_t)data[off+3];
             off += 4;
             if (nalLen == 0 || off + nalLen > total) break;
-            buf_append(&out, kStartCode, 4);
-            buf_append(&out, data + off, nalLen);
+            ok = buf_append(&out, kStartCode, 4) && buf_append(&out, data + off, nalLen);
+            if (!ok) break;
             off += nalLen;
         }
     }
@@ -80,7 +90,9 @@ static void emit_annexb(rctl_encoder *e, CMSampleBufferRef sb, bool keyframe) {
     CMTime ptsScaled = CMTIME_IS_VALID(pts) ? CMTimeConvertScale(pts, 1000000, kCMTimeRoundingMethod_Default)
                                             : kCMTimeZero;
     int64_t pts_us = ptsScaled.value;
-    if (e->cb && out.p && out.len) e->cb(out.p, out.len, keyframe, pts_us, e->ctx);
+    // An allocation failure mid-frame would leave a NAL hole in an otherwise
+    // decodable stream; drop the frame instead of shipping the corruption.
+    if (ok && e->cb && out.p && out.len) e->cb(out.p, out.len, keyframe, pts_us, e->ctx);
     free(out.p);
 }
 
@@ -169,6 +181,11 @@ static OSStatus configure_session(rctl_encoder *e) {
 rctl_encoder *rctl_encoder_create(int srcW, int srcH, int dstW, int dstH,
                                   int fps, int bitrate, rctl_nal_cb cb, void *ctx) {
     rctl_encoder *e = (rctl_encoder *)calloc(1, sizeof(rctl_encoder));
+    // The encoder runs inside SpringBoard (screen capture) and the camera app
+    // agent; both callers already handle a NULL encoder (session teardown,
+    // retry on the next frame), so allocation failure must degrade instead of
+    // respringing the system.
+    if (!e) return NULL;
     e->cb = cb; e->ctx = ctx;
     e->srcW = srcW; e->srcH = srcH; e->dstW = dstW; e->dstH = dstH;
     e->fps = fps; e->bitrate = bitrate;
