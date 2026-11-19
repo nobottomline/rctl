@@ -20,7 +20,8 @@ trusted local network or through an authenticated relay hosted on your own VPS.
 
 > [!WARNING]
 > rctl provides root-level control of the device. The local port is
-> unauthenticated and must never be forwarded to the public internet. Use the
+> drive-by-protected by a device-generated LAN token, but plaintext HTTP still
+> trusts the network: it must never be forwarded to the public internet. Use the
 > TLS relay for internet access and read the [security model](docs/SECURITY.md)
 > before deployment.
 

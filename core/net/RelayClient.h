@@ -12,6 +12,9 @@ void rctl_relay_start(void);
 // Malloc-owned JSON: configured/connected relay counts for updater verification.
 char *rctl_relay_status_json(void);
 
+// Counts-only variant for the credential-free legacy probe (no relay URLs).
+char *rctl_relay_status_counts(void);
+
 #ifdef __cplusplus
 }
 #endif

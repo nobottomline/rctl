@@ -141,11 +141,17 @@ and validated target. Do not make the existing WSS validator accept every `ws`
 URL, and never fall back from failed relay authentication to LAN automatically.
 Do not disable TLS certificate validation or introduce global arbitrary loads.
 
-The existing local API is unauthenticated. WebRTC encrypts media/data, but
-plaintext signaling does not establish a trusted device identity against an
-active LAN attacker. Describe this as trusted-network access, not equivalent
+The existing local API is token-gated against drive-by web attacks: `LocalDeviceClient`
+fetches the LAN token from `GET /v1/bootstrap` (`X-Rctl-Bootstrap` header) and
+presents it on capabilities and signaling requests. WebRTC encrypts media/data,
+but plaintext HTTP still does not establish a trusted device identity against an
+active LAN attacker, and a native program able to reach the port can call
+bootstrap itself. Describe this as trusted-network access, not equivalent
 security to authenticated relay access. Do not expose port 8080 on the internet.
-Authenticated local pairing is a separate future protocol change.
+Authenticated local pairing remains a separate future protocol change
+(see protocol/local-auth-v1.md). A daemon without the bootstrap route answers
+exactly 404: that shape is the supported legacy-daemon compatibility case; a
+403 or network failure never silently downgrades the client.
 
 ## iOS Integration And Qualification
 

@@ -7,11 +7,33 @@ the device and is only safe on a trusted LAN or through the USB tunnel.
 ## Local network policy
 
 By default, `rctld` listens on `0.0.0.0:8080` for the local browser client and API. This interface
-is intentionally unauthenticated in the current protocol. It exposes screen and
-camera viewing, input injection, file operations, application actions, and a
-root terminal. Anyone who can reach the port can control the device.
+is **token-gated**: the device generates a 256-bit LAN token on first start
+(32 random bytes stored raw at `/var/db/rctl/lan.token`, root-owned, mode
+`0600`, preserved across upgrades and rollbacks; the token travels in its
+64-character hex encoding) and requires it on every control route. Three exception sets stay credential-free: the legacy loopback
+health probes, the on-device camera agents' IPC routes (loopback plus the
+`X-Rctl-Camera-Ipc` header), and the daemon-internal relay hop. The served control page
+obtains the token once from `GET /v1/bootstrap`, which answers only to requests
+carrying the `X-Rctl-Bootstrap` header (a custom header no cross-origin browser
+page can attach without a preflight this server never grants) and whose `Origin`
+and `Sec-Fetch-Site` agree with the request's own `Host`. `Host` must name the
+address the connection actually terminated on — a rebound DNS name keeps the
+attacker's name in `Host`, so rebinding cannot pass. Browser WebSocket clients
+present the token as the `rctl.auth.<token>` subprotocol, validated before the
+`101`. Downloads that the browser's download manager issues (`/v1/pull_stream`)
+redeem a short-lived single-use ticket instead. Relay tunnels authenticate with
+an in-memory credential shared only inside `rctld`; Relay-only mode disables
+direct control entirely, keeping only the legacy loopback health probes
+(`/v1/capabilities`, `/v1/deviceinfo`, `/v1/relay_status` — both socket
+endpoints on loopback, exact GET, no query) and the authenticated relay hop.
+This closes the drive-by surface (cross-site CSRF, DNS rebinding, WebSocket
+hijacking) while keeping the trusted-LAN zero-configuration experience: any
+native program that can reach the port may call bootstrap itself.
 
-This is an explicit product constraint, not an accidental missing middleware:
+The interface still exposes screen and camera viewing, input injection, file
+operations, application actions, and a root terminal to whoever holds the
+token, and plaintext HTTP means a network observer can read it. The gate is an
+anti-drive-by boundary, not authentication:
 
 - never port-forward `8080`, publish it through a reverse proxy, or expose it on
   guest, hotel, public, or otherwise untrusted Wi-Fi;
@@ -66,6 +88,11 @@ the setting; the restart applies the listener and Bonjour policy. If independent
 access is unavailable, physical recovery is required, not a public fallback port.
 The CLI changes only the policy value and preserves device and relay secrets.
 It is an operator recovery path, not an on-device setup UI.
+
+Rolling back to a pre-token daemon restores its unauthenticated file API; if the
+installed LAN token may have been exposed before the rollback, delete
+`/var/db/rctl/lan.token` (rootful) or the resolved rootless path before
+trusting the new installation again — the next start generates a fresh token.
 
 ## Relay control
 

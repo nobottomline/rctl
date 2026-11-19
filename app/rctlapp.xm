@@ -119,7 +119,7 @@ static NSData *guest_camera_http(NSString *path, NSData *body) {
     struct sockaddr_in address={};address.sin_family=AF_INET;address.sin_port=htons(8080);address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     NSMutableData *response=[NSMutableData data];
     if(connect(fd,(struct sockaddr*)&address,sizeof address)==0) {
-        NSString *header=[NSString stringWithFormat:@"%@ %@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",body?@"POST":@"GET",path,(unsigned long)body.length];
+        NSString *header=[NSString stringWithFormat:@"%@ %@ HTTP/1.1\r\nHost: localhost\r\nX-Rctl-Camera-Ipc: 1\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",body?@"POST":@"GET",path,(unsigned long)body.length];
         NSData *head=[header dataUsingEncoding:NSUTF8StringEncoding];NSMutableData *request=[head mutableCopy];if(body)[request appendData:body];
         const uint8_t *bytes=(const uint8_t*)request.bytes;size_t left=request.length;
         while(left){ssize_t count=write(fd,bytes,left);if(count<=0)break;bytes+=count;left-=count;}
@@ -149,7 +149,7 @@ static void rctl_upload(NSData *jpeg) {
     if (connect(fd, (struct sockaddr *)&a, sizeof a) == 0) {
         char hdr[200];
         int hn = snprintf(hdr, sizeof hdr,
-            "POST /v1/cam_upload HTTP/1.1\r\nHost: x\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",
+            "POST /v1/cam_upload HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nX-Rctl-Camera-Ipc: 1\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",
             (unsigned long)jpeg.length);
         write(fd, hdr, hn);
         const uint8_t *p = (const uint8_t *)jpeg.bytes; size_t left = jpeg.length;

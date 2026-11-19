@@ -149,6 +149,12 @@ final class ControllerLifecycleTests: XCTestCase {
     private func localRetryRequest() async throws -> RequestStub {
         let deadline = ContinuousClock.now + .seconds(6)
         while ContinuousClock.now < deadline {
+            // The token bootstrap precedes every local request; answer it as a
+            // legacy daemon (exactly 404) so capabilities proceeds token-less.
+            if let bootstrap = RequestStub.requests.take("/v1/bootstrap") {
+                bootstrap.respond("{\"error\":\"bootstrap_absent_legacy_daemon\"}", status: 404)
+                continue
+            }
             if let pending = RequestStub.requests.take("/v1/capabilities") { return pending }
             try await Task.sleep(for: .milliseconds(10))
         }

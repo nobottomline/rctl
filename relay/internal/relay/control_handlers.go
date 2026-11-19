@@ -43,6 +43,7 @@ window.RCTL_WEBRTC=` + webrtc + `;
 window.RCTL_RELAY_VERSION="` + html.EscapeString(Version) + `";
 window.RCTL_RELAY_PROTOCOL_MAJOR=` + fmt.Sprint(protocolMajor) + `;
 window.RCTL_RELAY_PROTOCOL_MINOR=` + fmt.Sprint(protocolMinor) + `;
+window.RCTL_RELAY_TUNNEL_MAX_BODY=` + fmt.Sprint(s.cfg.TunnelMaxBody) + `;
 </script>
 `
 	page := strings.Replace(string(raw), "<head>", "<head>"+inject, 1)

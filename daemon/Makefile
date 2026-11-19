@@ -38,6 +38,8 @@ rctld_FILES = main.mm \
               ../core/config/RelayInstall.mm \
               ../core/protocol/Capabilities.mm \
               ../core/security/DestructiveActions.mm \
+              ../core/security/DeviceToken.mm \
+              ../core/security/FilePolicy.mm \
               ../core/update/UpdateLauncher.mm \
               ../core/net/RelayClient.mm \
               ../core/net/HttpStreamServer.mm \

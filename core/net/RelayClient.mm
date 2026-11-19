@@ -1,4 +1,5 @@
 #import "net/RelayClient.h"
+#import "security/DeviceToken.h"
 #import "net/WebRTCBridge.h"
 #import "protocol/Capabilities.h"
 #import "config/LocalAccess.h"
@@ -417,6 +418,11 @@ static NSMutableArray *g_relay_clients;
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = method;
     request.timeoutInterval = 20;
+    // The gateway must be able to tell the authenticated relay tunnel from
+    // any other loopback caller; this credential lives only inside rctld.
+    if (rctl_relay_hop_credential()) {
+        [request setValue:@(rctl_relay_hop_credential()) forHTTPHeaderField:@"X-Rctl-Relay-Hop"];
+    }
     NSURLSession *session = self.session;
     if (!session) {
         [self sendJSON:@{@"type": @"http_response", @"id": reqid, @"status": @502, @"error": @"relay_not_connected"}];
@@ -494,6 +500,9 @@ static NSMutableArray *g_relay_clients;
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"GET";
     request.timeoutInterval = 0;
+    if (rctl_relay_hop_credential()) {
+        [request setValue:@(rctl_relay_hop_credential()) forHTTPHeaderField:@"X-Rctl-Relay-Hop"];
+    }
     NSURLSession *session = self.session;
     if (!session) {
         [self sendJSON:@{@"type": @"stream_start", @"id": streamID, @"status": @502, @"error": @"relay_not_connected"}];
@@ -533,6 +542,9 @@ static NSMutableArray *g_relay_clients;
     NSMutableURLRequest *localRequest = [NSMutableURLRequest requestWithURL:localURL];
     localRequest.HTTPMethod = @"GET";
     localRequest.timeoutInterval = 0;
+    if (rctl_relay_hop_credential()) {
+        [localRequest setValue:@(rctl_relay_hop_credential()) forHTTPHeaderField:@"X-Rctl-Relay-Hop"];
+    }
     NSURLSessionDataTask *localTask = [session dataTaskWithRequest:localRequest];
 
     @synchronized (self.streamIDs) {
@@ -584,7 +596,13 @@ static NSMutableArray *g_relay_clients;
     id oldTask = nil;
     @synchronized (self.streamIDs) {
         oldTask = self.termTasks[termID];
-        self.termTasks[termID] = [session webSocketTaskWithURL:url];
+        if (rctl_relay_hop_credential()) {
+            NSMutableURLRequest *termRequest = [NSMutableURLRequest requestWithURL:url];
+            [termRequest setValue:@(rctl_relay_hop_credential()) forHTTPHeaderField:@"X-Rctl-Relay-Hop"];
+            self.termTasks[termID] = [session webSocketTaskWithRequest:termRequest];
+        } else {
+            self.termTasks[termID] = [session webSocketTaskWithURL:url];
+        }
     }
     if ([oldTask respondsToSelector:@selector(cancelWithCloseCode:reason:)]) {
         [oldTask cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)1001 reason:nil];
@@ -1043,6 +1061,23 @@ void rctl_relay_start(void) {
     rctl_webrtc_set_sender(NULL);
     relay_log([NSString stringWithFormat:@"starting %lu relay connection(s)", (unsigned long)clients.count]);
     for (RCTLRelayClient *client in clients) [client start];
+}
+
+char *rctl_relay_status_counts(void) {
+    // The legacy loopback health probe sees counts only: no configured relay
+    // URLs leave the credential-free path.
+    NSArray *clients = nil;
+    @synchronized ([RCTLRelayClient class]) {
+        clients = [g_relay_clients copy] ?: @[];
+    }
+    NSUInteger connected = 0;
+    for (RCTLRelayClient *client in clients) if (client.connected) connected++;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{
+        @"configured": @(clients.count), @"connected": @(connected),
+    } options:0 error:nil];
+    char *result = (char *)malloc(data.length + 1);
+    memcpy(result, data.bytes, data.length); result[data.length] = 0;
+    return result;
 }
 
 char *rctl_relay_status_json(void) {

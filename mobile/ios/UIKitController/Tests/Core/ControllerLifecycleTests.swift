@@ -163,6 +163,10 @@ final class ControllerLifecycleTests: XCTestCase {
     private func localRetryRequest() async throws -> CoreRequestStub {
         let deadline = CoreTestDeadline(seconds: 6)
         while deadline.hasTimeRemaining {
+            if let bootstrap = CoreRequestStub.requests.take("/v1/bootstrap") {
+                bootstrap.respond("{\"error\":\"bootstrap_absent_legacy_daemon\"}", status: 404)
+                continue
+            }
             if let pending = CoreRequestStub.requests.take("/v1/capabilities") { return pending }
             try await Task.sleep(seconds: 0.01)
         }

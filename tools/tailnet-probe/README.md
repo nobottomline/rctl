@@ -120,6 +120,12 @@ there is no public listener, Funnel, arbitrary upstream URL or TLS bypass.
 The permitted Tailscale user receives full device-control capabilities,
 including the root terminal. This is not a read-only role.
 
+**Compatibility limit.** The device's HTTP surface is token-gated; the probe's
+proxy presents none of the credentials the gateway accepts (LAN token, relay
+hop, camera IPC). Requests through `--rctl` therefore answer 403 against a
+token-gated daemon. Closing that gap needs a deliberate credential design for
+this experimental path and is not covered here; do not add a proxy exception.
+
 Boundaries implemented and covered by isolated tests:
 
 - Every request requires a matching, untagged, non-expired Tailscale identity

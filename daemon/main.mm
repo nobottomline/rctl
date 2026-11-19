@@ -25,6 +25,7 @@
 #import <spawn.h>
 #import <dirent.h>
 #import <sys/stat.h>
+#import <limits.h>
 #import <sys/time.h>
 #import <sys/socket.h>
 #import <sys/wait.h>
@@ -59,6 +60,8 @@
 #import "net/MediaLibrary.h"
 #import "net/VirtualMicServer.h"
 #import "security/DestructiveActions.h"
+#import "security/DeviceToken.h"
+#import "security/FilePolicy.h"
 #import "protocol/Capabilities.h"
 #import "update/UpdateLauncher.h"
 #include <atomic>
@@ -292,44 +295,203 @@ static void on_webrtc_key(int page, int usage, int down) {
 //   browser -> {op:put,path,size} + chunks + {op:put_eof}  ; we reply {op:put_ok,bytes}
 static FILE *gFilesUpload = NULL;
 static long gFilesUploadBytes = 0;
+static bool gFilesUploadShort = false;
 static pthread_mutex_t gFilesLock = PTHREAD_MUTEX_INITIALIZER;
-static volatile int gFilesCancel = 0;
+static void *gFilesUploadChannel = NULL;   // owning channel's sender token
+static char gFilesUploadId[65] = "";       // the id the owner reserved with
+static void *g_http_push_owner = NULL;     // REST push's own reservation marker
+// Active download workers, keyed by the requesting channel's generation:
+// cancellation names the channel it belongs to, so one session's cancel never
+// aborts another session's preview and a new get cannot reset a draining
+// worker's flag (each worker owns its own).
+typedef struct files_get_state {
+    void *token;
+    std::atomic<int> cancel;   // written under gFilesLock, read hot without it
+    struct files_get_state *next;
+} files_get_state;
+static files_get_state *gFilesGets = NULL;   // guarded by gFilesLock
 
-typedef struct { char path[1024]; } files_get_arg;
+static double files_clock(void) {
+    static const mach_timebase_info_data_t base = [] { mach_timebase_info_data_t v; mach_timebase_info(&v); return v; }();
+    return (double)mach_continuous_time() * base.numer / base.denom / 1e9;
+}
+// A reservation or stream with no activity for this long is abandoned: the
+// browser's own deadline (15s) has long expired, so the slot must free
+// itself instead of blocking every later upload and /v1/push.
+static const double RCTL_UPLOAD_IDLE_SECS = 30.0;
+static double gFilesUploadLastActivity = 0;
+static void files_touch_activity_locked(void) { gFilesUploadLastActivity = files_clock(); }
+
+typedef struct { char path[1024]; void *sender; char idsuf[80]; char idval[65]; files_get_state *self; } files_get_arg;
+
+// An upload whose owning files channel disappeared (viewer disconnect
+// mid-transfer) must not keep the daemon busy forever: a reconnecting session
+// would see "transfer in progress" on every put. The reap check validates the
+// owner token against the live session registry.
+static void files_get_register_locked(files_get_state *w, void *token) {
+    w->token = token;
+    w->cancel = 0;
+    w->next = gFilesGets;
+    gFilesGets = w;
+}
+
+static void files_get_unregister_locked(files_get_state *w) {
+    files_get_state **p = &gFilesGets;
+    while (*p && *p != w) p = &(*p)->next;
+    if (*p) *p = w->next;
+}
+
+static void files_reap_stale_locked(void) {
+    bool dead = gFilesUpload && !rctl_webrtc_files_channel_alive(gFilesUploadChannel);
+    // An abandoned P2P transfer expires even when its channel stays open: no
+    // chunk (and no activity) for the idle window means the browser gave up
+    // and its cleanup cancel was never enqueued. The REST push holds the slot
+    // with its own marker and never touches the activity clock, so the idle
+    // check must never strip an ACTIVE push's exclusive hold.
+    bool idle = gFilesUploadChannel != NULL && gFilesUploadChannel != &g_http_push_owner &&
+                files_clock() - gFilesUploadLastActivity > RCTL_UPLOAD_IDLE_SECS;
+    if (dead || idle) {
+        if (gFilesUpload) fclose(gFilesUpload);
+        gFilesUpload = NULL;
+        gFilesUploadBytes = 0;
+        gFilesUploadShort = false;
+        gFilesUploadChannel = NULL;
+        gFilesUploadId[0] = 0;
+    }
+}
+
+// Upload replies echo the browser's transfer id so a late answer can never
+// confirm or fail a DIFFERENT attempt (timeouts, retries, replacement
+// attempts on the same channel). The id is restricted to URL/JSON-safe ASCII
+// characters, and it is copied into a NUL-terminated buffer BEFORE formatting:
+// the validated NSData is not a C string, and %s must never read past the
+// exact bytes that were validated.
+// Validate the wire id into a NUL-terminated buffer. Returns false when the
+// id is absent or malformed (legacy clients send none).
+static bool reply_id_value(NSDictionary *e, char *out, size_t cap) {
+    if (cap < 65) return false;
+    out[0] = 0;
+    NSString *rid = e[@"id"];
+    if (![rid isKindOfClass:[NSString class]] || rid.length == 0 || rid.length > 64) return false;
+    NSData *u = [rid dataUsingEncoding:NSUTF8StringEncoding];
+    if (!u || u.length != rid.length) return false;   // ASCII only, bounded by the length check above
+    const char *s = (const char *)u.bytes;
+    for (NSUInteger i = 0; i < u.length; i++) {
+        char c = s[i];
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!ok) return false;
+    }
+    memcpy(out, s, u.length);
+    out[u.length] = 0;
+    return true;
+}
+
+static void reply_id_suffix(NSDictionary *e, char *out, size_t cap) {
+    out[0] = 0;
+    char terminated[65];
+    if (!reply_id_value(e, terminated, sizeof(terminated))) return;
+    snprintf(out, cap, ",\"id\":\"%s\"", terminated);
+}
 static void *files_get_worker(void *a) {
     files_get_arg *arg = (files_get_arg *)a;
-    struct stat st;
-    if (stat(arg->path, &st) != 0 || S_ISDIR(st.st_mode)) {
-        rctl_webrtc_files_send_text("{\"op\":\"err\",\"msg\":\"not found\"}"); free(arg); return NULL;
+    files_get_state *const self = arg->self;   // owned, registered by the handler
+    void *const sender = arg->sender;          // replies route to the requesting channel
+    char out[160];
+    int gfd = -1;
+    FILE *f = NULL;
+    uint8_t *buf = NULL;
+    bool cancelled = false;
+    const char *err = NULL;
+    struct stat gst = {};
+    if (!rctl_file_policy_open_read(arg->path, &gfd)) {
+        err = "protected";
+    } else {
+        if (fstat(gfd, &gst) != 0) {
+            err = "cannot open";
+        } else if (!(f = fdopen(gfd, "rb"))) {
+            close(gfd);
+            gfd = -1;
+            err = "cannot open";
+        }
     }
-    FILE *f = fopen(arg->path, "rb");
-    if (!f) { rctl_webrtc_files_send_text("{\"op\":\"err\",\"msg\":\"cannot open\"}"); free(arg); return NULL; }
-    const char *base = strrchr(arg->path, '/'); base = base ? base + 1 : arg->path;
-    NSString *nm = [NSString stringWithUTF8String:base] ?: @"file";
-    NSData *jd = [NSJSONSerialization dataWithJSONObject:@{@"op":@"get_meta", @"name":nm, @"size":@((long long)st.st_size)}
-                                                 options:0 error:nil];
-    char *meta = (char *)malloc(jd.length + 1); memcpy(meta, jd.bytes, jd.length); meta[jd.length] = 0;
-    rctl_webrtc_files_send_text(meta); free(meta);
-    const size_t CHUNK = 64 * 1024;
-    uint8_t *buf = (uint8_t *)malloc(CHUNK);
-    gFilesCancel = 0;
-    size_t n;
-    while (buf && (n = fread(buf, 1, CHUNK, f)) > 0) {
-        // Backpressure: don't let the SCTP send buffer balloon in memory.
-        while (rctl_webrtc_files_buffered() > (512u << 10) && !gFilesCancel) usleep(2000);
-        if (gFilesCancel) break;
-        rctl_webrtc_files_send_binary(buf, n);
+    if (!err) {
+        const char *base = strrchr(arg->path, '/'); base = base ? base + 1 : arg->path;
+        NSString *nm = [NSString stringWithUTF8String:base] ?: @"file";
+        // get_meta echoes the get id so the client can bind it to THIS fetch.
+        NSData *jd = [NSJSONSerialization dataWithJSONObject:arg->idval[0]
+            ? @{@"op":@"get_meta", @"name":nm, @"size":@((long long)gst.st_size), @"id":[NSString stringWithFormat:@"%s", arg->idval]}
+            : @{@"op":@"get_meta", @"name":nm, @"size":@((long long)gst.st_size)}
+                                                     options:0 error:nil];
+        char *meta = (char *)malloc(jd.length + 1); memcpy(meta, jd.bytes, jd.length); meta[jd.length] = 0;
+        rctl_webrtc_files_send_text_to(sender, meta); free(meta);
+        const size_t CHUNK = 64 * 1024;
+        buf = (uint8_t *)malloc(CHUNK);
+        size_t n;
+        while (buf && (n = fread(buf, 1, CHUNK, f)) > 0) {
+            // Backpressure: don't let the SCTP send buffer balloon in memory.
+            // A vanished requesting channel also ends the read: the generation
+            // lookup fails, so the worker must not stream the rest of the file
+            // to nobody.
+            while (rctl_webrtc_files_buffered_for(sender) > (512u << 10) &&
+                   self->cancel.load(std::memory_order_relaxed) == 0 &&
+                   rctl_webrtc_files_channel_alive(sender)) {
+                usleep(2000);
+            }
+            if (self->cancel.load(std::memory_order_relaxed) != 0 ||
+                !rctl_webrtc_files_channel_alive(sender)) {
+                break;
+            }
+            rctl_webrtc_files_send_binary_to(sender, buf, n);
+        }
+        cancelled = self->cancel.load(std::memory_order_relaxed) != 0;
+    } else {
+        snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"%s\"%s}", err, arg->idsuf);
+        rctl_webrtc_files_send_text_to(sender, out);
     }
-    free(buf); fclose(f);
-    rctl_webrtc_files_send_text(gFilesCancel ? "{\"op\":\"get_eof\",\"cancelled\":true}" : "{\"op\":\"get_eof\"}");
+    // EVERY exit releases the registration and the owned state. The eof is
+    // the terminal reply ONLY when no err went out (err and eof are mutually
+    // exclusive), and the suffix is copied BEFORE arg is freed — the exit
+    // path must never read the freed arg.
+    char eofSuffix[80];
+    memcpy(eofSuffix, arg->idsuf, sizeof(eofSuffix));
+    if (f) fclose(f); else if (gfd >= 0) close(gfd);
+    free(buf);
+    if (!err) {
+        char eof[160];
+        snprintf(eof, sizeof eof, "{\"op\":\"get_eof\",\"cancelled\":%s%s}",
+                 cancelled ? "true" : "false", eofSuffix);
+        rctl_webrtc_files_send_text_to(sender, eof);
+    }
+    pthread_mutex_lock(&gFilesLock);
+    files_get_unregister_locked(self);
+    pthread_mutex_unlock(&gFilesLock);
+    delete self;
     free(arg);
     return NULL;
 }
 
-static void on_files_message(const uint8_t *data, size_t len, int is_binary) {
+static void on_files_message(const uint8_t *data, size_t len, int is_binary, void *sender) {
     if (is_binary) {                       // upload chunk -> append to the open file
         pthread_mutex_lock(&gFilesLock);
-        if (gFilesUpload) { fwrite(data, 1, len, gFilesUpload); gFilesUploadBytes += (long)len; }
+        if (gFilesUpload && sender != gFilesUploadChannel) {
+            // Chunks from any other channel must not interleave into the
+            // owner's file: one transfer at a time, bound to its channel.
+            // They are dropped SILENTLY: the sender's own put was refused
+            // with an id-carrying err, so its attempt already stopped, and a
+            // reply to the queued chunks would only create an unattributable
+            // message on the wire.
+            pthread_mutex_unlock(&gFilesLock);
+            return;
+        }
+        if (gFilesUpload) {
+            size_t written = fwrite(data, 1, len, gFilesUpload);
+            gFilesUploadBytes += (long)written;
+            // A short write is recorded now: a later successful flush cannot
+            // turn a partial write into a successful upload.
+            if (written != len) gFilesUploadShort = true;
+            files_touch_activity_locked();
+        }
         pthread_mutex_unlock(&gFilesLock);
         return;
     }
@@ -339,30 +501,239 @@ static void on_files_message(const uint8_t *data, size_t len, int is_binary) {
     NSString *op = e[@"op"];
     if ([op isEqualToString:@"get"]) {
         NSString *p = e[@"path"]; if (![p isKindOfClass:[NSString class]]) return;
+        char idsuf[80]; reply_id_suffix(e, idsuf, sizeof(idsuf));
+        // Guard the BYTE representation the filesystem will see: NSString
+        // length counts UTF-16 units, while the fixed buffers hold UTF-8
+        // bytes. A multibyte path must not truncate into a different name.
+        NSData *utf8 = [p dataUsingEncoding:NSUTF8StringEncoding];
+        if (!utf8 || utf8.length >= 1024 || memchr(utf8.bytes, 0, utf8.length)) {
+            char out[160]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"bad path\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+            return;
+        }
         files_get_arg *arg = (files_get_arg *)calloc(1, sizeof(*arg));
-        if (!arg) return;
-        strncpy(arg->path, p.UTF8String, sizeof(arg->path) - 1);
-        pthread_t t; if (pthread_create(&t, NULL, files_get_worker, arg) == 0) pthread_detach(t); else free(arg);
+        files_get_state *self = NULL;
+        if (!arg || !(self = new files_get_state())) { free(arg); delete self; return; }
+        memcpy(arg->path, utf8.bytes, utf8.length);
+        arg->path[utf8.length] = 0;
+        arg->sender = sender;
+        memcpy(arg->idsuf, idsuf, sizeof(idsuf));
+        reply_id_value(e, arg->idval, sizeof(arg->idval));
+        arg->self = self;
+        // Register BEFORE spawning: the files channel is reliable+ordered, so
+        // a cancel that follows this get on the wire is processed after the
+        // registration and can never miss the worker.
+        pthread_mutex_lock(&gFilesLock);
+        files_get_register_locked(self, sender);
+        pthread_mutex_unlock(&gFilesLock);
+        pthread_t t;
+        if (pthread_create(&t, NULL, files_get_worker, arg) == 0) {
+            pthread_detach(t);
+        } else {
+            pthread_mutex_lock(&gFilesLock);
+            files_get_unregister_locked(self);
+            pthread_mutex_unlock(&gFilesLock);
+            delete self;
+            free(arg);
+        }
     } else if ([op isEqualToString:@"put"]) {
         NSString *p = e[@"path"]; if (![p isKindOfClass:[NSString class]]) return;
+        char idsuf[80]; reply_id_suffix(e, idsuf, sizeof(idsuf));
+        // One transfer at a time, bound to the requesting channel. The slot is
+        // RESERVED here, before any file is opened or truncated: two puts that
+        // race must produce one winner and one refusal, never a loser that
+        // opens-and-truncates the winner's file. The reservation is released
+        // on every failure path below.
         pthread_mutex_lock(&gFilesLock);
-        if (gFilesUpload) fclose(gFilesUpload);
-        gFilesUpload = fopen(p.UTF8String, "wb");
-        gFilesUploadBytes = 0;
-        int ok = gFilesUpload != NULL;
+        files_reap_stale_locked();
+        bool busy = gFilesUpload != NULL ||
+                    (gFilesUploadChannel != NULL && gFilesUploadChannel != sender);
+        if (!busy) {
+            gFilesUploadChannel = sender;   // reserve for this put
+            reply_id_value(e, gFilesUploadId, sizeof(gFilesUploadId));
+            files_touch_activity_locked();
+        }
         pthread_mutex_unlock(&gFilesLock);
-        if (!ok) rctl_webrtc_files_send_text("{\"op\":\"err\",\"msg\":\"cannot write\"}");
+        if (busy) {
+            char out[128]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"transfer in progress\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+            return;
+        }
+        NSData *utf8 = [p dataUsingEncoding:NSUTF8StringEncoding];
+        if (!utf8 || utf8.length >= 1024 || memchr(utf8.bytes, 0, utf8.length)) {
+            pthread_mutex_lock(&gFilesLock);
+            if (gFilesUploadChannel == sender && !gFilesUpload) {
+                gFilesUploadChannel = NULL;
+                gFilesUploadId[0] = 0;
+            }
+            pthread_mutex_unlock(&gFilesLock);
+            char out[128]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"bad path\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+            return;
+        }
+        // The walker strlen()s the path: hand it an explicitly terminated copy,
+        // not the unterminated NSData bytes.
+        char path_buf[1024];
+        memcpy(path_buf, utf8.bytes, utf8.length);
+        path_buf[utf8.length] = 0;
+        // The component-wise policy walk pins the resolved parent; the leaf
+        // is created through openat on that verified descriptor. Symlinked
+        // leaves, planted FIFOs, and multi-link objects are refused.
+        char leaf[256];
+        int dirfd = -1;
+        bool put_ok = false;
+        int pfd = -1;
+        int ok = 0;
+        // Fast pre-walk check (fail before the walk when the slot is gone);
+        // the AUTHORITATIVE check runs with the lock held across the whole
+        // openat/ftruncate/attach sequence below.
+        pthread_mutex_lock(&gFilesLock);
+        bool reservation_lost = gFilesUploadChannel != sender || gFilesUpload;
+        if (!reservation_lost) files_touch_activity_locked();
+        pthread_mutex_unlock(&gFilesLock);
+        if (reservation_lost) {
+            char out[128]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"transfer in progress\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+            return;
+        }
+        if (rctl_file_policy_open_write(path_buf, &dirfd, leaf, sizeof(leaf))) {
+            // From here to the attach the slot is HELD: an idle-reap cannot
+            // hand it to the REST push mid-section, and a concurrent put
+            // cannot slip between truncate and claim. The walk stays outside
+            // (no mutation); openat/ftruncate/fdopen are fast syscalls.
+            pthread_mutex_lock(&gFilesLock);
+            if (gFilesUploadChannel != sender || gFilesUpload) {
+                // Reservation lost (owner cancel/reap raced): do not touch
+                // any file.
+                close(dirfd);
+            } else {
+                files_touch_activity_locked();
+                pfd = openat(dirfd, leaf, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0644);
+                close(dirfd);
+                struct stat pst = {};
+                if (pfd >= 0 && fstat(pfd, &pst) == 0 &&
+                    S_ISREG(pst.st_mode) && pst.st_nlink <= 1) {
+                    if (ftruncate(pfd, 0) == 0) put_ok = true;
+                }
+                if (put_ok) {
+                    FILE *stream = fdopen(pfd, "wb");
+                    if (stream) {
+                        gFilesUpload = stream;   // THIS attempt's attach
+                        gFilesUploadBytes = 0;
+                        gFilesUploadShort = false;
+                    } else {
+                        close(pfd);              // fdopen must not leak the fd
+                        pfd = -1;
+                        put_ok = false;
+                    }
+                }
+                if (!put_ok && pfd >= 0) { close(pfd); pfd = -1; }   // the single close point
+            }
+            if (!put_ok) {
+                // Release OUR reservation; the loser never touched another
+                // writer's file.
+                if (gFilesUploadChannel == sender && !gFilesUpload) {
+                    gFilesUploadChannel = NULL;
+                    gFilesUploadId[0] = 0;
+                }
+            }
+            ok = put_ok;   // THIS attempt's outcome: another channel's stream is not our success
+            pthread_mutex_unlock(&gFilesLock);
+        } else {
+            // The walk failed before any mutation: release our reservation.
+            pthread_mutex_lock(&gFilesLock);
+            if (gFilesUploadChannel == sender && !gFilesUpload) {
+                gFilesUploadChannel = NULL;
+                gFilesUploadId[0] = 0;
+            }
+            pthread_mutex_unlock(&gFilesLock);
+        }
+        if (ok) {
+            // Strict handshake: the browser streams chunks only after this
+            // acceptance, so a refused or interrupted put can never write
+            // into a stream it does not own.
+            char started[128]; snprintf(started, sizeof started, "{\"op\":\"put_started\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, started);
+        } else {
+            char out[128]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"cannot write\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+        }
     } else if ([op isEqualToString:@"put_eof"]) {
+        char idsuf[80]; reply_id_suffix(e, idsuf, sizeof(idsuf));
+        // Snapshot and clear the ENTIRE upload state under one lock: a put or
+        // cancel on another session must not erase this upload's failure
+        // between the detach and the evaluation.
         pthread_mutex_lock(&gFilesLock);
+        // Only the OWNING channel's eof may end the transfer — and that holds
+        // for an in-progress reservation (stream not yet attached) just as
+        // much as for an attached stream: a straggler eof from another
+        // channel must neither close the owner's stream nor clear its slot.
+        if ((gFilesUpload || gFilesUploadChannel) && sender != gFilesUploadChannel) {
+            pthread_mutex_unlock(&gFilesLock);
+            char out[128]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"transfer in progress\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+            return;
+        }
         long bytes = gFilesUploadBytes;
-        if (gFilesUpload) { fclose(gFilesUpload); gFilesUpload = NULL; }
+        FILE *upload = gFilesUpload;
+        gFilesUpload = NULL;
+        gFilesUploadBytes = 0;
+        bool short_write = gFilesUploadShort;
+        gFilesUploadShort = false;
+        gFilesUploadChannel = NULL;
+        gFilesUploadId[0] = 0;
+        // Flush and close while the slot is still held: the eof releases the
+        // transfer, but a concurrent put to the same path must not be able to
+        // truncate a file whose buffered bytes are still landing on storage.
+        bool flushed = true;
+        if (upload) {
+            flushed = fflush(upload) == 0;
+            if (fclose(upload) != 0) flushed = false;   // always close, even after a failed flush
+        }
         pthread_mutex_unlock(&gFilesLock);
-        char out[96]; snprintf(out, sizeof out, "{\"op\":\"put_ok\",\"bytes\":%ld}", bytes);
-        rctl_webrtc_files_send_text(out);
+        if (!upload) {
+            // The put was refused (protected path, bad leaf): a trailing eof
+            // must not read as success.
+            char out[128]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"upload_refused\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+            return;
+        }
+        if (short_write || !flushed) {
+            // A short write or a failed flush is a failed upload: the client
+            // must see the refusal, not a byte count.
+            char out[128]; snprintf(out, sizeof out, "{\"op\":\"err\",\"msg\":\"write failed\"%s}", idsuf);
+            rctl_webrtc_files_send_text_to(sender, out);
+            return;
+        }
+        char out[112]; snprintf(out, sizeof out, "{\"op\":\"put_ok\",\"bytes\":%ld%s}", bytes, idsuf);
+        rctl_webrtc_files_send_text_to(sender, out);
     } else if ([op isEqualToString:@"cancel"]) {
-        gFilesCancel = 1;
+        char cid[65];
+        bool has_cid = reply_id_value(e, cid, sizeof(cid));
         pthread_mutex_lock(&gFilesLock);
-        if (gFilesUpload) { fclose(gFilesUpload); gFilesUpload = NULL; }
+        files_reap_stale_locked();
+        // Another session's cancel must not close someone else's upload or
+        // steal its reservation. A stale retry's cancel (its id names an
+        // attempt that is no longer the reservation) must not close a NEWER
+        // attempt's stream either, so the release matches the reserved id;
+        // an id-less cancel (legacy client) keeps the old owner-only rule.
+        if (sender == gFilesUploadChannel &&
+            (!has_cid || gFilesUploadId[0] == 0 || strcmp(cid, gFilesUploadId) == 0)) {
+            if (gFilesUpload) { fclose(gFilesUpload); gFilesUpload = NULL; }
+            gFilesUploadBytes = 0;
+            gFilesUploadShort = false;
+            gFilesUploadChannel = NULL;
+            gFilesUploadId[0] = 0;
+        }
+        // Downloads abort per channel: an id-carrying cancel is upload-scoped
+        // (a cleanup release must not kill the SAME channel's preview), while
+        // an id-less cancel keeps the legacy abort-whatever-is-running rule
+        // for this channel's gets only — never another session's.
+        if (!has_cid) {
+            for (files_get_state *w = gFilesGets; w; w = w->next) {
+                if (w->token == sender) w->cancel.store(1, std::memory_order_relaxed);
+            }
+        }
         pthread_mutex_unlock(&gFilesLock);
     }
 }
@@ -818,6 +1189,35 @@ static void pump_audio_frames_fd(int fd) {
     }
 }
 
+// Returns false when the decoded value would contain a NUL (which would make
+// every downstream C-string consumer see a truncated, different path) or when
+// the encoding is malformed (an incomplete % escape would pass raw garbage).
+static int rctl_hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static bool url_decode_strict(const char *in, char *out, size_t outsz) {
+    size_t o = 0;
+    for (size_t i = 0; in[i] && o + 1 < outsz; i++) {
+        char c = in[i];
+        if (c == '+') out[o++] = ' ';
+        else if (c == '%') {
+            if (!in[i+1] || !in[i+2]) return false;
+            int hi = rctl_hex_digit(in[i+1]), lo = rctl_hex_digit(in[i+2]);
+            if (hi < 0 || lo < 0) return false;
+            int value = (hi << 4) | lo;
+            if (value == 0) return false;   // an embedded NUL would truncate the path
+            out[o++] = (char)value;
+            i += 2;
+        } else out[o++] = c;
+    }
+    out[o] = 0;
+    return true;
+}
+
 static void url_decode(const char *in, char *out, size_t outsz) {
     size_t o = 0;
     for (size_t i = 0; in[i] && o + 1 < outsz; i++) {
@@ -828,6 +1228,22 @@ static void url_decode(const char *in, char *out, size_t outsz) {
         } else out[o++] = c;
     }
     out[o] = 0;
+}
+
+static bool get_param_strict(const char *query, const char *key, char *out, size_t outsz) {
+    // Same as get_param but refuses a value that would not fit: a silently
+    // capped path decodes into a different file than the client named.
+    size_t klen = strlen(key);
+    for (const char *p = query; p && *p; ) {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
+            const char *v = p + klen + 1, *e = strchr(v, '&');
+            size_t len = e ? (size_t)(e - v) : strlen(v);
+            if (len >= outsz) return false;
+            memcpy(out, v, len); out[len] = 0; return true;
+        }
+        p = strchr(p, '&'); if (p) p++;
+    }
+    return false;
 }
 
 static bool get_param(const char *query, const char *key, char *out, size_t outsz) {
@@ -1414,9 +1830,60 @@ static char *rctl_pkg_meta_json(const char *cid) {
 
 #include "GuestCameraTicket.inc"
 
+// POST /v1/push body, called with the file-transfer slot reserved: the P2P
+// flow and this endpoint share one slot, so a truncated-and-written target is
+// owned by exactly one writer at a time.
+static char *do_http_push(const char *query, const char *body, int body_len, int *status) {
+        char raw[1024], file[1024];
+        if (!get_param_strict(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        if (!url_decode_strict(raw, file, sizeof file)) { *status = 400; return strdup("{\"error\":\"bad path\"}"); }
+        // The component-wise policy walk pins the resolved parent: the leaf
+        // is created through openat on that verified descriptor, so no
+        // ancestor can be swapped between verdict and open. O_NOFOLLOW
+        // refuses a symlinked leaf, O_NONBLOCK fails a planted FIFO instead
+        // of blocking, and a multi-link object (a hard link into a protected
+        // tree) is refused before truncation.
+        char leaf[256];
+        int dirfd = -1;
+        if (!rctl_file_policy_open_write(file, &dirfd, leaf, sizeof(leaf))) {
+            *status = 403; return strdup("{\"error\":\"protected path\"}");
+        }
+        int pfd = openat(dirfd, leaf, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0644);
+        close(dirfd);
+        if (pfd >= 0) {
+            struct stat pst = {};
+            if (fstat(pfd, &pst) != 0 || !S_ISREG(pst.st_mode) || pst.st_nlink > 1) {
+                close(pfd);
+                pfd = -1;
+            } else if (ftruncate(pfd, 0) != 0) {
+                close(pfd);
+                pfd = -1;
+            }
+        }
+        if (pfd < 0) {
+            *status = errno == ELOOP || errno == ENXIO ? 403 : 500;
+            return strdup(errno == ELOOP || errno == ENXIO
+                              ? "{\"error\":\"protected path\"}"
+                              : "{\"error\":\"cannot write\"}");
+        }
+        if (body_len > 0) {
+        size_t written = 0;
+        while (written < (size_t)body_len) {
+            ssize_t k = write(pfd, body + written, (size_t)body_len - written);
+            if (k < 0 && errno == EINTR) continue;
+            if (k <= 0) { close(pfd); *status = 500; return strdup("{\"error\":\"write failed\"}"); }
+            written += (size_t)k;
+        }
+    }
+        close(pfd);
+        char out[96]; snprintf(out, sizeof out, "{\"ok\":true,\"bytes\":%d}", body_len);
+        return strdup(out);
+}
+
 static char *rest_handler(void *ctx, const char *method, const char *content_type,
                           const char *path, const char *query, const char *body,
-                          int body_len, int *status, int *out_len, const char **out_ctype) {
+                          int body_len, bool legacy_probe, int *status, int *out_len,
+                          const char **out_ctype) {
     *status = 200;
     if(char *guestCamera=guest_camera_internal(method,path,query,body,body_len,status))return guestCamera;
     // Owner mutations cannot reuse a guest-owned global capture/artifact. The
@@ -1479,6 +1946,9 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         });
         return rctl_local_access_json(true);
     } else if (!strcmp(path, "/v1/relay_status")) {
+        // The legacy loopback probe sees only counts: configured relay URLs
+        // are infrastructure details a health check must not carry.
+        if (legacy_probe) return rctl_relay_status_counts();
         return rctl_relay_status_json();
     } else if (!strcmp(path, "/v1/update_status")) {
         return rctl_update_status();
@@ -1616,6 +2086,16 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         if (strstr(result, "\"error\"")) *status = 503;
         return result;
     } else if (!strcmp(path, "/v1/deviceinfo")) {
+        // The credential-free probe proves SpringBoard IPC is alive; identity
+        // details (name, UDID, serial, IMEI) need the token or the relay hop.
+        // A SpringBoard timeout stays a 504 so the installed updater's
+        // runtime verification still fails closed.
+        if (legacy_probe) {
+            char *info = sb_query(RCTL_Q_DEVINFO, NULL, 0, 1.5);
+            if (!info) { *status = 504; return strdup("{\"error\":\"no reply from device\"}"); }
+            free(info);
+            return strdup("{\"ok\":true}");
+        }
         char *info = sb_query(RCTL_Q_DEVINFO, NULL, 0, 1.5);
         if (info) return info;            // SB already returns JSON
         *status = 504; return strdup("{\"error\":\"no reply from device\"}");
@@ -1651,7 +2131,7 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         *status = 400; return strdup("{\"error\":\"not a tweak path\"}");
     } else if (!strcmp(path, "/v1/owner")) {          // which package owns a file
         char raw[1024], pth[1024];
-        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        if (!get_param_strict(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
         url_decode(raw, pth, sizeof pth);
         return rctl_owner_json(pth);
     } else if (!strcmp(path, "/v1/pkg_files")) {      // files a package installed
@@ -1682,53 +2162,86 @@ static char *rest_handler(void *ctx, const char *method, const char *content_typ
         return run_script(body, status);
     } else if (!strcmp(path, "/v1/ls")) {
         char raw[1024], dir[1024];
-        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
-        url_decode(raw, dir, sizeof dir);
+        if (!get_param_strict(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        if (!url_decode_strict(raw, dir, sizeof dir)) { *status = 400; return strdup("{\"error\":\"bad path\"}"); }
         return list_dir(dir, status);
     } else if (!strcmp(path, "/v1/pull")) {       // download a file -> raw bytes
         char raw[1024], file[1024];
-        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
-        url_decode(raw, file, sizeof file);
-        struct stat st;
-        if (stat(file, &st) != 0) { *status = 404; return strdup("{\"error\":\"not found\"}"); }
-        if (S_ISDIR(st.st_mode))  { *status = 400; return strdup("{\"error\":\"is a directory\"}"); }
-        if (st.st_size > (64 << 20)) { *status = 400; return strdup("{\"error\":\"too large (>64MB)\"}"); }
-        FILE *f = fopen(file, "rb");
-        if (!f) { *status = 500; return strdup("{\"error\":\"cannot open\"}"); }
-        long sz = st.st_size; char *buf = (char *)malloc(sz > 0 ? sz : 1);
-        size_t rd = fread(buf, 1, sz, f); fclose(f);
+        if (!get_param_strict(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
+        if (!url_decode_strict(raw, file, sizeof file)) { *status = 400; return strdup("{\"error\":\"bad path\"}"); }
+        // The component-wise policy walk pins the object itself: the fd is
+        // the checked object, symlinks and hard links are refused inside the
+        // walk, and O_NONBLOCK keeps a planted FIFO from blocking.
+        int rfd = -1;
+        if (!rctl_file_policy_open_read(file, &rfd)) {
+            *status = 403; return strdup("{\"error\":\"protected path\"}");
+        }
+        struct stat rst = {};
+        if (fstat(rfd, &rst) != 0 || rst.st_size > (64 << 20)) {
+            close(rfd);
+            *status = rst.st_size > (64 << 20) ? 400 : 500;
+            return strdup(rst.st_size > (64 << 20) ? "{\"error\":\"too large (>64MB)\"}" : "{\"error\":\"cannot open\"}");
+        }
+        long sz = (long)rst.st_size; char *buf = (char *)malloc(sz > 0 ? sz : 1);
+        if (!buf) { close(rfd); *status = 500; return strdup("{\"error\":\"out of memory\"}"); }
+        size_t rd = 0;
+        while (rd < (size_t)sz) {
+            ssize_t k = read(rfd, buf + rd, (size_t)sz - rd);
+            if (k < 0 && errno == EINTR) continue;
+            if (k <= 0) break;
+            rd += (size_t)k;
+        }
+        close(rfd);
         *out_len = (int)rd; *out_ctype = "application/octet-stream";
         return buf;
     } else if (!strcmp(path, "/v1/push")) {       // upload: POST body bytes -> file
-        char raw[1024], file[1024];
-        if (!get_param(query, "path", raw, sizeof raw)) { *status = 400; return strdup("{\"error\":\"path required\"}"); }
-        url_decode(raw, file, sizeof file);
-        FILE *f = fopen(file, "wb");
-        if (!f) { *status = 500; return strdup("{\"error\":\"cannot write\"}"); }
-        if (body_len > 0) fwrite(body, 1, body_len, f);
-        fclose(f);
-        char out[96]; snprintf(out, sizeof out, "{\"ok\":true,\"bytes\":%d}", body_len);
-        return strdup(out);
+        if (strcmp(method, "POST") != 0) {
+            // A GET here would truncate the file before any body existed.
+            *status = 405; return strdup("{\"error\":\"use_post\"}");
+        }
+        // The REST push and a P2P upload must never write one target at the
+        // same time, and a check-then-act would let a put reserve between
+        // this check and the truncate. The push therefore holds the SAME
+        // slot the P2P flow uses, for the whole write; a put arriving during
+        // it is refused with transfer-in-progress, and a put that reserved
+        // first refuses the push.
+        pthread_mutex_lock(&gFilesLock);
+        files_reap_stale_locked();
+        if (gFilesUploadChannel != NULL) {
+            pthread_mutex_unlock(&gFilesLock);
+            *status = 409; return strdup("{\"error\":\"transfer_in_progress\"}");
+        }
+        gFilesUploadChannel = &g_http_push_owner;   // never a channel token
+        gFilesUploadId[0] = 0;
+        pthread_mutex_unlock(&gFilesLock);
+        char *result = do_http_push(query, body, body_len, status);
+        pthread_mutex_lock(&gFilesLock);
+        if (gFilesUploadChannel == &g_http_push_owner) {
+            gFilesUploadChannel = NULL;
+            gFilesUploadId[0] = 0;
+        }
+        pthread_mutex_unlock(&gFilesLock);
+        return result;
     } else if (!strcmp(path, "/v1/rm")) {
         NSDictionary *json = rctl_json_object(body, body_len);
         NSString *requested = [json[@"path"] isKindOfClass:[NSString class]] ? json[@"path"] : nil;
         if (!requested) { *status = 400; return rctl_json_error("path_required"); }
         char *error = NULL;
         if (!rctl_confirm_destructive(json, "file_delete", requested, status, &error)) return error;
-        char target[PATH_MAX];
-        if (!rctl_destructive_normalize_path(requested.fileSystemRepresentation, target, sizeof(target))) {
-            *status = 400; return rctl_json_error("invalid_path");
-        }
-        NSString *normalized = [NSString stringWithUTF8String:target];
-        NSString *parent = normalized.stringByDeletingLastPathComponent;
-        NSString *name = normalized.lastPathComponent;
-        int parent_fd = open(parent.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        // The component-wise policy walk pins the resolved parent; the delete
+        // goes through unlinkat on that verified descriptor, so the object
+        // removed is exactly the one the verdict covered.
+        char leaf[256];
+        int parent_fd = -1;
         struct stat st = {};
         int rc = -1;
-        if (parent_fd >= 0 && fstatat(parent_fd, name.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-            rc = unlinkat(parent_fd, name.fileSystemRepresentation, S_ISDIR(st.st_mode) ? AT_REMOVEDIR : 0);
+        if (!rctl_file_policy_open_delete(requested.fileSystemRepresentation ?: "", &parent_fd, leaf, sizeof(leaf))) {
+            *status = 403; return strdup("{\"error\":\"protected path\"}");
         }
-        if (parent_fd >= 0) close(parent_fd);
+        if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+            rc = unlinkat(parent_fd, leaf, S_ISDIR(st.st_mode) ? AT_REMOVEDIR : 0);
+        }
+        close(parent_fd);
         if (rc != 0) { *status = 500; return strdup("{\"error\":\"delete failed\"}"); }
     } else if (!strcmp(path, "/v1/say")) {            // FX: speak text aloud
         char raw[2048], text[2048];
@@ -2391,6 +2904,10 @@ int main(int argc, char **argv) {
     @autoreleasepool {
         configure_memory_limit();
         dlog("rctld started");
+        // Provision the device identity BEFORE any thread that reads it: the
+        // HTTP gate and the relay hop both compare against these values, and
+        // a failure leaves the gated surface closed (probes still answer).
+        if (!rctl_device_identity_provision()) dlog("device token provisioning FAILED");
         rctl_relay_start();
 
         // Port 8080 may briefly still be held by the old SpringBoard-hosted server
@@ -2416,7 +2933,7 @@ int main(int argc, char **argv) {
         rctl_webrtc_set_guest_input_cb(on_guest_input, on_guest_end);
         rctl_guest_dispatcher_init(guest_device_action);
         guest_recording_limits_init();
-        rctl_webrtc_set_files_cb(on_files_message);                 // file transfer over the files DataChannel
+        rctl_webrtc_set_files_cb(on_files_message);   // sender-token-bound file transfer
         dlog(localAccessEnabled ? "http listening on LAN :8080" : "http listening on loopback :8080");
         rctl_camera_set_expired_cb(on_camera_lease_expired);
         if (!rctl_vmic_server_start()) dlog("virtual mic server start FAILED");

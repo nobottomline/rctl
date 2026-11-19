@@ -570,7 +570,10 @@ public final class RctlRealtimeSession: NSObject, @unchecked Sendable {
             throw RctlRealtimeError.invalidSignalingResponse
         }
         if let localAddress {
-            guard request.allHTTPHeaderFields?.isEmpty != false,
+            // The LAN token travels as exactly one header; no cookie, no
+            // authorization header, and no other credential carrier.
+            let headers = request.allHTTPHeaderFields ?? [:]
+            guard headers.isEmpty || (headers.count == 1 && headers["X-Rctl-Token"] != nil),
                   !request.httpShouldHandleCookies,
                   url == localAddress.signalingRequest().url || url == localAddress.signalingRequest(camera: true).url else {
                 throw RctlRealtimeError.invalidSignalingResponse

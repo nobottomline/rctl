@@ -49,7 +49,13 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const download = (e: Entry) => downloadFile(join(path, e.name), e.name)
+  const download = async (e: Entry) => {
+    try {
+      await downloadFile(join(path, e.name), e.name)
+    } catch {
+      setStatus({ text: '⚠ download failed', kind: 'err' })
+    }
+  }
 
   const del = async () => {
     if (!deleteTarget) return
@@ -66,16 +72,65 @@ export default function FilesPanel({ transfer, onClose }: { transfer: FileTransf
     }
   }
 
+  const pickSeq = useRef(0)
   const onPick = async () => {
     const f = fileInput.current?.files?.[0]
     if (!f) return
     const dest = join(path, f.name)
     if (fileInput.current) fileInput.current.value = ''
-    if (await transfer.upload(f, dest)) return // P2P; onDone reloads
+    // The LATEST pick owns the banner: both status writers (the transfer's
+    // progress/refusal stream and this handler's own verdict messages) are
+    // gated by the pick sequence, so an older pick's settlement can never
+    // overwrite the newer pick's instruction.
+    const mySeq = ++pickSeq.current
+    const setPickStatus: (s: TransferStatus) => void = (s) => {
+      if (pickSeq.current === mySeq) setStatus(s)
+    }
+    transfer.onStatus = setPickStatus
+    const outcome = await transfer.upload(f, dest)
+    if (outcome === 'confirmed') return    // P2P accepted; onDone reloads
+    if (outcome === 'refused') {
+      // The device refused the write: retrying over HTTP would just repeat it.
+      setPickStatus({ text: '⚠ upload refused', kind: 'err' })
+      load(pathRef.current)
+      return
+    }
+    if (outcome === 'busy') {
+      // The transfer already showed the precise instruction; this pick's own
+      // outcome decides, so a finishing older attempt cannot overwrite it.
+      setPickStatus({ text: '⚠ upload busy', kind: 'err' })
+      load(pathRef.current)
+      return
+    }
+    if (outcome === 'unsupported') {
+      // This connection cannot carry the file (a legacy daemon's P2P is
+      // unattributable and the relayed HTTP fallback is body-capped): the
+      // transfer already explained; do not blind-push a 413.
+      load(pathRef.current)
+      return
+    }
+    if (outcome === 'unconfirmed') {
+      // The P2P write's acknowledgement never arrived: the daemon may still
+      // be writing the chunks, and an HTTP re-push would truncate the file.
+      // Tell the user to retry explicitly instead.
+      setPickStatus({ text: '⚠ upload unconfirmed — retry', kind: 'err' })
+      load(pathRef.current)
+      return
+    }
+    // HTTP fallback ('none'): hold the transport-agnostic upload slot across
+    // the WHOLE cycle, so two picks can never race one target's writes.
+    if (!transfer.claimUploadSlot()) {
+      setPickStatus({ text: '⚠ upload busy', kind: 'err' })
+      load(pathRef.current)
+      return
+    }
     try {
-      await api(`/v1/push?path=${enc(dest)}`, { method: 'POST', body: await f.arrayBuffer() })
+      const response = await api(`/v1/push?path=${enc(dest)}`, { method: 'POST', body: await f.arrayBuffer() })
+      if (!response.ok) setPickStatus({ text: '⚠ upload rejected', kind: 'err' })
     } catch {
-      /* ignore */
+      setPickStatus({ text: '⚠ upload failed', kind: 'err' })
+    } finally {
+      transfer.releaseUploadSlot()
     }
     load(path)
   }

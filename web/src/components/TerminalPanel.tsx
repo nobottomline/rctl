@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { Eraser, Power, X } from 'lucide-react'
-import { termWS } from '../lib/rctl'
+import { bootstrapLAN, lanAuthorized, termWS, wsProtocols } from '../lib/rctl'
 import { cn } from '../lib/cn'
 
 // Root terminal: xterm.js backed by rctld's PTY bridge over a WebSocket. Wire
@@ -14,7 +14,7 @@ import { cn } from '../lib/cn'
 // soft keyboard lacks), visualViewport sizing so the keyboard never hides the
 // prompt, tap-to-focus to summon the keyboard, and safe-area insets. Mounted only
 // while open, so xterm is created lazily on demand.
-type State = 'disconnected' | 'connecting' | 'connected' | 'error'
+type State = 'disconnected' | 'connecting' | 'connected' | 'error' | 'unauthorized'
 
 const THEME = {
   background: '#050506', foreground: '#f2f2f7', cursor: '#ffffff', selectionBackground: '#3a5f9f',
@@ -46,6 +46,7 @@ const STATE_DOT: Record<State, string> = {
   connected: 'bg-green-400',
   connecting: 'bg-yellow-400',
   error: 'bg-red-400',
+  unauthorized: 'bg-red-400',
   disconnected: 'bg-white/30',
 }
 
@@ -92,25 +93,55 @@ export default function TerminalPanel({ onClose }: { onClose: () => void }) {
     ws.send(pkt)
     termRef.current?.focus()
   }
+  const connectingRef = useRef(false)
   const connect = () => {
     const term = termRef.current
     if (!term) return
+    if (connectingRef.current) return
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return
-    const ws = new WebSocket(termWS(term.cols || 100, term.rows || 30))
-    ws.binaryType = 'arraybuffer'
-    wsRef.current = ws
-    setState('connecting')
-    ws.onopen = () => {
-      setState('connected')
-      term.focus()
-      sendResize(term.cols, term.rows)
-    }
-    ws.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) term.write(decRef.current.decode(new Uint8Array(e.data), { stream: true }))
-      else term.write(String(e.data))
-    }
-    ws.onclose = () => setState('disconnected')
-    ws.onerror = () => setState('error')
+    // The WS handshake carries the token as its subprotocol: if the startup
+    // bootstrap had not succeeded yet, fetch it once before dialing.
+    connectingRef.current = true
+    void (async () => {
+      // The guard is held across bootstrap AND the handshake: it releases in
+      // onopen/onclose only, so a socket stuck in CONNECTING still owns wsRef
+      // and no second dial can overwrite it. A bootstrap failure or a panel
+      // teardown releases through this cleanup below.
+      let released = false
+      const release = () => { if (!released) { released = true; connectingRef.current = false } }
+      try {
+        if (!lanAuthorized() && !(await bootstrapLAN())) {
+          setState('unauthorized')
+          release()
+          return
+        }
+        if (termRef.current !== term) { release(); return }  // the panel closed while bootstrapping
+        const ws = new WebSocket(termWS(term.cols || 100, term.rows || 30), wsProtocols())
+        ws.binaryType = 'arraybuffer'
+        wsRef.current = ws
+        setState('connecting')
+        ws.onopen = () => {
+          release()
+          setState('connected')
+          term.focus()
+          sendResize(term.cols, term.rows)
+        }
+        ws.onmessage = (e) => {
+          if (e.data instanceof ArrayBuffer) term.write(decRef.current.decode(new Uint8Array(e.data), { stream: true }))
+          else term.write(String(e.data))
+        }
+        ws.onclose = () => {
+          release()
+          setState('disconnected')
+        }
+        ws.onerror = () => setState('error')
+        // The socket now owns the guard: onopen/onclose release it. (A throw
+        // between creation and registration cannot leave the panel dialing —
+        // handlers are assigned synchronously next to creation.)
+      } catch {
+        release()
+      }
+    })()
   }
   const disconnect = () => {
     if (wsRef.current) {

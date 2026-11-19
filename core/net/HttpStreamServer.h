@@ -53,7 +53,9 @@ void rctl_http_set_key(rctl_http_server *s, rctl_key_cb cb, void *ctx);
 // Register a handler for the REST automation API (any "/v1/..." request). Gets the
 // HTTP method, normalized Content-Type, path ("/v1/tap"), raw query string (after
 // '?', may be ""), request body (POST, may be "") and its byte length `body_len`
-// (for binary uploads — `body` may contain NULs). Returns a malloc'd response body
+// (for binary uploads — `body` may contain NULs), and the `legacy_probe` flag
+// (a token-less legacy loopback health probe — the handler must omit sensitive
+// data, e.g. configured relay URLs). Returns a malloc'd response body
 // (server frees it) and sets
 // *status (e.g. 200, 400, 404). Return NULL to send an empty 200.
 //   *out_ctype — set this to send a raw binary response: exactly *out_len bytes
@@ -62,7 +64,7 @@ void rctl_http_set_key(rctl_http_server *s, rctl_key_cb cb, void *ctx);
 //   *out_len   — byte count for the binary response (used only when out_ctype set).
 typedef char *(*rctl_rest_cb)(void *ctx, const char *method, const char *content_type,
                               const char *path, const char *query, const char *body,
-                              int body_len, int *status,
+                              int body_len, bool legacy_probe, int *status,
                               int *out_len, const char **out_ctype);
 void rctl_http_set_rest(rctl_http_server *s, rctl_rest_cb cb, void *ctx);
 

@@ -32,7 +32,16 @@ async function environment(t, permissions = ['screen.view'], supported = true) {
     RCTL_GUEST_BOOTSTRAP: permissions ? { permissions, allow_direct: false } : null }
   if (supported) window.RTCPeerConnection = Peer
   const globals = { window, location: { protocol: 'https:', host: 'relay.example.invalid' },
-    WebSocket: Socket, RTCPeerConnection: Peer, fetch: () => { throw new Error('Unexpected owner HTTP request') } }
+    WebSocket: Socket, RTCPeerConnection: Peer,
+    // Device-local paths bootstrap the LAN token first; any other owner HTTP
+    // request is a test bug.
+    fetch: (input) => {
+      const url = typeof input === 'string' ? input : input.url
+      if (url === '/v1/bootstrap') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'a'.repeat(64) }) })
+      }
+      throw new Error('Unexpected owner HTTP request')
+    } }
   for (const [key, value] of Object.entries(globals)) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, key)
     Object.defineProperty(globalThis, key, { configurable: true, value })
@@ -186,7 +195,7 @@ test('stopping before readiness does not create a late peer', async t => {
 
 test('camera receives TURN at construction and ignores readiness after stop', async t => {
   const { camera, ready, ice, peers } = await environment(t)
-  camera.start()
+  await camera.start()
   assert.equal(peers.length, 0)
   await ready()
   assert.deepEqual(peers[0].config.iceServers, ice)
@@ -198,7 +207,7 @@ test('camera receives TURN at construction and ignores readiness after stop', as
 
 test('device-local camera negotiates without relay readiness', async t => {
   const { camera, sockets, peers } = await environment(t, null)
-  camera.start()
+  await camera.start()
   await sockets[0].onmessage({ data: JSON.stringify({ kind: 'offer', payload: { sdp: 'synthetic-camera-offer' } }) })
   assert.equal(peers.length, 1)
   assert.equal(peers[0].remoteDescription.sdp, 'synthetic-camera-offer')
@@ -207,7 +216,7 @@ test('device-local camera negotiates without relay readiness', async t => {
 
 test('guest camera cannot negotiate before receiving ICE policy', async t => {
   const { camera, sockets, peers, video } = await environment(t)
-  camera.start()
+  await camera.start()
   await sockets[0].onmessage({ data: JSON.stringify({ kind: 'offer', payload: { sdp: 'synthetic-camera-offer' } }) })
   assert.equal(peers.length, 0)
   assert.equal(video.srcObject, null)
