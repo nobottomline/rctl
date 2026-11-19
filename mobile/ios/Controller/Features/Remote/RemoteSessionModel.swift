@@ -191,8 +191,15 @@ final class RemoteSessionModel: ObservableObject {
                 guard let relayProfile else { throw ControllerClientError.corruptCredential }
                 return try await appModel.signalingRequest(deviceID: deviceID, media: selectedMedia, expectedProfile: relayProfile)
             case let .local(address):
-                _ = try await localClient.capabilities(at: address, camera: selectedMedia == .camera)
-                return address.signalingRequest(camera: selectedMedia == .camera)
+                // capabilitiesAuthenticating already re-probes once after a
+                // gate rejection; a bootstrap failure fails the preparation
+                // closed instead of dialing signaling token-less.
+                _ = try await localClient.capabilitiesAuthenticating(at: address, camera: selectedMedia == .camera)
+                var request = address.signalingRequest(camera: selectedMedia == .camera)
+                if let token = try await localClient.bootstrapToken(for: address) {
+                    request.setValue(token, forHTTPHeaderField: "X-Rctl-Token")
+                }
+                return request
             }
         }
         preparationTask = preparation
@@ -224,6 +231,12 @@ final class RemoteSessionModel: ObservableObject {
             if let error = error as? URLError,
                [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
                 .dnsLookupFailed, .notConnectedToInternet].contains(error.code) {
+                scheduleReconnect()
+            }
+            // A 403 from the token gate means the cached credential decision
+            // was stale (the cache is dropped before this point): the next
+            // attempt re-probes bootstrap, so treat it as retryable.
+            else if case LocalConnectionError.http(403) = error {
                 scheduleReconnect()
             }
         }

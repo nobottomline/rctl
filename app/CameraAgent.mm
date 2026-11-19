@@ -348,7 +348,7 @@ static NSDictionary *camera_fetch_state(void) {
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     char request[256];
-    snprintf(request,sizeof request,"GET /v1/cam_agent_state?agent=%s&stopped=%llu&pid=%d HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",gCameraAgentIdentity,(unsigned long long)atomic_load(&gCameraStoppedGeneration),getpid());
+    snprintf(request,sizeof request,"GET /v1/cam_agent_state?agent=%s&stopped=%llu&pid=%d HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nX-Rctl-Camera-Ipc: 1\r\nConnection: close\r\n\r\n",gCameraAgentIdentity,(unsigned long long)atomic_load(&gCameraStoppedGeneration),getpid());
     if (!camera_write_full(fd, request, strlen(request))) {
         close(fd);
         return nil;

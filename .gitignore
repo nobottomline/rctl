@@ -48,3 +48,4 @@ relay-config.plist
 relay/.env
 relay/data/
 relay/rctl-relay
+__pycache__/

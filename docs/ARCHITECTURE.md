@@ -331,9 +331,16 @@ NAT traversal. Large file downloads use the authenticated relay stream tunnel;
 normal REST calls use the bounded HTTP request/response tunnel. See `RELAY.md`
 and `TRANSPORT.md` for protocol and deployment invariants.
 
-The local `:8080` service remains intentionally independent and unauthenticated
-for LAN/USB operation by default. An approved relay administrator may explicitly
-select Relay-only mode, which binds the same service to loopback so the on-device
+The local `:8080` service remains intentionally independent for LAN/USB
+operation by default, with one request gate in `HttpStreamServer`: a single
+Host check bound to the connection's actual local socket address, and a
+device-generated LAN token (`/var/db/rctl/lan.token`, delivered only through
+the header-gated `/v1/bootstrap`) required on every control route. The relay
+tunnel authenticates to the gate with an in-memory hop credential, Relay-only
+mode disables direct control except the legacy loopback health probes, and the
+camera agents keep a dedicated loopback IPC route. See `docs/SECURITY.md` for
+the full policy. An approved relay administrator may explicitly select
+Relay-only mode, which binds the same service to loopback so the on-device
 relay tunnel still works. It must never be exposed directly to the public
 internet; internet clients terminate TLS and authenticate at the relay.
 
@@ -391,7 +398,9 @@ Discovery is not authentication. See `protocol/discovery-v1.md` and
   scripts own no persistent TCC rows and therefore delete none on uninstall. TCC
   is still per-process, so this boundary must be revalidated for every supported
   jailbreak/iOS combination.
-- **`:8080` is intentionally unauthenticated.** Its default all-interface bind is
+- **`:8080` is token-gated against drive-by web attacks, not authenticated
+  against a LAN peer**: the token arrives via plaintext bootstrap and any
+  native program on the network can fetch it. Its default all-interface bind is
   only supported on a fully trusted LAN or USB tunnel. Relay-only mode restricts
   it to loopback; internet access uses the authenticated TLS relay (see §6 and
   `docs/SECURITY.md`).
@@ -420,7 +429,7 @@ compatibility matrix, path inventory and acceptance gates are in
   arm64e device, including authenticated forced-TURN media/control over UDP and
   TCP. Other jailbreak/iOS combinations and the bare-IP TLS profile remain
   separate qualification lanes (§6, §9).
-- Local `:8080` has no authentication by design; use trusted LAN/USB networks or
-  the explicit loopback-only policy (§6, §8).
+- Local `:8080` gates drive-by access only; trust still comes from the network
+  (§6, §8). Use trusted LAN/USB networks or the explicit loopback-only policy.
 - Camera works only with an app foreground (§5).
 - Settings/PreferenceBundle — deferred ("we don't know what they'll be yet").

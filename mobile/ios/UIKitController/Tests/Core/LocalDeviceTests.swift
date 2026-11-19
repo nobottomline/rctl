@@ -167,9 +167,10 @@ final class LocalDeviceTests: XCTestCase {
         XCTAssertEqual(session.accessPath.label, "LAN")
         session.disconnect()
 
-        // The relay model uses the same stub: only the two LAN preflights started.
+        // The relay model uses the same stub: two LAN preflights, each
+        // preceded by its token bootstrap (the local API is token-gated).
         XCTAssertEqual(CoreRequestStub.requests.count("/v1/capabilities"), 2)
-        XCTAssertEqual(CoreRequestStub.requests.totalCount, 2, "Local screens never contact a relay")
+        XCTAssertEqual(CoreRequestStub.requests.totalCount, 4, "Local screens never contact a relay")
         XCTAssertEqual(try relayProfiles.loadAll(), [])
         XCTAssertNil(relay.profile)
         XCTAssertNil(defaults.data(forKey: "rctl.controller.profile.v1"))
@@ -324,6 +325,10 @@ final class LocalDeviceTests: XCTestCase {
     private func pendingRequest() async throws -> CoreRequestStub {
         let deadline = CoreTestDeadline(seconds: 3)
         while deadline.hasTimeRemaining {
+            if let bootstrap = CoreRequestStub.requests.take("/v1/bootstrap") {
+                bootstrap.respond("{\"error\":\"bootstrap_absent_legacy_daemon\"}", status: 404)
+                continue
+            }
             if let request = CoreRequestStub.requests.take("/v1/capabilities") { return request }
             try await Task.sleep(seconds: 0.01)
         }

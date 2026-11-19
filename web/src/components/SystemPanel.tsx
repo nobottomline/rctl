@@ -214,10 +214,15 @@ export default function SystemPanel({ onClose }: { onClose: () => void }) {
     await load('tweaks', true)
     setNeedRespring(true)
   }
-  const download = (path: string) => {
+  const download = async (path: string) => {
     setMenu(null)
     const name = baseName(path).trim() || 'file'
-    downloadFile(path, name)
+    try {
+      await downloadFile(path, name)
+    } catch {
+      setNote('Download failed. Try again.')
+      window.setTimeout(() => setNote(null), 2400)
+    }
   }
   const copy = (text: string) => {
     setMenu(null)

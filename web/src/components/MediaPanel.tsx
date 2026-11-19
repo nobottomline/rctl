@@ -14,7 +14,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { apiJSON, downloadFile, rctlPath } from '../lib/rctl'
+import { api, apiJSON, downloadFile, fetchBlob, rctlPath } from '../lib/rctl'
 import { fmtSize, type FileTransfer } from '../lib/files'
 import { cn } from '../lib/cn'
 import { Sheet } from './Sheet'
@@ -70,7 +70,7 @@ function mediaType(name: string) {
 async function clipboardPNG(asset: Asset) {
   if (!window.isSecureContext || !navigator.clipboard?.write || typeof ClipboardItem === 'undefined')
     throw new Error('Copy image requires HTTPS. Use Download on a local HTTP connection.')
-  const response = await fetch(rctlPath(`/v1/media_preview?id=${encodeURIComponent(asset.id)}`))
+  const response = await api(rctlPath(`/v1/media_preview?id=${encodeURIComponent(asset.id)}`))
   if (!response.ok) throw new Error('Could not load the image preview.')
   const source = await response.blob()
   const url = URL.createObjectURL(source)
@@ -116,9 +116,13 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
     window.setTimeout(() => setNote(''), 2400)
   }
 
-  const download = (asset: Asset) => {
+  const download = async (asset: Asset) => {
     setMenu(null)
-    downloadFile(asset.path, asset.name)
+    try {
+      await downloadFile(asset.path, asset.name)
+    } catch {
+      notify('Download failed. Try again.')
+    }
   }
 
   const copy = async (asset: Asset) => {
@@ -283,7 +287,7 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
                 >
                   <MediaThumbnail
                     key={`${asset.id}:${generation}`}
-                    src={rctlPath(`/v1/media_thumb?id=${encodeURIComponent(asset.id)}&v=${generation}`)}
+                    path={rctlPath(`/v1/media_thumb?id=${encodeURIComponent(asset.id)}&v=${generation}`)}
                     video={asset.type === 'video'}
                     className="size-full object-cover transition-opacity duration-150 group-active:opacity-80"
                   />
@@ -367,13 +371,58 @@ export default function MediaPanel({ transfer, onClose }: { transfer: FileTransf
   )
 }
 
-function MediaThumbnail({ src, video, className }: { src: string; video: boolean; className: string }) {
+function MediaThumbnail({ path, video, className }: { path: string; video: boolean; className: string }) {
+  const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    setUrl(null)
+    setFailed(false)
+    let alive = true
+    let objectURL: string | null = null
+    fetchBlob(path).then((blob) => {
+      if (!alive) return
+      if (!blob) { setFailed(true); return }
+      objectURL = URL.createObjectURL(blob)
+      setUrl(objectURL)
+    })
+    return () => {
+      alive = false
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    }
+  }, [path])
   if (failed) {
     const Icon = video ? Film : ImageIcon
     return <span className="grid size-full place-items-center text-muted" title="Preview unavailable"><Icon className="size-8" /></span>
   }
-  return <img src={src} alt="" loading="lazy" className={className} onError={() => setFailed(true)} />
+  if (!url) return <span className={className} />
+  return <img src={url} alt="" className={className} />
+}
+
+// The compressed preview inside the viewer: fetched authorized like the
+// thumbnails, since an <img src> cannot carry the token header. A decode
+// failure after a successful fetch surfaces as an empty frame.
+function MediaPreviewImage({ path, alt, className }: { path: string; alt: string; className: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    setUrl(null)
+    setFailed(false)
+    let alive = true
+    let objectURL: string | null = null
+    fetchBlob(path).then((blob) => {
+      if (!alive) return
+      if (!blob) { setFailed(true); return }
+      objectURL = URL.createObjectURL(blob)
+      setUrl(objectURL)
+    })
+    return () => {
+      alive = false
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path])
+  if (!url || failed) return null
+  return <img src={url} alt={alt} className={className} onError={() => setFailed(true)} />
 }
 
 function MediaMenu({
@@ -526,10 +575,10 @@ function MediaViewer({
           />
         )}
         {!loaded && asset.type === 'photo' && (
-          <img src={preview} alt={asset.name} className="max-h-full max-w-full object-contain" />
+          <MediaPreviewImage path={preview} alt={asset.name} className="max-h-full max-w-full object-contain" />
         )}
         {!loaded && asset.type === 'video' && (
-          <MediaThumbnail key={asset.id} src={thumb} video className="size-full object-contain opacity-55" />
+          <MediaThumbnail key={asset.id} path={thumb} video className="size-full object-contain opacity-55" />
         )}
         {!loaded && (asset.type === 'video' || asset.animated || asset.live) && (
           <div className="absolute inset-0 grid place-items-center bg-black/25">

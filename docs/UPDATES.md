@@ -197,7 +197,20 @@ before making the release immutable.
    exact Debian package version from dpkg, live daemon package version and
    protocol via `/v1/capabilities`, SpringBoard IPC via `/v1/deviceinfo`, and at
    least one relay connection via `/v1/relay_status` when a paired relay was
-   present before the update.
+   present before the update. These three probes are the only token-less routes
+   on the device HTTP surface (both socket endpoints must be loopback, exact
+   GET, no query), so an installed updater keeps verifying newer daemons
+   without carrying the LAN token, and upgrades never roll back because of the
+   token gate. The probe answers are trimmed: `/v1/relay_status` reports only
+   counts, never configured relay URLs, and a credential-free `/v1/deviceinfo`
+   answers only SpringBoard-IPC liveness (504 on a SpringBoard timeout), never
+   device identity. `/v1/capabilities` lists a `lan.token_gate` feature so a
+   future updater can require a provisioned token; the installed updater does
+   not, which is a documented limitation of the transitional update: a failed
+   token provisioning still verifies daemon, SpringBoard, and relay health
+   while direct LAN control stays closed. The LAN token itself lives outside
+   the payload and the update state tree, so install, upgrade, and rollback
+   all preserve it.
 8. Any install error, failed verification, parent exit, stale heartbeat, or
    watchdog deadline triggers the same clean remove/install flow with the
    verified previous package.

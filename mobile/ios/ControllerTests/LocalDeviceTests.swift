@@ -260,6 +260,12 @@ final class LocalDeviceTests: XCTestCase {
     private func pendingRequest() async throws -> RequestStub {
         let deadline = ContinuousClock.now + .seconds(3)
         while ContinuousClock.now < deadline {
+            // The token bootstrap precedes capabilities; answer it as a legacy
+            // daemon (exactly 404) so capabilities proceeds token-less.
+            if let bootstrap = RequestStub.requests.take("/v1/bootstrap") {
+                bootstrap.respond("{\"error\":\"bootstrap_absent_legacy_daemon\"}", status: 404)
+                continue
+            }
             if let request = RequestStub.requests.take("/v1/capabilities") { return request }
             try await Task.sleep(for: .milliseconds(10))
         }

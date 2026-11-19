@@ -59,12 +59,14 @@ void rctl_webrtc_set_pointer_cb(rctl_pointer_request cb);
 // File transfer over a dedicated reliable+ordered "files" DataChannel (P2P, so it
 // bypasses the relay body cap and streams any size). The browser sends JSON control
 // (get/put) + raw binary chunks; the bridge hands each message to this callback
-// (is_binary distinguishes a raw chunk from a JSON string). The daemon replies with
-// these; rctl_webrtc_files_buffered() exposes the send queue depth for backpressure.
-void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *data, size_t len, int is_binary));
-void rctl_webrtc_files_send_text(const char *json);
-void rctl_webrtc_files_send_binary(const uint8_t *data, size_t len);
-uint64_t rctl_webrtc_files_buffered(void);
+// (is_binary distinguishes a raw chunk from a JSON string; sender_token is an
+// opaque per-channel identity). Replies and backpressure are bound to the
+// requesting channel: two sessions cannot capture each other's transfers.
+void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *data, size_t len, int is_binary, void *sender_token));
+void rctl_webrtc_files_send_text_to(void *sender_token, const char *json);
+void rctl_webrtc_files_send_binary_to(void *sender_token, const uint8_t *data, size_t len);
+uint64_t rctl_webrtc_files_buffered_for(void *sender_token);
+bool rctl_webrtc_files_channel_alive(void *sender_token);
 
 // Local (non-relay) signaling: a device-served /ws/signal WebSocket drives the
 // same bridge directly. route_session sends a session's outbound offer/ICE to

@@ -7,6 +7,7 @@ import { AudioPlayer } from '../lib/audio'
 import { FileTransfer } from '../lib/files'
 import { MicTalk, micSupported } from '../lib/mic'
 import { api, apiJSON } from '../lib/rctl'
+import { loadDeviceCapabilities } from '../lib/capabilities'
 import { macroScript } from '../lib/macroPlayback'
 
 const REC_PATH = '/var/mobile/rctl/mic-recording.m4a'
@@ -94,7 +95,18 @@ export function useControl(
       onStatus: setStatus,
       onOrient: (o, manual) => setOrient({ o, manual }),
       onAudioChannel: (ch) => audioRef.current.attach(ch),
-      onFilesChannel: (ch) => filesRef.current.attach(ch),
+      onFilesChannel: (ch) => {
+        filesRef.current.attach(ch)
+        // The files protocol mode is per CONNECTION, not per page: every new
+        // files channel re-negotiates the transfer-id support, so a reconnect
+        // after a device package change (upgrade or rollback) picks up the
+        // daemon that is actually running now. The response is applied only
+        // if this channel is still the current one; a failed refresh falls
+        // back to the HTTP-selected upload mode. The promise is recorded on
+        // the transfer so an upload can await the decision instead of racing
+        // the first pick against it.
+        filesRef.current.beginNegotiation(ch, loadDeviceCapabilities())
+      },
       onMicChannel: (ch) => micRef.current.attach(ch),
       onRoomMicChannel: (ch) => roomMicRef.current.attach(ch),
       onPointerChannel: (ch) => pointer.attach(ch),

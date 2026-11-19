@@ -100,7 +100,7 @@ final class LocalDevicesModel: ObservableObject {
         browser.setResolutionPaused(true)
         let task = Task { [resolver, client] in
             let endpoint = try await resolver.resolve(current.id, interfaceIndices: current.interfaces, userInitiated: true)
-            _ = try await client.capabilities(at: endpoint.address)
+            _ = try await client.capabilitiesAuthenticating(at: endpoint.address)
             try Task.checkCancellation()
             return LocalDeviceProfile(id: UUID(), name: device.id.name, address: endpoint.address)
         }
@@ -118,7 +118,7 @@ final class LocalDevicesModel: ObservableObject {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.count <= 80 else { throw LocalDeviceStoreError.nameTooLong }
         let currentRevision = revision
-        _ = try await client.capabilities(at: address)
+        _ = try await client.capabilitiesAuthenticating(at: address)
         try Task.checkCancellation()
         guard revision == currentRevision else { throw CancellationError() }
         if let id, !devices.contains(where: { $0.id == id }) { throw CancellationError() }
@@ -160,7 +160,7 @@ final class LocalDevicesModel: ObservableObject {
                 func add(_ device: LocalDeviceProfile) {
                     group.addTask {
                         do {
-                            let capabilities = try await client.capabilities(at: device.address)
+                            let capabilities = try await client.capabilitiesAuthenticating(at: device.address)
                             return (device.id, .reachable(daemonVersion: capabilities.daemon?.version))
                         } catch is CancellationError {
                             return (device.id, .unknown)

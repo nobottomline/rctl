@@ -10,6 +10,8 @@
 #import "net/HttpHeaders.h"
 #import "platform/Paths.h"
 #import "net/Term.h"
+#import "security/DeviceToken.h"
+#import "security/FilePolicy.h"
 #import <pthread.h>
 #import <sys/socket.h>
 #import <netinet/in.h>
@@ -18,6 +20,7 @@
 #import <unistd.h>
 #import <fcntl.h>
 #import <errno.h>
+#import <limits.h>
 #import <signal.h>
 #import <string.h>
 #import <stdlib.h>
@@ -123,29 +126,34 @@ static char *read_file(const char *path, size_t *outLen) {
 }
 
 static void send_data(int fd, const char *status, const char *ctype,
-                      const void *body, size_t len);
-static void send_text(int fd, const char *status, const char *ctype, const char *body);
+                      const void *body, size_t len, const char *extra = NULL);
+static void send_text(int fd, const char *status, const char *ctype, const char *body,
+                      const char *extra = NULL);
 static bool send_full(int fd, const void *buf, size_t len);
 
-static bool decode_query_value(const char *source, size_t source_len, char *out, size_t out_cap) {
-    if (!out_cap) return false;
-    size_t oi = 0;
-    for (size_t i = 0; i < source_len; i++) {
-        unsigned char value = (unsigned char)source[i];
-        if (value == '%') {
-            if (i + 2 >= source_len) return false;
-            char hex[3] = { source[i + 1], source[i + 2], 0 };
-            char *end = NULL;
-            long decoded = strtol(hex, &end, 16);
-            if (!end || *end || decoded <= 0 || decoded > 255) return false;
-            value = (unsigned char)decoded;
-            i += 2;
+// Redeems the single-use download ticket for this pull_stream request; the
+// ticket store lives below with the request gate.
+static bool pull_stream_redeem_ticket(const char *request, const char *path, int *fd_out, off_t *size_out);
+static void stream_file_download(int fd, const char *request, bool redeem_ticket);
+
+// Extract one URL-encoded parameter value from a bounded query region.
+// Decoding lives in HttpHeaders.h (rctl_http_decode_query_value) so the strict
+// NUL/escape rules are unit-tested against the ticket and pull_stream
+// consumers.
+static bool query_param(const char *query, size_t query_len, const char *key, char *out, size_t cap) {
+    size_t key_len = strlen(key);
+    const char *end = query + query_len;
+    const char *p = query;
+    while (p < end) {
+        const char *amp = (const char *)memchr(p, '&', (size_t)(end - p));
+        const char *pair_end = amp ? amp : end;
+        size_t pair_len = (size_t)(pair_end - p);
+        if (pair_len > key_len && strncmp(p, key, key_len) == 0 && p[key_len] == '=') {
+            return rctl_http_decode_query_value(p + key_len + 1, pair_len - key_len - 1, out, cap);
         }
-        if (oi + 1 >= out_cap) return false;
-        out[oi++] = (char)value;
+        p = amp ? amp + 1 : end;
     }
-    out[oi] = 0;
-    return oi > 0;
+    return false;
 }
 
 static bool pull_stream_path(const char *request, char *out, size_t out_cap) {
@@ -160,7 +168,7 @@ static bool pull_stream_path(const char *request, char *out, size_t out_cap) {
         static const char key[] = "path=";
         if ((size_t)(pair_end - query) >= sizeof(key) - 1 &&
             memcmp(query, key, sizeof(key) - 1) == 0) {
-            return decode_query_value(query + sizeof(key) - 1,
+            return rctl_http_decode_query_value(query + sizeof(key) - 1,
                                       (size_t)(pair_end - query - (sizeof(key) - 1)),
                                       out, out_cap);
         }
@@ -169,8 +177,7 @@ static bool pull_stream_path(const char *request, char *out, size_t out_cap) {
     return false;
 }
 
-static void download_name(const char *path, char *out, size_t out_cap) {
-    const char *base = strrchr(path, '/');
+static void download_name(const char *path, char *out, size_t out_cap) {    const char *base = strrchr(path, '/');
     base = base ? base + 1 : path;
     size_t oi = 0;
     for (; *base && oi + 1 < out_cap; base++) {
@@ -182,23 +189,40 @@ static void download_name(const char *path, char *out, size_t out_cap) {
     out[oi] = 0;
 }
 
-static void stream_file_download(int fd, const char *request) {
+static void stream_file_download(int fd, const char *request, bool redeem_ticket) {
     char path[1024];
     if (!pull_stream_path(request, path, sizeof(path))) {
         send_text(fd, "400 Bad Request", "application/json", "{\"error\":\"invalid path\"}");
         return;
     }
-
-    int file_fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (file_fd < 0) {
-        send_text(fd, errno == ENOENT ? "404 Not Found" : "403 Forbidden",
-                  "application/json", "{\"error\":\"cannot open\"}");
-        return;
-    }
+    // A ticketed download redeems the ticket's OWNED descriptor — the exact
+    // object verified at issuance; a rename or replace in between cannot
+    // change what is served. A hop download opens fresh under the policy
+    // walk (symlinks and hard links refused inside it).
+    int file_fd = -1;
     struct stat st;
-    if (fstat(file_fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0) {
+    if (redeem_ticket) {
+        off_t verified_size = -1;
+        if (!pull_stream_redeem_ticket(request, path, &file_fd, &verified_size) ||
+            fstat(file_fd, &st) != 0 || st.st_size != verified_size) {
+            if (file_fd >= 0) close(file_fd);
+            send_text(fd, "403 Forbidden", "application/json", "{\"error\":\"invalid ticket\"}");
+            return;
+        }
+    } else {
+        if (!rctl_file_policy_open_read(path, &file_fd)) {
+            send_text(fd, "403 Forbidden", "application/json", "{\"error\":\"protected_path\"}");
+            return;
+        }
+        if (fstat(file_fd, &st) != 0) {
+            close(file_fd);
+            send_text(fd, "403 Forbidden", "application/json", "{\"error\":\"cannot open\"}");
+            return;
+        }
+    }
+    if (st.st_size < 0) {
         close(file_fd);
-        send_text(fd, "400 Bad Request", "application/json", "{\"error\":\"not a regular file\"}");
+        send_text(fd, "400 Bad Request", "application/json", "{\"error\":\"bad size\"}");
         return;
     }
 
@@ -442,27 +466,29 @@ static void *audio_test_loop(void *arg) {
 }
 
 static void send_data(int fd, const char *status, const char *ctype,
-                      const void *body, size_t len) {
+                      const void *body, size_t len, const char *extra) {
     // Ship the same security headers the relay sets on the control page, so the
     // device-served (LAN) page isn't a weaker origin: a strict CSP (frame-ancestors
     // none, no eval, https-only images), nosniff, and no referrer leakage. The CSP
     // is ignored on non-document responses (the /v1 JSON) but nosniff still helps.
-    char hdr[640];
+    char hdr[768];
     int n = snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
         "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+        "%s"
         "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ws: wss: stun: turn: turns:; "
         "img-src 'self' data: blob: https:; media-src 'self' blob:; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'self'\r\n"
         "Connection: close\r\n\r\n",
-        status, ctype, len);
+        status, ctype, len, extra ? extra : "");
     if (n < 0 || n >= (int)sizeof(hdr)) return;   // header overflow: drop, don't send garbage
     send_full(fd, hdr, n);
     send_full(fd, body, len);
 }
-static void send_text(int fd, const char *status, const char *ctype, const char *body) {
-    send_data(fd, status, ctype, body, strlen(body));
+static void send_text(int fd, const char *status, const char *ctype, const char *body,
+                      const char *extra) {
+    send_data(fd, status, ctype, body, strlen(body), extra);
 }
 
 static void log_control_client_unavailable(rctl_http_server *s) {
@@ -483,7 +509,611 @@ static void log_control_client_unavailable(rctl_http_server *s) {
 
 // One connection per thread so a slow request (e.g. /v1/camera waiting for the
 // in-app capturer to POST its photo back) can't block other requests.
+// ── request gate ────────────────────────────────────────────────────────────
+//
+// Every request passes one gate before dispatch. The gate validates the
+// request line (origin-form target, known method), requires a single Host
+// field naming the address the connection actually terminated on — a rebound
+// DNS name keeps the attacker's name in Host, so this defeats rebinding — and
+// enforces the LAN token policy. Without a valid token only these proceed:
+// the static page, the header-gated bootstrap, the legacy loopback health
+// probes, the camera IPC routes, relay-hop-authenticated tunnel requests, and
+// one-time ticketed downloads. Relay-only mode disables direct control
+// entirely: only probes and the authenticated relay hop work there.
+//
+// The camera IPC header and the relay-hop credential both act as browser
+// barriers — a cross-origin page can neither set a custom header (no CORS
+// permission is granted) nor offer a WebSocket subprotocol the gate accepts —
+// while the hop credential additionally authenticates rctld's own loopback
+// consumers to each other.
+
+#define RCTL_CAMERA_IPC_HEADER "X-Rctl-Camera-Ipc"
+#define RCTL_CAMERA_IPC_VALUE "1"
+#define RCTL_BOOTSTRAP_HEADER "X-Rctl-Bootstrap"
+#define RCTL_BOOTSTRAP_VALUE "1"
+#define RCTL_RELAY_HOP_HEADER "X-Rctl-Relay-Hop"
+#define RCTL_TOKEN_HEADER "X-Rctl-Token"
+#define RCTL_WS_PROTO_PREFIX "rctl.auth."
+
+enum {
+    GATE_OPEN,      // proceed to dispatch (possibly with probe flag)
+    GATE_WS,        // proceed; ws_proto holds the exact subprotocol to echo
+    GATE_HANDLED,   // gate answered and closed the request itself
+    GATE_DENY,      // 403 sent; caller just closes
+};
+
+// One-time download tickets: the browser's <a> download cannot attach the
+// token header, so /v1/pull_stream redeems a short-lived ticket issued for one
+// exact path. Bounded store; expired and used slots are reused.
+#define RCTL_TICKET_BYTES 16
+#define RCTL_TICKETS 8
+#define RCTL_TICKET_TTL 60.0
+typedef struct {
+    char id[RCTL_TICKET_BYTES * 2 + 1];
+    char path[1024];
+    double expires;
+    bool used;
+    int fd;        // the verified, still-open object; -1 when empty
+    off_t size;    // verified size at issuance
+} rctl_ticket;
+static rctl_ticket g_tickets[RCTL_TICKETS];
+static pthread_mutex_t g_ticket_mtx = PTHREAD_MUTEX_INITIALIZER;
+static bool g_ticket_store_open = true;
+
+static void ticket_store_init(void) {
+    g_ticket_store_open = true;
+    for (int i = 0; i < RCTL_TICKETS; i++) g_tickets[i].fd = -1;
+}
+
+// Once closed, no in-flight issuer may insert a ticket after the final sweep:
+// admission and the sweep share the store mutex, and the closed flag is read
+// under it.
+static void ticket_store_shutdown(void) {
+    pthread_mutex_lock(&g_ticket_mtx);
+    g_ticket_store_open = false;
+    for (int i = 0; i < RCTL_TICKETS; i++) {
+        if (g_tickets[i].fd >= 0) { close(g_tickets[i].fd); g_tickets[i].fd = -1; }
+        g_tickets[i].path[0] = 0;
+        g_tickets[i].used = false;
+        g_tickets[i].expires = 0;
+    }
+    pthread_mutex_unlock(&g_ticket_mtx);
+}
+
+static bool fd_local_addrs(int fd, bool *src_loopback, bool *dst_loopback,
+                           uint32_t *local_addr, uint16_t *local_port) {
+    struct sockaddr_in sa; socklen_t sl = sizeof(sa);
+    if (getpeername(fd, (struct sockaddr *)&sa, &sl) != 0) return false;
+    *src_loopback = sa.sin_family == AF_INET && ntohl(sa.sin_addr.s_addr) == INADDR_LOOPBACK;
+    sl = sizeof(sa);
+    if (getsockname(fd, (struct sockaddr *)&sa, &sl) != 0) return false;
+    if (sa.sin_family != AF_INET) return false;
+    *dst_loopback = ntohl(sa.sin_addr.s_addr) == INADDR_LOOPBACK;
+    *local_addr = ntohl(sa.sin_addr.s_addr);
+    *local_port = ntohs(sa.sin_port);
+    return true;
+}
+
+// Host must name the address this connection terminated on (or the canonical
+// loopback names on a loopback destination) and the listening port. Names are
+// rejected outright: a rebound DNS lookup cannot pass, and no mDNS alias
+// grants the direct authority.
+static bool host_allowed(const char *host_value, bool dst_loopback,
+                         uint32_t local_addr, uint16_t listen_port) {
+    char host[256]; int port = 0;
+    if (!rctl_http_split_authority(host_value, host, sizeof(host), &port)) return false;
+    if (!strcmp(host, "localhost") || !strcmp(host, "127.0.0.1")) return dst_loopback;
+    struct in_addr parsed;
+    if (inet_pton(AF_INET, host, &parsed) != 1) return false;
+    if (ntohl(parsed.s_addr) != local_addr) return false;
+    return port == (int)listen_port;
+}
+
+static void deny_json(int fd, const char *status, const char *code) {
+    send_text(fd, status, "application/json", code);
+}
+
+// Close an expired or superseded slot's owned descriptor and release it.
+// Called with the store mutex held.
+static void ticket_slot_release_locked(rctl_ticket *t) {
+    if (t->fd >= 0) { close(t->fd); t->fd = -1; }
+    t->path[0] = 0;
+    t->used = false;
+    t->expires = 0;
+}
+
+// Issue a ticket that OWNS the verified object descriptor: the file is
+// checked and opened at issuance and redemption serves that exact fd, so a
+// rename, replace, or delete in between cannot change what is served (and a
+// vanished file cannot strand the anchor — the download succeeds from the
+// pinned object). Bounded: a full store answers 503.
+static bool ticket_issue(int verified_fd, const char *path, char *out, size_t out_cap) {
+    bool ok = false;
+    pthread_mutex_lock(&g_ticket_mtx);
+    if (!g_ticket_store_open) {   // shutdown raced an in-flight issuer
+        pthread_mutex_unlock(&g_ticket_mtx);
+        return false;             // the caller retains (and closes) the fd
+    }
+    int slot = -1;
+    double now = monotonic_seconds();
+    for (int i = 0; i < RCTL_TICKETS && slot < 0; i++) {
+        if (g_tickets[i].path[0] == 0) {
+            if (g_tickets[i].fd >= 0) { close(g_tickets[i].fd); g_tickets[i].fd = -1; }
+            slot = i;
+        } else if (g_tickets[i].used || g_tickets[i].expires < now) {
+            ticket_slot_release_locked(&g_tickets[i]);
+            slot = i;
+        }
+    }
+    if (slot >= 0) {
+        uint8_t raw[RCTL_TICKET_BYTES];
+        arc4random_buf(raw, sizeof(raw));
+        static const char digits[] = "0123456789abcdef";
+        for (size_t i = 0; i < sizeof(raw); i++) {
+            g_tickets[slot].id[i * 2] = digits[raw[i] >> 4];
+            g_tickets[slot].id[i * 2 + 1] = digits[raw[i] & 0xF];
+        }
+        g_tickets[slot].id[sizeof(raw) * 2] = 0;
+        snprintf(g_tickets[slot].path, sizeof(g_tickets[slot].path), "%s", path);
+        g_tickets[slot].expires = now + RCTL_TICKET_TTL;
+        g_tickets[slot].used = false;
+        g_tickets[slot].fd = verified_fd;   // ownership moves here
+        struct stat st = {};
+        g_tickets[slot].size = fstat(verified_fd, &st) == 0 ? st.st_size : -1;
+        snprintf(out, out_cap, "%s", g_tickets[slot].id);
+        ok = true;
+    }
+    pthread_mutex_unlock(&g_ticket_mtx);
+    return ok;
+}
+
+// Validate without consuming: the download must still claim the owned
+// descriptor before the single-use redemption happens.
+static bool ticket_validate(const char *id, const char *path) {
+    if (!id || !path) return false;
+    bool ok = false;
+    pthread_mutex_lock(&g_ticket_mtx);
+    double now = monotonic_seconds();
+    for (int i = 0; i < RCTL_TICKETS; i++) {
+        rctl_ticket *t = &g_tickets[i];
+        if (t->path[0] == 0) { ticket_slot_release_locked(t); continue; }
+        if (t->used || t->expires < now) { ticket_slot_release_locked(t); continue; }
+        if (strcmp(t->id, id) == 0 && strcmp(t->path, path) == 0) { ok = true; break; }
+    }
+    pthread_mutex_unlock(&g_ticket_mtx);
+    return ok;
+}
+
+// Single atomic redemption: one matching request takes over the owned
+// descriptor (the caller closes it after streaming), replays and a changed
+// path fail. A reclaimable slot's fd is closed on expiry.
+static bool ticket_redeem(const char *id, const char *path, int *fd_out, off_t *size_out) {
+    if (!id || !path || !fd_out || !size_out) return false;
+    bool ok = false;
+    pthread_mutex_lock(&g_ticket_mtx);
+    double now = monotonic_seconds();
+    for (int i = 0; i < RCTL_TICKETS; i++) {
+        rctl_ticket *t = &g_tickets[i];
+        if (t->path[0] == 0) { ticket_slot_release_locked(t); continue; }
+        if (t->used || t->expires < now) { ticket_slot_release_locked(t); continue; }
+        if (strcmp(t->id, id) == 0 && strcmp(t->path, path) == 0) {
+            t->used = true;
+            *fd_out = t->fd;
+            *size_out = t->size;
+            t->fd = -1;
+            ok = true;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_ticket_mtx);
+    return ok;
+}
+
+// Pull the ticket from the pull_stream query and redeem it against the exact
+// path the download is about to serve; the owned descriptor moves to the
+// caller.
+static bool pull_stream_redeem_ticket(const char *request, const char *path, int *fd_out, off_t *size_out) {
+    const char *query = strchr(request, '?');
+    if (!query) return false;
+    ++query;
+    const char *target_end = strchr(query, ' ');
+    if (!target_end) return false;
+    size_t query_len = (size_t)(target_end - query);
+    char ticket[128];
+    if (!query_param(query, query_len, "ticket", ticket, sizeof(ticket))) return false;
+    return ticket_redeem(ticket, path, fd_out, size_out);
+}
+
+// Copy one field value into a bounded buffer. The CRLF-based lookup in
+// HttpHeaders.h returns a pointer that is NOT NUL-terminated — the field's
+// own line break is the only bound — and hdr_end is the CR that STARTS the
+// terminator's CRLF, i.e. the last field's own terminating CR, so the search
+// window must include it.
+static bool copy_header_value(const char *req, const char *hdr_end, const char *name,
+                              char *out, size_t cap) {
+    const char *v = rctl_http_header(req, hdr_end, name);
+    if (!v || v > hdr_end) return false;
+    const char *eol = (const char *)memchr(v, '\r', (size_t)(hdr_end - v) + 1);
+    if (!eol) return false;
+    while (v < eol && (*v == ' ' || *v == '\t')) v++;
+    while (eol > v && (eol[-1] == ' ' || eol[-1] == '\t')) eol--;
+    size_t len = (size_t)(eol - v);
+    if (len >= cap) return false;
+    memcpy(out, v, len);
+    out[len] = 0;
+    return true;
+}
+
+static bool header_is(const char *req, const char *hdr_end, const char *name, const char *value) {
+    char got[256];
+    return copy_header_value(req, hdr_end, name, got, sizeof(got)) &&
+           strcasecmp(got, value) == 0;
+}
+
+static bool request_is_ws_upgrade(const char *req, const char *hdr_end) {
+    char upgrade[64];
+    return copy_header_value(req, hdr_end, "Upgrade", upgrade, sizeof(upgrade)) &&
+           strcasestr(upgrade, "websocket") != NULL;
+}
+
+// The browser offers its token as a WebSocket subprotocol (browsers cannot set
+// custom headers on WebSocket). Exactly one protocol may be offered and it
+// must carry the valid token; the handler echoes the offered value verbatim.
+static bool ws_subprotocol_token(const char *req, const char *hdr_end,
+                                 char *out, size_t out_cap) {
+    int count = rctl_http_header_count(req, hdr_end, "Sec-WebSocket-Protocol");
+    if (count == 0) return true;                   // native/relay clients offer none
+    if (count != 1) return false;                  // ambiguous
+    char value[256];
+    if (!copy_header_value(req, hdr_end, "Sec-WebSocket-Protocol", value, sizeof(value))) return false;
+    if (strchr(value, ',')) return false;          // multiple offers: ambiguous
+    size_t prefix = sizeof(RCTL_WS_PROTO_PREFIX) - 1;
+    if (strncmp(value, RCTL_WS_PROTO_PREFIX, prefix) != 0) return false;
+    if (!rctl_device_token_matches(value + prefix)) return false;
+    snprintf(out, out_cap, "%s", value);
+    return true;
+}
+
+// Answer GET /v1/bootstrap for requests that carry the custom bootstrap
+// header — a barrier no cross-origin browser page can pass without a CORS
+// preflight, and no CORS preflight is ever granted here. Native programs and
+// scripts are not drive-by origins and may present it freely. An Origin or
+// Sec-Fetch-Site that contradicts the validated Host authority fails closed.
+static void serve_bootstrap(int fd, const char *req, const char *hdr_end, const char *host_value) {
+    const char *code = NULL;
+    if (!header_is(req, hdr_end, RCTL_BOOTSTRAP_HEADER, RCTL_BOOTSTRAP_VALUE)) {
+        code = "{\"error\":\"bootstrap_header_required\"}";
+    } else {
+        char origin[256], site[32];
+        bool origin_present = rctl_http_header_count(req, hdr_end, "Origin") > 0;
+        if ((origin_present && !copy_header_value(req, hdr_end, "Origin", origin, sizeof(origin))) ||
+            (origin_present && !rctl_http_origin_matches(origin, host_value))) {
+            code = "{\"error\":\"origin_mismatch\"}";
+        } else if (copy_header_value(req, hdr_end, "Sec-Fetch-Site", site, sizeof(site)) &&
+                   strcasecmp(site, "same-origin") != 0 && strcasecmp(site, "none") != 0) {
+            code = "{\"error\":\"origin_mismatch\"}";
+        }
+    }
+    const char *token = rctl_device_token();
+    if (!code && !token) code = "{\"error\":\"gateway_unready\"}";
+    if (code) {
+        deny_json(fd, "403 Forbidden", code);
+        return;
+    }
+    char body[128];
+    snprintf(body, sizeof(body), "{\"token\":\"%s\"}", token);
+    send_text(fd, "200 OK", "application/json", body,
+              "Cache-Control: private, no-store\r\nCross-Origin-Resource-Policy: same-origin\r\n");
+}
+
+// Read the small JSON body of POST /v1/download_ticket directly: bounded
+// length, bounded deadline, no upload-budget machinery needed.
+static bool read_small_body(int fd, const char *first, size_t have, size_t clen,
+                            char *out, size_t cap) {
+    if (clen == 0 || clen >= cap) return false;
+    size_t got = have < clen ? have : clen;
+    memcpy(out, first, got);
+    struct timeval tv = { 1, 0 };
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) return false;
+    const double deadline = monotonic_seconds() + 5;
+    while (got < clen) {
+        if (monotonic_seconds() > deadline) break;
+        ssize_t k = recv(fd, out + got, clen - got, 0);
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+        if (k <= 0) break;
+        got += (size_t)k;
+    }
+    memset(&tv, 0, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (got < clen) return false;
+    out[got] = 0;
+    return true;
+}
+
+// The gate. Order matters: syntax and Host first, then the closed exception
+// sets, then the token requirement for everything that remains.
+static int request_gate(rctl_http_server *s, int fd, char *req, ssize_t n, char *hdr_end,
+                        bool *probe_out, bool *ticket_out, char *ws_proto_out, size_t ws_proto_cap) {
+    *probe_out = false;
+    *ticket_out = false;
+    ws_proto_out[0] = 0;
+
+    // Field syntax must agree with the CRLF-based lookups used below: a bare
+    // CR or LF can never smuggle a field past the gate or dispatch.
+    if (!rctl_http_fields_valid(req, hdr_end)) {
+        deny_json(fd, "400 Bad Request", "{\"error\":\"malformed_header_field\"}");
+        return GATE_DENY;
+    }
+
+    // Request line: METHOD SP target SP HTTP/1.x, target in origin form. The
+    // buffer is NOT mutated — every later lookup is strstr-based over the full
+    // request — so the query region is parsed with explicit bounds instead.
+    char *line_end = strstr(req, "\r\n");
+    if (!line_end || line_end > hdr_end) {
+        deny_json(fd, "400 Bad Request", "{\"error\":\"bad_request_line\"}");
+        return GATE_DENY;
+    }
+    char method[8];
+    char *target = NULL; char *version = NULL;
+    {
+        size_t mi = 0;
+        char *p = req;
+        while (*p && *p != ' ' && mi + 1 < sizeof(method)) method[mi++] = *p++;
+        method[mi] = 0;
+        if (*p != ' ') { deny_json(fd, "400 Bad Request", "{\"error\":\"bad_request_line\"}"); return GATE_DENY; }
+        target = p + 1;
+        version = strchr(target, ' ');
+        if (!version || version > line_end || version == target) {
+            deny_json(fd, "400 Bad Request", "{\"error\":\"bad_request_line\"}");
+            return GATE_DENY;
+        }
+        if (strncmp(version + 1, "HTTP/1.", 7) != 0) {
+            deny_json(fd, "400 Bad Request", "{\"error\":\"bad_request_line\"}");
+            return GATE_DENY;
+        }
+        if (target[0] != '/') {   // absolute-form or CONNECT-style targets
+            deny_json(fd, "400 Bad Request", "{\"error\":\"origin_form_required\"}");
+            return GATE_DENY;
+        }
+    }
+    bool is_get = !strcmp(method, "GET");
+    bool is_post = !strcmp(method, "POST");
+    if (!is_get && !is_post) {
+        deny_json(fd, "405 Method Not Allowed", "{\"error\":\"method_not_allowed\"}");
+        return GATE_DENY;
+    }
+
+    // Single Host naming the local socket address the request arrived on.
+    char host_buf[256];
+    if (rctl_http_header_count(req, hdr_end, "Host") != 1 ||
+        !copy_header_value(req, hdr_end, "Host", host_buf, sizeof(host_buf))) {
+        deny_json(fd, "400 Bad Request", "{\"error\":\"host_required\"}");
+        return GATE_DENY;
+    }
+    bool src_loopback = false, dst_loopback = false;
+    uint32_t local_addr = 0; uint16_t local_port = 0;
+    if (!fd_local_addrs(fd, &src_loopback, &dst_loopback, &local_addr, &local_port) ||
+        !host_allowed(host_buf, dst_loopback, local_addr, (uint16_t)s->port)) {
+        deny_json(fd, "400 Bad Request", "{\"error\":\"bad_host\"}");
+        return GATE_DENY;
+    }
+
+    // Path and query for gate decisions (dispatch re-derives its own view of
+    // the request line, which the origin-form check above pinned down).
+    size_t target_len = (size_t)(version - target);
+    char path[1024];
+    const char *query = "";
+    size_t query_len = 0;
+    {
+        const char *qm = (const char *)memchr(target, '?', target_len);
+        size_t path_len = qm ? (size_t)(qm - target) : target_len;
+        if (path_len == 0 || path_len >= sizeof(path)) {
+            deny_json(fd, "400 Bad Request", "{\"error\":\"bad_target\"}");
+            return GATE_DENY;
+        }
+        memcpy(path, target, path_len);
+        path[path_len] = 0;
+        if (qm) { query = qm + 1; query_len = target_len - path_len - 1; }
+    }
+    // Camera IPC routes are reserved for the on-device agents: loopback source
+    // and destination, the dedicated header, and never the relay hop. They sit
+    // before the mode policy because the camera feature must keep working in
+    // Relay-only mode.
+    static const char *const kCameraIpc[] = {
+        "/v1/cam_agent_state", "/v1/cam_upload",
+        "/v1/guest_camera_ticket", "/v1/guest_camera_upload", "/v1/guest_camera_stopped",
+    };
+    for (size_t i = 0; i < sizeof(kCameraIpc) / sizeof(kCameraIpc[0]); i++) {
+        if (!strcmp(path, kCameraIpc[i])) {
+            bool hop_here = rctl_http_header_count(req, hdr_end, RCTL_RELAY_HOP_HEADER) > 0;
+            if (src_loopback && dst_loopback && !hop_here &&
+                header_is(req, hdr_end, RCTL_CAMERA_IPC_HEADER, RCTL_CAMERA_IPC_VALUE)) {
+                return GATE_OPEN;
+            }
+            deny_json(fd, "403 Forbidden", "{\"error\":\"camera_ipc_only\"}");
+            return GATE_DENY;
+        }
+    }
+
+    // The relay hop is checked before the policy branches: it authenticates
+    // rctld's own loopback consumers, but the camera routes above deliberately
+    // reject it, and Relay-only mode below uses it as its only key.
+    char hop_buf[80];
+    bool hop_present = rctl_http_header_count(req, hdr_end, RCTL_RELAY_HOP_HEADER) > 0;
+    bool hop_ok = hop_present && copy_header_value(req, hdr_end, RCTL_RELAY_HOP_HEADER, hop_buf, sizeof(hop_buf)) &&
+                  rctl_relay_hop_matches(hop_buf);
+
+    // Legacy loopback probes: updater verifyRuntime and the deploy script —
+    // callers that hold no credential at all. Both socket endpoints must be
+    // loopback, exact GET, exact path, no query, no upgrade; responses are
+    // marked so the REST layer trims sensitive data. A hop-authenticated
+    // caller reaches the same paths through the full authorization below.
+    static const char *const kProbes[] = { "/v1/capabilities", "/v1/deviceinfo", "/v1/relay_status" };
+    if (is_get && !hop_present &&
+        rctl_http_header_count(req, hdr_end, RCTL_TOKEN_HEADER) == 0 &&
+        src_loopback && dst_loopback && query_len == 0 &&
+        !memchr(target, '?', target_len) && !request_is_ws_upgrade(req, hdr_end)) {
+        for (size_t i = 0; i < sizeof(kProbes) / sizeof(kProbes[0]); i++) {
+            if (!strcmp(path, kProbes[i])) {
+                *probe_out = true;
+                return GATE_OPEN;
+            }
+        }
+    }
+
+    // Relay-only mode: no direct control, ever — not even over a loopback
+    // connection that already holds a token. A hop-authenticated request
+    // continues through the normal branches below, where bootstrap, ticket
+    // issuance, and the static page are refused to it.
+    if (s->loopback_only && !hop_ok) {
+        deny_json(fd, "403 Forbidden", "{\"error\":\"relay_only\"}");
+        return GATE_DENY;
+    }
+
+    char token_buf[80];
+    bool token_present = copy_header_value(req, hdr_end, RCTL_TOKEN_HEADER, token_buf, sizeof(token_buf));
+    bool token_ok = token_present && rctl_device_token_matches(token_buf);
+
+    // Bootstrap: the token's only delivery channel. The relay hop must never
+    // pull it, and Relay-only mode has no direct-control surface to serve.
+    if (!strcmp(path, "/v1/bootstrap")) {
+        if (!is_get) {
+            deny_json(fd, "405 Method Not Allowed", "{\"error\":\"use_get\"}");
+            return GATE_DENY;
+        }
+        if (s->loopback_only || hop_ok) {
+            deny_json(fd, "403 Forbidden", s->loopback_only ? "{\"error\":\"relay_only\"}"
+                                                            : "{\"error\":\"bootstrap_not_over_tunnel\"}");
+            return GATE_DENY;
+        }
+        serve_bootstrap(fd, req, hdr_end, host_buf);
+        return GATE_HANDLED;
+    }
+
+    // One-time download ticket issuance: only the full LAN token converts a
+    // path into a short-lived ticket; the relay hop downloads through the
+    // stream tunnel directly and never needs one.
+    if (is_post && !strcmp(path, "/v1/download_ticket")) {
+        if (!token_ok) {
+            deny_json(fd, "403 Forbidden",
+                      token_present ? "{\"error\":\"lan_token_invalid\"}"
+                                    : "{\"error\":\"lan_token_required\"}");
+            return GATE_DENY;
+        }
+        char body[2048], clen_str[16];
+        size_t have = (size_t)(hdr_end + 4 <= req + n ? (size_t)(n - (hdr_end + 4 - req)) : 0);
+        long clen = copy_header_value(req, hdr_end, "Content-Length", clen_str, sizeof(clen_str)) &&
+                            clen_str[strspn(clen_str, "0123456789")] == 0
+                        ? strtol(clen_str, NULL, 10) : 0;
+        if (clen <= 0 || clen >= (long)sizeof(body) ||
+            !read_small_body(fd, hdr_end + 4, have, (size_t)clen, body, sizeof(body))) {
+            deny_json(fd, "400 Bad Request", "{\"error\":\"invalid_ticket_request\"}");
+            return GATE_DENY;
+        }
+        // URL-encoded form body: `path=<encoded>`.
+        char requested[1024];
+        if (!query_param(body, (size_t)clen, "path", requested, sizeof(requested)) || requested[0] != '/') {
+            deny_json(fd, "400 Bad Request", "{\"error\":\"invalid_ticket_request\"}");
+            return GATE_DENY;
+        }
+        // The object is verified and pinned NOW: the ticket owns the open
+        // descriptor, so a rename, replace, or delete in between cannot
+        // change what the anchor download serves, and a vanished file cannot
+        // strand it behind a 403.
+        int verified_fd = -1;
+        if (!rctl_file_policy_open_read(requested, &verified_fd)) {
+            deny_json(fd, "403 Forbidden", "{\"error\":\"protected_path\"}");
+            return GATE_DENY;
+        }
+        char ticket[64];
+        if (!ticket_issue(verified_fd, requested, ticket, sizeof(ticket))) {
+            close(verified_fd);
+            deny_json(fd, "503 Service Unavailable", "{\"error\":\"ticket_store_busy\"}");
+            return GATE_DENY;
+        }
+        char out[128];
+        snprintf(out, sizeof(out), "{\"ticket\":\"%s\"}", ticket);
+        send_text(fd, "200 OK", "application/json", out,
+                  "Cache-Control: private, no-store\r\nCross-Origin-Resource-Policy: same-origin\r\n");
+        return GATE_HANDLED;
+    }
+
+    // Streaming file download: the ticket is validated here but redeemed
+    // (consumed) only when the download actually starts, so a failed open or
+    // a refused path cannot burn it. The relay hop wins when both credentials
+    // are presented — its download never needs a ticket, so none is burned.
+    if (!strcmp(path, "/v1/pull_stream")) {
+        if (hop_ok) return GATE_OPEN;
+        char ticket[128], requested[1024];
+        if (query_param(query, query_len, "ticket", ticket, sizeof(ticket)) &&
+            query_param(query, query_len, "path", requested, sizeof(requested)) &&
+            ticket_validate(ticket, requested)) {
+            *ticket_out = true;   // consumed later, after the file opens
+            return GATE_OPEN;
+        }
+        deny_json(fd, "403 Forbidden", "{\"error\":\"lan_token_required\"}");
+        return GATE_DENY;
+    }
+
+    // WebSocket upgrades live only on the two signaling paths and require the
+    // same document origin as the Host authority plus a credential: token
+    // header (native) or token subprotocol (browser) or relay hop (tunnel).
+    // The decision is returned as GATE_WS and dispatch refuses an upgrade on
+    // any other verdict, so a crafted request can never reach 101 around it.
+    if (request_is_ws_upgrade(req, hdr_end)) {
+        if (strcmp(path, "/ws/term") != 0 && strcmp(path, "/ws/signal") != 0) {
+            deny_json(fd, "400 Bad Request", "{\"error\":\"unknown_upgrade\"}");
+            return GATE_DENY;
+        }
+        char origin[256];
+        bool origin_present = rctl_http_header_count(req, hdr_end, "Origin") > 0;
+        if ((origin_present && !copy_header_value(req, hdr_end, "Origin", origin, sizeof(origin))) ||
+            (origin_present && !rctl_http_origin_matches(origin, host_buf))) {
+            deny_json(fd, "403 Forbidden", "{\"error\":\"origin_mismatch\"}");
+            return GATE_DENY;
+        }
+        char offered[128] = "";
+        if (!ws_subprotocol_token(req, hdr_end, offered, sizeof(offered))) {
+            deny_json(fd, "403 Forbidden", "{\"error\":\"lan_token_invalid\"}");
+            return GATE_DENY;
+        }
+        // ws_subprotocol_token leaves the buffer empty when the client offered
+        // no subprotocol (native/relay handshakes); only a written value means
+        // a validated token subprotocol reached the 101.
+        bool offered_valid = offered[0] != 0;
+        if (!token_ok && !hop_ok && !offered_valid) {
+            deny_json(fd, "403 Forbidden",
+                      token_present ? "{\"error\":\"lan_token_invalid\"}"
+                                    : "{\"error\":\"lan_token_required\"}");
+            return GATE_DENY;
+        }
+        if (offered_valid) snprintf(ws_proto_out, ws_proto_cap, "%s", offered);
+        return GATE_WS;
+    }
+
+    // Static page and legacy assets: public, Host-validated only — but never
+    // in Relay-only mode and never through the relay hop, which exists for the
+    // control tunnel, not for serving the direct-control UI.
+    if (is_get && (!strcmp(path, "/") || !strcmp(path, "/index.html") || !strncmp(path, "/vendor/", 8))) {
+        if (s->loopback_only || hop_ok) {
+            deny_json(fd, "403 Forbidden", "{\"error\":\"relay_only\"}");
+            return GATE_DENY;
+        }
+        return GATE_OPEN;
+    }
+
+    // Everything else — the control plane, input, terminal HTTP plane, media,
+    // stream, camera control — requires the token or the relay hop.
+    if (token_ok || hop_ok) return GATE_OPEN;
+    deny_json(fd, "403 Forbidden",
+              token_present ? "{\"error\":\"lan_token_invalid\"}"
+                            : "{\"error\":\"lan_token_required\"}");
+    return GATE_DENY;
+}
+
 static void route_request(rctl_http_server *s, int fd, char *req, ssize_t n, char *hdr_end);
+
 
 // Total buffered POST body bytes across all connection threads: two near-64MB
 // uploads would already approach the daemon's jetsam budget.
@@ -560,18 +1190,42 @@ static void handle_client(rctl_http_server *s, int fd) {
 }
 
 static void route_request(rctl_http_server *s, int fd, char *req, ssize_t n, char *hdr_end) {
+    // The gate decides before any dispatch: request-line syntax, Host binding,
+    // probe/camera/bootstrap/ticket exceptions, and the token policy.
+    bool probe = false;
+    char ws_proto[128];
+    bool ticket_download = false;
+    int gate = request_gate(s, fd, req, n, hdr_end, &probe, &ticket_download, ws_proto, sizeof(ws_proto));
+    if (gate == GATE_HANDLED || gate == GATE_DENY) {
+        close(fd);
+        return;
+    }
     if (strncmp(req, "GET /v1/pull_stream?", 20) == 0) {
-        stream_file_download(fd, req);
+        // A hop-authenticated relay download needs no ticket; a ticketed LAN
+        // download redeems after the file opens successfully.
+        stream_file_download(fd, req, ticket_download);
         close(fd);
     } else if (strncmp(req, "GET /ws/term", 12) == 0) {
-        rctl_term_handle_ws(fd, req);
+        // Only the gate's own upgrade decision may reach 101: a crafted
+        // request with a key but no upgrade cannot bypass the WS policy.
+        if (gate != GATE_WS) {
+            send_text(fd, "400 Bad Request", "text/plain", "not a websocket upgrade");
+            close(fd);
+            return;
+        }
+        rctl_term_handle_ws(fd, req, ws_proto);
     } else if (strncmp(req, "GET /ws/signal", 14) == 0) {
-        rctl_signal_handle_ws(fd, req);
+        if (gate != GATE_WS) {
+            send_text(fd, "400 Bad Request", "text/plain", "not a websocket upgrade");
+            close(fd);
+            return;
+        }
+        rctl_signal_handle_ws(fd, req, ws_proto);
     } else if (strncmp(req, "GET /stream", 11) == 0) {
         const char *h =
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
             "Transfer-Encoding: chunked\r\nCache-Control: no-cache\r\n"
-            "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+            "Connection: close\r\n\r\n";
         if (!send_full(fd, h, strlen(h))) { close(fd); return; }
         struct timeval tv = { 1, 0 }; // drop a stalled (e.g. dropped-Wi-Fi) client fast
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -669,6 +1323,13 @@ static void route_request(rctl_http_server *s, int fd, char *req, ssize_t n, cha
         const char *target = req + (isPost ? 5 : 4);   // skip "POST " / "GET "
         char tbuf[1024]; size_t ti = 0;
         while (target[ti] && target[ti] != ' ' && ti < sizeof(tbuf) - 1) { tbuf[ti] = target[ti]; ti++; }
+        if (target[ti] && target[ti] != ' ') {
+            // A target longer than the parse buffer would dispatch a silently
+            // truncated path: refuse rather than operate on a different file.
+            send_text(fd, "400 Bad Request", "application/json", "{\"error\":\"target too long\"}");
+            close(fd);
+            return;
+        }
         tbuf[ti] = 0;
         char *path = tbuf, *query = strchr(tbuf, '?');
         if (query) { *query = 0; query++; } else query = (char *)"";
@@ -823,7 +1484,7 @@ static void route_request(rctl_http_server *s, int fd, char *req, ssize_t n, cha
         rctl_rest_cb cb = s->rest_cb; void *cx = s->rest_ctx;
         pthread_mutex_unlock(&s->mtx);
         int status = 200, out_len = 0; const char *out_ctype = NULL;
-        char *resp = cb ? cb(cx, method, content_type, path, query, body, body_len,
+        char *resp = cb ? cb(cx, method, content_type, path, query, body, body_len, probe,
                              &status, &out_len, &out_ctype) : NULL;
         // The request body and its budget charge end with the handler; the
         // response stays live until it has been written. A stalled client
@@ -864,16 +1525,38 @@ static void route_request(rctl_http_server *s, int fd, char *req, ssize_t n, cha
         char rel[256]; size_t ri = 0;
         while (target[ri] && target[ri] != ' ' && ri < sizeof(rel) - 1) { rel[ri] = target[ri]; ri++; }
         rel[ri] = 0;
-        if (strstr(rel, "..")) {
+        if (strstr(rel, "..") || strchr(rel, 92)) {
             send_text(fd, "400 Bad Request", "text/plain", "bad path");
         } else {
-            char path[384];
-            snprintf(path, sizeof(path), "/var/mobile/rctl%s", rel);
-            size_t len = 0;
-            char *body = read_file(path, &len);
-            if (body) send_data(fd, "200 OK", ctype_for_path(path), body, len);
-            else send_text(fd, "404 Not Found", "text/plain", "not found");
-            free(body);
+            // Resolve the asset relative to the pinned web-client directory:
+            // O_NOFOLLOW_ANY refuses symlinks on every component, so a
+            // planted link cannot serve a protected file.
+            char dir[PATH_MAX];
+            snprintf(dir, sizeof(dir), "%s", RCTL_WEB_CLIENT);
+            char *asset_dir_slash = strrchr(dir, '/');
+            if (!asset_dir_slash) { send_text(fd, "404 Not Found", "text/plain", "not found"); close(fd); return; }
+            *asset_dir_slash = 0;
+            int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            int asset_fd = dirfd >= 0
+                ? openat(dirfd, rel[0] == '/' ? rel + 1 : rel, O_RDONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
+                : -1;
+            if (dirfd >= 0) close(dirfd);
+            struct stat st;
+            if (asset_fd >= 0 && fstat(asset_fd, &st) == 0 && S_ISREG(st.st_mode)) {
+                size_t len = (size_t)st.st_size;
+                char *body = (char *)malloc(len + 1);
+                if (body && read(asset_fd, body, len) == (ssize_t)len) {
+                    char name[288];
+                    snprintf(name, sizeof(name), "/vendor/%s", rel);
+                    send_data(fd, "200 OK", ctype_for_path(name), body, len);
+                } else {
+                    send_text(fd, "404 Not Found", "text/plain", "not found");
+                }
+                free(body);
+            } else {
+                send_text(fd, "404 Not Found", "text/plain", "not found");
+            }
+            if (asset_fd >= 0) close(asset_fd);
         }
         close(fd);
     } else if (strncmp(req, "GET / ", 6) == 0 || strncmp(req, "GET /index", 10) == 0) {
@@ -973,6 +1656,7 @@ static void *accept_loop(void *arg) {
 }
 
 rctl_http_server *rctl_http_start(int port, bool loopback_only) {
+    ticket_store_init();
     signal(SIGPIPE, SIG_IGN);
     int lfd = socket(AF_INET, SOCK_STREAM, 0);
     if (lfd < 0) { fprintf(stderr, "[http] socket failed\n"); return NULL; }
@@ -1164,6 +1848,7 @@ void rctl_http_egress_sample(rctl_http_server *s, int *out_max_queue, int *out_l
 
 void rctl_http_stop(rctl_http_server *s) {
     if (!s) return;
+    ticket_store_shutdown();   // close any ticket-owned object descriptors
     s->running = false;
     close(s->listen_fd);
     if (s->audio_thread_started) pthread_join(s->audio_thread, NULL);

@@ -1,4 +1,4 @@
-import { GUEST_ACCESS, RELAY_MODE, signalWS } from './rctl'
+import { bootstrapLAN, GUEST_ACCESS, lanAuthorized, RELAY_MODE, signalWS, wsProtocols } from './rctl'
 
 type CameraTransportCallbacks = {
   onState?: (state: string) => void
@@ -23,7 +23,7 @@ export class CameraTransport {
     this.callbacks = callbacks
   }
 
-  start() {
+  async start() {
     this.stopped = false
     this.retry = 0
     this.expectedLive = false
@@ -31,7 +31,7 @@ export class CameraTransport {
     this.lastFrameAt = performance.now()
     if (this.frameWatchdog) window.clearInterval(this.frameWatchdog)
     this.frameWatchdog = window.setInterval(() => this.checkFrames(), 2000)
-    this.connect()
+    await this.connect()
   }
 
   setExpectedLive(expected: boolean) {
@@ -84,7 +84,7 @@ export class CameraTransport {
       this.scheduleReconnect()
   }
 
-  private connect() {
+  private async connect() {
     if (this.stopped) return
     const generation = ++this.generation
     if (this.disconnectGrace) window.clearTimeout(this.disconnectGrace)
@@ -100,7 +100,12 @@ export class CameraTransport {
     const pending: RTCIceCandidateInit[] = []
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const url = RELAY_MODE ? signalWS('camera') : `${proto}://${location.host}/ws/signal?media=camera`
-    const ws = new WebSocket(url)
+    // The WS handshake carries the token as its subprotocol: fetch it first
+    // when the startup bootstrap has not succeeded yet. The transport may
+    // have been stopped or superseded while fetching.
+    if (!lanAuthorized()) await bootstrapLAN()
+    if (this.stopped || generation !== this.generation) return
+    const ws = new WebSocket(url, wsProtocols())
     this.ws = ws
 
     const createPeer = (iceServers: RTCIceServer[] = []) => {

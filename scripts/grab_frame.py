@@ -10,12 +10,57 @@ ip   = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 secs = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0
 out  = sys.argv[3] if len(sys.argv) > 3 else "/tmp/rctl_grab.h264"
 
+def http_request(sock, request, body=None):
+    sock.sendall(request.encode() + (body or b""))
+    resp = b""
+    while b"\r\n\r\n" not in resp:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("connection closed")
+        resp += chunk
+    head, rest = resp.split(b"\r\n\r\n", 1)
+    return head.decode("latin1"), rest
+
+def read_http_response(sock):    # Read until the header block terminates, then honor Content-Length: a
+    # short first read must not truncate the bootstrap JSON.
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("connection closed")
+        buf += chunk
+    head, body = buf.split(b"\r\n\r\n", 1)
+    headers = head.decode("latin1")
+    for line in headers.split("\r\n")[1:]:
+        if line.lower().startswith("content-length:"):
+            remaining = int(line.split(":", 1)[1].strip()) - len(body)
+            while remaining > 0:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                body += chunk
+                remaining -= len(chunk)
+            break
+    return headers, body
+
+# The device HTTP surface is token-gated: fetch the LAN token via the
+# header-gated bootstrap endpoint, then present it on the stream request.
 s = socket.create_connection((ip, 8080), timeout=6)
-s.sendall(b"GET /stream HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-buf = b""
-while b"\r\n\r\n" not in buf:
-    buf += s.recv(4096)
-_, buf = buf.split(b"\r\n\r\n", 1)
+s.sendall(f"GET /v1/bootstrap HTTP/1.1\r\nHost: {ip}:8080\r\n"
+          "X-Rctl-Bootstrap: 1\r\nConnection: close\r\n\r\n".encode())
+head, body = read_http_response(s)
+if not head.startswith("HTTP/1.1 200"):
+    sys.exit(f"bootstrap failed: {head.splitlines()[0] if head else 'empty'}")
+import json
+token = json.loads(body.decode())["token"]
+s.close()
+
+s = socket.create_connection((ip, 8080), timeout=6)
+s.sendall(b"GET /stream HTTP/1.1\r\nHost: " + ip.encode() + b":8080\r\n"
+          b"X-Rctl-Token: " + token.encode() + b"\r\nConnection: close\r\n\r\n")
+head, buf = read_http_response(s)
+if not head.startswith("HTTP/1.1 200"):
+    sys.exit(f"stream failed: {head.splitlines()[0] if head else 'empty'}")
 
 # de-chunk HTTP/1.1 chunked transfer-encoding into the raw app byte stream
 data = buf

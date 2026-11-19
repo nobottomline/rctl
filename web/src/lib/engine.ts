@@ -8,7 +8,7 @@
 // /stream WebCodecs fallback path. Audio playback and the files DataChannel are
 // exposed via callbacks so those layers attach on top.
 
-import { WEBRTC_MODE, RELAY_MODE, GUEST_ACCESS, guestHas, guestButtonHas, api, signalWS } from './rctl'
+import { WEBRTC_MODE, RELAY_MODE, GUEST_ACCESS, guestHas, guestButtonHas, api, signalWS, wsProtocols } from './rctl'
 
 // UIInterfaceOrientation -> CSS rotation (deg) that makes content upright.
 const DEG: Record<number, number> = { 1: 0, 2: 180, 3: -90, 4: 90 }
@@ -971,7 +971,7 @@ export class ControlEngine {
       return pc
     }
 
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsUrl, wsProtocols())
     this.ws = ws
     // TURN/TCP allocation and ICE need their own bounded connection window.
     // The first-frame deadline starts only after transport connection, so a

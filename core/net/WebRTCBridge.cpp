@@ -99,6 +99,11 @@ struct Session {
     std::shared_ptr<rtc::DataChannel> pointer;
     std::shared_ptr<rtc::DataChannel> pointerMotion;
     std::shared_ptr<rtc::DataChannel> filesDc;
+    // Monotonic generation id for the files channel: the daemon's sender
+    // token. Pointer-identity routing would be vulnerable to address reuse
+    // (a freed channel's address can be handed to a new session); an id that
+    // is erased on close/destroy makes a stale token resolve to nothing.
+    uint64_t filesId = 0;
     std::shared_ptr<rtc::DataChannel> guestOperations;
     bool guest = false;
     std::atomic<int> talkRoute{0};
@@ -109,6 +114,8 @@ struct Session {
     std::shared_ptr<rtc::DataChannel> stateDc;
 };
 static std::map<std::string, std::shared_ptr<Session>> g_sessions;
+static std::map<uint64_t, std::weak_ptr<rtc::DataChannel>> g_files_channels;   // generation id -> channel
+static uint64_t g_next_files_id = 1;   // 0 is never a valid token
 static std::string g_guestInputOwner;
 static std::set<std::string> g_guestRetiring;
 static std::set<std::string> g_guestOperationsRetiring;
@@ -176,8 +183,7 @@ static std::vector<int16_t> g_micPcm;
 // File transfer rides its own reliable+ordered "files" DataChannel (P2P, so it
 // bypasses the relay's body cap and streams any size). One transfer at a time, so
 // a single active channel is enough for the daemon to send replies/chunks back.
-static std::shared_ptr<rtc::DataChannel> g_files_dc;
-static void (*g_files_cb)(const uint8_t *data, size_t len, int is_binary) = nullptr;
+static void (*g_files_cb)(const uint8_t *data, size_t len, int is_binary, void *sender_token) = nullptr;
 static std::chrono::steady_clock::time_point g_lastPli{};
 static std::chrono::steady_clock::time_point g_lastCameraPli{};
 
@@ -325,6 +331,7 @@ static void destroy_session(std::shared_ptr<Session> dead) {
     if (dead->pointer) dead->pointer->resetCallbacks();
     if (dead->pointerMotion) dead->pointerMotion->resetCallbacks();
     if (dead->filesDc) dead->filesDc->resetCallbacks();
+    { std::lock_guard<std::mutex> lk(g_mtx); g_files_channels.erase(dead->filesId); }
     if (dead->audioDc) dead->audioDc->resetCallbacks();
     if (dead->micIn)   dead->micIn->resetCallbacks();
     if (dead->roomMic) dead->roomMic->resetCallbacks();
@@ -364,7 +371,6 @@ static void destroy_session(std::shared_ptr<Session> dead) {
                                   [sp](const std::shared_ptr<rtc::DataChannel> &d) { return d.get() == sp; }),
                               g_state_dcs.end());
         }
-        if (dead->filesDc && g_files_dc && g_files_dc.get() == dead->filesDc.get()) g_files_dc.reset();
     }
     auto viewerCb = dead->camera ? g_camera_viewer_cb : g_viewer_cb;
     if (lastGone && viewerCb) viewerCb(false);
@@ -1007,15 +1013,18 @@ static void start_session(const std::string &id, const json &ice, bool camera,
     if (!permissions.scoped && (permissions.filesRead || permissions.filesWrite)) {
         auto filesDc = pc->createDataChannel("files");
         sess->filesDc = filesDc;
-        rtc::DataChannel *fptr = filesDc.get();
-        filesDc->onOpen([id, fptr]() {
+        uint64_t filesId = 0;
+        {
             std::lock_guard<std::mutex> lk(g_mtx);
-            auto it = g_sessions.find(id);
-            if (it == g_sessions.end() || !it->second->filesDc || it->second->filesDc.get() != fptr) return;
-            g_files_dc = it->second->filesDc;
+            filesId = g_next_files_id++;
+            sess->filesId = filesId;
+            g_files_channels[filesId] = filesDc;
+        }
+        const void *token = (const void *)(uintptr_t)filesId;
+        filesDc->onOpen([id]() {
             wlog("session " + id + " files channel open");
         });
-        filesDc->onMessage([permissions](rtc::message_variant msg) {
+        filesDc->onMessage([permissions, token](rtc::message_variant msg) {
             if (!g_files_cb) return;
             if (std::holds_alternative<std::string>(msg)) {
                 const std::string &s = std::get<std::string>(msg);
@@ -1027,16 +1036,12 @@ static void start_session(const std::string &id, const json &ice, bool camera,
                     return;
                 }
                 if (!rctl::webRTCFilesMessageAllowed(permissions, false, operation)) return;
-                g_files_cb(reinterpret_cast<const uint8_t *>(s.data()), s.size(), 0);
+                g_files_cb(reinterpret_cast<const uint8_t *>(s.data()), s.size(), 0, const_cast<void *>(token));
             } else {
                 if (!rctl::webRTCFilesMessageAllowed(permissions, true, "")) return;
                 const auto &b = std::get<rtc::binary>(msg);
-                g_files_cb(reinterpret_cast<const uint8_t *>(b.data()), b.size(), 1);
+                g_files_cb(reinterpret_cast<const uint8_t *>(b.data()), b.size(), 1, const_cast<void *>(token));
             }
-        });
-        filesDc->onClosed([fptr]() {
-            std::lock_guard<std::mutex> lk(g_mtx);
-            if (g_files_dc && g_files_dc.get() == fptr) g_files_dc.reset();
         });
     }
 
@@ -1165,7 +1170,7 @@ extern "C" void rctl_webrtc_set_input_cb(void (*touch)(int, int, double, double)
 }
 extern "C" void rctl_webrtc_set_pointer_cb(rctl_pointer_request cb) { g_pointer_cb = cb; }
 
-extern "C" void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *, size_t, int)) {
+extern "C" void rctl_webrtc_set_files_cb(void (*cb)(const uint8_t *, size_t, int, void *)) {
     g_files_cb = cb;
 }
 
@@ -1184,28 +1189,50 @@ extern "C" void rctl_webrtc_set_orientation(uint8_t orientation) {
     }
 }
 
-extern "C" void rctl_webrtc_files_send_text(const char *s) {
-    if (!s) return;
-    std::shared_ptr<rtc::DataChannel> dc;
-    { std::lock_guard<std::mutex> lk(g_mtx); dc = g_files_dc; }
-    if (dc && dc->isOpen()) { try { dc->send(std::string(s)); } catch (...) {} }
+// Replies route to the REQUESTING channel, looked up in the session registry:
+// a second session opening its own files channel can no longer capture another
+// transfer's responses. A gone channel yields NO fallback — a misrouted reply
+// is worse than a client-side timeout.
+static std::shared_ptr<rtc::DataChannel> files_channel_for(void *sender_token) {
+    const auto files_id = (uint64_t)(uintptr_t)sender_token;
+    if (!files_id) return nullptr;
+    std::lock_guard<std::mutex> lk(g_mtx);
+    auto it = g_files_channels.find(files_id);
+    if (it == g_files_channels.end()) return nullptr;   // generation retired: never matches a new channel
+    auto dc = it->second.lock();
+    if (!dc || !dc->isOpen()) {
+        g_files_channels.erase(it);
+        return nullptr;
+    }
+    return dc;
 }
 
-extern "C" void rctl_webrtc_files_send_binary(const uint8_t *data, size_t len) {
+extern "C" void rctl_webrtc_files_send_text_to(void *sender_token, const char *s) {
+    if (!s) return;
+    auto dc = files_channel_for(sender_token);
+    if (dc) { try { dc->send(std::string(s)); } catch (...) {} }
+}
+
+extern "C" void rctl_webrtc_files_send_binary_to(void *sender_token, const uint8_t *data, size_t len) {
     if (!data || !len) return;
-    std::shared_ptr<rtc::DataChannel> dc;
-    { std::lock_guard<std::mutex> lk(g_mtx); dc = g_files_dc; }
-    if (dc && dc->isOpen()) {
+    auto dc = files_channel_for(sender_token);
+    if (dc) {
         rtc::binary b(reinterpret_cast<const std::byte *>(data),
                       reinterpret_cast<const std::byte *>(data + len));
         try { dc->send(std::move(b)); } catch (...) {}
     }
 }
 
-extern "C" uint64_t rctl_webrtc_files_buffered(void) {
-    std::shared_ptr<rtc::DataChannel> dc;
-    { std::lock_guard<std::mutex> lk(g_mtx); dc = g_files_dc; }
+extern "C" uint64_t rctl_webrtc_files_buffered_for(void *sender_token) {
+    auto dc = files_channel_for(sender_token);
     return dc ? (uint64_t)dc->bufferedAmount() : 0;
+}
+
+// Whether a sender token still refers to a live files channel. The daemon
+// reaps an upload whose owning channel disappeared (disconnect mid-transfer)
+// with this, so a reconnecting session is never locked out.
+extern "C" bool rctl_webrtc_files_channel_alive(void *sender_token) {
+    return sender_token && files_channel_for(sender_token) != nullptr;
 }
 
 static void authorization_tick(double now) {

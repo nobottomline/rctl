@@ -24,6 +24,8 @@ NSArray<NSString *> *rctl_device_feature_names(void) {
             @"controller.scoped_sessions",
             @"controller.authorization_lease_v1",
             @"state.orientation",
+            @"lan.token_gate",
+            @"files.transfer_ids",
         ];
     });
     return features;

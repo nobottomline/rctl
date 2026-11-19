@@ -212,7 +212,7 @@ static bool spawn_term(struct term_session *t, uint16_t cols, uint16_t rows) {
     return true;
 }
 
-void rctl_term_handle_ws(int fd, const char *req) {
+void rctl_term_handle_ws(int fd, const char *req, const char *ws_protocol) {
     char key[160];
     if (!header_value(req, "Sec-WebSocket-Key", key, sizeof(key))) {
         const char *body = "missing websocket key";
@@ -228,13 +228,26 @@ void rctl_term_handle_ws(int fd, const char *req) {
 
     char *accept = ws_accept_key(key);
     if (!accept) { close(fd); return; }
-    char resp[512];
-    int rn = snprintf(resp, sizeof(resp),
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: %s\r\n"
-        "Cache-Control: no-cache\r\n\r\n", accept);
+    char resp[576];
+    int rn;
+    if (ws_protocol && ws_protocol[0]) {
+        // A browser offered a validated token subprotocol; the 101 must echo
+        // exactly the offered value or the client rejects the handshake.
+        rn = snprintf(resp, sizeof(resp),
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "Sec-WebSocket-Protocol: %s\r\n"
+            "Cache-Control: no-cache\r\n\r\n", accept, ws_protocol);
+    } else {
+        rn = snprintf(resp, sizeof(resp),
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "Cache-Control: no-cache\r\n\r\n", accept);
+    }
     free(accept);
     if (!send_full(fd, resp, (size_t)rn)) { close(fd); return; }
 
@@ -321,7 +334,7 @@ static void signal_ws_send(void *ctx, const char *json) {
     pthread_mutex_unlock(&s->send_mtx);
 }
 
-void rctl_signal_handle_ws(int fd, const char *req) {
+void rctl_signal_handle_ws(int fd, const char *req, const char *ws_protocol) {
     char key[160];
     if (!header_value(req, "Sec-WebSocket-Key", key, sizeof(key))) {
         const char *body = "missing websocket key";
@@ -336,13 +349,24 @@ void rctl_signal_handle_ws(int fd, const char *req) {
     }
     char *accept = ws_accept_key(key);
     if (!accept) { close(fd); return; }
-    char resp[512];
-    int rn = snprintf(resp, sizeof(resp),
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: %s\r\n"
-        "Cache-Control: no-cache\r\n\r\n", accept);
+    char resp[576];
+    int rn;
+    if (ws_protocol && ws_protocol[0]) {
+        rn = snprintf(resp, sizeof(resp),
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "Sec-WebSocket-Protocol: %s\r\n"
+            "Cache-Control: no-cache\r\n\r\n", accept, ws_protocol);
+    } else {
+        rn = snprintf(resp, sizeof(resp),
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "Cache-Control: no-cache\r\n\r\n", accept);
+    }
     free(accept);
     if (!send_full(fd, resp, (size_t)rn)) { close(fd); return; }
 
